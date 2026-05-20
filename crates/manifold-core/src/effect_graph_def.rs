@@ -35,7 +35,7 @@
 //! any document up to [`EFFECT_GRAPH_VERSION_WITH_METADATA`]; higher
 //! versions are rejected so old binaries don't silently lose data.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -97,6 +97,15 @@ pub struct EffectGraphNode {
     /// keys fall through to the node's declared defaults.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, SerializedParamValue>,
+    /// Names of params that are currently exposed on the outer card
+    /// (i.e. visible as a slider / control on the host effect or
+    /// generator). The graph is the single source of truth for this —
+    /// the right-panel checkbox in the graph editor flips entries in
+    /// this set, regardless of whether the graph is hosted by an
+    /// Effect or a Generator. Missing means "not exposed"; a preset's
+    /// `bindings` array seeds this set at instance creation.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub exposed_params: BTreeSet<String>,
     /// Editor-saved position in graph-space. `None` for documents
     /// authored without an editor (hand-rolled bundled presets).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,6 +419,7 @@ mod tests {
                 type_id: "node.threshold".to_string(),
                 handle: Some("thresh".to_string()),
                 params,
+                exposed_params: BTreeSet::new(),
                 editor_pos: Some((100.0, 200.0)),
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),

@@ -215,20 +215,18 @@ pub enum PanelAction {
     EffectReorder(usize, usize),
     /// Reorder multiple effect cards as a group: (sorted source indices, target index).
     EffectReorderGroup(Vec<usize>, usize),
-    /// Toggle whether an inner-graph param is user-exposed on the
-    /// effect card. Sent by the graph-editor right-sidebar checkbox
-    /// when the user ticks/unticks a param. Routes through the
-    /// content thread as a `ToggleEffectParamExposeCommand`.
+    /// Toggle whether an inner-graph param is exposed on the outer
+    /// card. **Single variant for both Effect-hosted and Generator-
+    /// hosted graphs** — the graph editor is one surface and the click
+    /// handler emits this regardless of target. Dispatch resolves the
+    /// watched `GraphTarget` and routes to `ToggleNodeParamExposeCommand`.
     ///
     /// `label` / `min` / `max` / `default_value` / `convert` are the
-    /// inner-node ParamDef metadata captured at panel-build time —
-    /// the panel reads them from the live graph snapshot when the
-    /// user clicks. The content-thread command uses them to build a
-    /// well-formed `UserParamBinding` without needing access to the
-    /// renderer registry from the UI thread. The same meta is
-    /// preserved on the command for undo of an unexpose.
-    EffectParamExpose {
-        effect_index: usize,
+    /// inner-node ParamDef metadata captured at panel-build time. They
+    /// feed both the synthesised user binding (when the param has no
+    /// preset binding) and the undo restore path. Reading them in the
+    /// UI thread keeps the renderer registry off the click hot path.
+    ToggleNodeParamExpose {
         node_handle: String,
         inner_param: String,
         expose: bool,
@@ -237,18 +235,6 @@ pub enum PanelAction {
         max: f32,
         default_value: f32,
         convert: manifold_core::effects::ParamConvert,
-    },
-    /// Toggle the `exposed` flag on a static-block param slot. Sent by
-    /// the graph-editor sidebar when the user ticks/unticks a slot that
-    /// belongs to the effect's def-declared static block (as opposed to
-    /// a user-tail binding, which routes through `EffectParamExpose`).
-    /// Hidden static slots disappear from the effect card slider list
-    /// but keep their value, drivers, and Ableton mappings — they're
-    /// still addressable by id, just not visible.
-    EffectStaticParamExpose {
-        effect_index: usize,
-        param_index: usize,
-        expose: bool,
     },
 
     // ── Graph editor mutations (Phase 4) ──────────────────────────────

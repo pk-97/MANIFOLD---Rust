@@ -736,15 +736,14 @@ impl GraphEditorPanel {
                         return Vec::new();
                     }
                     if *checkbox_node_id == node_id {
-                        if let Some(slot) = static_block_slot {
-                            return vec![PanelAction::EffectStaticParamExpose {
-                                effect_index,
-                                param_index: *slot,
-                                expose: !currently_exposed,
-                            }];
-                        }
-                        return vec![PanelAction::EffectParamExpose {
-                            effect_index,
+                        // Unified: one PanelAction regardless of whether
+                        // (handle, param) maps to a static-block slot
+                        // or a user-bound tail entry. The content-thread
+                        // command (`ToggleNodeParamExposeCommand`) does
+                        // the dispatch internally.
+                        let _ = static_block_slot;
+                        let _ = effect_index;
+                        return vec![PanelAction::ToggleNodeParamExpose {
                             node_handle: node_handle.clone(),
                             inner_param: inner_param.clone(),
                             expose: !currently_exposed,
@@ -1105,8 +1104,7 @@ mod tests {
         let actions = panel.handle_click(translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::EffectParamExpose {
-                effect_index,
+            PanelAction::ToggleNodeParamExpose {
                 node_handle,
                 inner_param,
                 expose,
@@ -1116,7 +1114,6 @@ mod tests {
                 default_value,
                 convert,
             } => {
-                assert_eq!(*effect_index, 0);
                 assert_eq!(node_handle, "uv_transform");
                 assert_eq!(inner_param, "translate");
                 assert!(*expose);
@@ -1157,7 +1154,7 @@ mod tests {
         let actions = panel.handle_click(translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::EffectParamExpose { expose, .. } => {
+            PanelAction::ToggleNodeParamExpose { expose, .. } => {
                 assert!(!expose, "click on checked checkbox emits expose: false");
             }
             other => panic!("unexpected action: {other:?}"),
@@ -1585,24 +1582,20 @@ mod tests {
     }
 
     #[test]
-    fn inner_node_checkbox_for_static_block_target_emits_static_param_expose() {
-        // When the selected inner node carries a param that is the
-        // target of a static-block binding (e.g., Bloom's "Amount"
-        // outer slider drives `mix_final.blend`), clicking its
-        // per-node checkbox routes through `EffectStaticParamExpose`
-        // — flipping `param_values[slot].exposed` directly — instead
-        // of stacking a redundant `UserParamBinding`.
+    fn inner_node_checkbox_for_static_block_target_emits_unified_toggle() {
+        // After the exposure unification, the click handler emits ONE
+        // PanelAction regardless of whether (handle, param) maps to a
+        // static-block slot or a user-tail binding. The content-thread
+        // command (`ToggleNodeParamExposeCommand`) figures out the
+        // static-slot routing internally.
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds();
-        // "scale" is the target of slot 0; "enabled" is unrouted.
         let mut static_block_targets = HashMap::new();
         static_block_targets.insert(
             ("uv_transform".to_string(), "scale".to_string()),
             0_usize,
         );
-        // "scale" reports as exposed via the unified set (slot 0 is
-        // exposed). The click should produce `expose: false`.
         let mut exposed_keys = HashSet::new();
         exposed_keys.insert(("uv_transform".to_string(), "scale".to_string()));
         panel.configure(
@@ -1625,32 +1618,28 @@ mod tests {
         let actions = panel.handle_click(cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::EffectStaticParamExpose {
-                effect_index,
-                param_index,
+            PanelAction::ToggleNodeParamExpose {
+                node_handle,
+                inner_param,
                 expose,
+                ..
             } => {
-                assert_eq!(*effect_index, 0);
-                assert_eq!(*param_index, 0);
+                assert_eq!(node_handle, "uv_transform");
+                assert_eq!(inner_param, "scale");
                 assert!(
                     !expose,
-                    "click on a checked static-block-routed param emits expose: false",
+                    "click on a checked param emits expose: false",
                 );
             }
-            other => panic!("expected EffectStaticParamExpose, got {other:?}"),
+            other => panic!("expected ToggleNodeParamExpose, got {other:?}"),
         }
     }
 
     #[test]
-    fn inner_node_checkbox_for_unrouted_param_still_emits_effect_param_expose() {
-        // The user-binding path (existing behavior): an inner param
-        // with no static-block routing still goes through
-        // `EffectParamExpose` so the V2 surface adds / removes a
-        // `UserParamBinding`.
+    fn inner_node_checkbox_for_unrouted_param_emits_unified_toggle() {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds();
-        // No static-block targets — "enabled" is unrouted.
         panel.configure(
             Some(0),
             Vec::new(),
@@ -1673,7 +1662,7 @@ mod tests {
         let actions = panel.handle_click(cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::EffectParamExpose {
+            PanelAction::ToggleNodeParamExpose {
                 node_handle,
                 inner_param,
                 expose,
@@ -1683,7 +1672,7 @@ mod tests {
                 assert_eq!(inner_param, "enabled");
                 assert!(*expose);
             }
-            other => panic!("expected EffectParamExpose, got {other:?}"),
+            other => panic!("expected ToggleNodeParamExpose, got {other:?}"),
         }
     }
 

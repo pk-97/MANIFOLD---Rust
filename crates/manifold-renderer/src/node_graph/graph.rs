@@ -5,7 +5,7 @@
 //! No execution happens here. The runtime (execution plan, resource bindings,
 //! per-frame evaluation) lands in subsequent steps.
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 
 use crate::node_graph::effect_node::{EffectNode, NodeInstanceId, NodeWire, ParamValues};
 use crate::node_graph::parameters::ParamValue;
@@ -22,6 +22,12 @@ pub struct NodeInstance {
     /// Current values for every parameter the node defines.
     /// Initialised to defaults when the instance is added to the graph.
     pub params: ParamValues,
+    /// Names of params currently exposed on the outer card. Mirrors
+    /// the serialised `exposed_params` set in `EffectGraphNode`.
+    /// `&'static str` matches the parameter name keys used throughout
+    /// `EffectNode::parameters()`. Mutated by the unified
+    /// `ToggleNodeParamExposeCommand` via `Graph::set_param_exposed`.
+    pub exposed_params: AHashSet<&'static str>,
 }
 
 impl NodeInstance {
@@ -30,7 +36,12 @@ impl NodeInstance {
         for def in node.parameters() {
             params.insert(def.name, def.default);
         }
-        Self { id, node, params }
+        Self {
+            id,
+            node,
+            params,
+            exposed_params: AHashSet::default(),
+        }
     }
 }
 
@@ -229,6 +240,45 @@ impl Graph {
             .ok_or(GraphError::NodeNotFound(id))?;
         inst.node.set_output_format(port, format);
         Ok(())
+    }
+
+    /// Mark `name` as exposed (`true`) or unexposed (`false`) on the
+    /// outer card. The graph is the single source of truth for this —
+    /// the unified `ToggleNodeParamExposeCommand` flips entries via
+    /// this call, regardless of whether the host is an Effect or a
+    /// Generator. Validates that `name` is one of the node's declared
+    /// params so a typo from a persisted JSON document doesn't silently
+    /// add a phantom exposure.
+    pub fn set_param_exposed(
+        &mut self,
+        id: NodeInstanceId,
+        name: &'static str,
+        exposed: bool,
+    ) -> Result<(), GraphError> {
+        let inst = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
+        if !inst.node.parameters().iter().any(|p| p.name == name) {
+            return Err(GraphError::ParamNotFound {
+                node: id,
+                param: name.to_string(),
+            });
+        }
+        if exposed {
+            inst.exposed_params.insert(name);
+        } else {
+            inst.exposed_params.remove(name);
+        }
+        Ok(())
+    }
+
+    /// Read-only access to whether a node's param is exposed.
+    pub fn is_param_exposed(&self, id: NodeInstanceId, name: &str) -> bool {
+        self.nodes
+            .get(&id)
+            .map(|inst| inst.exposed_params.contains(name))
+            .unwrap_or(false)
     }
 
     /// Fast-path variant of [`Self::set_param`] for callers that

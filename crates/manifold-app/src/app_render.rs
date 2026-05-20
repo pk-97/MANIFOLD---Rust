@@ -686,6 +686,37 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::ToggleNodeParamExpose {
+                    node_handle,
+                    inner_param,
+                    expose,
+                    label,
+                    min,
+                    max,
+                    default_value,
+                    convert,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd =
+                            manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
+                                target.clone(),
+                                node_handle.clone(),
+                                inner_param.clone(),
+                                *expose,
+                                default.clone(),
+                                label.clone(),
+                                *min,
+                                *max,
+                                *default_value,
+                                *convert,
+                            );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::EnterPerformMode => {
                     self.perform.pending_enter = true;
                     continue;
@@ -1540,17 +1571,8 @@ impl Application {
             snap_arc.as_deref(),
             &self.local_project,
         );
-        let exposed_keys = build_card_exposures(
-            self.current_editor_target.as_ref(),
-            &static_block_targets,
-            &self.local_project,
-            snap_arc.as_deref(),
-        );
-        let card_entries = build_card_entries(
-            self.current_editor_target.as_ref(),
-            snap_arc.as_deref(),
-            &self.local_project,
-        );
+        let exposed_keys = build_card_exposures(snap_arc.as_deref());
+        let card_entries = build_card_entries(snap_arc.as_deref());
         // Outer→inner routings declared by the effect (Mirror's
         // `Amount` → `Mix.amount`, `Mode` → `Transform.mode`, etc.).
         // The panel uses this to disable inner-param rows the outer
@@ -2193,64 +2215,28 @@ fn build_graph_editor_view(
 }
 
 /// Build the unified set of `(node_handle, inner_param)` keys for every
-/// inner-node param that is currently exposed on the effect card,
-/// merging BOTH surfaces:
-///
-/// 1. All `EffectInstance.user_param_bindings` (V2 per-instance
-///    exposures).
-/// 2. Static-block routings whose slot has `param_values[i].exposed`
-///    set — resolved through `static_block_targets`.
+/// inner-node param currently exposed on the outer card. Reads ONLY
+/// the snapshot's per-param `exposed` flag — the graph is the single
+/// source of truth for exposure state, identical for Effect-hosted
+/// and Generator-hosted graphs.
 ///
 /// Drives the per-node "Expose to card" checkbox state in the
-/// graph-editor sidebar. The set is the single source of truth for
-/// "checked vs unchecked" — the click handler picks the right
-/// command (`EffectStaticParamExpose` vs `EffectParamExpose`) by
-/// consulting `static_block_targets` separately.
+/// graph-editor sidebar.
 fn build_card_exposures(
-    target: Option<&(
-        manifold_editing::commands::effect_target::EffectTarget,
-        usize,
-    )>,
-    static_block_targets: &std::collections::HashMap<(String, String), usize>,
-    project: &manifold_core::project::Project,
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
 ) -> std::collections::HashSet<(String, String)> {
-    use manifold_editing::commands::effect_target::EffectTarget;
-    // Generator-graph case: no EffectTarget, but the snapshot's
-    // outer_routings (built from the preset's bindings) ARE the card
-    // sliders. Every declared routing counts as exposed — that's the
-    // whole reason the binding exists. Effect-graph exposures still
-    // need the per-instance dance below.
-    let Some((effect_target, effect_index)) = target else {
-        return snapshot
-            .map(|snap| {
-                snap.outer_routings
-                    .iter()
-                    .map(|r| (r.node_handle.clone(), r.inner_param.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-    };
-    let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
-        EffectTarget::Master => Some(&project.settings.master_effects),
-        EffectTarget::Layer { layer_id } => project
-            .timeline
-            .find_layer_by_id(layer_id)
-            .and_then(|(_, l)| l.effects.as_deref()),
-    };
-    let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
+    let Some(snap) = snapshot else {
         return Default::default();
     };
-    // Start with user-bindings — they're always card-visible.
-    let mut out: std::collections::HashSet<(String, String)> = fx
-        .user_param_bindings
-        .iter()
-        .map(|ub| (ub.node_handle.clone(), ub.inner_param.clone()))
-        .collect();
-    // Add static-block routings whose slot is currently exposed.
-    for ((handle, param), &slot_idx) in static_block_targets {
-        if fx.is_param_exposed(slot_idx) {
-            out.insert((handle.clone(), param.clone()));
+    let mut out = std::collections::HashSet::new();
+    for node in &snap.nodes {
+        let Some(handle) = node.node_handle.as_deref() else {
+            continue;
+        };
+        for p in &node.parameters {
+            if p.exposed {
+                out.insert((handle.to_string(), p.name.clone()));
+            }
         }
     }
     out
@@ -2354,115 +2340,82 @@ fn build_static_block_targets(
         .collect()
 }
 
-/// Build the read-only "Effect Parameters" list for the graph-editor
-/// sidebar — every inner-node param currently exposed on the effect
-/// card. Merges:
+/// Build the read-only "Effect Parameters" summary list for the
+/// graph-editor sidebar — every inner-node param currently exposed,
+/// in a stable order. Reads ONLY the snapshot — the graph is the
+/// single source of truth, identical for Effect-hosted and
+/// Generator-hosted graphs.
 ///
-/// 1. Static-block routings whose slot has `param_values[i].exposed`,
-///    in def-declared order. Labels come from `def.param_defs[i].name`;
-///    targets come from the snapshot's `OuterParamRouting` for the
-///    matching `outer_param_id`.
-/// 2. `EffectInstance.user_param_bindings` in insertion order. Labels
-///    come from `binding.label`; targets come from
-///    `binding.node_handle` / `binding.inner_param`.
-///
-/// User-bindings whose `(node_handle, inner_param)` is ALSO a
-/// static-block target are de-duplicated (only the static-block entry
-/// is kept). This keeps the displayed list one-row-per-card-slider.
+/// Ordering:
+/// 1. Preset-declared bindings first, in `outer_routings` order
+///    (label = the preset's outer label).
+/// 2. Synthesised entries for params that are exposed but not bound
+///    by the preset (label = the param's own name; appended in node
+///    iteration order). Step 8 will collapse user-binding state into
+///    this path; for now it covers the no-binding case.
 fn build_card_entries(
-    target: Option<&(
-        manifold_editing::commands::effect_target::EffectTarget,
-        usize,
-    )>,
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
-    project: &manifold_core::project::Project,
 ) -> Vec<manifold_ui::panels::graph_editor::GraphEditorCardEntry> {
-    use manifold_editing::commands::effect_target::EffectTarget;
     use manifold_ui::panels::graph_editor::GraphEditorCardEntry;
-    // Generator-graph case: no EffectTarget. The summary entries come
-    // from the snapshot's outer_routings (preset-declared bindings),
-    // one entry per binding. Effect-graph case continues with the
-    // per-instance dance below.
-    let Some((effect_target, effect_index)) = target else {
-        let Some(snap) = snapshot else {
-            return Vec::new();
-        };
-        return snap
-            .outer_routings
-            .iter()
-            .map(|r| GraphEditorCardEntry {
-                label: r.outer_label.clone(),
-                target_handle: r.node_handle.clone(),
-                target_inner_param: r.inner_param.clone(),
-            })
-            .collect();
-    };
-    let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
-        EffectTarget::Master => Some(&project.settings.master_effects),
-        EffectTarget::Layer { layer_id } => project
-            .timeline
-            .find_layer_by_id(layer_id)
-            .and_then(|(_, l)| l.effects.as_deref()),
-    };
-    let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
-        return Vec::new();
-    };
-    let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type()) else {
+    let Some(snap) = snapshot else {
         return Vec::new();
     };
 
-    // Build outer_param_id → (node_handle, inner_param) lookup for
-    // resolving static-block targets when the snapshot is available.
-    let routing_by_id: std::collections::HashMap<&str, (&str, &str)> = snapshot
-        .map(|s| {
-            s.outer_routings
-                .iter()
-                .map(|r| {
-                    (
-                        r.outer_param_id.as_str(),
-                        (r.node_handle.as_str(), r.inner_param.as_str()),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
+    let mut covered: std::collections::HashSet<(String, String)> = Default::default();
     let mut entries: Vec<GraphEditorCardEntry> = Vec::new();
-    let mut covered_targets: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
 
-    // Static-block surface, in def order. Skip slots that have no
-    // resolvable inner-node target — they can't be surfaced as
-    // "Label ↳ handle.param" without a target, and that's the only
-    // information the read-only list carries.
-    for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
-        if !fx.is_param_exposed(i) {
+    // Pass 1: preset-bound exposures. Walk outer_routings so the
+    // user-facing label ("Amount") comes from the preset's binding,
+    // not the inner-node param name ("blend").
+    for r in &snap.outer_routings {
+        // Only include if the target param is actually exposed in the
+        // live graph. (For freshly-loaded presets this is always true
+        // because of the Step 6 backfill; for user-toggled-off entries
+        // we skip them.)
+        let is_exposed = snap
+            .nodes
+            .iter()
+            .find(|n| n.node_handle.as_deref() == Some(r.node_handle.as_str()))
+            .and_then(|n| n.parameters.iter().find(|p| p.name == r.inner_param))
+            .map(|p| p.exposed)
+            .unwrap_or(false);
+        if !is_exposed {
             continue;
         }
-        let Some(&(handle, inner_param)) = routing_by_id.get(pd.id.as_str()) else {
-            continue;
-        };
-        covered_targets.insert((handle.to_string(), inner_param.to_string()));
+        covered.insert((r.node_handle.clone(), r.inner_param.clone()));
         entries.push(GraphEditorCardEntry {
-            label: pd.name.clone(),
-            target_handle: handle.to_string(),
-            target_inner_param: inner_param.to_string(),
+            label: r.outer_label.clone(),
+            target_handle: r.node_handle.clone(),
+            target_inner_param: r.inner_param.clone(),
         });
     }
 
-    // User-bindings, in insertion order. Skip any whose target is
-    // already covered by a static-block entry above so the list
-    // doesn't show the same routing twice.
-    for ub in &fx.user_param_bindings {
-        let key = (ub.node_handle.clone(), ub.inner_param.clone());
-        if covered_targets.contains(&key) {
+    // Pass 2: exposed params without a preset binding. Synthesise a
+    // label from the param's own name so the user sees their custom
+    // exposure in the summary list. Walk nodes in id order for
+    // determinism.
+    let mut node_refs: Vec<&manifold_renderer::node_graph::NodeSnapshot> =
+        snap.nodes.iter().collect();
+    node_refs.sort_by_key(|n| n.id);
+    for node in node_refs {
+        let Some(handle) = node.node_handle.as_deref() else {
             continue;
+        };
+        for p in &node.parameters {
+            if !p.exposed {
+                continue;
+            }
+            let key = (handle.to_string(), p.name.clone());
+            if covered.contains(&key) {
+                continue;
+            }
+            entries.push(GraphEditorCardEntry {
+                label: p.label.clone(),
+                target_handle: handle.to_string(),
+                target_inner_param: p.name.clone(),
+            });
+            covered.insert(key);
         }
-        entries.push(GraphEditorCardEntry {
-            label: ub.label.clone(),
-            target_handle: ub.node_handle.clone(),
-            target_inner_param: ub.inner_param.clone(),
-        });
     }
 
     entries

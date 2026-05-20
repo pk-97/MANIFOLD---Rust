@@ -131,6 +131,12 @@ pub struct ParamSnapshot {
     /// the inspector can render "FoldX" instead of `6`. `None` for
     /// non-enum params.
     pub enum_labels: Option<Vec<String>>,
+    /// Whether this param is currently exposed on the outer card.
+    /// Mirrors `NodeInstance.exposed_params` — the graph editor's
+    /// right-panel checkbox flips this through
+    /// `ToggleNodeParamExposeCommand`. Works the same for Effect-
+    /// hosted and Generator-hosted graphs (no fork on target type).
+    pub exposed: bool,
 }
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
@@ -256,6 +262,7 @@ impl GraphSnapshot {
                             } else {
                                 None
                             },
+                            exposed: inst.exposed_params.contains(pd.name),
                         }
                     })
                     .collect();
@@ -643,6 +650,7 @@ mod tests {
                 type_id: "node.does_not_exist".to_string(),
                 handle: None,
                 params: Default::default(),
+                exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: Default::default(),

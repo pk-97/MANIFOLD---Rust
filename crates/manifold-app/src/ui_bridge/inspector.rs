@@ -12,9 +12,8 @@ use manifold_editing::commands::drivers::{
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
-    ChangeEffectParamCommand, InnerParamMeta, RemoveEffectCommand, ReorderEffectCommand,
-    ReorderEffectGroupCommand, ToggleEffectCommand, ToggleEffectParamExposeCommand,
-    ToggleStaticParamExposeCommand,
+    ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
+    ToggleEffectCommand,
 };
 use manifold_editing::commands::envelopes::{
     ChangeLayerEnvelopeADSRCommand, ChangeLayerEnvelopeRangeCommand,
@@ -1598,49 +1597,11 @@ pub(super) fn dispatch_inspector(
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
         }
-        PanelAction::EffectParamExpose {
-            effect_index,
-            node_handle,
-            inner_param,
-            expose,
-            label,
-            min,
-            max,
-            default_value,
-            convert,
-        } => {
-            let tab = ui.inspector.last_effect_tab();
-            let target = super::resolve_effect_target(tab, active_layer, project);
-            let meta = InnerParamMeta {
-                label: label.clone(),
-                min: *min,
-                max: *max,
-                default_value: *default_value,
-                convert: *convert,
-            };
-            let cmd = ToggleEffectParamExposeCommand::new(
-                target,
-                *effect_index,
-                node_handle.clone(),
-                inner_param.clone(),
-                *expose,
-                meta,
-            );
-            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-            DispatchResult::handled()
-        }
-        PanelAction::EffectStaticParamExpose {
-            effect_index,
-            param_index,
-            expose,
-        } => {
-            let tab = ui.inspector.last_effect_tab();
-            let target = super::resolve_effect_target(tab, active_layer, project);
-            let cmd =
-                ToggleStaticParamExposeCommand::new(target, *effect_index, *param_index, *expose);
-            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-            DispatchResult::handled()
-        }
+        // `PanelAction::ToggleNodeParamExpose` is handled in
+        // `app_render.rs` alongside the other graph commands so it can
+        // access `watched_graph_target` + `watched_catalog_default`
+        // directly. No fork on Effect vs Generator at the dispatch
+        // layer — the command itself handles both.
         PanelAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.
             let tab = ui.inspector.last_effect_tab();

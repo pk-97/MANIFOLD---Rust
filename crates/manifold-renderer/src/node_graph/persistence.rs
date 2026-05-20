@@ -410,6 +410,11 @@ impl EffectGraphDefExt for EffectGraphDef {
                     type_id: inst.node.type_id().as_str().to_string(),
                     handle: id_to_handle.get(&inst.id.0).cloned(),
                     params,
+                    exposed_params: inst
+                        .exposed_params
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect(),
                     editor_pos: None,
                     wgsl_source: inst.node.wgsl_source().map(|s| s.to_string()),
                     output_formats,
@@ -530,6 +535,22 @@ impl EffectGraphDefExt for EffectGraphDef {
                     .expect("node was just added");
             }
 
+            // Apply exposed_params from the document. Unknown param
+            // names are silently ignored — a renamed param shouldn't
+            // refuse to load just because an old saved exposure points
+            // at a defunct name. Validates via the param_defs scan so
+            // the static-lifetime name lookup matches what the live
+            // node declares.
+            for exposed_name in &node_doc.exposed_params {
+                if let Some(&(name_static, _)) =
+                    param_defs.iter().find(|(n, _)| *n == exposed_name.as_str())
+                {
+                    graph
+                        .set_param_exposed(runtime_id, name_static, true)
+                        .expect("validated above");
+                }
+            }
+
             // Install any per-output format overrides. Most documents
             // carry no entries; the native-precision escape-hatch
             // family is where these matter.
@@ -587,6 +608,44 @@ impl EffectGraphDefExt for EffectGraphDef {
                     wire_index: i,
                     reason: format!("{e:?}"),
                 })?;
+        }
+
+        // Step 6 (exposure unification): seed `exposed_params` on the
+        // live graph from `preset_metadata.bindings`. Each binding's
+        // target param becomes exposed by default — this is how the
+        // "preset binding == shows on outer card" rule lands at the
+        // graph level, replacing the legacy
+        // `EffectInstance.param_values[i].exposed = true` initialiser.
+        //
+        // Runs after all nodes are added (handle resolution must work)
+        // and after `exposed_params` from the document itself has been
+        // applied (this is the seed for cases where the document
+        // didn't carry an explicit `exposedParams` set — primarily
+        // fresh-from-disk presets where the bindings are the source of
+        // truth). Idempotent: re-applying a binding's seed when the
+        // doc already exposed the same param is a no-op.
+        if let Some(meta) = self.preset_metadata.as_ref() {
+            use manifold_core::effect_graph_def::BindingTarget;
+            for binding in &meta.bindings {
+                if let BindingTarget::HandleNode { handle, param } = &binding.target
+                    && let Some(node_id) = graph.node_id_by_handle(handle)
+                {
+                    // Resolve `param` to the &'static str the node
+                    // declared. Skip if the node doesn't have a param
+                    // with that name — a stale preset shouldn't refuse
+                    // to load.
+                    let static_name = graph.get_node(node_id).and_then(|inst| {
+                        inst.node
+                            .parameters()
+                            .iter()
+                            .find(|p| p.name == param.as_str())
+                            .map(|p| p.name)
+                    });
+                    if let Some(name_static) = static_name {
+                        let _ = graph.set_param_exposed(node_id, name_static, true);
+                    }
+                }
+            }
         }
 
         Ok(graph)
@@ -738,6 +797,48 @@ mod tests {
         assert!(!plan.steps().is_empty());
     }
 
+    /// `exposed_params` on each `EffectGraphNode` round-trips through
+    /// the JSON document. Confirms the graph editor's "Expose to card"
+    /// state survives save → reload — the unified exposure source of
+    /// truth (Step 1 + Step 2 of the exposure-unification plan).
+    #[test]
+    fn exposed_params_round_trip_through_json() {
+        let mut g = Graph::new();
+        let _src = g.add_node(Box::new(Source::new()));
+        let thresh = g.add_node_named("thresh", Box::new(Threshold::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((_src, "out"), (thresh, "source")).unwrap();
+        g.connect((thresh, "out"), (out, "in")).unwrap();
+        // Expose two params on the threshold node.
+        g.set_param_exposed(thresh, "level", true).unwrap();
+        g.set_param_exposed(thresh, "softness", true).unwrap();
+        assert!(g.is_param_exposed(thresh, "level"));
+        assert!(g.is_param_exposed(thresh, "softness"));
+
+        // Serialize → deserialize.
+        let doc = GraphDocument::from_graph(&g);
+        let json = serde_json::to_string(&doc).unwrap();
+        let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
+
+        // Confirm the document carries the exposure set.
+        let thresh_doc = parsed
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("thresh"))
+            .unwrap();
+        assert!(thresh_doc.exposed_params.contains("level"));
+        assert!(thresh_doc.exposed_params.contains("softness"));
+
+        // Confirm the live graph mirror picks them back up.
+        let g2 = parsed.into_graph(&registry()).unwrap();
+        let thresh2 = g2.node_id_by_handle("thresh").unwrap();
+        assert!(g2.is_param_exposed(thresh2, "level"));
+        assert!(g2.is_param_exposed(thresh2, "softness"));
+        // Unset params remain unexposed.
+        let final2 = g2.nodes().find(|n| n.id != thresh2).unwrap();
+        assert!(!g2.is_param_exposed(final2.id, "any_param"));
+    }
+
     /// WGSL escape-hatch primitives round-trip their `wgsl_source` field
     /// through the JSON document — the field is identity-level config of
     /// the node (alongside `editor_pos`), NOT a parameter. Confirms that
@@ -836,6 +937,7 @@ mod tests {
                 type_id: "node.wgsl_compute_0in_1tex".to_string(),
                 handle: None,
                 params: BTreeMap::new(),
+                exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats,
@@ -890,6 +992,7 @@ mod tests {
                 type_id: "node.does_not_exist".to_string(),
                 handle: None,
                 params: BTreeMap::new(),
+                exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
@@ -929,6 +1032,7 @@ mod tests {
                     type_id: SOURCE_TYPE_ID.to_string(),
                     handle: None,
                     params: BTreeMap::new(),
+                    exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
@@ -938,6 +1042,7 @@ mod tests {
                     type_id: FINAL_OUTPUT_TYPE_ID.to_string(),
                     handle: None,
                     params: BTreeMap::new(),
+                    exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
@@ -971,6 +1076,7 @@ mod tests {
                 type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
                 handle: None,
                 params,
+                exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
@@ -999,6 +1105,7 @@ mod tests {
                 type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
                 handle: None,
                 params,
+                exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),

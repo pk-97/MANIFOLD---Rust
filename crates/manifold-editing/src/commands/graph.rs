@@ -207,6 +207,7 @@ impl Command for AddGraphNodeCommand {
                 type_id: node_type_id,
                 handle: None,
                 params: BTreeMap::new(),
+                exposed_params: Default::default(),
                 editor_pos: pos,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
@@ -681,6 +682,427 @@ impl Command for RevertEffectGraphCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Toggle Node Param Expose (unified Effect + Generator)
+// ---------------------------------------------------------------------------
+
+/// Toggle whether an inner-graph parameter is exposed on the outer
+/// card. **Single command for both Effect-hosted and Generator-hosted
+/// graphs** — the graph editor is one surface, the click handler emits
+/// one [`crate::PanelAction`], and exposure state lives in one place
+/// (the graph node's `exposed_params` set).
+///
+/// For Effect targets, this command also mirrors the new state into
+/// the legacy `EffectInstance.param_values[i].exposed` (for params
+/// covered by a preset binding's static-block slot) and
+/// [`EffectInstance::user_param_bindings`] (for inner-node params with
+/// no preset binding). The mirror is what keeps the timeline-card
+/// state-sync path working until Step 8 of the unification cuts those
+/// fields over to the graph as the single source of truth.
+///
+/// For Generator targets, only the graph write happens — generators
+/// never had a legacy `param_values` shadow.
+#[derive(Debug)]
+pub struct ToggleNodeParamExposeCommand {
+    target: GraphTarget,
+    node_handle: String,
+    inner_param: String,
+    expose: bool,
+    catalog_default: EffectGraphDef,
+    /// Inner-node ParamDef metadata captured at panel-build time.
+    /// Required when the Effect-side mirror needs to append a new
+    /// `UserParamBinding` — the binding needs label/min/max/default/
+    /// convert to be well-formed. Generators ignore this.
+    inner_meta: Option<manifold_core::effects::ParamConvert>,
+    /// Display label for the user binding (effect-side only).
+    inner_label: String,
+    inner_min: f32,
+    inner_max: f32,
+    inner_default: f32,
+    /// Reverse state, populated on first execute(). See
+    /// [`NodeExposeReverse`].
+    reverse: NodeExposeReverse,
+}
+
+#[derive(Debug, Default)]
+enum NodeExposeReverse {
+    #[default]
+    None,
+    /// Captured on execute. Restored on undo.
+    Captured {
+        /// Previous membership of `inner_param` in the node's
+        /// `exposed_params` set. `true` if it was present before
+        /// execute, `false` otherwise. Restored unconditionally on undo.
+        prev_in_set: bool,
+        /// Effect-side mirror reverse state. `None` for Generator
+        /// targets; `Some` for Effect targets where the mirror ran.
+        effect_mirror: Option<EffectMirrorReverse>,
+    },
+}
+
+#[derive(Debug)]
+enum EffectMirrorReverse {
+    /// The (handle, param) maps to a static-block slot; we flipped
+    /// `param_values[slot].exposed`. Undo restores `prev_exposed`.
+    StaticSlot { slot: usize, prev_exposed: bool },
+    /// The (handle, param) is a non-preset param; we appended a
+    /// `UserParamBinding`. Undo removes it by id.
+    AppendedUserBinding {
+        user_param_id: String,
+    },
+    /// The (handle, param) is a non-preset param; we removed an
+    /// existing `UserParamBinding`. Undo reinserts it at `position`
+    /// with the captured slot value.
+    RemovedUserBinding {
+        binding: manifold_core::effects::UserParamBinding,
+        position: usize,
+        slot_value: manifold_core::effects::ParamSlot,
+    },
+    /// No-op: the Effect-side state already matched the requested
+    /// state (idempotent re-toggle). Nothing to undo on the mirror.
+    NoOp,
+}
+
+impl ToggleNodeParamExposeCommand {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target: GraphTarget,
+        node_handle: String,
+        inner_param: String,
+        expose: bool,
+        catalog_default: EffectGraphDef,
+        inner_label: String,
+        inner_min: f32,
+        inner_max: f32,
+        inner_default: f32,
+        inner_convert: manifold_core::effects::ParamConvert,
+    ) -> Self {
+        Self {
+            target,
+            node_handle,
+            inner_param,
+            expose,
+            catalog_default,
+            inner_meta: Some(inner_convert),
+            inner_label,
+            inner_min,
+            inner_max,
+            inner_default,
+            reverse: NodeExposeReverse::None,
+        }
+    }
+}
+
+/// Flip `inner_param` membership in the matching `EffectGraphNode`'s
+/// `exposed_params` set. Returns the previous membership for undo.
+/// `None` if the def has no node with that handle.
+fn flip_graph_exposed(
+    def: &mut EffectGraphDef,
+    node_handle: &str,
+    inner_param: &str,
+    expose: bool,
+) -> Option<bool> {
+    let node = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.handle.as_deref() == Some(node_handle))?;
+    let was = node.exposed_params.contains(inner_param);
+    if expose {
+        node.exposed_params.insert(inner_param.to_string());
+    } else {
+        node.exposed_params.remove(inner_param);
+    }
+    Some(was)
+}
+
+/// Restore `inner_param` membership in the matching node's
+/// `exposed_params` set to `prev_in_set`. Idempotent — silently no-ops
+/// if the node is gone.
+fn restore_graph_exposed(
+    def: &mut EffectGraphDef,
+    node_handle: &str,
+    inner_param: &str,
+    prev_in_set: bool,
+) {
+    if let Some(node) = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.handle.as_deref() == Some(node_handle))
+    {
+        if prev_in_set {
+            node.exposed_params.insert(inner_param.to_string());
+        } else {
+            node.exposed_params.remove(inner_param);
+        }
+    }
+}
+
+/// Find the static-block param slot index for an (inner_node_handle,
+/// inner_param) pair, by scanning the preset metadata's bindings.
+/// Returns the position in `metadata.params` of the binding whose
+/// target is `(handle, param)`. `None` if the def has no metadata or
+/// no binding targets that (handle, param).
+fn static_slot_for(
+    def: &EffectGraphDef,
+    node_handle: &str,
+    inner_param: &str,
+) -> Option<usize> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let meta = def.preset_metadata.as_ref()?;
+    let binding_idx = meta.bindings.iter().position(|b| match &b.target {
+        BindingTarget::HandleNode { handle, param } => {
+            handle == node_handle && param == inner_param
+        }
+        BindingTarget::Composite { .. } => false,
+    })?;
+    // Static-block slots are positional against `metadata.params` —
+    // each `params[i]` corresponds to bindings sharing the same `id`.
+    let binding_id = &meta.bindings[binding_idx].id;
+    meta.params.iter().position(|p| &p.id == binding_id)
+}
+
+impl Command for ToggleNodeParamExposeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let node_handle = self.node_handle.clone();
+        let inner_param = self.inner_param.clone();
+        let expose = self.expose;
+        let inner_label = self.inner_label.clone();
+        let inner_min = self.inner_min;
+        let inner_max = self.inner_max;
+        let inner_default = self.inner_default;
+        let inner_convert = self.inner_meta.unwrap_or(manifold_core::effects::ParamConvert::Float);
+
+        // Graph-side write + locate static-block slot (if any). We
+        // need a snapshot of the static-slot mapping BEFORE the
+        // effect-side mutation, so do it inside this block.
+        let graph_result = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            let prev_in_set =
+                flip_graph_exposed(def, &node_handle, &inner_param, expose).unwrap_or(false);
+            let static_slot = static_slot_for(def, &node_handle, &inner_param);
+            (prev_in_set, static_slot)
+        });
+
+        let Some((prev_in_set, static_slot)) = graph_result else {
+            // Target didn't resolve — nothing to undo.
+            self.reverse = NodeExposeReverse::None;
+            return;
+        };
+
+        // Effect-side mirror. Only runs for GraphTarget::Effect.
+        let effect_mirror = match &self.target {
+            GraphTarget::Effect(effect_id) => {
+                let effect = match project.find_effect_by_id_mut(effect_id) {
+                    Some(fx) => fx,
+                    None => {
+                        self.reverse = NodeExposeReverse::Captured {
+                            prev_in_set,
+                            effect_mirror: None,
+                        };
+                        return;
+                    }
+                };
+                Some(mirror_effect_side(
+                    effect,
+                    &node_handle,
+                    &inner_param,
+                    expose,
+                    static_slot,
+                    &inner_label,
+                    inner_min,
+                    inner_max,
+                    inner_default,
+                    inner_convert,
+                ))
+            }
+            GraphTarget::Generator(_) => None,
+        };
+
+        self.reverse = NodeExposeReverse::Captured {
+            prev_in_set,
+            effect_mirror,
+        };
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let reverse = std::mem::take(&mut self.reverse);
+        let NodeExposeReverse::Captured {
+            prev_in_set,
+            effect_mirror,
+        } = reverse
+        else {
+            return;
+        };
+
+        // Effect-side restore first (must happen before the graph-side
+        // restore if either fails for a deleted target, the effect
+        // walk will short-circuit cleanly).
+        if let (GraphTarget::Effect(effect_id), Some(mirror)) = (&self.target, effect_mirror)
+            && let Some(effect) = project.find_effect_by_id_mut(effect_id)
+        {
+            unmirror_effect_side(effect, mirror);
+        }
+
+        // Graph-side restore. Use the non-lifting helper — if the
+        // graph was None pre-execute we created it via the lifting
+        // helper; on undo we leave whatever's there in place and just
+        // restore the bit.
+        let node_handle = self.node_handle.clone();
+        let inner_param = self.inner_param.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            restore_graph_exposed(def, &node_handle, &inner_param, prev_in_set);
+        });
+    }
+
+    fn description(&self) -> &str {
+        if self.expose {
+            "Expose Param"
+        } else {
+            "Hide Param"
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mirror_effect_side(
+    effect: &mut manifold_core::effects::EffectInstance,
+    node_handle: &str,
+    inner_param: &str,
+    expose: bool,
+    static_slot: Option<usize>,
+    inner_label: &str,
+    inner_min: f32,
+    inner_max: f32,
+    inner_default: f32,
+    inner_convert: manifold_core::effects::ParamConvert,
+) -> EffectMirrorReverse {
+    use manifold_core::effects::{ParamSlot, UserParamBinding};
+
+    if let Some(slot) = static_slot {
+        // Static-block path: flip param_values[slot].exposed.
+        let Some(s) = effect.param_values.get_mut(slot) else {
+            return EffectMirrorReverse::NoOp;
+        };
+        if s.exposed == expose {
+            return EffectMirrorReverse::NoOp;
+        }
+        let prev_exposed = s.exposed;
+        s.exposed = expose;
+        return EffectMirrorReverse::StaticSlot { slot, prev_exposed };
+    }
+
+    // Non-static path: append / remove a UserParamBinding.
+    let existing_position = effect
+        .user_param_bindings
+        .iter()
+        .position(|b| b.node_handle == node_handle && b.inner_param == inner_param);
+
+    if expose {
+        if existing_position.is_some() {
+            return EffectMirrorReverse::NoOp;
+        }
+        let id = generate_unified_user_param_id(
+            node_handle,
+            inner_param,
+            &effect.user_param_bindings,
+        );
+        let binding = UserParamBinding {
+            id: id.clone(),
+            label: inner_label.to_string(),
+            node_handle: node_handle.to_string(),
+            inner_param: inner_param.to_string(),
+            min: inner_min,
+            max: inner_max,
+            default_value: inner_default,
+            convert: inner_convert,
+        };
+        effect.append_user_binding(binding);
+        EffectMirrorReverse::AppendedUserBinding {
+            user_param_id: id,
+        }
+    } else {
+        let Some(position) = existing_position else {
+            return EffectMirrorReverse::NoOp;
+        };
+        let binding = effect.user_param_bindings[position].clone();
+        // Capture the slot value BEFORE removal (the slot lives at
+        // static_count + position).
+        let static_count = manifold_core::effect_definition_registry::try_get(effect.effect_type())
+            .map(|def| def.param_count)
+            .unwrap_or(0);
+        let slot_idx = static_count + position;
+        let slot_value = effect
+            .param_values
+            .get(slot_idx)
+            .copied()
+            .unwrap_or(ParamSlot::exposed(inner_default));
+        let _ = effect.remove_user_binding_by_id(&binding.id);
+        EffectMirrorReverse::RemovedUserBinding {
+            binding,
+            position,
+            slot_value,
+        }
+    }
+}
+
+fn unmirror_effect_side(
+    effect: &mut manifold_core::effects::EffectInstance,
+    mirror: EffectMirrorReverse,
+) {
+    match mirror {
+        EffectMirrorReverse::NoOp => {}
+        EffectMirrorReverse::StaticSlot { slot, prev_exposed } => {
+            if let Some(s) = effect.param_values.get_mut(slot) {
+                s.exposed = prev_exposed;
+            }
+        }
+        EffectMirrorReverse::AppendedUserBinding { user_param_id } => {
+            let _ = effect.remove_user_binding_by_id(&user_param_id);
+        }
+        EffectMirrorReverse::RemovedUserBinding {
+            binding,
+            position,
+            slot_value,
+        } => {
+            let pos = position.min(effect.user_param_bindings.len());
+            let binding_id = binding.id.clone();
+            effect.user_param_bindings.insert(pos, binding);
+            effect.user_param_bindings_version =
+                effect.user_param_bindings_version.wrapping_add(1);
+            if let Some(value_idx) = effect.param_id_to_value_index(&binding_id) {
+                if value_idx <= effect.param_values.len() {
+                    effect.param_values.insert(value_idx, slot_value);
+                } else {
+                    effect.param_values.push(slot_value);
+                }
+            }
+        }
+    }
+}
+
+/// Mint a deterministic user_param_id for an effect's user-tail
+/// binding. Mirrors the existing `generate_user_param_id` in
+/// `crate::commands::effects` — we duplicate the logic here to avoid a
+/// cross-module pub-item dependency from `graph.rs` into `effects.rs`.
+fn generate_unified_user_param_id(
+    inner_node_handle: &str,
+    inner_param: &str,
+    existing: &[manifold_core::effects::UserParamBinding],
+) -> String {
+    let short = inner_node_handle
+        .rsplit_once('.')
+        .map(|(_, t)| t)
+        .unwrap_or(inner_node_handle);
+    let prefix = format!("user.{short}.{inner_param}");
+    let mut n: u32 = 1;
+    loop {
+        let candidate = format!("{prefix}.{n}");
+        if !existing.iter().any(|b| b.id == candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -707,6 +1129,7 @@ mod tests {
                     type_id: "system.source".to_string(),
                     handle: Some("source".to_string()),
                     params: BTreeMap::new(),
+                    exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
@@ -716,6 +1139,7 @@ mod tests {
                     type_id: "node.transform".to_string(),
                     handle: Some("uv_transform".to_string()),
                     params: BTreeMap::new(),
+                    exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
@@ -725,6 +1149,7 @@ mod tests {
                     type_id: "node.mix".to_string(),
                     handle: Some("mix".to_string()),
                     params: BTreeMap::new(),
+                    exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
@@ -734,6 +1159,7 @@ mod tests {
                     type_id: "system.final_output".to_string(),
                     handle: Some("final_output".to_string()),
                     params: BTreeMap::new(),
+                    exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
@@ -1152,6 +1578,108 @@ mod tests {
                 .is_some(),
             "undo restores the previous override",
         );
+    }
+
+    // ─── Toggle Node Param Expose (unified) ─────────────────────────
+    //
+    // The same command lights up both Effect-hosted and Generator-
+    // hosted graphs. These tests pin the contract for each direction.
+
+    #[test]
+    fn toggle_node_param_expose_against_generator_flips_graph_exposed_set() {
+        let (mut project, lid) = project_with_one_generator_layer();
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+        );
+
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(
+            node.exposed_params.contains("rotation"),
+            "expose flips the graph exposed_params set"
+        );
+
+        // Undo flips it back.
+        cmd.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(
+            !node.exposed_params.contains("rotation"),
+            "undo restores prior exposed_params state"
+        );
+    }
+
+    #[test]
+    fn toggle_node_param_expose_against_effect_flips_both_graph_and_user_binding() {
+        // Project with one master effect using the catalog default.
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-mirror-instance");
+        let mut fx = EffectInstance::new(EffectTypeId::new("test.mirror"));
+        fx.id = effect_id.clone();
+        project.settings.master_effects.push(fx);
+
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+        );
+
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        // Graph side: exposed_params set carries the param.
+        let def = fx.graph.as_ref().expect("graph lifted on first edit");
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(node.exposed_params.contains("rotation"));
+        // Effect-side mirror: user_param_bindings appended because the
+        // catalog default has no preset bindings for this param.
+        assert_eq!(fx.user_param_bindings.len(), 1);
+        assert_eq!(fx.user_param_bindings[0].node_handle, "uv_transform");
+        assert_eq!(fx.user_param_bindings[0].inner_param, "rotation");
+
+        // Undo reverses both sides.
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        let def = fx.graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(!node.exposed_params.contains("rotation"));
+        assert_eq!(fx.user_param_bindings.len(), 0);
     }
 
     #[test]
