@@ -11,16 +11,25 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-pub const MATH_OPS: &[&str] =
-    &["Add", "Subtract", "Multiply", "Divide", "Min", "Max", "Atan2"];
+pub const MATH_OPS: &[&str] = &[
+    "Add",      // 0
+    "Subtract", // 1
+    "Multiply", // 2
+    "Divide",   // 3
+    "Min",      // 4
+    "Max",      // 5
+    "Atan2",    // 6
+    "Sin",      // 7 — unary, b ignored
+    "Cos",      // 8 — unary, b ignored
+];
 
 crate::primitive! {
     name: Math,
     type_id: "node.math",
-    purpose: "Binary scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / min / max / divide / atan2). Composition glue for control wires.",
+    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos). Composition glue for control wires. `b` is unused for unary ops (sin, cos) and may be left unwired.",
     inputs: {
         a: ScalarF32 required,
-        b: ScalarF32 required,
+        b: ScalarF32 optional,
     },
     outputs: {
         out: ScalarF32,
@@ -35,7 +44,7 @@ crate::primitive! {
             enum_values: MATH_OPS,
         },
     ],
-    composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate.",
+    composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate. Sin and Cos are unary ops that read `a` only (in radians) and ignore `b`; convenient for deriving rotation coefficients from time wires when composing rotating procedural fields.",
     examples: [],
     picker: { label: "Math", category: Driver },
 }
@@ -46,14 +55,31 @@ impl Primitive for Math {
             Some(ParamValue::Float(f)) => f,
             _ => return, // required input unwired — runtime would have caught this in validate
         };
-        let b = match ctx.inputs.scalar("b") {
-            Some(ParamValue::Float(f)) => f,
-            _ => return,
-        };
         let op = match ctx.params.get("op") {
             Some(ParamValue::Enum(v)) => (*v as usize).min(MATH_OPS.len() - 1),
             Some(ParamValue::Float(f)) => (f.round().max(0.0) as usize).min(MATH_OPS.len() - 1),
             _ => 2,
+        };
+
+        // Unary ops compute from `a` only.
+        if op == 7 {
+            ctx.outputs.set_scalar("out", ParamValue::Float(a.sin()));
+            return;
+        }
+        if op == 8 {
+            ctx.outputs.set_scalar("out", ParamValue::Float(a.cos()));
+            return;
+        }
+
+        // Binary ops need `b`. If `b` is unwired we have no useful
+        // output — set 0 explicitly so downstream consumers see a
+        // defined value rather than a stale slot.
+        let b = match ctx.inputs.scalar("b") {
+            Some(ParamValue::Float(f)) => f,
+            _ => {
+                ctx.outputs.set_scalar("out", ParamValue::Float(0.0));
+                return;
+            }
         };
         let out = match op {
             0 => a + b,
@@ -228,5 +254,27 @@ mod tests {
     #[test]
     fn atan2_zero_zero_clamps_to_zero() {
         assert_eq!(run_math(0.0, 0.0, 6), 0.0);
+    }
+
+    /// Sin / Cos are unary ops — read `a` (in radians), ignore `b`.
+    /// The Math primitive's `b` port is optional now; these tests
+    /// wire `b = 0` for ergonomic parity with the binary-op tests.
+    #[test]
+    fn sin_zero_is_zero() {
+        assert!(run_math(0.0, 0.0, 7).abs() < 1e-6);
+    }
+    #[test]
+    fn sin_half_pi_is_one() {
+        let got = run_math(std::f32::consts::FRAC_PI_2, 0.0, 7);
+        assert!((got - 1.0).abs() < 1e-6, "sin(π/2) = 1, got {got}");
+    }
+    #[test]
+    fn cos_zero_is_one() {
+        assert!((run_math(0.0, 0.0, 8) - 1.0).abs() < 1e-6);
+    }
+    #[test]
+    fn cos_pi_is_negative_one() {
+        let got = run_math(std::f32::consts::PI, 0.0, 8);
+        assert!((got - -1.0).abs() < 1e-6, "cos(π) = -1, got {got}");
     }
 }

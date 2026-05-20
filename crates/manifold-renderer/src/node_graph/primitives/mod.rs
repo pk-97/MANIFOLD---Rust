@@ -36,6 +36,7 @@ mod dither_pattern;
 mod edge_detect;
 mod envelope_follower_ar;
 mod fbm_2d;
+mod field_combine;
 mod filter;
 mod flow_field_noise;
 mod fract_texture;
@@ -98,6 +99,7 @@ mod separable_gaussian;
 mod simplex_noise_2d;
 mod sin_texture;
 mod smoothing;
+mod smoothstep_texture;
 mod strobe;
 mod temporal;
 mod tone_map;
@@ -149,6 +151,7 @@ pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
 pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr};
 pub use fbm_2d::Fbm2D;
+pub use field_combine::FieldCombine;
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
@@ -223,6 +226,7 @@ pub use separable_gaussian::{
 pub use simplex_noise_2d::SimplexNoise2D;
 pub use sin_texture::SinTexture;
 pub use smoothing::{SMOOTHING_TYPE_ID, Smoothing};
+pub use smoothstep_texture::SmoothstepTexture;
 pub use strobe::{
     NOTE_RATE_LABELS, NOTE_RATE_VALUES, NOTE_RATES as STROBE_NOTE_RATES, Strobe,
 };

@@ -19,7 +19,11 @@ struct DistanceUniforms {
     cx: f32,
     cy: f32,
     scale: f32,
-    _pad: f32,
+    scale_x: f32,
+    scale_y: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 crate::primitive! {
@@ -27,14 +31,17 @@ crate::primitive! {
     type_id: "node.distance_to_point",
     purpose: "Pure generator. Per-pixel Euclidean distance from a configurable center in UV space, broadcast to R/G/B (A=1). Building block for radial fields, circle fields, and tunnel-like compositions.",
     inputs: {
-        // Port-shadows-param for the three scalar params: when a
+        // Port-shadows-param for all five scalar params: when a
         // scalar is wired, it overrides the static param each frame.
         // Lets generator graphs derive cx/cy from a Math node and
-        // animate scale from the same complexity wire that feeds
-        // downstream sin_texture frequencies.
+        // animate scale (or scale_x/scale_y for anisotropic length
+        // fields) from the same complexity wire that feeds downstream
+        // sin_texture frequencies.
         cx: ScalarF32 optional,
         cy: ScalarF32 optional,
         scale: ScalarF32 optional,
+        scale_x: ScalarF32 optional,
+        scale_y: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -64,35 +71,49 @@ crate::primitive! {
             range: Some((0.0, 16.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "scale_x",
+            label: "Scale X (anisotropic)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 16.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "scale_y",
+            label: "Scale Y (anisotropic)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 16.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "Output range without scale: [0, ~1.414] (sqrt(2) at corners when center is opposite corner). Use scale to remap into a target range, or chain into node.scale_offset_texture for affine remap. Pair with node.sin_texture for concentric rings, node.lut1d for radial gradients, node.compose with a threshold for circle masks.",
     examples: [],
     picker: { label: "Distance to Point", category: Atom },
 }
 
+fn read_scalar(
+    ctx: &EffectNodeContext<'_, '_>,
+    name: &str,
+    default: f32,
+) -> f32 {
+    match ctx.inputs.scalar(name) {
+        Some(ParamValue::Float(f)) => f,
+        _ => match ctx.params.get(name) {
+            Some(ParamValue::Float(f)) => *f,
+            _ => default,
+        },
+    }
+}
+
 impl Primitive for DistanceToPoint {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cx = match ctx.inputs.scalar("cx") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("cx") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 0.5,
-            },
-        };
-        let cy = match ctx.inputs.scalar("cy") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("cy") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 0.5,
-            },
-        };
-        let scale = match ctx.inputs.scalar("scale") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("scale") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 1.0,
-            },
-        };
+        let cx = read_scalar(ctx, "cx", 0.5);
+        let cy = read_scalar(ctx, "cy", 0.5);
+        let scale = read_scalar(ctx, "scale", 1.0);
+        let scale_x = read_scalar(ctx, "scale_x", 1.0);
+        let scale_y = read_scalar(ctx, "scale_y", 1.0);
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;
@@ -116,7 +137,11 @@ impl Primitive for DistanceToPoint {
             cx,
             cy,
             scale,
-            _pad: 0.0,
+            scale_x,
+            scale_y,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -144,13 +169,13 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn distance_to_point_declares_three_optional_scalar_inputs_and_one_texture_output() {
+    fn distance_to_point_declares_five_optional_scalar_inputs_and_one_texture_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(DistanceToPoint::TYPE_ID, "node.distance_to_point");
         let ins = DistanceToPoint::INPUTS;
-        assert_eq!(ins.len(), 3);
+        assert_eq!(ins.len(), 5);
         let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["cx", "cy", "scale"]);
+        assert_eq!(names, vec!["cx", "cy", "scale", "scale_x", "scale_y"]);
         for port in ins {
             assert!(!port.required);
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
@@ -161,9 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn distance_to_point_has_cx_cy_scale_params() {
+    fn distance_to_point_has_all_five_params() {
         let names: Vec<&str> = DistanceToPoint::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["cx", "cy", "scale"]);
+        assert_eq!(names, vec!["cx", "cy", "scale", "scale_x", "scale_y"]);
     }
 
     #[test]
