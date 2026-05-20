@@ -192,6 +192,7 @@ mod tests {
         assert_eq!(
             drivers,
             &[
+                "Affine Scalar",
                 "BeatGate",
                 "ColorSample",
                 "Envelope Follower (A/R)",

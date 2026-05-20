@@ -1204,7 +1204,34 @@ impl ContentThread {
         )?;
         let def: manifold_core::effect_graph_def::EffectGraphDef =
             serde_json::from_str(json).ok()?;
-        manifold_renderer::node_graph::GraphSnapshot::from_def(&def)
+        let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&def)?;
+        // Populate outer_routings from the preset's bindings so the
+        // graph editor's right panel knows which inner params are bound
+        // to outer-card sliders. For effects this is filled in by the
+        // compositor's `outer_routings_for`; generators don't have an
+        // effect registry, so we build the routings directly from the
+        // JSON def's `presetMetadata.bindings`.
+        if let Some(meta) = def.preset_metadata.as_ref() {
+            use manifold_core::effect_graph_def::BindingTarget;
+            use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+            snap.outer_routings = meta
+                .bindings
+                .iter()
+                .filter_map(|b| match &b.target {
+                    BindingTarget::HandleNode { handle, param } => {
+                        Some(OuterParamRouting {
+                            outer_label: b.label.clone(),
+                            outer_param_id: b.id.clone(),
+                            node_handle: handle.clone(),
+                            inner_param: param.clone(),
+                            source: OuterParamSource::Static,
+                        })
+                    }
+                    BindingTarget::Composite { .. } => None,
+                })
+                .collect();
+        }
+        Some(snap)
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.

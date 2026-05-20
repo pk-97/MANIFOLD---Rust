@@ -58,10 +58,12 @@ pub fn bundled_generator_preset_type_ids() -> impl Iterator<Item = GeneratorType
 mod tests {
     use super::*;
 
-    /// The TrivialPassthrough + PlasmaClassicDecomposed presets that
-    /// ship today must be discoverable through this table. Renaming
-    /// either JSON file breaks the picker — this test guards against
-    /// that.
+    /// The TrivialPassthrough + Plasma presets that ship today must be
+    /// discoverable through this table. The `Plasma` entry binds to
+    /// `GeneratorTypeId::PLASMA` (the legacy id) so it supersedes the
+    /// Rust factory of the same id — renaming or removing it would
+    /// silently revert every existing Plasma layer to the Rust path
+    /// and break the editor's cog button on those layers.
     #[test]
     fn bundled_presets_include_shipping_generators() {
         let ids: Vec<String> = bundled_generator_preset_type_ids()
@@ -72,8 +74,8 @@ mod tests {
             "TrivialPassthrough preset must ship — got {ids:?}",
         );
         assert!(
-            ids.contains(&"PlasmaClassicDecomposed".to_string()),
-            "PlasmaClassicDecomposed preset must ship — got {ids:?}",
+            ids.contains(&"Plasma".to_string()),
+            "Plasma preset must ship under id `Plasma` to supersede the legacy Rust factory — got {ids:?}",
         );
     }
 

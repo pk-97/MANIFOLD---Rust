@@ -1520,7 +1520,6 @@ impl Application {
         // is a degenerate state — show the panel's empty placeholder.
         let snap_arc = self.content_state.active_graph_snapshot.as_ref().cloned();
         let view_for_panel = build_graph_editor_view(
-            self.current_editor_target.as_ref(),
             self.graph_canvas
                 .as_ref()
                 .and_then(|c| c.selected_node_id()),
@@ -1545,6 +1544,7 @@ impl Application {
             self.current_editor_target.as_ref(),
             &static_block_targets,
             &self.local_project,
+            snap_arc.as_deref(),
         );
         let card_entries = build_card_entries(
             self.current_editor_target.as_ref(),
@@ -2145,14 +2145,15 @@ fn render_text_input_overlay(
 /// that the right-sidebar panel consumes.
 ///
 /// Returns `None` when:
-/// - no editor target is set,
 /// - no graph snapshot is available, or
 /// - the canvas's selected node is not in the snapshot.
+///
+/// Intentionally does NOT gate on an effect target — generator graphs
+/// have no effect identity, but the snapshot carries everything the
+/// per-node param view needs (handle, title, params + ranges). Gating
+/// on `current_editor_target` (effect-only) would silently empty the
+/// right column for every generator graph the user opens.
 fn build_graph_editor_view(
-    target: Option<&(
-        manifold_editing::commands::effect_target::EffectTarget,
-        usize,
-    )>,
     selected_node: Option<u32>,
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
 ) -> Option<manifold_ui::panels::graph_editor::GraphEditorNodeView> {
@@ -2161,7 +2162,6 @@ fn build_graph_editor_view(
         GraphEditorNodeView, GraphEditorParam, GraphEditorParamKind,
     };
 
-    target?; // editor not on a specific effect → no view
     let id = selected_node?;
     let snap = snapshot?;
     let node = snap.nodes.iter().find(|n| n.id == id)?;
@@ -2213,10 +2213,23 @@ fn build_card_exposures(
     )>,
     static_block_targets: &std::collections::HashMap<(String, String), usize>,
     project: &manifold_core::project::Project,
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
 ) -> std::collections::HashSet<(String, String)> {
     use manifold_editing::commands::effect_target::EffectTarget;
+    // Generator-graph case: no EffectTarget, but the snapshot's
+    // outer_routings (built from the preset's bindings) ARE the card
+    // sliders. Every declared routing counts as exposed — that's the
+    // whole reason the binding exists. Effect-graph exposures still
+    // need the per-instance dance below.
     let Some((effect_target, effect_index)) = target else {
-        return Default::default();
+        return snapshot
+            .map(|snap| {
+                snap.outer_routings
+                    .iter()
+                    .map(|r| (r.node_handle.clone(), r.inner_param.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
     };
     let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
         EffectTarget::Master => Some(&project.settings.master_effects),
@@ -2366,8 +2379,23 @@ fn build_card_entries(
 ) -> Vec<manifold_ui::panels::graph_editor::GraphEditorCardEntry> {
     use manifold_editing::commands::effect_target::EffectTarget;
     use manifold_ui::panels::graph_editor::GraphEditorCardEntry;
+    // Generator-graph case: no EffectTarget. The summary entries come
+    // from the snapshot's outer_routings (preset-declared bindings),
+    // one entry per binding. Effect-graph case continues with the
+    // per-instance dance below.
     let Some((effect_target, effect_index)) = target else {
-        return Vec::new();
+        let Some(snap) = snapshot else {
+            return Vec::new();
+        };
+        return snap
+            .outer_routings
+            .iter()
+            .map(|r| GraphEditorCardEntry {
+                label: r.outer_label.clone(),
+                target_handle: r.node_handle.clone(),
+                target_inner_param: r.inner_param.clone(),
+            })
+            .collect();
     };
     let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
         EffectTarget::Master => Some(&project.settings.master_effects),

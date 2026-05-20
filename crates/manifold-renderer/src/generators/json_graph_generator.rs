@@ -114,6 +114,31 @@ pub struct JsonGraphGenerator {
     /// mock-backend test path, where there's no GPU and the slot is
     /// never used.
     final_output_slot: Option<Slot>,
+    /// Texture format threaded through to placeholder allocation on
+    /// resize. `None` for the mock-backend test path (which doesn't
+    /// touch the GPU on resize).
+    target_format: Option<GpuTextureFormat>,
+    /// Outer-card → inner-node bindings resolved at construction time.
+    /// Each render frame walks these and pushes the corresponding
+    /// `GeneratorContext::params[i]` into the target node's param.
+    /// Empty when the preset declares no bindings.
+    bindings: Vec<BindingResolution>,
+}
+
+/// One resolved outer-card → inner-node binding for a JSON generator
+/// preset. Built once at construction by walking the preset's
+/// `BindingDef` list against the live graph's handle map; subsequent
+/// frames index this vec by `GeneratorContext::params[i]` position.
+struct BindingResolution {
+    target_node: NodeInstanceId,
+    /// Param name on the target node. The graph's `set_param` API
+    /// requires `&'static str`, so we Box::leak the param name once at
+    /// construction. The leak is bounded — one per preset binding,
+    /// times the number of generator constructions in a session — and
+    /// matches the existing pattern in `loaded_preset_view`.
+    target_param: &'static str,
+    default: f32,
+    convert: manifold_core::effects::ParamConvert,
 }
 
 impl JsonGraphGenerator {
@@ -172,6 +197,14 @@ impl JsonGraphGenerator {
             return Err(JsonGeneratorLoadError::MissingFinalOutput);
         }
 
+        // Capture the binding specs before into_graph consumes `doc`.
+        // These get resolved against the live graph's handle map below.
+        let binding_specs: Vec<manifold_core::effect_graph_def::BindingDef> = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| m.bindings.clone())
+            .unwrap_or_default();
+
         let graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
 
@@ -200,6 +233,31 @@ impl JsonGraphGenerator {
             .map(|(_, res)| *res)
             .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
 
+        // Resolve the captured binding specs against the live graph's
+        // handle map. Bindings whose handle doesn't resolve are silently
+        // dropped (the host doesn't surface a runtime warn from
+        // primitive load yet).
+        use manifold_core::effect_graph_def::BindingTarget;
+        let handle_map: std::collections::HashMap<&str, NodeInstanceId> =
+            graph.handles().map(|(h, id)| (h, id)).collect();
+        let bindings: Vec<BindingResolution> = binding_specs
+            .iter()
+            .filter_map(|b| match &b.target {
+                BindingTarget::HandleNode { handle, param } => {
+                    let node_id = *handle_map.get(handle.as_str())?;
+                    let leaked_param: &'static str =
+                        Box::leak(param.clone().into_boxed_str());
+                    Some(BindingResolution {
+                        target_node: node_id,
+                        target_param: leaked_param,
+                        default: b.default_value,
+                        convert: b.convert,
+                    })
+                }
+                BindingTarget::Composite { .. } => None,
+            })
+            .collect();
+
         Ok(Self {
             type_id,
             graph,
@@ -209,6 +267,8 @@ impl JsonGraphGenerator {
             final_output_id,
             final_output_input_resource,
             final_output_slot: None,
+            target_format: None,
+            bindings,
         })
     }
 
@@ -248,6 +308,7 @@ impl JsonGraphGenerator {
         );
         let slot = backend.pre_bind_texture_2d(g.final_output_input_resource, placeholder);
         g.final_output_slot = Some(slot);
+        g.target_format = Some(format);
         g.executor = Executor::new(Box::new(backend));
         Ok(g)
     }
@@ -321,6 +382,27 @@ impl JsonGraphGenerator {
         );
     }
 
+    /// Push the host's slider values through the preset's bindings to
+    /// the matching inner-node params. Each `values[i]` lands on the
+    /// `i`-th binding declared in `presetMetadata.bindings`. Missing
+    /// entries fall back to the binding's `default_value`. No-op if the
+    /// preset declared no bindings.
+    pub fn apply_param_values(&mut self, values: &[f32]) {
+        use manifold_core::effects::ParamConvert;
+        for (i, binding) in self.bindings.iter().enumerate() {
+            let v = values.get(i).copied().unwrap_or(binding.default);
+            let pv = match binding.convert {
+                ParamConvert::Float => ParamValue::Float(v),
+                ParamConvert::IntRound => ParamValue::Int(v.round() as i32),
+                ParamConvert::BoolThreshold => ParamValue::Bool(v > 0.5),
+                ParamConvert::EnumRound => ParamValue::Enum(v.round().max(0.0) as u32),
+            };
+            let _ = self
+                .graph
+                .set_param(binding.target_node, binding.target_param, pv);
+        }
+    }
+
     /// Run one frame against the configured executor. Mock-backend mode
     /// is fine for unit tests; production use installs a Metal
     /// backend via [`Self::set_executor`] before calling.
@@ -352,7 +434,14 @@ impl Generator for JsonGraphGenerator {
             ctx.anim_progress,
         );
 
-        // 2. Install the host's target as the FinalOutput's source slot.
+        // 2. Push the host's outer-card slider values through the
+        // preset's bindings. Without this the inner-node params stay at
+        // their JSON defaults and the user's slider drags do nothing —
+        // it was the cause of the "Plasma looks frozen" bug.
+        let values = &ctx.params[..ctx.param_count.min(ctx.params.len() as u32) as usize];
+        self.apply_param_values(values);
+
+        // 3. Install the host's target as the FinalOutput's source slot.
         // First call pre-binds + swaps; later calls swap in place.
         self.install_target(target);
 
@@ -380,16 +469,39 @@ impl Generator for JsonGraphGenerator {
         ctx.anim_progress
     }
 
-    fn resize(&mut self, _device: &GpuDevice, _width: u32, _height: u32) {
-        // Invalidate the cached final-output slot. The next render()
-        // call will pre-bind a fresh placeholder + install the new
-        // target. The MetalBackend keeps its internal texture pool
-        // across resizes — primitives' lazy-alloc paths produce
-        // textures at the slot's declared size, which the backend's
-        // internal pool may handle separately. For now this is a
-        // best-effort resize; bit-exact resize semantics are a
-        // follow-up.
-        self.final_output_slot = None;
+    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
+        // Push the new dims into the MetalBackend so future lazy-alloc
+        // acquires get textures at the host's render resolution. Without
+        // this, every intermediate texture stays frozen at the
+        // construction-time size and the final pass writing into a
+        // larger host target only fills the original sub-rect (the
+        // "top-left corner only" rendering bug).
+        let Some(format) = self.target_format else {
+            // Mock-backend test path — no GPU, no resources to invalidate.
+            return;
+        };
+        let Some(metal) = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<MetalBackend>())
+        else {
+            return;
+        };
+        metal.resize(width, height);
+        // `resize` wiped every pinned binding (including the
+        // final-output placeholder) so the slot index is stale. Pre-bind
+        // a fresh 1×1 placeholder; `install_target` will swap in the
+        // host's real target on the next frame.
+        let placeholder = RenderTarget::new(
+            device,
+            1,
+            1,
+            format,
+            "json_graph_generator_target_owner",
+        );
+        let slot = metal.pre_bind_texture_2d(self.final_output_input_resource, placeholder);
+        self.final_output_slot = Some(slot);
     }
 }
 
@@ -401,6 +513,52 @@ mod tests {
 
     use manifold_core::Beats;
     use manifold_core::Seconds;
+
+    /// Regression test for the "Plasma looks frozen" bug: outer-card
+    /// slider values must reach the inner-node param via the preset's
+    /// declared bindings.
+    #[test]
+    fn apply_param_values_routes_into_inner_node_params() {
+        let json = include_str!(
+            "../../assets/generator-presets/Plasma.json"
+        );
+        let mut g = JsonGraphGenerator::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("Plasma preset must load");
+
+        // Find the plasma node's runtime id (handle = "plasma").
+        let plasma_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "plasma")
+            .map(|(_, id)| id)
+            .expect("Plasma preset declares a node with handle `plasma`");
+
+        // Push values in the same order Plasma's presetMetadata.params
+        // declares them: pattern, complexity, contrast, speed, scale, snap.
+        g.apply_param_values(&[3.0, 0.75, 0.42, 2.5, 1.5, 1.0]);
+
+        // The bindings should have updated each target param.
+        let inst = g.graph.get_node(plasma_id).unwrap();
+        assert!(matches!(
+            inst.params.get("complexity"),
+            Some(ParamValue::Float(v)) if (*v - 0.75).abs() < 1e-5
+        ));
+        assert!(matches!(
+            inst.params.get("contrast"),
+            Some(ParamValue::Float(v)) if (*v - 0.42).abs() < 1e-5
+        ));
+        assert!(matches!(
+            inst.params.get("speed"),
+            Some(ParamValue::Float(v)) if (*v - 2.5).abs() < 1e-5
+        ));
+        assert!(matches!(
+            inst.params.get("scale"),
+            Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
+        ));
+    }
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -539,22 +697,24 @@ mod tests {
         preset.execute_frame(frame_time());
     }
 
-    /// Load the bundled `PlasmaClassicDecomposed.json` preset from
-    /// disk and execute it. The first Tier 1 generator — a
-    /// non-trivial graph (~25 nodes) exercising the procedural-math
-    /// vocabulary + port-shadows-param + system.generator_input. If
-    /// this loads and executes cleanly, the infrastructure is sound.
+    /// Load the bundled `Plasma.json` preset from disk and execute it.
+    /// This is the JSON Plasma that supersedes the legacy Rust factory
+    /// — a non-trivial graph (~75 nodes) exercising the procedural-math
+    /// vocabulary + port-shadows-param + system.generator_input. The
+    /// `Plasma` type_id binding is load-bearing: it's what makes the
+    /// editor cog populate for existing Plasma layers and what causes
+    /// the registry to pick this JSON over the Rust factory at runtime.
     #[test]
-    fn bundled_plasma_classic_decomposed_loads_and_executes() {
+    fn bundled_plasma_loads_and_executes() {
         let json = include_str!(
-            "../../assets/generator-presets/PlasmaClassicDecomposed.json"
+            "../../assets/generator-presets/Plasma.json"
         );
         let mut preset = JsonGraphGenerator::from_json_str(
             json,
             &PrimitiveRegistry::with_builtin(),
         )
-        .expect("bundled PlasmaClassicDecomposed must load");
-        assert_eq!(preset.type_id().as_str(), "PlasmaClassicDecomposed");
+        .expect("bundled Plasma must load");
+        assert_eq!(preset.type_id().as_str(), "Plasma");
         preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0);
         preset.execute_frame(frame_time());
         // Advance time and execute again — phase should propagate

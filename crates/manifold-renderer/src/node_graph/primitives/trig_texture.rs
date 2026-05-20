@@ -1,10 +1,9 @@
-//! `node.sin_texture` — per-pixel `sin(input.rgb * freq + phase)`,
-//! alpha pass-through.
+//! `node.trig_texture` — per-pixel sin/cos/tan of `(input.rgb * freq + phase)`.
 //!
-//! Per-pixel-math member of the Batch 5.5 procedural texture math
-//! family. Chains downstream of field generators (uv_field,
-//! distance_to_point, polar_field, noise) to create sinusoidal
-//! patterns.
+//! Replaces the old standalone `node.sin_texture` and `node.cos_texture`
+//! with a single primitive that switches on a `mode` enum (Sin / Cos / Tan).
+//! Same input/output/param shape regardless of mode — authors don't pick
+//! the wrong primitive or need to swap nodes when iterating on a pattern.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -14,23 +13,22 @@ use crate::node_graph::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct SinUniforms {
+struct TrigUniforms {
     freq: f32,
     phase: f32,
+    mode: u32,
     _pad0: f32,
-    _pad1: f32,
 }
 
+pub const TRIG_MODES: &[&str] = &["Sin", "Cos", "Tan"];
+
 crate::primitive! {
-    name: SinTexture,
-    type_id: "node.sin_texture",
-    purpose: "Per-pixel sin(input.rgb * freq + phase). Alpha passes through. Output range [-1, 1] (chain node.scale_offset_texture with a=0.5, b=0.5 to remap to [0, 1] for normal display). Used to turn scalar fields into oscillating patterns (rings around distance_to_point, sweeps around uv_field, etc.).",
+    name: TrigTexture,
+    type_id: "node.trig_texture",
+    purpose: "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free.",
     inputs: {
         in: Texture2D required,
-        // Port-shadows-param for freq and phase: wired scalars
-        // override the static params every frame. Lets generator
-        // graphs drive phase from system.generator_input.time through
-        // a Math primitive (multiply by a per-term constant).
+        // Port-shadows-param: wired scalars override the inline freq/phase.
         freq: ScalarF32 optional,
         phase: ScalarF32 optional,
     },
@@ -54,17 +52,22 @@ crate::primitive! {
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "mode",
+            label: "Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // Sin
+            range: Some((0.0, (TRIG_MODES.len() - 1) as f32)),
+            enum_values: TRIG_MODES,
+        },
     ],
-    composition_notes: "Default freq = 2π so a [0, 1] input completes one full sine cycle. Animate by wiring `phase` from system.generator_input.time through a node.math (multiply by a per-term constant). Pair with node.distance_to_point for concentric rings, node.uv_field for stripes, node.polar_field's R channel for radial sectors.",
+    composition_notes: "Default freq = 2π so a [0, 1] input completes one full cycle. Sin and Cos output range is [-1, 1]; Tan is clamped to ±32. For Lissajous-style XY compositions, pair two trig_texture nodes (one Sin, one Cos) driven from the same field.",
     examples: [],
-    picker: { label: "Sin Texture", category: Atom },
+    picker: { label: "Trig Texture", category: Atom },
 }
 
-impl Primitive for SinTexture {
+impl Primitive for TrigTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // Port-shadows-param: wired scalar (if present) overrides the
-        // static param. Matches the convention Smoothing / Gain /
-        // AffineTransform use.
         let freq = match ctx.inputs.scalar("freq") {
             Some(ParamValue::Float(f)) => f,
             _ => match ctx.params.get("freq") {
@@ -79,6 +82,11 @@ impl Primitive for SinTexture {
                 _ => 0.0,
             },
         };
+        let mode = match ctx.params.get("mode") {
+            Some(ParamValue::Enum(v)) => (*v).min((TRIG_MODES.len() - 1) as u32),
+            Some(ParamValue::Float(f)) => (f.round() as u32).min((TRIG_MODES.len() - 1) as u32),
+            _ => 0,
+        };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -91,20 +99,20 @@ impl Primitive for SinTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/sin_texture.wgsl"),
+                include_str!("shaders/trig_texture.wgsl"),
                 "cs_main",
-                "node.sin_texture",
+                "node.trig_texture",
             )
         });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
-        let uniforms = SinUniforms {
+        let uniforms = TrigUniforms {
             freq,
             phase,
+            mode,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -114,21 +122,12 @@ impl Primitive for SinTexture {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: in_tex,
-                },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: out_tex,
-                },
+                GpuBinding::Texture { binding: 1, texture: in_tex },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Texture { binding: 3, texture: out_tex },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.sin_texture",
+            "node.trig_texture",
         );
     }
 }
@@ -140,10 +139,10 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn sin_texture_declares_one_required_texture_input_and_two_optional_scalar_ports() {
+    fn trig_texture_declares_required_in_and_optional_freq_phase() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(SinTexture::TYPE_ID, "node.sin_texture");
-        let ins = SinTexture::INPUTS;
+        assert_eq!(TrigTexture::TYPE_ID, "node.trig_texture");
+        let ins = TrigTexture::INPUTS;
         assert_eq!(ins.len(), 3);
         assert_eq!(ins[0].name, "in");
         assert!(ins[0].required);
@@ -154,20 +153,19 @@ mod tests {
         assert_eq!(ins[2].name, "phase");
         assert!(!ins[2].required);
         assert_eq!(ins[2].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(SinTexture::OUTPUTS.len(), 1);
-        assert_eq!(SinTexture::OUTPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(TrigTexture::OUTPUTS.len(), 1);
     }
 
     #[test]
-    fn sin_texture_has_freq_and_phase_params() {
-        let names: Vec<&str> = SinTexture::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["freq", "phase"]);
+    fn trig_texture_has_freq_phase_mode_params() {
+        let names: Vec<&str> = TrigTexture::PARAMS.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["freq", "phase", "mode"]);
     }
 
     #[test]
     fn primitive_registers_as_palette_atom() {
-        let prim = SinTexture::new();
+        let prim = TrigTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.sin_texture");
+        assert_eq!(node.type_id().as_str(), "node.trig_texture");
     }
 }

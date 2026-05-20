@@ -12,21 +12,22 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 pub const MATH_OPS: &[&str] = &[
-    "Add",      // 0
-    "Subtract", // 1
-    "Multiply", // 2
-    "Divide",   // 3
-    "Min",      // 4
-    "Max",      // 5
-    "Atan2",    // 6
-    "Sin",      // 7 — unary, b ignored
-    "Cos",      // 8 — unary, b ignored
+    "Add",        // 0
+    "Subtract",   // 1
+    "Multiply",   // 2
+    "Divide",     // 3
+    "Min",        // 4
+    "Max",        // 5
+    "Atan2",      // 6
+    "Sin",        // 7 — unary, b ignored
+    "Cos",        // 8 — unary, b ignored
+    "Reciprocal", // 9 — unary, b ignored; 1/a with 0-clamp
 ];
 
 crate::primitive! {
     name: Math,
     type_id: "node.math",
-    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos). Composition glue for control wires. `b` is unused for unary ops (sin, cos) and may be left unwired.",
+    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos). Composition glue for control wires. `b` is unused for unary ops (sin, cos). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
     inputs: {
         a: ScalarF32 required,
         b: ScalarF32 optional,
@@ -35,6 +36,22 @@ crate::primitive! {
         out: ScalarF32,
     },
     params: [
+        ParamDef {
+            name: "a",
+            label: "A",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "b",
+            label: "B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: "op",
             label: "Operation",
@@ -49,12 +66,23 @@ crate::primitive! {
     picker: { label: "Math", category: Driver },
 }
 
+fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
+    match ctx.inputs.scalar(name) {
+        Some(ParamValue::Float(f)) => f,
+        _ => match ctx.params.get(name) {
+            Some(ParamValue::Float(f)) => *f,
+            _ => default,
+        },
+    }
+}
+
 impl Primitive for Math {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let a = match ctx.inputs.scalar("a") {
-            Some(ParamValue::Float(f)) => f,
-            _ => return, // required input unwired — runtime would have caught this in validate
-        };
+        // Port-shadows-param for both inputs: wired scalar overrides
+        // the inline param, otherwise the param's static value drives
+        // the op. Constants embedded in the graph live as param values
+        // on this node instead of as separate Value-node wires.
+        let a = read_scalar(ctx, "a", 0.0);
         let op = match ctx.params.get("op") {
             Some(ParamValue::Enum(v)) => (*v as usize).min(MATH_OPS.len() - 1),
             Some(ParamValue::Float(f)) => (f.round().max(0.0) as usize).min(MATH_OPS.len() - 1),
@@ -70,17 +98,13 @@ impl Primitive for Math {
             ctx.outputs.set_scalar("out", ParamValue::Float(a.cos()));
             return;
         }
+        if op == 9 {
+            let out = if a.abs() < 1e-9 { 0.0 } else { 1.0 / a };
+            ctx.outputs.set_scalar("out", ParamValue::Float(out));
+            return;
+        }
 
-        // Binary ops need `b`. If `b` is unwired we have no useful
-        // output — set 0 explicitly so downstream consumers see a
-        // defined value rather than a stale slot.
-        let b = match ctx.inputs.scalar("b") {
-            Some(ParamValue::Float(f)) => f,
-            _ => {
-                ctx.outputs.set_scalar("out", ParamValue::Float(0.0));
-                return;
-            }
-        };
+        let b = read_scalar(ctx, "b", 0.0);
         let out = match op {
             0 => a + b,
             1 => a - b,

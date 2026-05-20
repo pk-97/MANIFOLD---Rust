@@ -1,23 +1,16 @@
-// node.smoothstep_texture — per-pixel WGSL smoothstep(low, high, x)
-// applied to RGB. Alpha passes through.
+// node.smoothstep_texture — per-pixel WGSL smoothstep on RGB.
 //
-// out.r = smoothstep(low, high, in.r)
-// out.g = smoothstep(low, high, in.g)
-// out.b = smoothstep(low, high, in.b)
-// out.a = in.a
+// mode = Range (0): out = smoothstep(low, high, in)
+// mode = Bipolar (1): out = smoothstep(-high, high, in)  (low ignored)
 //
-// smoothstep clamps x to [low, high] then applies the Hermite
-// polynomial 3t² - 2t³ where t = (x - low) / (high - low). Useful for
-// contrast remapping signed-sin sums into [0, 1] greyscale with an
-// S-curve falloff at the band edges — matches the
-// `smoothstep(-edge, edge, plasma)` step at the tail of plasma_classic
-// and similar procedural-texture pipelines.
+// Alpha passes through. Hermite polynomial 3t²-2t³ where
+// t = clamp((x - lo) / (hi - lo), 0, 1).
 
 struct Uniforms {
     low:  f32,
     high: f32,
+    mode: u32,   // 0 = Range, 1 = Bipolar
     _pad0: f32,
-    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -27,16 +20,18 @@ struct Uniforms {
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(source_tex);
+    let dims = textureDimensions(output_tex);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
     let s = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
+    let lo = select(u.low, -u.high, u.mode == 1u);
+    let hi = u.high;
     let out = vec4<f32>(
-        smoothstep(u.low, u.high, s.r),
-        smoothstep(u.low, u.high, s.g),
-        smoothstep(u.low, u.high, s.b),
+        smoothstep(lo, hi, s.r),
+        smoothstep(lo, hi, s.g),
+        smoothstep(lo, hi, s.b),
         s.a,
     );
     textureStore(output_tex, vec2<i32>(id.xy), out);

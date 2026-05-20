@@ -418,6 +418,30 @@ impl MetalBackend {
         self.pinned.clear();
         self.next_slot = 0;
     }
+
+    /// Change the size used by future lazy-allocation acquires and drop
+    /// every cached resource so the next frame re-allocates at the new
+    /// dimensions. Used by hosts that swap a generator's output
+    /// resolution mid-session (project render-resolution change, dpi
+    /// flip, etc.) — without this, lazy-allocated intermediate
+    /// textures stay frozen at the construction-time size and the
+    /// final pass that writes into the host's larger target only
+    /// covers the original sub-rect.
+    ///
+    /// Callers that pre-bind any resources (e.g. JsonGraphGenerator's
+    /// final-output slot) must re-pre-bind after `resize` — every
+    /// pinned binding is wiped.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.drop_all_resources();
+        self.pool.clear();
+        self.width = width;
+        self.height = height;
+    }
+
+    /// Texture format the backend allocates new Texture2D slots with.
+    pub fn format(&self) -> GpuTextureFormat {
+        self.format
+    }
 }
 
 impl Backend for MetalBackend {

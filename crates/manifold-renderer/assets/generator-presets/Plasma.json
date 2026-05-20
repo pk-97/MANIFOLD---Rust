@@ -1,0 +1,106 @@
+{
+  "version": 2,
+  "name": "Plasma",
+  "description": "Plasma family — eight bit-exact pattern variants (Classic, Rings, Diamond, Warp, Cells, Noise, Fractal, Lattice) packed into one curated `plasma_pattern_2d` primitive. The whole effect is one node with shared outer params (Pattern, Complexity, Contrast, Speed, Scale, Snap) bound directly to its params — no internal sin-term plumbing, no mux required to switch patterns.\n\nFollows the TD Noise TOP model: one curated operator per pattern family.",
+  "presetMetadata": {
+    "id": "Plasma",
+    "displayName": "Plasma",
+    "category": "Procedural",
+    "oscPrefix": "plasma",
+    "available": true,
+    "params": [
+      {
+        "id": "pattern",
+        "name": "Pattern",
+        "min": 0.0,
+        "max": 7.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "complexity",
+        "name": "Complexity",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.1,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "snap",
+        "name": "Snap",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
+      }
+    ],
+    "bindings": [
+      { "id": "pattern",    "label": "Pattern",    "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "pattern" },
+        "convert": { "type": "EnumRound" } },
+      { "id": "complexity", "label": "Complexity", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "complexity" },
+        "convert": { "type": "Float" } },
+      { "id": "contrast",   "label": "Contrast",   "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "contrast" },
+        "convert": { "type": "Float" } },
+      { "id": "speed",      "label": "Speed",      "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "speed" },
+        "convert": { "type": "Float" } },
+      { "id": "scale",      "label": "Scale",      "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "scale" },
+        "convert": { "type": "Float" } },
+      { "id": "snap",       "label": "Snap",       "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "snap" },
+        "convert": { "type": "BoolThreshold" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "node.plasma_pattern_2d", "handle": "plasma" },
+    { "id": 2, "typeId": "system.final_output",    "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "time",          "toNode": 1, "toPort": "time" },
+    { "fromNode": 0, "fromPort": "aspect",        "toNode": 1, "toPort": "aspect" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 1, "toPort": "trigger_count" },
+    { "fromNode": 1, "fromPort": "out",           "toNode": 2, "toPort": "in" }
+  ]
+}

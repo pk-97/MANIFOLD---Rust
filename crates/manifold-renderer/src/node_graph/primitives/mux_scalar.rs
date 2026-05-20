@@ -6,7 +6,7 @@
 //! the executor's control-rate pass.
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
@@ -27,8 +27,17 @@ crate::primitive! {
     outputs: {
         out: ScalarF32,
     },
-    params: [],
-    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Unwired inputs default to 0.0 — if the selected in_N isn't wired the output is 0.0. No GPU dispatch.",
+    params: [
+        ParamDef {
+            name: "selector",
+            label: "Selector",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 7.0)),
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. Unwired data inputs (in_N) default to 0.0. No GPU dispatch.",
     examples: [],
     picker: { label: "Mux (scalar)", category: Atom },
 }
@@ -37,7 +46,10 @@ impl Primitive for MuxScalar {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let selector = match ctx.inputs.scalar("selector") {
             Some(ParamValue::Float(f)) => f,
-            _ => 0.0,
+            _ => match ctx.params.get("selector") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
         let raw_idx = selector.round().clamp(0.0, 7.0) as usize;
 

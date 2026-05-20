@@ -18,19 +18,21 @@ use crate::node_graph::primitive::Primitive;
 struct SmoothstepUniforms {
     low: f32,
     high: f32,
+    mode: u32,
     _pad0: f32,
-    _pad1: f32,
 }
+
+pub const SMOOTHSTEP_MODES: &[&str] = &["Range", "Bipolar"];
 
 crate::primitive! {
     name: SmoothstepTexture,
     type_id: "node.smoothstep_texture",
-    purpose: "Per-pixel smoothstep(low, high, input) on RGB with alpha pass-through. Hermite-polynomial S-curve from 0 to 1 across the [low, high] band, clamped outside. The natural contrast-curve primitive for procedural-texture sums — wires after a compose:add chain that produces signed values in roughly [-1, 1] to remap into a punchy [0, 1] luminance.",
+    purpose: "Per-pixel smoothstep contrast curve on RGB, alpha pass-through. Mode=Range uses (low, high); Mode=Bipolar uses (-high, high) so a single `high` slider gives a symmetric curve around 0 (the canonical signed-field → [0,1] remap used by Plasma's contrast curve and similar sum-of-sines patterns).",
     inputs: {
         in: Texture2D required,
         // Port-shadows-param for the two band edges so generator
-        // graphs can derive contrast from outer-card sliders through
-        // node.math chains.
+        // graphs can derive contrast from outer-card sliders without
+        // a Value-node middleman. `low` is ignored in Bipolar mode.
         low: ScalarF32 optional,
         high: ScalarF32 optional,
     },
@@ -54,8 +56,16 @@ crate::primitive! {
             range: Some((-8.0, 8.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "mode",
+            label: "Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // Range
+            range: Some((0.0, (SMOOTHSTEP_MODES.len() - 1) as f32)),
+            enum_values: SMOOTHSTEP_MODES,
+        },
     ],
-    composition_notes: "Default (low=0, high=1) is identity for inputs already in [0, 1]. For symmetric signed inputs around zero use low = -edge, high = +edge (e.g. edge = 0.16 reproduces the plasma_classic contrast curve at the default contrast slider value).",
+    composition_notes: "Defaults (low=0, high=1, mode=Range) are identity for inputs already in [0, 1]. For Plasma-style symmetric-around-zero curves use mode=Bipolar and drive `high` from the edge value (low is ignored). `mode=Range` with low=-high gives the same result without the bipolar shortcut.",
     examples: [],
     picker: { label: "Smoothstep", category: Atom },
 }
@@ -74,6 +84,11 @@ impl Primitive for SmoothstepTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let low = read_scalar(ctx, "low", 0.0);
         let high = read_scalar(ctx, "high", 1.0);
+        let mode = match ctx.params.get("mode") {
+            Some(ParamValue::Enum(v)) => (*v).min((SMOOTHSTEP_MODES.len() - 1) as u32),
+            Some(ParamValue::Float(f)) => (f.round() as u32).min((SMOOTHSTEP_MODES.len() - 1) as u32),
+            _ => 0,
+        };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -98,8 +113,8 @@ impl Primitive for SmoothstepTexture {
         let uniforms = SmoothstepUniforms {
             low,
             high,
+            mode,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

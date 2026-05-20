@@ -19,7 +19,7 @@
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 const MUX_TEXTURE_WGSL: &str = r"
@@ -55,19 +55,31 @@ crate::primitive! {
     outputs: {
         out: Texture2D,
     },
-    params: [],
-    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). If the selected in_N isn't wired, falls back to in_0; if that's also unwired, the output frame is undefined (previous frame's contents persist via the pool). All upstream sub-graphs still execute every frame — a future planner pass can prune unselected branches when the selector is statically known.",
+    params: [
+        ParamDef {
+            name: "selector",
+            label: "Selector",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 7.0)),
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. If the selected in_N isn't wired, falls back to in_0; if that's also unwired, the output frame is undefined (previous frame's contents persist via the pool). All upstream sub-graphs still execute every frame — a future planner pass can prune unselected branches when the selector is statically known.",
     examples: [],
     picker: { label: "Mux (texture)", category: Atom },
 }
 
 impl Primitive for MuxTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // Read the selector. Default 0 if unwired (defended by the
-        // required: true declaration, but be conservative).
+        // Read the selector. Port-shadows-param: wired value overrides
+        // the inline param, otherwise the param drives the choice.
         let selector = match ctx.inputs.scalar("selector") {
             Some(ParamValue::Float(f)) => f,
-            _ => 0.0,
+            _ => match ctx.params.get("selector") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
         let raw_idx = selector.round().clamp(0.0, 7.0) as usize;
 

@@ -172,12 +172,26 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
         for input in inst.node.inputs() {
             if input.required {
                 let wired = graph.wires().iter().any(|w| w.to == (inst.id, input.name));
-                if !wired {
-                    return Err(GraphError::RequiredInputUnwired {
-                        node: inst.id,
-                        port: input.name.to_string(),
-                    });
+                if wired {
+                    continue;
                 }
+                // Port-shadows-param: a required scalar input with a
+                // same-named backing param doesn't need a wire — the
+                // inline param value drives the op. Constants embedded
+                // in the graph live as param values on the consuming
+                // node rather than as Value-node middlemen.
+                let has_backing_param = inst
+                    .node
+                    .parameters()
+                    .iter()
+                    .any(|p| p.name == input.name);
+                if has_backing_param {
+                    continue;
+                }
+                return Err(GraphError::RequiredInputUnwired {
+                    node: inst.id,
+                    port: input.name.to_string(),
+                });
             }
         }
     }
