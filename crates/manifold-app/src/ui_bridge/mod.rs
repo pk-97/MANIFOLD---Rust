@@ -372,6 +372,7 @@ pub fn dispatch(
         // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
         PanelAction::CopyOscAddress(_)
         | PanelAction::OpenGraphEditor(_)
+        | PanelAction::OpenGeneratorGraphEditor
         | PanelAction::AddGraphNode { .. }
         | PanelAction::ConnectPorts { .. }
         | PanelAction::DisconnectPorts { .. }

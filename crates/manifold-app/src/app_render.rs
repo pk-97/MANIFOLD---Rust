@@ -466,6 +466,26 @@ impl Application {
                     self.pending_toggle_output = true;
                     continue;
                 }
+                PanelAction::OpenGeneratorGraphEditor => {
+                    // The generator card's cog button fires this. Full
+                    // integration (WatchGeneratorGraph snapshot →
+                    // GraphEditorPanel viewing the JSON-defined graph)
+                    // is a follow-up; for now log the active layer and
+                    // raise the pending_open_graph_editor flag so the
+                    // panel surfaces. Once the snapshot path lands the
+                    // panel will display the generator's graph instead
+                    // of remaining empty.
+                    let layer_label = self
+                        .active_layer_id
+                        .as_ref()
+                        .map(|id| id.as_str().to_string())
+                        .unwrap_or_else(|| "<no active layer>".to_string());
+                    log::info!(
+                        "OpenGeneratorGraphEditor: layer = {layer_label} (full integration pending)"
+                    );
+                    self.pending_open_graph_editor = true;
+                    continue;
+                }
                 PanelAction::OpenGraphEditor(ei) => {
                     // Resolve `ei` (effect index in the active inspector
                     // tab) to the effect's stable `EffectId`, then ask

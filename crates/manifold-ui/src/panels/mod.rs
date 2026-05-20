@@ -350,6 +350,12 @@ pub enum PanelAction {
     GenCollapseToggle,
     GenCardClicked,
     GenCardRightClicked,
+    /// User clicked the "open graph editor" affordance on the
+    /// generator card header. Mirror of
+    /// [`PanelAction::OpenGraphEditor`] for effects — the host opens
+    /// the graph editor scoped to the currently-selected layer's
+    /// generator.
+    OpenGeneratorGraphEditor,
     CopyGenerator,
     PasteGenerator,
 

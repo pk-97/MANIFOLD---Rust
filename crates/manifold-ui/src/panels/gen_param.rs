@@ -13,6 +13,7 @@ const TOGGLE_BTN_W: f32 = 40.0;
 const TOGGLE_BTN_H: f32 = 16.0;
 const CHANGE_BTN_W: f32 = 60.0;
 const CHANGE_BTN_H: f32 = 16.0;
+const COG_W: f32 = 18.0;
 
 // ── Card layout constants ────────────────────────────────────────
 const HEADER_HEIGHT: f32 = 27.5;
@@ -127,6 +128,10 @@ pub struct GenParamPanel {
     name_label_id: i32,
     change_btn_id: i32,
     chevron_id: i32,
+    /// "Open in graph editor" affordance on the card header. Drawn as
+    /// three small dots in a triangle (suggesting graph nodes) — same
+    /// shape as the effect-card cog at [`super::effect_card`].
+    cog_btn_id: i32,
 
     // Node IDs — per-param (sliders or toggles)
     slider_ids: Vec<Option<SliderNodeIds>>,
@@ -179,6 +184,7 @@ impl GenParamPanel {
             name_label_id: -1,
             change_btn_id: -1,
             chevron_id: -1,
+            cog_btn_id: -1,
             slider_ids: Vec::new(),
             toggle_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
@@ -439,9 +445,10 @@ impl GenParamPanel {
 
         let gen_name = self.gen_type_name.clone();
 
-        // Header layout (right-to-left): [Name] ... [Change] [Chevron]
+        // Header layout (right-to-left): [Name] ... [Change] [Cog] [Chevron]
         let chevron_x = inner_x + inner_w - CHEVRON_W;
-        let change_x = chevron_x - CHANGE_BTN_W - GAP;
+        let cog_x = chevron_x - COG_W;
+        let change_x = cog_x - CHANGE_BTN_W - GAP;
         let name_x = inner_x + PADDING;
         let name_w = change_x - name_x - GAP;
 
@@ -498,6 +505,47 @@ impl GenParamPanel {
             },
             chevron_text,
         ) as i32;
+
+        // "Open in graph editor" affordance. Mirrors effect_card.rs —
+        // three small dots in a triangle suggesting graph nodes.
+        // U+2699 (gear) doesn't render reliably through the text path
+        // on every system, so we draw geometry instead.
+        let elem_y = inner_y;
+        self.cog_btn_id = tree.add_button(
+            -1,
+            cog_x,
+            elem_y,
+            COG_W,
+            HEADER_HEIGHT,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                ..UIStyle::default()
+            },
+            "",
+        ) as i32;
+        {
+            let dot: f32 = 3.0;
+            let dot_style = UIStyle {
+                bg_color: color::TEXT_DIMMED_C32,
+                corner_radius: dot * 0.5,
+                ..UIStyle::default()
+            };
+            // Triangle: top-center, bottom-left, bottom-right.
+            let cx = cog_x + COG_W * 0.5;
+            let cy = elem_y + HEADER_HEIGHT * 0.5;
+            let v_offset = 3.5;
+            let h_offset = 4.0;
+            let positions = [
+                (cx - dot * 0.5, cy - v_offset - dot * 0.5),
+                (cx - h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
+                (cx + h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
+            ];
+            for (px, py) in positions {
+                tree.add_panel(self.cog_btn_id, px, py, dot, dot, dot_style);
+            }
+        }
 
         // ── Params (if not collapsed) ──
         if !self.is_collapsed && !self.param_info.is_empty() {
@@ -937,6 +985,11 @@ impl GenParamPanel {
         // Change button → open type picker
         if id == self.change_btn_id {
             return vec![PanelAction::GenTypeClicked(self.layer_id.clone())];
+        }
+
+        // Cog → open graph editor for this generator
+        if id == self.cog_btn_id {
+            return vec![PanelAction::OpenGeneratorGraphEditor];
         }
 
         // Card click (header bg, name, border) → select the card
