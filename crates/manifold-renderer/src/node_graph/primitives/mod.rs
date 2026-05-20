@@ -25,6 +25,7 @@ mod convolution_2d_9tap;
 mod depth_of_field;
 mod digital_plants_render;
 mod displace_mesh;
+mod distance_to_point;
 mod dither_pattern;
 mod edge_detect;
 mod envelope_follower_ar;
@@ -114,6 +115,7 @@ pub use depth_of_field::{
 };
 pub use digital_plants_render::DigitalPlantsRender;
 pub use displace_mesh::DisplaceMesh;
+pub use distance_to_point::DistanceToPoint;
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
 pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr};
