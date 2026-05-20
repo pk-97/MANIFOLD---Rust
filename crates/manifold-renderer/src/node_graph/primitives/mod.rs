@@ -83,6 +83,7 @@ mod temporal;
 mod tone_map;
 mod triangulate_grid;
 mod uv;
+mod uv_displace_by_flow;
 mod value;
 mod voronoi_prism;
 mod watercolor;
@@ -183,6 +184,7 @@ pub use uv::{
     SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
     TRANSFORM_TYPE_ID, Transform,
 };
+pub use uv_displace_by_flow::UvDisplaceByFlow;
 pub use value::Value;
 pub use voronoi_prism::VoronoiPrism;
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
