@@ -47,10 +47,12 @@ mod fluid_simulate;
 mod gain;
 mod gaussian_blur_variable_width;
 mod generate_cube_mesh;
+mod generate_duocylinder_vertices;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
 mod generate_parametric_curve;
 mod generate_platonic_solid;
+mod generate_tesseract_vertices;
 mod glitch;
 mod halation;
 mod highlight_boost;
@@ -160,6 +162,9 @@ pub use fluid_simulate::FluidSimulate;
 pub use gain::Gain;
 pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
+pub use generate_duocylinder_vertices::{
+    DUOCYLINDER_DEFAULT_GRID_SIZE, GenerateDuocylinderVertices,
+};
 pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
@@ -167,6 +172,9 @@ pub use generate_instance_transforms::{
 pub use generate_parametric_curve::{CURVE_TYPES, GenerateParametricCurve};
 pub use generate_platonic_solid::{
     GeneratePlatonicSolid, PLATONIC_MAX_VERTS, PLATONIC_SHAPES,
+};
+pub use generate_tesseract_vertices::{
+    GenerateTesseractVertices, TESSERACT_VERTEX_COUNT,
 };
 pub use glitch::Glitch;
 pub use halation::{HALATION_TYPE_ID, Halation};
