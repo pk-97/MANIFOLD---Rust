@@ -29,6 +29,7 @@ mod dither_pattern;
 mod edge_detect;
 mod envelope_follower_ar;
 mod filter;
+mod flow_field_noise;
 mod fluid_gradient_curl_3d;
 mod fluid_gradient_rotate;
 mod fluid_project_scatter_2d;
@@ -117,6 +118,7 @@ pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr}
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
+pub use flow_field_noise::FlowFieldNoise;
 pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
 pub use fluid_gradient_rotate::FluidGradientRotate;
 pub use fluid_project_scatter_2d::{FLUID_PROJECT_MODES, FluidProjectScatter2D};
