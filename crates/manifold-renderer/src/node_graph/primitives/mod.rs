@@ -34,6 +34,7 @@ mod envelope_follower_ar;
 mod fbm_2d;
 mod filter;
 mod flow_field_noise;
+mod fract_texture;
 mod fluid_gradient_curl_3d;
 mod fluid_gradient_rotate;
 mod fluid_project_scatter_2d;
@@ -134,6 +135,7 @@ pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
 pub use flow_field_noise::FlowFieldNoise;
+pub use fract_texture::FractTexture;
 pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
 pub use fluid_gradient_rotate::FluidGradientRotate;
 pub use fluid_project_scatter_2d::{FLUID_PROJECT_MODES, FluidProjectScatter2D};
