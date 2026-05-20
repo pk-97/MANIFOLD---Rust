@@ -1,34 +1,76 @@
-//! Boundary nodes — [`Source`] and [`FinalOutput`].
+//! Boundary nodes — [`Source`], [`FinalOutput`], and [`GeneratorInput`].
 //!
-//! Every composite graph has these two as its input and output edges. They
+//! Every composite graph has these as its input and output edges. They
 //! are not full effects; they exist so the graph has a well-defined place
 //! for data to enter and leave.
 //!
-//! ## How they work
+//! ## Effect graphs vs generator graphs
 //!
-//! [`Source`] declares one [`NodeOutput`] (`out`, Texture2D, V1 constraint)
-//! and zero inputs. Its `evaluate` is a no-op — the runtime will, in a
-//! future step, pre-bind the host's input frame to Source's output slot
-//! before each frame, so downstream nodes naturally read from it via the
-//! resource pool's slot lookup.
+//! Effects sit between an upstream texture and the final output:
+//! `Source → … → FinalOutput`. [`Source`] surfaces the host's input
+//! frame as the graph's `out`, [`FinalOutput`] consumes the graph's
+//! result back to the host.
 //!
-//! [`FinalOutput`] is the mirror: one [`NodeInput`] (`in`, Texture2D), zero
-//! outputs, evaluate is a no-op. The host fishes the result out of
-//! FinalOutput's bound input slot after each frame.
+//! Generators have no upstream texture — they produce one. Their graphs
+//! look like `GeneratorInput → … → FinalOutput`. [`GeneratorInput`]
+//! surfaces the runtime values a generator needs (time, beat, aspect,
+//! trigger count, anim progress) as scalar outputs the primitives can
+//! wire into. The host updates these values per frame via
+//! [`GeneratorInput::set_frame_context`].
 //!
-//! Both nodes are intentionally trivial. The interesting work — pre-binding
-//! the source frame and post-reading the final output — happens in the
-//! [`Executor`](crate::node_graph::Executor) once the real backend lands.
+//! [`FinalOutput`] is shared — both effect and generator graphs end at
+//! the same boundary. Evaluate is a no-op; the host reads the result
+//! from FinalOutput's bound input slot after each frame.
+//!
+//! All boundary nodes are intentionally trivial. The interesting work —
+//! pre-binding inputs and post-reading outputs — happens in the
+//! [`Executor`](crate::node_graph::Executor).
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
-use crate::node_graph::parameters::ParamDef;
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::node_graph::parameters::{ParamDef, ParamValue};
+use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 
 /// Stable type ID for [`Source`].
 pub const SOURCE_TYPE_ID: &str = "system.source";
 
 /// Stable type ID for [`FinalOutput`].
 pub const FINAL_OUTPUT_TYPE_ID: &str = "system.final_output";
+
+/// Stable type ID for [`GeneratorInput`].
+pub const GENERATOR_INPUT_TYPE_ID: &str = "system.generator_input";
+
+const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 5] = [
+    NodePort {
+        name: "time",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: "beat",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: "aspect",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: "trigger_count",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: "anim_progress",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+];
 
 const SOURCE_OUTPUTS: [NodeOutput; 1] = [NodePort {
     name: "out",
@@ -138,6 +180,124 @@ inventory::submit! {
     }
 }
 
+const GENERATOR_INPUT_PARAMS: [ParamDef; 5] = [
+    ParamDef {
+        name: "time",
+        label: "Time (s)",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "beat",
+        label: "Beat",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "aspect",
+        label: "Aspect Ratio",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(1.0),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "trigger_count",
+        label: "Trigger Count",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "anim_progress",
+        label: "Anim Progress",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: None,
+        enum_values: &[],
+    },
+];
+
+/// Boundary node at the input edge of a generator graph. Surfaces the
+/// host's per-frame timing + trigger state as scalar outputs that
+/// generator primitives can wire into.
+///
+/// Five scalar outputs (`time`, `beat`, `aspect`, `trigger_count`,
+/// `anim_progress`), each driven by a same-named float parameter. The
+/// host updates the params each frame via the standard
+/// [`Graph::set_param`](crate::node_graph::Graph::set_param) path;
+/// `evaluate` reads them and writes to the matching output slots.
+///
+/// Using params instead of internal mutable state means there's no
+/// downcast or `as_any_mut` plumbing — the host updates the node
+/// through the same path it would update any other primitive.
+pub struct GeneratorInput {
+    type_id: EffectNodeType,
+}
+
+impl GeneratorInput {
+    pub fn new() -> Self {
+        Self {
+            type_id: EffectNodeType::new(GENERATOR_INPUT_TYPE_ID),
+        }
+    }
+}
+
+impl Default for GeneratorInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn read_f(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
+    match ctx.params.get(name) {
+        Some(ParamValue::Float(f)) => *f,
+        _ => default,
+    }
+}
+
+impl EffectNode for GeneratorInput {
+    fn type_id(&self) -> &EffectNodeType {
+        &self.type_id
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        &[]
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &GENERATOR_INPUT_OUTPUTS
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &GENERATOR_INPUT_PARAMS
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let time = read_f(ctx, "time", 0.0);
+        let beat = read_f(ctx, "beat", 0.0);
+        let aspect = read_f(ctx, "aspect", 1.0);
+        let trigger_count = read_f(ctx, "trigger_count", 0.0);
+        let anim_progress = read_f(ctx, "anim_progress", 0.0);
+        ctx.outputs.set_scalar("time", ParamValue::Float(time));
+        ctx.outputs.set_scalar("beat", ParamValue::Float(beat));
+        ctx.outputs.set_scalar("aspect", ParamValue::Float(aspect));
+        ctx.outputs
+            .set_scalar("trigger_count", ParamValue::Float(trigger_count));
+        ctx.outputs
+            .set_scalar("anim_progress", ParamValue::Float(anim_progress));
+    }
+}
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: GENERATOR_INPUT_TYPE_ID,
+        create: || Box::new(GeneratorInput::new()),
+        picker: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +359,69 @@ mod tests {
             validate(&g),
             Err(GraphError::RequiredInputUnwired { .. })
         ));
+    }
+
+    #[test]
+    fn generator_input_declares_five_scalar_outputs() {
+        let g = GeneratorInput::new();
+        assert_eq!(g.inputs().len(), 0);
+        let outs = g.outputs();
+        assert_eq!(outs.len(), 5);
+        let names: Vec<&str> = outs.iter().map(|p| p.name).collect();
+        assert_eq!(
+            names,
+            vec!["time", "beat", "aspect", "trigger_count", "anim_progress"]
+        );
+        for out in outs {
+            assert_eq!(out.ty, PortType::Scalar(ScalarType::F32));
+        }
+    }
+
+    #[test]
+    fn generator_input_in_a_graph_compiles_and_executes() {
+        // A bare GeneratorInput is a legal generator-shaped graph root.
+        // No downstream consumers needed for the compile path to work
+        // (its outputs are optional, just like Source's).
+        let mut g = Graph::new();
+        g.add_node(Box::new(GeneratorInput::new()));
+        validate(&g).unwrap();
+        let plan = compile(&g).unwrap();
+        assert_eq!(plan.steps().len(), 1);
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_time());
+    }
+
+    #[test]
+    fn generator_input_declares_five_float_params() {
+        let g = GeneratorInput::new();
+        let names: Vec<&str> = g.parameters().iter().map(|p| p.name).collect();
+        assert_eq!(
+            names,
+            vec!["time", "beat", "aspect", "trigger_count", "anim_progress"]
+        );
+        for p in g.parameters() {
+            assert!(matches!(p.default, ParamValue::Float(_)));
+        }
+    }
+
+    #[test]
+    fn generator_input_params_drive_scalar_outputs() {
+        // Build a graph: generator_input → final_output (no actual
+        // downstream consumer of the scalars, but the executor will
+        // call evaluate and the assertion is that nothing panics).
+        let mut g = Graph::new();
+        let gi = g.add_node(Box::new(GeneratorInput::new()));
+        g.set_param(gi, "time", ParamValue::Float(2.5)).unwrap();
+        g.set_param(gi, "beat", ParamValue::Float(1.25)).unwrap();
+        g.set_param(gi, "aspect", ParamValue::Float(1.78)).unwrap();
+        g.set_param(gi, "trigger_count", ParamValue::Float(7.0))
+            .unwrap();
+        g.set_param(gi, "anim_progress", ParamValue::Float(0.5))
+            .unwrap();
+        validate(&g).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_time());
     }
 
     #[test]
