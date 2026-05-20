@@ -329,7 +329,7 @@ mod gpu_tests {
         let plan = compile(&g).unwrap();
 
         // Wire backend + encoder.
-        let backend = MetalBackend::new(device.clone(), w, h, format);
+        let backend = MetalBackend::new(&device, w, h, format);
         let mut native_enc = device.create_encoder("mix-smoke");
         let mut exec = Executor::new(Box::new(backend));
 
@@ -387,7 +387,7 @@ mod gpu_tests {
         // Pre-bind the colored targets to the Source output ResourceIds.
         // Capture the next-slot watermark — Mix's output will be allocated
         // there since the Texture2D free pool is empty post-pre-bind.
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_a, red_target);
         backend.pre_bind_texture_2d(r_b, blue_target);
         let mix_output_slot = Slot(backend.slot_count());
@@ -476,7 +476,7 @@ mod gpu_tests {
             );
         }
 
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_a, a_target);
         backend.pre_bind_texture_2d(r_b, b_target);
         let mix_output_slot = Slot(backend.slot_count());

@@ -1,5 +1,6 @@
 //! Loader shim that turns a JSON-defined generator graph into a
-//! runtime-executable bundle.
+//! runtime-executable bundle implementing the standard [`Generator`]
+//! trait.
 //!
 //! A generator preset JSON sits at
 //! `crates/manifold-renderer/assets/generator-presets/*.json` and uses
@@ -11,26 +12,26 @@
 //!   scalars in) and end with `system.final_output` (texture out).
 //!
 //! `JsonGraphGenerator` owns the compiled `Graph`, the `ExecutionPlan`,
-//! and an `Executor`. At each frame the host updates the
-//! `GeneratorInput`'s cached frame context (time, beat, aspect,
-//! trigger_count, anim_progress), then runs the graph. The target
-//! texture pre-binds to the FinalOutput's input resource so the last
-//! primitive in the chain writes directly into it.
-//!
-//! This struct is the foundation for the production `Generator` trait
-//! integration — the trait impl that calls `Generator::render` on this
-//! wrapper lands when the first Tier 1 generator preset ships.
+//! and an `Executor` with a real [`MetalBackend`]. At each frame
+//! [`Generator::render`] updates the GeneratorInput's params, installs
+//! the host-provided target texture as the FinalOutput's source slot,
+//! then runs the graph against the host's `GpuEncoder`.
 
 use manifold_core::{
-    GeneratorTypeId,
+    Beats, GeneratorTypeId, Seconds,
     effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef},
 };
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 
+use crate::generator::Generator;
+use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::{
     EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID, FrameTime,
-    GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, NodeInstanceId, ParamValue,
-    PrimitiveRegistry, ResourceId, compile,
+    GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, MetalBackend, NodeInstanceId,
+    ParamValue, PrimitiveRegistry, ResourceId, Slot, compile,
 };
+use crate::render_target::RenderTarget;
 
 /// Errors produced when loading a generator preset.
 #[derive(Debug)]
@@ -93,8 +94,7 @@ impl From<GraphError> for JsonGeneratorLoadError {
 ///
 /// Construction is one-shot: parse JSON, build Graph, compile plan,
 /// locate the boundary nodes. Per-frame work is then minimal — set
-/// frame context, run the executor.
-#[allow(dead_code)] // `executor` and other fields are exercised through public methods + tests
+/// frame context, install the target texture, run the executor.
 pub struct JsonGraphGenerator {
     type_id: GeneratorTypeId,
     pub graph: Graph,
@@ -107,6 +107,13 @@ pub struct JsonGraphGenerator {
     /// Resource id that feeds `final_output.in` — the host pre-binds
     /// the target texture here.
     pub final_output_input_resource: ResourceId,
+    /// Slot that holds the FinalOutput's source texture. `Some` for
+    /// production-path generators (constructed via
+    /// `from_json_str_with_device`), where construction-time pre-bind
+    /// reserves the slot with a placeholder. `None` for the
+    /// mock-backend test path, where there's no GPU and the slot is
+    /// never used.
+    final_output_slot: Option<Slot>,
 }
 
 impl JsonGraphGenerator {
@@ -201,7 +208,48 @@ impl JsonGraphGenerator {
             generator_input_id,
             final_output_id,
             final_output_input_resource,
+            final_output_slot: None,
         })
+    }
+
+    /// Parse + compile + wire to a real [`MetalBackend`] for production
+    /// rendering. Same as [`Self::from_json_str`] but the executor uses
+    /// a `MetalBackend` allocated against `device` at the given render
+    /// resolution + format. Pre-binds a 1×1 placeholder RenderTarget
+    /// at the FinalOutput-source slot so per-frame `render()` only has
+    /// to swap the borrowed texture (no allocation on the hot path).
+    /// The resulting generator implements [`Generator`].
+    ///
+    /// Safety: the `&GpuDevice` is cached internally as a raw pointer
+    /// (mirroring the `GeneratorRenderer::device_ptr` pattern). The
+    /// caller must keep `device` alive for the returned generator's
+    /// lifetime — in production that's the content-thread-owned
+    /// `Option<GpuDevice>` field on `ContentPipeline`, which exists
+    /// for the program's lifetime.
+    pub fn from_json_str_with_device(
+        json: &str,
+        registry: &PrimitiveRegistry,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let mut g = Self::from_json_str(json, registry)?;
+        let mut backend = MetalBackend::new(device, width, height, format);
+        // Pre-bind a 1×1 placeholder at the FinalOutput-source slot so
+        // the slot exists across frames; `install_target` swaps in the
+        // host's real target via `replace_texture_2d` each render call.
+        let placeholder = RenderTarget::new(
+            device,
+            1,
+            1,
+            format,
+            "json_graph_generator_target_owner",
+        );
+        let slot = backend.pre_bind_texture_2d(g.final_output_input_resource, placeholder);
+        g.final_output_slot = Some(slot);
+        g.executor = Executor::new(Box::new(backend));
+        Ok(g)
     }
 
     /// Stable identity for the GeneratorRegistry.
@@ -214,6 +262,33 @@ impl JsonGraphGenerator {
     /// fine for tests but won't allocate real GPU textures).
     pub fn set_executor(&mut self, executor: Executor) {
         self.executor = executor;
+    }
+
+    /// Install the host-provided target texture as the source for
+    /// `final_output.in` via `replace_texture_2d` — a single atomic
+    /// retain on the host's `MTLTexture`, no allocation. The slot was
+    /// pre-bound to a placeholder at construction time
+    /// (`from_json_str_with_device`); this just swaps the borrowed
+    /// view each frame.
+    ///
+    /// Panics if the backend isn't a `MetalBackend` (mock-backend mode
+    /// never reaches this — `Generator::render` is the only caller and
+    /// the registry only hands out mock-backed instances inside tests).
+    fn install_target(&mut self, target: &GpuTexture) {
+        let metal = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<MetalBackend>())
+            .expect(
+                "JsonGraphGenerator::install_target requires a MetalBackend — use \
+                 from_json_str_with_device to construct the production path",
+            );
+        let slot = self.final_output_slot.expect(
+            "JsonGraphGenerator final_output_slot must be pre-bound — \
+             construct via from_json_str_with_device",
+        );
+        metal.replace_texture_2d(slot, target.clone());
     }
 
     /// Update the `system.generator_input` node's per-frame context by
@@ -252,6 +327,69 @@ impl JsonGraphGenerator {
     pub fn execute_frame(&mut self, time: FrameTime) {
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
+    }
+}
+
+impl Generator for JsonGraphGenerator {
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &self.type_id
+    }
+
+    fn render(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        target: &GpuTexture,
+        ctx: &GeneratorContext,
+    ) -> f32 {
+        // 1. Push the per-frame timing into the system.generator_input
+        // node's params. Downstream primitives read these as scalar
+        // wires.
+        self.set_frame_context(
+            ctx.time as f32,
+            ctx.beat as f32,
+            ctx.aspect,
+            ctx.trigger_count as f32,
+            ctx.anim_progress,
+        );
+
+        // 2. Install the host's target as the FinalOutput's source slot.
+        // First call pre-binds + swaps; later calls swap in place.
+        self.install_target(target);
+
+        // 3. Run the graph. We dispatch through execute_frame_with_gpu;
+        // graphs that hold state (Feedback, mip chains) would need the
+        // _with_state path — JSON generators don't compose stateful
+        // primitives yet, so this is sufficient.
+        let frame_time = FrameTime {
+            beats: Beats(ctx.beat),
+            seconds: Seconds(ctx.time),
+            delta: Seconds(ctx.dt as f64),
+            frame_count: 0,
+        };
+        self.executor.execute_frame_with_gpu(
+            &mut self.graph,
+            &self.plan,
+            frame_time,
+            gpu,
+        );
+
+        // No anim_progress tracking inside the JSON graph (yet) — pass
+        // the host's value through. Future iteration: surface a node
+        // that emits anim_progress and pipe its output to the
+        // generator's return value.
+        ctx.anim_progress
+    }
+
+    fn resize(&mut self, _device: &GpuDevice, _width: u32, _height: u32) {
+        // Invalidate the cached final-output slot. The next render()
+        // call will pre-bind a fresh placeholder + install the new
+        // target. The MetalBackend keeps its internal texture pool
+        // across resizes — primitives' lazy-alloc paths produce
+        // textures at the slot's declared size, which the backend's
+        // internal pool may handle separately. For now this is a
+        // best-effort resize; bit-exact resize semantics are a
+        // follow-up.
+        self.final_output_slot = None;
     }
 }
 

@@ -391,7 +391,7 @@ mod gpu_tests {
             gpu.clear_texture(&source_target.texture, 0.5, 0.5, 0.5, 1.0);
         }
 
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(source_res, source_target);
 
         let mut exec = Executor::new(Box::new(backend));

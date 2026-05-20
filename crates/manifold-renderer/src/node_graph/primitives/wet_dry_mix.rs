@@ -214,7 +214,7 @@ mod gpu_tests {
             );
         }
 
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_dry, dry_target);
         backend.pre_bind_texture_2d(r_wet, wet_target);
         let mix_output_slot = Slot(backend.slot_count());
@@ -333,7 +333,7 @@ mod gpu_tests {
         }
 
         let out_target = RenderTarget::new(&device, w, h, format, "test-mix-out");
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_dry, dry_target);
         backend.pre_bind_texture_2d(r_wet, wet_target);
         // Pin the mix output slot so it survives the executor's

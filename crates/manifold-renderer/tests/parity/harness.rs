@@ -260,7 +260,7 @@ impl ParityHarness {
         // primitive's output. Capture the next slot watermark so we
         // know where the primitive's output landed.
         let mut backend =
-            MetalBackend::new(self.device.clone(), self.width, self.height, self.format);
+            MetalBackend::new(&self.device, self.width, self.height, self.format);
         backend.pre_bind_texture_2d(source_res, source_rt);
         let prim_output_slot = Slot(backend.slot_count());
 
@@ -385,7 +385,7 @@ impl ParityHarness {
         // exactly once (Vec items aren't `Copy`, can't index in a loop
         // that also borrows from `self.device`).
         let mut backend =
-            MetalBackend::new(self.device.clone(), self.width, self.height, self.format);
+            MetalBackend::new(&self.device, self.width, self.height, self.format);
         let primary_res = resource_for_output(&plan, primary_source, "out");
         backend.pre_bind_texture_2d(primary_res, primary_rt);
         let mut aux_rts_iter = aux_rts.into_iter();

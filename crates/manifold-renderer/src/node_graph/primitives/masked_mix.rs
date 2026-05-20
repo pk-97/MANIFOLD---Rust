@@ -240,7 +240,7 @@ mod gpu_tests {
             );
         }
 
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_a, a_tgt);
         backend.pre_bind_texture_2d(r_b, b_tgt);
         backend.pre_bind_texture_2d(r_m, m_tgt);

@@ -33,8 +33,6 @@
 //!   slot before each frame and reads `FinalOutput`'s input slot afterward.
 //!   That comes in the next step alongside the `GpuEncoder` plumbing.
 
-use std::sync::Arc;
-
 use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
@@ -57,7 +55,13 @@ use crate::render_target_pool::RenderTargetPool;
 /// what the live renderer uses, since it constructs effects through
 /// `EffectFactory`'s `&GpuDevice` (no `Arc`) at registry-build time.
 pub struct MetalBackend {
-    device: Option<Arc<GpuDevice>>,
+    /// Raw pointer to the content thread's GpuDevice (or `None` for
+    /// the `without_device` test path). Matches the
+    /// `GeneratorRenderer::device_ptr` pattern — the device lives on
+    /// the content thread for the lifetime of the program; this struct
+    /// is only used on that thread, so a raw pointer is safe.
+    /// `MetalBackend` is `Send` via the `unsafe impl` below.
+    device: Option<*const GpuDevice>,
     pool: RenderTargetPool,
 
     /// Render resolution and format used for `Texture2D` slot allocations.
@@ -135,13 +139,25 @@ pub struct MetalBackend {
     textures_3d: AHashMap<Slot, GpuTexture>,
 }
 
+// Safety: the raw `*const GpuDevice` points to a device owned by the
+// content thread; `MetalBackend` is only used on that thread. The
+// `unsafe impl` matches the `GeneratorRenderer::device_ptr` pattern
+// elsewhere in the renderer crate.
+unsafe impl Send for MetalBackend {}
+
 impl MetalBackend {
     /// Construct a backend tied to a specific `GpuDevice`, render
     /// resolution, and texture format. Width/height are the dimensions of
     /// every `Texture2D` slot the backend allocates.
-    pub fn new(device: Arc<GpuDevice>, width: u32, height: u32, format: GpuTextureFormat) -> Self {
+    ///
+    /// Stores `device` as a raw pointer for cross-frame access. The
+    /// caller must keep the underlying `GpuDevice` alive for the
+    /// backend's lifetime — typically that's the content thread's
+    /// `Option<GpuDevice>` field, which exists for the lifetime of
+    /// the program.
+    pub fn new(device: &GpuDevice, width: u32, height: u32, format: GpuTextureFormat) -> Self {
         Self {
-            device: Some(device),
+            device: Some(device as *const GpuDevice),
             pool: RenderTargetPool::new(),
             width,
             height,
@@ -196,8 +212,17 @@ impl MetalBackend {
     /// internal resources (e.g. FluidSim's persistent density grid).
     /// Returns `None` if the backend was constructed via
     /// [`MetalBackend::without_device`].
+    ///
+    /// Safety: dereferences the cached raw pointer. The device's
+    /// lifetime is the content thread's program lifetime; the backend
+    /// is constructed on that thread and the caller guarantees the
+    /// device outlives the backend.
     pub fn device(&self) -> Option<&GpuDevice> {
-        self.device.as_deref()
+        // SAFETY: the raw pointer was created from a `&GpuDevice` in
+        // `MetalBackend::new`. The device lives on the content thread
+        // for the program's lifetime; this backend lives on the same
+        // thread.
+        self.device.map(|p| unsafe { &*p })
     }
 
     /// Pre-bind a real `RenderTarget` to a slot. Used by the host to feed
@@ -428,9 +453,16 @@ impl Backend for MetalBackend {
         if matches!(ty, PortType::Texture2D)
             && let std::collections::hash_map::Entry::Vacant(e) = self.textures_2d.entry(slot)
         {
-            let device = self.device.as_deref().expect(
+            // Read the raw device pointer directly (NOT via self.device()
+            // which would borrow &self) so we can hold `&self.pool`
+            // mutably alongside. The pointer is valid by the same
+            // invariant as device(): caller keeps the underlying
+            // GpuDevice alive for the backend's lifetime.
+            let device_ptr = self.device.expect(
                 "MetalBackend lazy-alloc requires a device — use `pre_bind_texture_2d` for every Texture2D resource when constructing via `without_device`",
             );
+            // SAFETY: see `MetalBackend::device` field doc.
+            let device: &GpuDevice = unsafe { &*device_ptr };
             let alloc_format = format.unwrap_or(self.format);
             let rt = self
                 .pool
@@ -573,7 +605,7 @@ mod array_buffer_tests {
 
     fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
         let device = crate::test_device();
-        let backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(&device, 16, 16, GpuTextureFormat::Rgba16Float);
         (device, backend)
     }
 
@@ -790,7 +822,7 @@ mod alias_tests {
 
     fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
         let device = crate::test_device();
-        let backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(&device, 16, 16, GpuTextureFormat::Rgba16Float);
         (device, backend)
     }
 

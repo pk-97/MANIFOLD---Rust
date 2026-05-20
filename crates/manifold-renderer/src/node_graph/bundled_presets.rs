@@ -438,7 +438,7 @@ mod tests {
         // Pre-bind the source texture. Intermediate textures (the
         // affine output) get auto-allocated by MetalBackend.
         let r_src = output_resource(&plan, src, "out");
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
 
         let mut exec = Executor::new(Box::new(backend));

@@ -297,7 +297,7 @@ mod gpu_tests {
             "color-sample-clear",
         );
 
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
         let mut exec = Executor::new(Box::new(backend));
 
@@ -364,7 +364,7 @@ mod gpu_tests {
             "color-sample-luma-clear",
         );
 
-        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        let mut backend = MetalBackend::new(&device, w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
         let mut exec = Executor::new(Box::new(backend));
 
