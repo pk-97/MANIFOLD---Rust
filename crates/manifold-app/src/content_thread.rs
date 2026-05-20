@@ -1199,11 +1199,32 @@ impl ContentThread {
         if gen_type.is_none() {
             return None;
         }
-        let json = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
-            gen_type,
-        )?;
+        // Prefer the layer's per-instance override (where the
+        // ToggleNodeParamExposeCommand writes its exposure state) when
+        // it's populated. Falls back to the bundled JSON preset for a
+        // pristine layer that hasn't been edited yet. preset_metadata
+        // from the bundled JSON is grafted onto the override if the
+        // override lost it during edits, so outer_routings + binding
+        // backfill keep working either way.
         let def: manifold_core::effect_graph_def::EffectGraphDef =
-            serde_json::from_str(json).ok()?;
+            if let Some(override_def) = layer.generator_graph.as_ref() {
+                let mut d = override_def.clone();
+                if d.preset_metadata.is_none() {
+                    if let Some(json) = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
+                        gen_type,
+                    ) {
+                        if let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json) {
+                            d.preset_metadata = base.preset_metadata;
+                        }
+                    }
+                }
+                d
+            } else {
+                let json = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
+                    gen_type,
+                )?;
+                serde_json::from_str(json).ok()?
+            };
         let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&def)?;
         // Populate outer_routings from the preset's bindings so the
         // graph editor's right panel knows which inner params are bound
