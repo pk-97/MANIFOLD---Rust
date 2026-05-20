@@ -1,5 +1,9 @@
-//! `node.cos_texture` — per-pixel `cos(input.rgb * freq + phase)`,
-//! alpha pass-through. Sibling to `node.sin_texture`.
+//! `node.scale_offset_texture` — per-pixel affine remap
+//! `a * x + b` on RGB (alpha pass-through).
+//!
+//! Companion to the per-pixel field generators in Batch 5.5 —
+//! generators output [0, 1] for storage convenience; this primitive
+//! is the affine inverse / re-range step.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -9,17 +13,17 @@ use crate::node_graph::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CosUniforms {
-    freq: f32,
-    phase: f32,
+struct ScaleOffsetUniforms {
+    scale: f32,
+    offset: f32,
     _pad0: f32,
     _pad1: f32,
 }
 
 crate::primitive! {
-    name: CosTexture,
-    type_id: "node.cos_texture",
-    purpose: "Per-pixel cos(input.rgb * freq + phase). Alpha passes through. Output range [-1, 1]. Sibling of node.sin_texture; offered as its own primitive so authors don't have to compute a π/2 phase shift to switch between them.",
+    name: ScaleOffsetTexture,
+    type_id: "node.scale_offset_texture",
+    purpose: "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.gain + node.brightness fused.",
     inputs: {
         in: Texture2D required,
     },
@@ -28,34 +32,34 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "freq",
-            label: "Frequency",
+            name: "scale",
+            label: "Scale",
             ty: ParamType::Float,
-            default: ParamValue::Float(std::f32::consts::TAU),
-            range: Some((0.0, 100.0)),
+            default: ParamValue::Float(1.0),
+            range: Some((-16.0, 16.0)),
             enum_values: &[],
         },
         ParamDef {
-            name: "phase",
-            label: "Phase",
+            name: "offset",
+            label: "Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
+            range: Some((-16.0, 16.0)),
             enum_values: &[],
         },
     ],
-    composition_notes: "Identical wiring to node.sin_texture — same freq / phase conventions, same input/output shape. Pair with node.sin_texture (driven from the same field) for Lissajous-style XY compositions.",
+    composition_notes: "Output = input * scale + offset, per RGB channel. Standard re-range recipes: (a=2, b=-1) maps [0, 1] → [-1, 1]; (a=0.5, b=0.5) maps [-1, 1] → [0, 1]; (a=-1, b=1) inverts; (a=1, b=0) is identity. Pair with node.sin_texture to compose ConcentricTunnel-style patterns.",
     examples: [],
-    picker: { label: "Cos Texture", category: Atom },
+    picker: { label: "Scale + Offset", category: Atom },
 }
 
-impl Primitive for CosTexture {
+impl Primitive for ScaleOffsetTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let freq = match ctx.params.get("freq") {
+        let scale = match ctx.params.get("scale") {
             Some(ParamValue::Float(f)) => *f,
-            _ => std::f32::consts::TAU,
+            _ => 1.0,
         };
-        let phase = match ctx.params.get("phase") {
+        let offset = match ctx.params.get("offset") {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
         };
@@ -71,18 +75,18 @@ impl Primitive for CosTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/cos_texture.wgsl"),
+                include_str!("shaders/scale_offset_texture.wgsl"),
                 "cs_main",
-                "node.cos_texture",
+                "node.scale_offset_texture",
             )
         });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
-        let uniforms = CosUniforms {
-            freq,
-            phase,
+        let uniforms = ScaleOffsetUniforms {
+            scale,
+            offset,
             _pad0: 0.0,
             _pad1: 0.0,
         };
@@ -108,7 +112,7 @@ impl Primitive for CosTexture {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.cos_texture",
+            "node.scale_offset_texture",
         );
     }
 }
@@ -120,24 +124,24 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn cos_texture_declares_one_input_and_one_output() {
+    fn scale_offset_texture_declares_one_input_and_one_output() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(CosTexture::TYPE_ID, "node.cos_texture");
-        assert_eq!(CosTexture::INPUTS.len(), 1);
-        assert_eq!(CosTexture::OUTPUTS.len(), 1);
-        assert_eq!(CosTexture::OUTPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(ScaleOffsetTexture::TYPE_ID, "node.scale_offset_texture");
+        assert_eq!(ScaleOffsetTexture::INPUTS.len(), 1);
+        assert_eq!(ScaleOffsetTexture::OUTPUTS.len(), 1);
+        assert_eq!(ScaleOffsetTexture::OUTPUTS[0].ty, PortType::Texture2D);
     }
 
     #[test]
-    fn cos_texture_has_freq_and_phase_params() {
-        let names: Vec<&str> = CosTexture::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["freq", "phase"]);
+    fn scale_offset_texture_has_scale_and_offset_params() {
+        let names: Vec<&str> = ScaleOffsetTexture::PARAMS.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["scale", "offset"]);
     }
 
     #[test]
     fn primitive_registers_as_palette_atom() {
-        let prim = CosTexture::new();
+        let prim = ScaleOffsetTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.cos_texture");
+        assert_eq!(node.type_id().as_str(), "node.scale_offset_texture");
     }
 }
