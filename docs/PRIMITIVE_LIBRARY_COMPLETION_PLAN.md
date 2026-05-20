@@ -88,8 +88,8 @@ Conventions:
 | `node.optical_flow_estimate` | extract | Native plugin path used by `WireframeDepth`. Wrap as primitive. | 2h |
 | `node.blob_detect_ffi` | extract | `manifold-native::BlobDetector` FFI plugin. Wrap as primitive. | 2h |
 | `node.blob_overlay_render` | extract | `effects/shaders/fx_blob_overlay_render.wgsl` | 1.5h |
-| `node.wireframe_extract_from_depth` | extract | `effects/shaders/fx_wireframe_depth.wgsl` / `fx_wireframe_depth_compute.wgsl` (15-pass pipeline; pick the wireframe-extract step) | 2h |
-| `node.midas_mesh_pyramid` | extract | same source, mesh pyramid pass | 2h |
+| `node.wireframe_extract_from_depth` | **deferred — misclassified as extract** | The "wire_mask" pass reads 5 textures (depth + semantic mask + DNN subject mask + bicubic-sampled main + hardcoded near-reference samples) and uses near_ref / sem_foreground / center_bias state from the surrounding pipeline. Not a clean extract — would be partial port. Compositional equivalent for the lightweight case: `node.depth_estimate_midas → node.edge_detect`. Revisit only if a wireframe-specific decomposition becomes a real graph-authoring need. | — |
+| `node.midas_mesh_pyramid` | **deferred — misclassified as extract** | The mesh-pyramid chain (`init_mesh_coord → mesh_regularize → mesh_cell_affine → mesh_face_warp`) has flow + history feedback baked in across passes. Standalone "build mesh from depth" is already achievable with `depth_estimate_midas → triangulate_grid → displace_mesh`. Revisit only if the full pyramid (with feedback) becomes a real graph-authoring need. | — |
 
 ### 3D volume family
 
