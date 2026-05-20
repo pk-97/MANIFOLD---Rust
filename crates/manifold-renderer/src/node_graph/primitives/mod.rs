@@ -91,6 +91,7 @@ mod uv;
 mod uv_displace_by_flow;
 mod uv_field;
 mod value;
+mod voronoi_2d;
 mod voronoi_prism;
 mod watercolor;
 mod wet_dry_mix;
@@ -198,6 +199,7 @@ pub use uv::{
 pub use uv_displace_by_flow::UvDisplaceByFlow;
 pub use uv_field::UvField;
 pub use value::Value;
+pub use voronoi_2d::Voronoi2D;
 pub use voronoi_prism::VoronoiPrism;
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
