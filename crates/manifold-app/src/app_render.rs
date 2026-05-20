@@ -467,22 +467,22 @@ impl Application {
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {
-                    // The generator card's cog button fires this. Full
-                    // integration (WatchGeneratorGraph snapshot →
-                    // GraphEditorPanel viewing the JSON-defined graph)
-                    // is a follow-up; for now log the active layer and
-                    // raise the pending_open_graph_editor flag so the
-                    // panel surfaces. Once the snapshot path lands the
-                    // panel will display the generator's graph instead
-                    // of remaining empty.
-                    let layer_label = self
-                        .active_layer_id
-                        .as_ref()
-                        .map(|id| id.as_str().to_string())
-                        .unwrap_or_else(|| "<no active layer>".to_string());
-                    log::info!(
-                        "OpenGeneratorGraphEditor: layer = {layer_label} (full integration pending)"
-                    );
+                    // Ask the content thread to snapshot the active
+                    // layer's generator graph for the editor canvas.
+                    // View-only today — per-layer graph overrides +
+                    // edit commands keyed by LayerId land in the
+                    // follow-up commit.
+                    if let Some(lid) = self.active_layer_id.clone() {
+                        self.send_content_cmd(
+                            ContentCommand::WatchGeneratorGraph(Some(lid)),
+                        );
+                    }
+                    // Clear any effect-side watch so the canvas
+                    // doesn't show stale per-card state behind the
+                    // generator graph.
+                    self.watched_effect_id = None;
+                    self.watched_catalog_default = None;
+                    self.current_editor_target = None;
                     self.pending_open_graph_editor = true;
                     continue;
                 }

@@ -103,6 +103,12 @@ pub struct ContentThread {
     /// any effect — canvas stays empty until the user clicks a cog.
     /// Phase 2 of per-card divergence — see `docs/NODE_GRAPH_SYSTEM.md`.
     pub watched_graph_effect: Option<manifold_core::EffectId>,
+    /// Generator-side counterpart of `watched_graph_effect`. When
+    /// `Some`, the snapshot path returns the layer's generator graph
+    /// (sourced from the bundled JSON preset for the generator type).
+    /// Mutually exclusive in practice — setting one clears the other,
+    /// because only one editor canvas is visible at a time.
+    pub watched_graph_generator_layer: Option<manifold_core::LayerId>,
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
@@ -1122,6 +1128,11 @@ impl ContentThread {
                 .watched_graph_effect
                 .as_ref()
                 .and_then(|eid| self.active_graph_snapshot(eid))
+                .or_else(|| {
+                    self.watched_graph_generator_layer
+                        .as_ref()
+                        .and_then(|lid| self.active_generator_graph_snapshot(lid))
+                })
                 .map(Arc::new),
         };
 
@@ -1166,6 +1177,34 @@ impl ContentThread {
             self.content_pipeline
                 .graph_snapshot_for(instance.effect_type())
         }
+    }
+
+    /// Generator-side counterpart of [`Self::active_graph_snapshot`].
+    /// Builds the editor canvas's snapshot for the currently-watched
+    /// layer's generator. The graph source is the bundled JSON preset
+    /// for the layer's `generator_type` (loaded by `build.rs` into
+    /// `bundled_generator_presets`); per-layer overrides are pending
+    /// the edit-side follow-up.
+    ///
+    /// Returns `None` if the layer no longer resolves, has no generator
+    /// assigned, or the assigned generator type has no JSON preset
+    /// (e.g., a legacy Rust-only generator).
+    fn active_generator_graph_snapshot(
+        &self,
+        layer_id: &manifold_core::LayerId,
+    ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
+        let project = self.engine.project()?;
+        let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
+        let gen_type = layer.generator_type();
+        if gen_type.is_none() {
+            return None;
+        }
+        let json = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
+            gen_type,
+        )?;
+        let def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_str(json).ok()?;
+        manifold_renderer::node_graph::GraphSnapshot::from_def(&def)
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.

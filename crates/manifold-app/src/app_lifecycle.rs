@@ -850,9 +850,12 @@ impl Application {
         self.current_editor_target = None;
         self.watched_effect_id = None;
         self.watched_catalog_default = None;
-        // Tell the content thread to stop snapshotting any effect's
-        // graph — saves the per-frame walk while no editor is open.
+        // Tell the content thread to stop snapshotting any graph —
+        // saves the per-frame walk while no editor is open. Cover
+        // both the effect-graph and generator-graph watchers since
+        // either could be active when the editor closes.
         self.send_content_cmd(ContentCommand::WatchEffectGraph(None));
+        self.send_content_cmd(ContentCommand::WatchGeneratorGraph(None));
         log::info!("[GraphEditor] Closed");
     }
 }

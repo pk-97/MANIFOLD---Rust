@@ -63,6 +63,12 @@ impl ContentThread {
 
             ContentCommand::WatchEffectGraph(effect_id) => {
                 self.watched_graph_effect = effect_id;
+                // Only one canvas active at a time.
+                self.watched_graph_generator_layer = None;
+            }
+            ContentCommand::WatchGeneratorGraph(layer_id) => {
+                self.watched_graph_generator_layer = layer_id;
+                self.watched_graph_effect = None;
             }
 
             // ── GPU events ─────────────────────────────────────────

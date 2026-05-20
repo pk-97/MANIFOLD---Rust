@@ -210,6 +210,17 @@ pub enum ContentCommand {
     /// per-card graph divergence.
     WatchEffectGraph(Option<EffectId>),
 
+    /// Generator-side counterpart of `WatchEffectGraph`. Sent when the
+    /// user clicks the cog on a generator card. Snapshots the layer's
+    /// generator graph (the bundled JSON for the generator type) into
+    /// the editor canvas. `None` clears.
+    ///
+    /// Keyed by `LayerId` because generators live per-layer (one
+    /// generator per layer at most) — the layer is the natural
+    /// identity. Per-layer graph overrides are pending the edit-side
+    /// follow-up; today the snapshot is the bundled JSON unchanged.
+    WatchGeneratorGraph(Option<manifold_core::LayerId>),
+
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
 }
