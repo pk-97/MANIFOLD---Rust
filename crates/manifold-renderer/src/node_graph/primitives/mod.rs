@@ -83,6 +83,7 @@ mod seed_particles_from_texture;
 mod seed_particles;
 mod separable_gaussian;
 mod simplex_noise_2d;
+mod sin_texture;
 mod smoothing;
 mod strobe;
 mod temporal;
@@ -187,6 +188,7 @@ pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
 };
 pub use simplex_noise_2d::SimplexNoise2D;
+pub use sin_texture::SinTexture;
 pub use smoothing::{SMOOTHING_TYPE_ID, Smoothing};
 pub use strobe::{
     NOTE_RATE_LABELS, NOTE_RATE_VALUES, NOTE_RATES as STROBE_NOTE_RATES, Strobe,
