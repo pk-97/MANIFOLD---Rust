@@ -194,6 +194,7 @@ mod tests {
             &[
                 "BeatGate",
                 "ColorSample",
+                "Envelope Follower (A/R)",
                 "LFO",
                 "Luminance",
                 "Math",
