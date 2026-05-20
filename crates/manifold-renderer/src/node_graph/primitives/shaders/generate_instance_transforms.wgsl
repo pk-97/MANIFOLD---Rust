@@ -14,7 +14,7 @@ const LAYOUT_RANDOM: u32 = 3u;
 struct InstanceUniforms {
     active_count: u32,
     capacity: u32,
-    layout: u32,
+    layout_kind: u32,
     seed: u32,
     extent_x: f32,
     extent_y: f32,
@@ -64,7 +64,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var scale: f32 = params.base_scale;
     var rot: vec3<f32> = vec3<f32>(params.rot_x, params.rot_y, params.rot_z);
 
-    if params.layout == LAYOUT_GRID {
+    if params.layout_kind == LAYOUT_GRID {
         // Cube root → 3D grid. Side = ceil(N^(1/3)).
         let n = f32(params.active_count);
         let side = max(u32(ceil(pow(n, 1.0 / 3.0))), 1u);
@@ -80,7 +80,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             ny * params.extent_y,
             nz * params.extent_z,
         );
-    } else if params.layout == LAYOUT_RING {
+    } else if params.layout_kind == LAYOUT_RING {
         let t = f32(i) / f32(max(params.active_count, 1u));
         let theta = t * 6.28318530718;
         pos = vec3<f32>(
@@ -88,7 +88,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             0.0,
             sin(theta) * params.extent_z * 0.5,
         );
-    } else if params.layout == LAYOUT_SPIRAL {
+    } else if params.layout_kind == LAYOUT_SPIRAL {
         let t = f32(i) / f32(max(params.active_count, 1u));
         let theta = t * 6.28318530718 * 4.0;
         let r = t;

@@ -37,8 +37,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let active = u.cols * u.rows;
-    if i >= active {
+    let active_count = u.cols * u.rows;
+    if i >= active_count {
         dst[i] = src[i];
         return;
     }

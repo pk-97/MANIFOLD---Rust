@@ -32,7 +32,6 @@ fn sample_pos(col: i32, row: i32) -> vec3<f32> {
 }
 
 fn compute_normal(col: i32, row: i32) -> vec3<f32> {
-    let center = sample_pos(col, row);
     let dx = sample_pos(col + 1, row) - sample_pos(col - 1, row);
     let dy = sample_pos(col, row + 1) - sample_pos(col, row - 1);
     let n = cross(dy, dx);
@@ -40,7 +39,6 @@ fn compute_normal(col: i32, row: i32) -> vec3<f32> {
     if len < 1e-8 {
         return vec3<f32>(0.0, 1.0, 0.0);
     }
-    let _ = center;
     return n / len;
 }
 
