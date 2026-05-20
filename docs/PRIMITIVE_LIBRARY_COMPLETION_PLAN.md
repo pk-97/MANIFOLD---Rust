@@ -105,6 +105,51 @@ Conventions:
 | `node.project_particles_3d` | extract | `generators/fluid_simulation_3d.rs` ProjectedScatter pass | 2h |
 | `node.sample_volume_2d` | extract | `generators/shaders/mri_slice_compute.wgsl` (volume slice sampling) | 1h |
 
+### Procedural texture math family (NEW — required to decompose Plasma / BasicShapesSnap / ConcentricTunnel / StarField cleanly)
+
+Originally I claimed these four single-shader generators "can't decompose" — that was the old atomic-vs-composite framing where shader complexity dictated atomicity. Wrong. Each is a per-pixel math function of `(uv, time)` and decomposes naturally into compositions of field-generator and per-pixel-math primitives, the same way Substance Designer / TouchDesigner / shader-graph tools work.
+
+**Critical framing constraint** (per Peter, 2026-05-20): the WGSL escape hatch is **not** to be used as a lazy fallback for simple per-pixel math. It's reserved for genuinely irreducible kernels (BlackHole's relativistic geodesic tracing, OilyFluid's coupled reaction-diffusion). Decomposing Plasma must happen through composable primitives, not by embedding 10 lines of WGSL.
+
+**Field generators** (zero inputs → Texture2D field):
+
+| Primitive | What it does | Est |
+|---|---|---|
+| `node.uv_field` | R = u, G = v at each pixel. The foundation — most other field generators are math-on-uv. | 0.5h |
+| `node.distance_to_point` | Per-pixel scalar distance from a center (param: cx, cy). | 0.5h |
+| `node.polar_field` | R = angle (atan2), G = radius. Polar-coord building block. | 0.5h |
+| `node.simplex_noise_2d` | 2D simplex noise. The workhorse procedural noise. | 1h |
+| `node.perlin_noise_2d` | Perlin noise (different aesthetic than simplex). | 1h |
+| `node.fbm_2d` | Octave-summed fBM (fractional Brownian motion). | 1h |
+| `node.voronoi_2d` | Worley/voronoi noise (cellular patterns). | 1.5h |
+| `node.checkerboard` | Alternating pattern at configurable scale. | 0.5h |
+
+**Per-pixel single-input math** (Texture2D → Texture2D):
+
+| Primitive | What it does | Est |
+|---|---|---|
+| `node.sin_texture` | Per-pixel sin(rgb). | 0.3h |
+| `node.cos_texture` | Per-pixel cos(rgb). | 0.3h |
+| `node.fract_texture` | Per-pixel fract(rgb). | 0.3h |
+| `node.abs_texture` | Per-pixel abs(rgb). | 0.3h |
+| `node.power_texture` | Per-pixel pow(rgb, exponent). | 0.3h |
+| `node.scale_offset_texture` | Per-pixel a*x + b (uniform scale + uniform offset). | 0.5h |
+
+**Already exists from earlier work, no new primitive needed:**
+- Binary per-pixel arithmetic (add / multiply / max / screen) → `node.compose` covers this
+- Domain warping (sample with offset) → `node.uv_displace_by_flow` covers this
+- Color lookup (scalar → color via 1D LUT) → `node.lut1d` covers this
+
+**Decomposition examples:**
+- Plasma "Classic" ≈ `distance_to_point → sin_texture → compose:add(uv_field → sin_texture) → lut1d` (4-5 nodes)
+- ConcentricTunnel ≈ `distance_to_point → scale_offset_texture → sin_texture → abs_texture → lut1d`
+- StarField ≈ `voronoi_2d → fract_texture → power_texture(high) → compose:multiply(constant color)`
+- BasicShapesSnap ≈ depends on shape — for circles: `distance_to_point → scale_offset_texture → step (compose with threshold)`
+
+**Net new: ~13 primitives, ~9 hours work total.** Each is small (~30-80 lines of WGSL + the standard primitive!-macro wrapping). Cumulatively they unlock every procedural texture generator and a vast novel-composition surface for AI agents (procedural textures are one of the highest-reach building-block families in shader-graph tooling).
+
+Ships **before** Batch 6 (WGSL escape hatch). With these in place, the escape hatch genuinely is reserved for the irreducible 5% (BlackHole, OilyFluid, novel agent-authored kernels with no compositional path).
+
 ### WGSL escape hatch (CRITICAL — agent-authored kernels for vocabulary gaps)
 
 Two real design questions worth a decision before building:
@@ -161,8 +206,11 @@ gaussian_blur_variable_width, convolution_2d_9tap, flow_field_from_luma, uv_slop
 **Batch 5 — Texture3D backend + 3D primitives (1 session)**
 Backend wiring (~3-4h) + 7 primitives (~11h) = ~15h.
 
+**Batch 5.5 — Procedural texture math family (1 session, NEW)**
+8 field generators (uv_field, distance_to_point, polar_field, simplex/perlin/fbm/voronoi noise, checkerboard) + 6 per-pixel math ops (sin/cos/fract/abs/power/scale_offset on textures). ~9h. Ships **before** Batch 6 so the WGSL escape hatch genuinely is reserved for irreducible kernels. Unlocks decomposition of Plasma / BasicShapesSnap / ConcentricTunnel / StarField — they were misclassified as "atomic by design" earlier; they're actually math-on-fields compositions.
+
 **Batch 6 — WGSL escape hatch (1 session)**
-6 variants + Naga error formatting. ~7-8h.
+6 variants + Naga error formatting. ~7-8h. Use ONLY for genuinely irreducible kernels (BlackHole, OilyFluid, novel agent-authored kernels with no compositional path through the existing vocabulary). NOT a lazy default — the procedural texture math family covers the bulk of "per-pixel math" that would otherwise be tempting to embed as one-off WGSL.
 
 **Batch 7 — LLM-audience pass (1 session)**
 Audit every primitive's `purpose` / `composition_notes` / `examples` for AI clarity. Audit validation error messages for self-correction quality. Add `node.describe` introspection endpoint returning the full primitive catalog as structured JSON for agent consumption. ~6h.
@@ -171,7 +219,7 @@ Audit every primitive's `purpose` / `composition_notes` / `examples` for AI clar
 Channel plumbing + 4 primitives. ~6h once policy is settled.
 
 **Batch 9 — JSON migration (3-6 sessions)**
-- Atomic generators wrapped as JSON-described nodes: Plasma, BasicShapesSnap, ConcentricTunnel, StarField (single-shader procedurals)
+- Decomposed compositions of procedural textures (with Batch 5.5 in place): Plasma, BasicShapesSnap, ConcentricTunnel, StarField — these are math-on-fields, NOT atomic wraps
 - Decomposed compositions: StrangeAttractor, ParticleText, DigitalPlants, MetallicGlass, FluidSim2D (the existing `atomic.fluid_sim_2d`), Watercolor, DepthOfField, AutoGain, BlobTracking, WireframeDepth
 - Re-author Tesseract / Duocylinder / WireframeZoo / Lissajous / OscilloscopeXY as GPU-side JSON compositions (current CPU implementations remain as reference for parity testing)
 - Wrap genuinely irreducible kernels (OilyFluid reaction-diffusion, BlackHole geodesic tracing) using `wgsl_compute_*` primitives embedding their existing shaders
