@@ -66,6 +66,7 @@ mod smoothing;
 mod strobe;
 mod temporal;
 mod tone_map;
+mod triangulate_grid;
 mod uv;
 mod value;
 mod voronoi_prism;
@@ -145,6 +146,7 @@ pub use strobe::{
 };
 pub use temporal::{FEEDBACK_MODES, FEEDBACK_TYPE_ID, Feedback};
 pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
+pub use triangulate_grid::TriangulateGrid;
 pub use uv::{
     SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
     TRANSFORM_TYPE_ID, Transform,
