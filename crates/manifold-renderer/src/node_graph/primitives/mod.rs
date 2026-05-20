@@ -25,6 +25,7 @@ mod color_sample;
 mod compose;
 mod convolution_2d_9tap;
 mod cos_texture;
+mod depth_estimate_midas;
 mod depth_of_field;
 mod digital_plants_render;
 mod displace_mesh;
@@ -125,6 +126,7 @@ pub use color_sample::ColorSample;
 pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
 pub use convolution_2d_9tap::Convolution2D9Tap;
 pub use cos_texture::CosTexture;
+pub use depth_estimate_midas::DepthEstimateMidas;
 pub use depth_of_field::{
     DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID, DepthOfField,
 };
