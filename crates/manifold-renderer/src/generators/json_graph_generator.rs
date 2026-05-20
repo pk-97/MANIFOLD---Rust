@@ -334,6 +334,73 @@ mod tests {
         );
     }
 
+    /// Integration smoke test for the infra session as a whole: a
+    /// generator graph that exercises `system.generator_input`,
+    /// `node.mux_texture` (variadic ports), and an `outputFormats`
+    /// override (per-slot format) on a `node.wgsl_compute_0in_1tex`
+    /// branch — D1 + D2 + D5 wired together in one preset.
+    #[test]
+    fn infra_session_integration_smoke_test() {
+        let json = r#"{
+            "version": 2,
+            "name": "InfraSmoke",
+            "presetMetadata": {
+                "id": "InfraSmoke",
+                "displayName": "Infra Smoke",
+                "category": "Diagnostic",
+                "oscPrefix": "infra_smoke",
+                "params": [],
+                "bindings": []
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                {
+                    "id": 1,
+                    "typeId": "node.wgsl_compute_0in_1tex",
+                    "handle": "branch_a",
+                    "outputFormats": { "out": "rgba32float" }
+                },
+                { "id": 2, "typeId": "node.wgsl_compute_0in_1tex", "handle": "branch_b" },
+                { "id": 3, "typeId": "node.mux_texture", "handle": "mux" },
+                { "id": 4, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "selector" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in_0" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in_1" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+
+        let mut preset = JsonGraphGenerator::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("infra smoke preset must load");
+        assert_eq!(preset.type_id().as_str(), "InfraSmoke");
+
+        // Verify the per-format propagation reached the compiled plan.
+        // Resource ordering is topological-by-node, so we search for
+        // a resource declaring rgba32float rather than hardcoding the
+        // index (which would break if anyone reorders the JSON).
+        let mut found_rgba32 = false;
+        for i in 0..preset.plan.resource_count() {
+            if preset.plan.resource_format(ResourceId(i as u32))
+                == Some(manifold_gpu::GpuTextureFormat::Rgba32Float)
+            {
+                found_rgba32 = true;
+                break;
+            }
+        }
+        assert!(
+            found_rgba32,
+            "branch_a's rgba32float output_format override must reach the plan",
+        );
+
+        preset.set_frame_context(0.0, 0.0, 1.78, 1.0, 0.0);
+        preset.execute_frame(frame_time());
+    }
+
     /// Load the bundled `TrivialPassthrough.json` preset from disk and
     /// execute it. Confirms the generator-presets directory wiring,
     /// the on-disk schema, and the full loader path are aligned.
