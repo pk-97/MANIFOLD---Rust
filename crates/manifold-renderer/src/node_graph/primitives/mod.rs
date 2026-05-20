@@ -21,6 +21,7 @@ mod color_grade;
 mod color_sample;
 mod compose;
 mod depth_of_field;
+mod digital_plants_render;
 mod displace_mesh;
 mod dither_pattern;
 mod edge_detect;
@@ -102,6 +103,7 @@ pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix
 pub use depth_of_field::{
     DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID, DepthOfField,
 };
+pub use digital_plants_render::DigitalPlantsRender;
 pub use displace_mesh::DisplaceMesh;
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;

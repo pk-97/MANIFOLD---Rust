@@ -1,0 +1,461 @@
+//! `node.digital_plants_render` — fused two-pass DigitalPlants
+//! renderer: shadow pass (depth-only) into an internal shadow map,
+//! then main pass (cel-shaded cubes with PCF shadow sampling).
+//!
+//! Bit-exact wraps of `generators/shaders/digital_plants_shadow.wgsl`
+//! and `digital_plants_render.wgsl` via include_str. Cube vertex
+//! data is hardcoded in both shaders (36 verts).
+//!
+//! Inputs: `Array<InstanceTransform>` driving instanced rendering.
+//! Output: `Texture2D` color (Rgba16Float, depth-tested + cel-shaded
+//! + PCF shadow).
+//!
+//! Internal state: the shadow map (Depth32Float), the dummy color
+//! attachment for the shadow pass (Rgba16Float, never read), the
+//! main pass's depth buffer, and a comparison sampler for PCF.
+//!
+//! Fused because the shadow output is intrinsically a depth texture
+//! and the node_graph runtime today only allocates Rgba16Float
+//! Texture2D outputs through the resource pool. A future
+//! `Texture2DDepth` port type would let the shadow pass become its
+//! own primitive — this fused version ships first.
+
+use manifold_gpu::{
+    GpuAddressMode, GpuBinding, GpuFilterMode, GpuLoadAction, GpuSamplerDesc, GpuTextureFormat,
+};
+
+use crate::generators::mesh_common::InstanceTransform;
+use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
+use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::primitive::Primitive;
+
+const CUBE_VERTEX_COUNT: u32 = 36;
+const SHADOW_MAP_SIZE: u32 = 2048;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct RenderUniforms {
+    view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 4],
+    light_pos: [f32; 4],
+    light_color: [f32; 4],
+    shadow_info: [f32; 4], // x: shadow_map_size
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShadowUniforms {
+    light_view_proj: [[f32; 4]; 4],
+}
+
+crate::primitive! {
+    name: DigitalPlantsRender,
+    type_id: "node.digital_plants_render",
+    purpose: "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.generate_instance_transforms (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
+    inputs: {
+        instances: Array(InstanceTransform) required,
+    },
+    outputs: {
+        color: Texture2D,
+    },
+    params: [
+        ParamDef {
+            name: "instance_count",
+            label: "Instance Count",
+            ty: ParamType::Int,
+            default: ParamValue::Int(160_000),
+            range: Some((1.0, 1_000_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "camera_distance",
+            label: "Camera Distance",
+            ty: ParamType::Float,
+            default: ParamValue::Float(15.0),
+            range: Some((0.1, 200.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "camera_orbit",
+            label: "Camera Orbit",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.7),
+            range: Some((-6.28318, 6.28318)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "camera_tilt",
+            label: "Camera Tilt",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.4),
+            range: Some((-1.5, 1.5)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "camera_fov",
+            label: "Camera FOV",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.9),
+            range: Some((0.1, 2.5)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "light_x",
+            label: "Light X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(8.0),
+            range: Some((-50.0, 50.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "light_y",
+            label: "Light Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(20.0),
+            range: Some((-50.0, 50.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "light_z",
+            label: "Light Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(8.0),
+            range: Some((-50.0, 50.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "light_intensity",
+            label: "Light Intensity",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 10.0)),
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "Hardcoded 36-vertex cube geometry — no Array<MeshVertex> input. Pair upstream with node.generate_instance_transforms (Grid/Ring/Spiral/Random layouts) to drive arbitrary cube fields, or use a procedural compute that emits InstanceTransform values (DigitalPlants's noise-driven plant-stalk generator is one). 5-tap PCF shadow sampling with hard-coded 0.003 depth bias matches the legacy DigitalPlants. Shadow map is 2048×2048 internal state.",
+    examples: [],
+    picker: { label: "Digital Plants Render", category: Atom },
+    extra_fields: {
+        shadow_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        shadow_depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,
+        shadow_map: Option<manifold_gpu::GpuTexture> = None,
+        shadow_color_dummy: Option<manifold_gpu::GpuTexture> = None,
+        render_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        render_depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,
+        depth_texture: Option<manifold_gpu::GpuTexture> = None,
+        depth_width: u32 = 0,
+        depth_height: u32 = 0,
+        shadow_sampler: Option<manifold_gpu::GpuSampler> = None,
+    },
+}
+
+impl DigitalPlantsRender {
+    fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.depth_width == width
+            && self.depth_height == height
+            && self.depth_texture.is_some()
+        {
+            return;
+        }
+        self.depth_texture = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Depth32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
+            label: "node.digital_plants_render depth",
+            mip_levels: 1,
+        }));
+        self.depth_width = width;
+        self.depth_height = height;
+    }
+}
+
+impl Primitive for DigitalPlantsRender {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let instance_count = match ctx.params.get("instance_count") {
+            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            _ => 160_000,
+        };
+        let camera_distance = match ctx.params.get("camera_distance") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 15.0,
+        };
+        let camera_orbit = match ctx.params.get("camera_orbit") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.7,
+        };
+        let camera_tilt = match ctx.params.get("camera_tilt") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.4,
+        };
+        let camera_fov = match ctx.params.get("camera_fov") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.9,
+        };
+        let light_x = match ctx.params.get("light_x") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 8.0,
+        };
+        let light_y = match ctx.params.get("light_y") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 20.0,
+        };
+        let light_z = match ctx.params.get("light_z") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 8.0,
+        };
+        let light_intensity = match ctx.params.get("light_intensity") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 1.0,
+        };
+
+        let Some(instances) = ctx.inputs.array("instances") else {
+            return;
+        };
+        let Some(target) = ctx.outputs.texture_2d("color") else {
+            return;
+        };
+        let width = target.width;
+        let height = target.height;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let item_size = std::mem::size_of::<InstanceTransform>() as u64;
+        let inst_capacity = (instances.size / item_size) as u32;
+        let inst_count = instance_count.min(inst_capacity);
+        if inst_count == 0 {
+            let gpu = ctx.gpu_encoder();
+            gpu.native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
+        // Camera setup
+        let aspect = width as f32 / height as f32;
+        let proj = perspective_rh(camera_fov, aspect, 0.05, 500.0);
+        let eye = [
+            camera_distance * camera_orbit.cos() * camera_tilt.cos(),
+            camera_distance * camera_tilt.sin(),
+            camera_distance * camera_orbit.sin() * camera_tilt.cos(),
+        ];
+        let view = look_at_rh(eye, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let view_proj = mat4_mul(proj, view);
+
+        // Light VP — orthographic from light POV
+        let light_proj = ortho_rh(-30.0, 30.0, -30.0, 30.0, 0.1, 200.0);
+        let light_view = look_at_rh([light_x, light_y, light_z], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let light_view_proj = mat4_mul(light_proj, light_view);
+
+        let render_uniforms = RenderUniforms {
+            view_proj,
+            camera_pos: [eye[0], eye[1], eye[2], 1.0],
+            light_pos: [light_x, light_y, light_z, 1.0],
+            light_color: [1.0, 1.0, 1.0, light_intensity],
+            shadow_info: [SHADOW_MAP_SIZE as f32, 0.0, 0.0, 0.0],
+        };
+
+        let shadow_uniforms = ShadowUniforms { light_view_proj };
+
+        let gpu = ctx.gpu_encoder();
+
+        // Lazy-init all the pipelines and textures.
+        if self.shadow_pipeline.is_none() {
+            self.shadow_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                include_str!("../../generators/shaders/digital_plants_shadow.wgsl"),
+                "vs_shadow",
+                "fs_shadow",
+                GpuTextureFormat::Rgba16Float,
+                GpuTextureFormat::Depth32Float,
+                None,
+                1,
+                "node.digital_plants_render shadow",
+            ));
+        }
+        if self.shadow_depth_stencil.is_none() {
+            self.shadow_depth_stencil = Some(gpu.device.create_depth_stencil_state(
+                &manifold_gpu::GpuDepthStencilDesc {
+                    compare: manifold_gpu::GpuCompareFunction::Less,
+                    write_enabled: true,
+                },
+            ));
+        }
+        if self.shadow_map.is_none() {
+            self.shadow_map = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: SHADOW_MAP_SIZE,
+                height: SHADOW_MAP_SIZE,
+                depth: 1,
+                format: GpuTextureFormat::Depth32Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                label: "node.digital_plants_render shadow_map",
+                mip_levels: 1,
+            }));
+        }
+        if self.shadow_color_dummy.is_none() {
+            self.shadow_color_dummy = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: SHADOW_MAP_SIZE,
+                height: SHADOW_MAP_SIZE,
+                depth: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
+                label: "node.digital_plants_render shadow_color_dummy",
+                mip_levels: 1,
+            }));
+        }
+        if self.render_pipeline.is_none() {
+            self.render_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                include_str!("../../generators/shaders/digital_plants_render.wgsl"),
+                "vs_main",
+                "fs_main",
+                GpuTextureFormat::Rgba16Float,
+                GpuTextureFormat::Depth32Float,
+                None,
+                1,
+                "node.digital_plants_render main",
+            ));
+        }
+        if self.render_depth_stencil.is_none() {
+            self.render_depth_stencil = Some(gpu.device.create_depth_stencil_state(
+                &manifold_gpu::GpuDepthStencilDesc {
+                    compare: manifold_gpu::GpuCompareFunction::Less,
+                    write_enabled: true,
+                },
+            ));
+        }
+        if self.shadow_sampler.is_none() {
+            self.shadow_sampler = Some(gpu.device.create_sampler(&GpuSamplerDesc {
+                min_filter: GpuFilterMode::Linear,
+                mag_filter: GpuFilterMode::Linear,
+                mip_filter: GpuFilterMode::Nearest,
+                address_mode_u: GpuAddressMode::ClampToEdge,
+                address_mode_v: GpuAddressMode::ClampToEdge,
+                address_mode_w: GpuAddressMode::ClampToEdge,
+                compare: Some(manifold_gpu::GpuCompareFunction::Less),
+            }));
+        }
+        self.ensure_depth_texture(gpu.device, width, height);
+
+        let shadow_pipeline = self.shadow_pipeline.as_ref().expect("just inserted");
+        let shadow_depth_stencil = self.shadow_depth_stencil.as_ref().expect("just inserted");
+        let shadow_map = self.shadow_map.as_ref().expect("just inserted");
+        let shadow_color_dummy = self.shadow_color_dummy.as_ref().expect("just inserted");
+        let render_pipeline = self.render_pipeline.as_ref().expect("just inserted");
+        let render_depth_stencil = self.render_depth_stencil.as_ref().expect("just inserted");
+        let depth_tex = self.depth_texture.as_ref().expect("just inserted");
+        let shadow_sampler = self.shadow_sampler.as_ref().expect("just inserted");
+
+        // Shadow pass: render cubes depth-only into shadow_map.
+        gpu.native_enc.draw_instanced_depth(
+            shadow_pipeline,
+            shadow_color_dummy,
+            shadow_map,
+            shadow_depth_stencil,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&shadow_uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: instances,
+                    offset: 0,
+                },
+            ],
+            CUBE_VERTEX_COUNT,
+            inst_count,
+            GpuLoadAction::Clear,
+            "node.digital_plants_render.shadow",
+        );
+
+        // Main pass: render with PCF shadow sampling.
+        gpu.native_enc.draw_instanced_depth(
+            render_pipeline,
+            target,
+            depth_tex,
+            render_depth_stencil,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&render_uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: instances,
+                    offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 2,
+                    data: bytemuck::bytes_of(&shadow_uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: shadow_map,
+                },
+                GpuBinding::Sampler {
+                    binding: 4,
+                    sampler: shadow_sampler,
+                },
+            ],
+            CUBE_VERTEX_COUNT,
+            inst_count,
+            GpuLoadAction::Clear,
+            "node.digital_plants_render.main",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::EffectNode;
+    use crate::node_graph::primitive::PrimitiveSpec;
+
+    #[test]
+    fn digital_plants_render_declares_instance_in_and_color_out() {
+        use crate::node_graph::ports::{ArrayType, PortType};
+        let layout = ArrayType {
+            item_size: std::mem::size_of::<InstanceTransform>() as u32,
+            item_align: std::mem::align_of::<InstanceTransform>() as u32,
+        };
+        assert_eq!(DigitalPlantsRender::TYPE_ID, "node.digital_plants_render");
+        assert_eq!(DigitalPlantsRender::INPUTS.len(), 1);
+        assert_eq!(DigitalPlantsRender::INPUTS[0].name, "instances");
+        assert_eq!(
+            DigitalPlantsRender::INPUTS[0].ty,
+            PortType::Array(layout)
+        );
+        assert_eq!(DigitalPlantsRender::OUTPUTS.len(), 1);
+        assert_eq!(DigitalPlantsRender::OUTPUTS[0].name, "color");
+        assert_eq!(
+            DigitalPlantsRender::OUTPUTS[0].ty,
+            PortType::Texture2D
+        );
+    }
+
+    #[test]
+    fn digital_plants_render_has_camera_and_light_params() {
+        let names: Vec<&str> = DigitalPlantsRender::PARAMS.iter().map(|p| p.name).collect();
+        for required in &[
+            "instance_count",
+            "camera_distance",
+            "camera_orbit",
+            "camera_fov",
+            "light_x",
+            "light_intensity",
+        ] {
+            assert!(names.contains(required), "missing param {}", required);
+        }
+    }
+
+    #[test]
+    fn primitive_registers_as_palette_atom() {
+        let prim = DigitalPlantsRender::new();
+        let node: &dyn EffectNode = &prim;
+        assert_eq!(node.type_id().as_str(), "node.digital_plants_render");
+    }
+}
