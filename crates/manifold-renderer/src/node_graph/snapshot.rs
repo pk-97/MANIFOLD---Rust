@@ -645,6 +645,7 @@ mod tests {
                 params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                output_formats: Default::default(),
             }],
             wires: Vec::new(),
         };

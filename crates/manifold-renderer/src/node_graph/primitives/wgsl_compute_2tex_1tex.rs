@@ -94,6 +94,7 @@ crate::primitive! {
         source: String = DEFAULT_WGSL_2TEX_1TEX.to_string(),
         compiled_source_hash: Option<u64> = None,
         compile_failed: bool = false,
+        output_format_override: Option<manifold_gpu::GpuTextureFormat> = None,
     },
 }
 
@@ -122,6 +123,14 @@ impl Primitive for WgslCompute2Tex1Tex {
         self.pipeline = None;
         self.compiled_source_hash = None;
         self.compile_failed = false;
+    }
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        if port == "out" { self.output_format_override } else { None }
+    }
+    fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
+        if port == "out" {
+            self.output_format_override = Some(format);
+        }
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let slots = Slots {

@@ -63,6 +63,17 @@ pub struct ExecutionPlan {
     /// uses these to size allocations (texture format, dimensions) or to
     /// store scalar values inline.
     resource_types: Vec<PortType>,
+    /// Producer-declared texture format for each `Texture2D` resource,
+    /// queried at compile time from the producing node's
+    /// [`EffectNode::output_format`](crate::node_graph::EffectNode::output_format).
+    /// `None` means "use the backend's default format" (the common case).
+    /// Indexed by `ResourceId`, parallel to `resource_types`.
+    ///
+    /// The runtime threads this through [`Backend::acquire`] / [`Backend::release`]
+    /// so the backend's slot pool keys on `(PortType, GpuTextureFormat)` —
+    /// preventing a freed rgba16float slot from aliasing into a fresh
+    /// rgba32float acquire.
+    resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>>,
     /// Union of every node's [`NodeRequires`] declaration. The
     /// executor's entry point checks this against what it can
     /// provide (encoder, state store) and panics with a clean
@@ -81,6 +92,19 @@ impl ExecutionPlan {
 
     pub fn resource_type(&self, id: ResourceId) -> Option<PortType> {
         self.resource_types.get(id.0 as usize).copied()
+    }
+
+    /// Producer-declared texture format for the given resource, or
+    /// `None` if the producer didn't override (use backend default).
+    /// Always `None` for non-`Texture2D` resources.
+    pub fn resource_format(
+        &self,
+        id: ResourceId,
+    ) -> Option<manifold_gpu::GpuTextureFormat> {
+        self.resource_formats
+            .get(id.0 as usize)
+            .copied()
+            .flatten()
     }
 
     /// Aggregate runtime-service requirements across all nodes in
@@ -133,6 +157,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     let mut output_resources: AHashMap<(NodeInstanceId, &'static str), ResourceId> =
         AHashMap::default();
     let mut resource_types: Vec<PortType> = Vec::new();
+    let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
     for &node_id in &order {
         let inst = graph
             .get_node(node_id)
@@ -141,6 +166,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             let id = ResourceId(resource_types.len() as u32);
             output_resources.insert((node_id, output_port.name), id);
             resource_types.push(output_port.ty);
+            // Format declaration is only meaningful for Texture2D
+            // outputs; other port types ignore it. Query the producer
+            // even for non-textures so the parallel arrays stay
+            // aligned — the runtime normalizes non-texture formats to
+            // `None` when constructing the pool key.
+            resource_formats.push(inst.node.output_format(output_port.name));
         }
     }
 
@@ -264,6 +295,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     Ok(ExecutionPlan {
         steps,
         resource_types,
+        resource_formats,
         requires,
     })
 }

@@ -110,6 +110,19 @@ pub struct EffectGraphNode {
     /// (i.e. nearly every shipping primitive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wgsl_source: Option<String>,
+    /// Per-output texture format override, keyed by output port name.
+    /// Format strings match Metal/WGSL conventions: `"rgba16float"`,
+    /// `"rgba32float"`, `"r32float"`, `"rg32float"`, `"r16float"`,
+    /// `"rgba8unorm"`, etc. — see `manifold_gpu::GpuTextureFormat`.
+    ///
+    /// Default (empty / missing) means "use the backend's default
+    /// format" — typically `rgba16float`, which is right for color and
+    /// video. Native-precision escape hatches (e.g. fluid sim passes)
+    /// declare formats here so the runtime allocates intermediate
+    /// textures with the precision the legacy pipeline used, preserving
+    /// numerical stability across multi-pass feedback chains.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_formats: BTreeMap<String, String>,
 }
 
 /// One wire inside an [`EffectGraphDef`]. Endpoint ids reference
@@ -399,6 +412,7 @@ mod tests {
                 params,
                 editor_pos: Some((100.0, 200.0)),
                 wgsl_source: None,
+                output_formats: BTreeMap::new(),
             }],
             wires: Vec::new(),
         };

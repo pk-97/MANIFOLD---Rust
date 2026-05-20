@@ -212,6 +212,25 @@ impl Graph {
         Ok(())
     }
 
+    /// Install a per-output-port format override on a node. Used by
+    /// persistence to apply JSON-declared `outputFormats` entries after
+    /// a node is constructed but before `compile()` walks outputs.
+    /// No-op on nodes whose format is fixed at compile time (the
+    /// default for nearly every primitive).
+    pub fn set_output_format(
+        &mut self,
+        id: NodeInstanceId,
+        port: &str,
+        format: manifold_gpu::GpuTextureFormat,
+    ) -> Result<(), GraphError> {
+        let inst = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
+        inst.node.set_output_format(port, format);
+        Ok(())
+    }
+
     /// Fast-path variant of [`Self::set_param`] for callers that
     /// constructed the node themselves and know `name` is valid.
     /// Skips the linear scan over `parameters()`. Silently no-ops on

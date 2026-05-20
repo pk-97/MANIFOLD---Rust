@@ -2961,6 +2961,7 @@ mod tests {
                     params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: std::collections::BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 1,
@@ -2969,6 +2970,7 @@ mod tests {
                     params,
                     editor_pos: Some((100.0, 200.0)),
                     wgsl_source: None,
+                    output_formats: std::collections::BTreeMap::new(),
                 },
             ],
             wires: vec![EffectGraphWire {

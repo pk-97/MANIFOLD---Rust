@@ -15,7 +15,7 @@
 //! implementation are designed together.
 
 use ahash::AHashMap;
-use manifold_gpu::{GpuBuffer, GpuTexture};
+use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::execution_plan::ResourceId;
@@ -25,13 +25,26 @@ use crate::node_graph::ports::PortType;
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
     /// Acquire a slot for `id` of the given [`PortType`]. Backends are
-    /// expected to recycle freed slots of the same type before allocating
-    /// fresh ones — that's where pool reuse happens.
-    fn acquire(&mut self, id: ResourceId, ty: PortType) -> Slot;
+    /// expected to recycle freed slots of the same `(type, format)` pair
+    /// before allocating fresh ones.
+    ///
+    /// `format` is honored only for `Texture2D` slots; other port types
+    /// ignore it. `None` means "use the backend's default format"
+    /// (typically `Rgba16Float`) — most primitives pass `None` and
+    /// only the native-precision escape hatches declare a non-default
+    /// format via [`EffectNode::output_format`](crate::node_graph::EffectNode::output_format).
+    fn acquire(
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+    ) -> Slot;
 
-    /// Release `id`'s slot back to the per-type free pool. Idempotent —
-    /// releasing an already-released id is a no-op.
-    fn release(&mut self, id: ResourceId, ty: PortType);
+    /// Release `id`'s slot back to the per-`(type, format)` free pool.
+    /// Idempotent — releasing an already-released id is a no-op. `format`
+    /// must match what was passed to [`Backend::acquire`] so the slot
+    /// returns to the correct bucket.
+    fn release(&mut self, id: ResourceId, ty: PortType, format: Option<GpuTextureFormat>);
 
     /// Currently bound slot for `id`, or `None` if unbound.
     fn slot_for(&self, id: ResourceId) -> Option<Slot>;
@@ -129,6 +142,20 @@ pub trait Backend: Send {
     fn clear_skip_aliases(&mut self) {}
 }
 
+/// Build the per-(type, format) slot-recycling pool key. `format` is
+/// meaningful for `Texture2D` slots only; for every other port type
+/// the value is normalized to `None` so non-texture slots pool by type
+/// alone (avoids fragmenting the recycle pool by an irrelevant axis).
+pub(crate) fn pool_key(
+    ty: PortType,
+    format: Option<GpuTextureFormat>,
+) -> (PortType, Option<GpuTextureFormat>) {
+    match ty {
+        PortType::Texture2D => (ty, format),
+        _ => (ty, None),
+    }
+}
+
 /// In-memory backend with no real GPU resources. Tracks slot identity and
 /// per-type recycling — same logic as step 4's `ResourcePool`, now behind
 /// the [`Backend`] trait.
@@ -136,7 +163,7 @@ pub trait Backend: Send {
 /// Used by every test in the `node_graph` module. Production code uses a
 /// future `MetalBackend` that wraps `manifold_gpu::RenderTargetPool`.
 pub struct MockBackend {
-    free_by_type: AHashMap<PortType, Vec<Slot>>,
+    free_by_type: AHashMap<(PortType, Option<GpuTextureFormat>), Vec<Slot>>,
     bound: AHashMap<ResourceId, Slot>,
     next_slot: u32,
     /// Scalar values written via [`Backend::set_scalar`]. Mock has no
@@ -163,12 +190,18 @@ impl Default for MockBackend {
 }
 
 impl Backend for MockBackend {
-    fn acquire(&mut self, id: ResourceId, ty: PortType) -> Slot {
+    fn acquire(
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+    ) -> Slot {
         // Idempotent on existing bindings — mirrors `MetalBackend`.
         if let Some(&slot) = self.bound.get(&id) {
             return slot;
         }
-        let pool = self.free_by_type.entry(ty).or_default();
+        let key = pool_key(ty, format);
+        let pool = self.free_by_type.entry(key).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);
             self.next_slot += 1;
@@ -178,9 +211,10 @@ impl Backend for MockBackend {
         slot
     }
 
-    fn release(&mut self, id: ResourceId, ty: PortType) {
+    fn release(&mut self, id: ResourceId, ty: PortType, format: Option<GpuTextureFormat>) {
         if let Some(slot) = self.bound.remove(&id) {
-            self.free_by_type.entry(ty).or_default().push(slot);
+            let key = pool_key(ty, format);
+            self.free_by_type.entry(key).or_default().push(slot);
         }
     }
 
@@ -222,9 +256,9 @@ mod tests {
     #[test]
     fn reuses_freed_slot_of_matching_type() {
         let mut b = MockBackend::new();
-        let s0 = b.acquire(ResourceId(0), PortType::Texture2D);
-        b.release(ResourceId(0), PortType::Texture2D);
-        let s1 = b.acquire(ResourceId(1), PortType::Texture2D);
+        let s0 = b.acquire(ResourceId(0), PortType::Texture2D, None);
+        b.release(ResourceId(0), PortType::Texture2D, None);
+        let s1 = b.acquire(ResourceId(1), PortType::Texture2D, None);
         assert_eq!(s0, s1);
         assert_eq!(b.slot_count(), 1);
     }
@@ -232,9 +266,9 @@ mod tests {
     #[test]
     fn does_not_cross_type_boundaries() {
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Texture2D);
-        b.release(ResourceId(0), PortType::Texture2D);
-        let s = b.acquire(ResourceId(1), PortType::Texture3D);
+        b.acquire(ResourceId(0), PortType::Texture2D, None);
+        b.release(ResourceId(0), PortType::Texture2D, None);
+        let s = b.acquire(ResourceId(1), PortType::Texture3D, None);
         assert_eq!(s.0, 1);
         assert_eq!(b.slot_count(), 2);
     }
@@ -244,9 +278,9 @@ mod tests {
         // F32 and Vec3 scalars live in different physical-buffer kinds even
         // though they're both Scalar-flavoured.
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32));
-        b.release(ResourceId(0), PortType::Scalar(ScalarType::F32));
-        let s = b.acquire(ResourceId(1), PortType::Scalar(ScalarType::Vec3));
+        b.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None);
+        b.release(ResourceId(0), PortType::Scalar(ScalarType::F32), None);
+        let s = b.acquire(ResourceId(1), PortType::Scalar(ScalarType::Vec3), None);
         assert_eq!(s.0, 1);
         assert_eq!(b.slot_count(), 2);
     }
@@ -254,13 +288,61 @@ mod tests {
     #[test]
     fn clear_resets_bindings_but_preserves_high_water_mark() {
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Texture2D);
-        b.acquire(ResourceId(1), PortType::Texture2D);
+        b.acquire(ResourceId(0), PortType::Texture2D, None);
+        b.acquire(ResourceId(1), PortType::Texture2D, None);
         b.clear();
         assert!(b.slot_for(ResourceId(0)).is_none());
         // After clear, the next acquire allocates a fresh slot rather than
         // reusing — the cleared bindings don't repopulate the free pool.
-        let s = b.acquire(ResourceId(2), PortType::Texture2D);
+        let s = b.acquire(ResourceId(2), PortType::Texture2D, None);
         assert_eq!(s.0, 2);
+    }
+
+    #[test]
+    fn texture2d_pools_separately_by_format() {
+        // A freed slot allocated as rgba16float must NOT be reused for an
+        // acquire requesting rgba32float — handing back the wrong-format
+        // texture would silently corrupt downstream reads.
+        let mut b = MockBackend::new();
+        let _s0 = b.acquire(
+            ResourceId(0),
+            PortType::Texture2D,
+            Some(GpuTextureFormat::Rgba16Float),
+        );
+        b.release(
+            ResourceId(0),
+            PortType::Texture2D,
+            Some(GpuTextureFormat::Rgba16Float),
+        );
+        let s1 = b.acquire(
+            ResourceId(1),
+            PortType::Texture2D,
+            Some(GpuTextureFormat::Rgba32Float),
+        );
+        assert_eq!(s1.0, 1, "different-format acquire must allocate a fresh slot");
+        assert_eq!(b.slot_count(), 2);
+    }
+
+    #[test]
+    fn non_texture_ports_ignore_format() {
+        // Scalar/Array slots aren't textures — the format parameter
+        // shouldn't fragment their recycle pool.
+        let mut b = MockBackend::new();
+        b.acquire(
+            ResourceId(0),
+            PortType::Scalar(ScalarType::F32),
+            Some(GpuTextureFormat::Rgba16Float),
+        );
+        b.release(
+            ResourceId(0),
+            PortType::Scalar(ScalarType::F32),
+            Some(GpuTextureFormat::Rgba32Float),
+        );
+        let s = b.acquire(
+            ResourceId(1),
+            PortType::Scalar(ScalarType::F32),
+            None,
+        );
+        assert_eq!(s.0, 0, "non-texture slots should recycle regardless of format hint");
     }
 }

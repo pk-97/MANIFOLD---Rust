@@ -232,6 +232,15 @@ pub enum LoadError {
     /// Wire targets a port that doesn't exist or has the wrong kind /
     /// type on the receiving node.
     InvalidWire { wire_index: usize, reason: String },
+    /// An `outputFormats` entry references a format string this build
+    /// doesn't know about. The set of valid strings tracks
+    /// [`manifold_gpu::GpuTextureFormat`] — see [`format_from_str`].
+    UnknownOutputFormat {
+        node_id: u32,
+        type_id: String,
+        port: String,
+        format: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -272,8 +281,63 @@ impl std::fmt::Display for LoadError {
             Self::InvalidWire { wire_index, reason } => {
                 write!(f, "wire #{wire_index}: {reason}")
             }
+            Self::UnknownOutputFormat {
+                node_id,
+                type_id,
+                port,
+                format,
+            } => write!(
+                f,
+                "node {node_id} ({type_id}): output '{port}' declares unknown format '{format}'"
+            ),
         }
     }
+}
+
+/// Map a [`manifold_gpu::GpuTextureFormat`] to the JSON wire string.
+/// Inverse of [`format_from_str`]. Keep the two functions in sync —
+/// they're the round-trip contract for the `outputFormats` map.
+pub fn format_to_str(fmt: manifold_gpu::GpuTextureFormat) -> &'static str {
+    use manifold_gpu::GpuTextureFormat::*;
+    match fmt {
+        Rgba16Float => "rgba16float",
+        Rgba32Float => "rgba32float",
+        Rgba8Unorm => "rgba8unorm",
+        R32Float => "r32float",
+        Rg32Float => "rg32float",
+        R16Float => "r16float",
+        Rg16Float => "rg16float",
+        R32Uint => "r32uint",
+        Rgba8UnormSrgb => "rgba8unorm_srgb",
+        Bgra8Unorm => "bgra8unorm",
+        Bgra8UnormSrgb => "bgra8unorm_srgb",
+        R8Unorm => "r8unorm",
+        Depth32Float => "depth32float",
+    }
+}
+
+/// Parse the JSON `outputFormats` value string. Returns `None` for an
+/// unrecognized name — the loader surfaces a clean `LoadError` instead
+/// of silently falling back to a default. Strings match WGSL /
+/// `texture_storage_2d<...>` conventions.
+pub fn format_from_str(s: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+    use manifold_gpu::GpuTextureFormat::*;
+    Some(match s {
+        "rgba16float" => Rgba16Float,
+        "rgba32float" => Rgba32Float,
+        "rgba8unorm" => Rgba8Unorm,
+        "r32float" => R32Float,
+        "rg32float" => Rg32Float,
+        "r16float" => R16Float,
+        "rg16float" => Rg16Float,
+        "r32uint" => R32Uint,
+        "rgba8unorm_srgb" => Rgba8UnormSrgb,
+        "bgra8unorm" => Bgra8Unorm,
+        "bgra8unorm_srgb" => Bgra8UnormSrgb,
+        "r8unorm" => R8Unorm,
+        "depth32float" => Depth32Float,
+        _ => return None,
+    })
 }
 
 impl std::error::Error for LoadError {}
@@ -330,6 +394,17 @@ impl EffectGraphDefExt for EffectGraphDef {
                     let value = inst.params.get(def.name).copied().unwrap_or(def.default);
                     params.insert(def.name.to_string(), value.into());
                 }
+                // Walk outputs and serialize any node-declared format
+                // overrides. Most nodes return `None` and the map stays
+                // empty — only `node.wgsl_compute_*` nodes that an
+                // author explicitly configured for native precision
+                // carry entries here.
+                let mut output_formats = BTreeMap::new();
+                for out in inst.node.outputs() {
+                    if let Some(fmt) = inst.node.output_format(out.name) {
+                        output_formats.insert(out.name.to_string(), format_to_str(fmt).to_string());
+                    }
+                }
                 EffectGraphNode {
                     id: inst.id.0,
                     type_id: inst.node.type_id().as_str().to_string(),
@@ -337,6 +412,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                     params,
                     editor_pos: None,
                     wgsl_source: inst.node.wgsl_source().map(|s| s.to_string()),
+                    output_formats,
                 }
             })
             .collect();
@@ -451,6 +527,23 @@ impl EffectGraphDefExt for EffectGraphDef {
             if let Some(source) = node_doc.wgsl_source.as_deref() {
                 graph
                     .set_wgsl_source(runtime_id, source)
+                    .expect("node was just added");
+            }
+
+            // Install any per-output format overrides. Most documents
+            // carry no entries; the native-precision escape-hatch
+            // family is where these matter.
+            for (port_name, fmt_str) in &node_doc.output_formats {
+                let Some(fmt) = format_from_str(fmt_str) else {
+                    return Err(LoadError::UnknownOutputFormat {
+                        node_id: node_doc.id,
+                        type_id: node_doc.type_id.clone(),
+                        port: port_name.clone(),
+                        format: fmt_str.clone(),
+                    });
+                };
+                graph
+                    .set_output_format(runtime_id, port_name, fmt)
                     .expect("node was just added");
             }
         }
@@ -689,6 +782,102 @@ mod tests {
         );
     }
 
+    /// `outputFormats` on a `node.wgsl_compute_*` node carries through
+    /// `from_graph` → JSON → `into_graph` and lands on the rebuilt
+    /// node's `output_format(port)` accessor. Validates the full D5
+    /// path end to end at the persistence layer.
+    #[test]
+    fn output_format_override_round_trips_through_json() {
+        use crate::node_graph::primitives::WgslCompute1Tex1Tex;
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let wgsl = g.add_node_named("kernel", Box::new(WgslCompute1Tex1Tex::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((src, "out"), (wgsl, "in")).unwrap();
+        g.connect((wgsl, "out"), (out, "in")).unwrap();
+
+        // Configure native-precision output.
+        g.set_output_format(wgsl, "out", manifold_gpu::GpuTextureFormat::Rgba32Float)
+            .unwrap();
+
+        let doc = GraphDocument::from_graph(&g);
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(
+            json.contains("outputFormats") && json.contains("rgba32float"),
+            "JSON must carry the outputFormats map with the format string; got: {json}"
+        );
+
+        let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
+        let g2 = parsed.into_graph(&registry()).unwrap();
+        let kernel_id = g2.node_id_by_handle("kernel").expect("handle survived");
+        let inst = g2.get_node(kernel_id).unwrap();
+        assert_eq!(
+            inst.node.output_format("out"),
+            Some(manifold_gpu::GpuTextureFormat::Rgba32Float),
+            "output format override must round-trip through into_graph",
+        );
+    }
+
+    /// An unknown format string surfaces as a clean `LoadError` rather
+    /// than silently falling back to the default — defends against
+    /// typos and lets the editor surface the bad node to the author.
+    #[test]
+    fn unknown_output_format_surfaces_as_load_error() {
+        let mut output_formats = BTreeMap::new();
+        output_formats.insert("out".to_string(), "made_up_format".to_string());
+        let doc = GraphDocument {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![NodeDocument {
+                id: 0,
+                type_id: "node.wgsl_compute_0in_1tex".to_string(),
+                handle: None,
+                params: BTreeMap::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                output_formats,
+            }],
+            wires: vec![],
+        };
+        let err = expect_err(doc.into_graph(&registry()));
+        match err {
+            LoadError::UnknownOutputFormat { format, port, .. } => {
+                assert_eq!(format, "made_up_format");
+                assert_eq!(port, "out");
+            }
+            other => panic!("expected UnknownOutputFormat, got {other:?}"),
+        }
+    }
+
+    /// The producer's declared format propagates through `compile()` and
+    /// is queryable via `plan.resource_format(id)`. This is the
+    /// compile-time piece — the runtime piece (backend allocates at
+    /// that format) is exercised by the backend's
+    /// `texture2d_pools_separately_by_format` test.
+    #[test]
+    fn declared_output_format_lands_in_compiled_plan() {
+        use crate::node_graph::primitives::WgslCompute0In1Tex;
+
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(WgslCompute0In1Tex::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((producer, "out"), (out, "in")).unwrap();
+        g.set_output_format(producer, "out", manifold_gpu::GpuTextureFormat::R32Float)
+            .unwrap();
+
+        let plan = crate::node_graph::compile(&g).unwrap();
+        // Two outputs in the graph: WgslCompute0In1Tex.out (Texture2D,
+        // declared r32float) and FinalOutput's outputs (none — it's a
+        // sink). The first resource is the generator's `out`.
+        assert_eq!(
+            plan.resource_format(crate::node_graph::execution_plan::ResourceId(0)),
+            Some(manifold_gpu::GpuTextureFormat::R32Float),
+        );
+    }
+
     #[test]
     fn unknown_type_id_is_a_clean_error() {
         let doc = GraphDocument {
@@ -703,6 +892,7 @@ mod tests {
                 params: BTreeMap::new(),
                 editor_pos: None,
                 wgsl_source: None,
+                output_formats: BTreeMap::new(),
             }],
             wires: vec![],
         };
@@ -741,6 +931,7 @@ mod tests {
                     params: BTreeMap::new(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: BTreeMap::new(),
                 },
                 NodeDocument {
                     id: 1,
@@ -749,6 +940,7 @@ mod tests {
                     params: BTreeMap::new(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: BTreeMap::new(),
                 },
             ],
             wires: vec![WireDocument {
@@ -781,6 +973,7 @@ mod tests {
                 params,
                 editor_pos: None,
                 wgsl_source: None,
+                output_formats: BTreeMap::new(),
             }],
             wires: vec![],
         };
@@ -808,6 +1001,7 @@ mod tests {
                 params,
                 editor_pos: None,
                 wgsl_source: None,
+                output_formats: BTreeMap::new(),
             }],
             wires: vec![],
         };

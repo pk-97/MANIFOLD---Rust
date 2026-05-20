@@ -170,7 +170,8 @@ impl Executor {
                 let ty = plan
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
-                let slot = self.backend.acquire(res_id, ty);
+                let fmt = plan.resource_format(res_id);
+                let slot = self.backend.acquire(res_id, ty, fmt);
                 self.output_scratch.push((port_name, slot));
             }
 
@@ -254,7 +255,8 @@ impl Executor {
                 let ty = plan
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
-                self.backend.release(res_id, ty);
+                let fmt = plan.resource_format(res_id);
+                self.backend.release(res_id, ty, fmt);
             }
         }
     }

@@ -142,6 +142,21 @@ pub trait Primitive: PrimitiveSpec {
     /// [`EffectNode::set_wgsl_source`](crate::node_graph::effect_node::EffectNode::set_wgsl_source).
     /// Override only on `node.wgsl_compute_*` primitives.
     fn set_wgsl_source(&mut self, _source: &str) {}
+
+    /// Per-output-port texture format override — mirror of
+    /// [`EffectNode::output_format`](crate::node_graph::effect_node::EffectNode::output_format).
+    /// Override on primitives that need a non-default format (most
+    /// commonly the `node.wgsl_compute_*` escape hatches when an
+    /// agent wants `rgba32float` / `r32float` precision).
+    fn output_format(&self, _port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        None
+    }
+
+    /// Setter for [`output_format`](Self::output_format) — mirror of
+    /// [`EffectNode::set_output_format`](crate::node_graph::effect_node::EffectNode::set_output_format).
+    /// Override only on primitives that carry instance-level format
+    /// state (the `node.wgsl_compute_*` family).
+    fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 }
 
 /// Blanket `EffectNode` impl for any `Primitive`. Reads all surface
@@ -173,6 +188,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn set_wgsl_source(&mut self, source: &str) {
         Primitive::set_wgsl_source(self, source);
+    }
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        Primitive::output_format(self, port)
+    }
+    fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
+        Primitive::set_output_format(self, port, format);
     }
 }
 

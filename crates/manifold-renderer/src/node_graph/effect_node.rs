@@ -348,4 +348,30 @@ pub trait EffectNode: Send {
     /// is in place before the first `evaluate`. No-op for every node
     /// whose shader is fixed at compile time.
     fn set_wgsl_source(&mut self, _source: &str) {}
+
+    /// Output texture format for the named port. Returns `None` to use
+    /// the backend's default format (typically `Rgba16Float`). Only
+    /// meaningful for `Texture2D` outputs — other port types ignore
+    /// the value.
+    ///
+    /// The graph runtime queries this at `compile()` time to record
+    /// each resource's format alongside its `PortType`. The backend
+    /// then allocates per-slot at the producer's declared format and
+    /// keys slot recycling on `(PortType, GpuTextureFormat)` so two
+    /// slots with different formats never alias.
+    ///
+    /// Most primitives default to `None` (use the backend's format,
+    /// which is correct for color/video). Native-precision escape
+    /// hatches (`node.wgsl_compute_*` with format override) and any
+    /// stateful primitive that needs `r32float` / `rgba32float`
+    /// stability override this.
+    fn output_format(&self, _port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        None
+    }
+
+    /// Optional setter for [`output_format`](Self::output_format).
+    /// Called by `into_graph` after `new()` so a JSON-declared format
+    /// override is in place before `compile()` walks outputs. No-op
+    /// for every node whose format is fixed at compile time.
+    fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 }

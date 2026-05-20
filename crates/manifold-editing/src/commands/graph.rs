@@ -112,6 +112,7 @@ impl Command for AddGraphNodeCommand {
             params: BTreeMap::new(),
             editor_pos: self.pos,
             wgsl_source: None,
+            output_formats: BTreeMap::new(),
         });
         self.minted_id = Some(id);
         bump_version(instance);
@@ -620,6 +621,7 @@ mod tests {
                     params: BTreeMap::new(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 1,
@@ -628,6 +630,7 @@ mod tests {
                     params: BTreeMap::new(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 2,
@@ -636,6 +639,7 @@ mod tests {
                     params: BTreeMap::new(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 3,
@@ -644,6 +648,7 @@ mod tests {
                     params: BTreeMap::new(),
                     editor_pos: None,
                     wgsl_source: None,
+                    output_formats: BTreeMap::new(),
                 },
             ],
             wires: vec![
