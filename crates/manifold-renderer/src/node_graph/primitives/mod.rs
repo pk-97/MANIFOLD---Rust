@@ -29,6 +29,7 @@ mod distance_to_point;
 mod dither_pattern;
 mod edge_detect;
 mod envelope_follower_ar;
+mod fbm_2d;
 mod filter;
 mod flow_field_noise;
 mod fluid_gradient_curl_3d;
@@ -122,6 +123,7 @@ pub use distance_to_point::DistanceToPoint;
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
 pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr};
+pub use fbm_2d::Fbm2D;
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
