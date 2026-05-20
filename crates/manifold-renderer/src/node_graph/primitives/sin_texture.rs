@@ -27,6 +27,12 @@ crate::primitive! {
     purpose: "Per-pixel sin(input.rgb * freq + phase). Alpha passes through. Output range [-1, 1] (chain node.scale_offset_texture with a=0.5, b=0.5 to remap to [0, 1] for normal display). Used to turn scalar fields into oscillating patterns (rings around distance_to_point, sweeps around uv_field, etc.).",
     inputs: {
         in: Texture2D required,
+        // Port-shadows-param for freq and phase: wired scalars
+        // override the static params every frame. Lets generator
+        // graphs drive phase from system.generator_input.time through
+        // a Math primitive (multiply by a per-term constant).
+        freq: ScalarF32 optional,
+        phase: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -49,20 +55,29 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Default freq = 2π so a [0, 1] input completes one full sine cycle. Animate by driving `phase` from an LFO. Pair with node.distance_to_point for concentric rings, node.uv_field for stripes, node.polar_field's R channel for radial sectors.",
+    composition_notes: "Default freq = 2π so a [0, 1] input completes one full sine cycle. Animate by wiring `phase` from system.generator_input.time through a node.math (multiply by a per-term constant). Pair with node.distance_to_point for concentric rings, node.uv_field for stripes, node.polar_field's R channel for radial sectors.",
     examples: [],
     picker: { label: "Sin Texture", category: Atom },
 }
 
 impl Primitive for SinTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let freq = match ctx.params.get("freq") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => std::f32::consts::TAU,
+        // Port-shadows-param: wired scalar (if present) overrides the
+        // static param. Matches the convention Smoothing / Gain /
+        // AffineTransform use.
+        let freq = match ctx.inputs.scalar("freq") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("freq") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => std::f32::consts::TAU,
+            },
         };
-        let phase = match ctx.params.get("phase") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        let phase = match ctx.inputs.scalar("phase") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("phase") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
@@ -125,12 +140,20 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn sin_texture_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
+    fn sin_texture_declares_one_required_texture_input_and_two_optional_scalar_ports() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(SinTexture::TYPE_ID, "node.sin_texture");
-        assert_eq!(SinTexture::INPUTS.len(), 1);
-        assert_eq!(SinTexture::INPUTS[0].name, "in");
-        assert_eq!(SinTexture::INPUTS[0].ty, PortType::Texture2D);
+        let ins = SinTexture::INPUTS;
+        assert_eq!(ins.len(), 3);
+        assert_eq!(ins[0].name, "in");
+        assert!(ins[0].required);
+        assert_eq!(ins[0].ty, PortType::Texture2D);
+        assert_eq!(ins[1].name, "freq");
+        assert!(!ins[1].required);
+        assert_eq!(ins[1].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(ins[2].name, "phase");
+        assert!(!ins[2].required);
+        assert_eq!(ins[2].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(SinTexture::OUTPUTS.len(), 1);
         assert_eq!(SinTexture::OUTPUTS[0].ty, PortType::Texture2D);
     }

@@ -26,6 +26,12 @@ crate::primitive! {
     purpose: "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.gain + node.brightness fused.",
     inputs: {
         in: Texture2D required,
+        // Port-shadows-param for scale and offset: wired scalars
+        // override the static params each frame. Lets composed graphs
+        // derive the rescale factors from generator inputs (e.g.
+        // scale = freq * 1.2 for a length-modulated plasma term).
+        scale: ScalarF32 optional,
+        offset: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -55,13 +61,19 @@ crate::primitive! {
 
 impl Primitive for ScaleOffsetTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let scale = match ctx.params.get("scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
+        let scale = match ctx.inputs.scalar("scale") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("scale") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 1.0,
+            },
         };
-        let offset = match ctx.params.get("offset") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        let offset = match ctx.inputs.scalar("offset") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("offset") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
@@ -124,10 +136,20 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn scale_offset_texture_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
+    fn scale_offset_texture_declares_required_texture_plus_two_optional_scalar_inputs() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(ScaleOffsetTexture::TYPE_ID, "node.scale_offset_texture");
-        assert_eq!(ScaleOffsetTexture::INPUTS.len(), 1);
+        let ins = ScaleOffsetTexture::INPUTS;
+        assert_eq!(ins.len(), 3);
+        assert_eq!(ins[0].name, "in");
+        assert!(ins[0].required);
+        assert_eq!(ins[0].ty, PortType::Texture2D);
+        assert_eq!(ins[1].name, "scale");
+        assert!(!ins[1].required);
+        assert_eq!(ins[1].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(ins[2].name, "offset");
+        assert!(!ins[2].required);
+        assert_eq!(ins[2].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(ScaleOffsetTexture::OUTPUTS.len(), 1);
         assert_eq!(ScaleOffsetTexture::OUTPUTS[0].ty, PortType::Texture2D);
     }

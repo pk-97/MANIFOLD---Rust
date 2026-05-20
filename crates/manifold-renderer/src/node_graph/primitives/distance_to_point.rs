@@ -26,7 +26,16 @@ crate::primitive! {
     name: DistanceToPoint,
     type_id: "node.distance_to_point",
     purpose: "Pure generator. Per-pixel Euclidean distance from a configurable center in UV space, broadcast to R/G/B (A=1). Building block for radial fields, circle fields, and tunnel-like compositions.",
-    inputs: {},
+    inputs: {
+        // Port-shadows-param for the three scalar params: when a
+        // scalar is wired, it overrides the static param each frame.
+        // Lets generator graphs derive cx/cy from a Math node and
+        // animate scale from the same complexity wire that feeds
+        // downstream sin_texture frequencies.
+        cx: ScalarF32 optional,
+        cy: ScalarF32 optional,
+        scale: ScalarF32 optional,
+    },
     outputs: {
         out: Texture2D,
     },
@@ -63,17 +72,26 @@ crate::primitive! {
 
 impl Primitive for DistanceToPoint {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cx = match ctx.params.get("cx") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
+        let cx = match ctx.inputs.scalar("cx") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("cx") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.5,
+            },
         };
-        let cy = match ctx.params.get("cy") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
+        let cy = match ctx.inputs.scalar("cy") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("cy") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.5,
+            },
         };
-        let scale = match ctx.params.get("scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
+        let scale = match ctx.inputs.scalar("scale") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("scale") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 1.0,
+            },
         };
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
@@ -126,10 +144,17 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn distance_to_point_declares_zero_inputs_and_one_texture_output() {
-        use crate::node_graph::ports::PortType;
+    fn distance_to_point_declares_three_optional_scalar_inputs_and_one_texture_output() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(DistanceToPoint::TYPE_ID, "node.distance_to_point");
-        assert!(DistanceToPoint::INPUTS.is_empty());
+        let ins = DistanceToPoint::INPUTS;
+        assert_eq!(ins.len(), 3);
+        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["cx", "cy", "scale"]);
+        for port in ins {
+            assert!(!port.required);
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(DistanceToPoint::OUTPUTS.len(), 1);
         assert_eq!(DistanceToPoint::OUTPUTS[0].name, "out");
         assert_eq!(DistanceToPoint::OUTPUTS[0].ty, PortType::Texture2D);
