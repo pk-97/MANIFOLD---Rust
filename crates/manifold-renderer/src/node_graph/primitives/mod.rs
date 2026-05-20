@@ -15,6 +15,7 @@ mod blob_tracking;
 mod bloom;
 mod blur_3d_separable;
 mod chroma_key;
+mod checkerboard;
 mod chromatic_offset;
 mod clamp_stretch;
 mod color;
@@ -106,6 +107,7 @@ pub use blob_tracking::{BLOB_TRACKING_TYPE_ID, BlobTracking};
 pub use bloom::{BLOOM_TYPE_ID, Bloom};
 pub use blur_3d_separable::{BLUR_3D_AXES, BLUR_3D_MODES, Blur3DSeparable};
 pub use chroma_key::{CHROMA_KEY_MODES, ChromaKey};
+pub use checkerboard::Checkerboard;
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use color::{
