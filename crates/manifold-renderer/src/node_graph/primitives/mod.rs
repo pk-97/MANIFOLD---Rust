@@ -24,6 +24,7 @@ mod depth_of_field;
 mod dither_pattern;
 mod edge_detect;
 mod filter;
+mod fluid_gradient_curl_3d;
 mod fluid_gradient_rotate;
 mod fluid_seed;
 mod fluid_simulate;
@@ -92,6 +93,7 @@ pub use edge_detect::EdgeDetect;
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
+pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
 pub use fluid_gradient_rotate::FluidGradientRotate;
 pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
 pub use fluid_simulate::FluidSimulate;
