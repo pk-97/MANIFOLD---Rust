@@ -752,7 +752,8 @@ enum EffectMirrorReverse {
     /// The (handle, param) is a non-preset param; we removed an
     /// existing `UserParamBinding`. Undo reinserts it at `position`
     /// with the captured slot value, plus re-attaches any orphaned
-    /// drivers / Ableton mappings that referenced the binding's id.
+    /// drivers / Ableton mappings / envelopes that referenced the
+    /// binding's id.
     RemovedUserBinding {
         binding: manifold_core::effects::UserParamBinding,
         position: usize,
@@ -766,10 +767,37 @@ enum EffectMirrorReverse {
         /// Ableton mappings pruned for the same reason.
         removed_ableton_mappings:
             Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
+        /// Envelopes pruned from the host layer's envelope list when the
+        /// removed binding's (effect_type, param_id) matched. `None`
+        /// when the effect is master-scoped (master has no envelopes)
+        /// or clip-scoped (clip-hosted effects don't surface in the
+        /// graph editor today). When `Some`, `layer_id` is the host
+        /// layer — undo restores the captured envelopes there.
+        removed_envelope_state: Option<RemovedEnvelopeState>,
     },
     /// No-op: the Effect-side state already matched the requested
     /// state (idempotent re-toggle). Nothing to undo on the mirror.
     NoOp,
+}
+
+/// Captured envelope orphans from a Layer-hosted effect's unexpose.
+/// Envelopes live on the [`manifold_core::layer::Layer`] (keyed by
+/// `(target_effect_type, param_id)`), not on the [`EffectInstance`],
+/// so capturing them needs the layer borrow — separate from the rest
+/// of `EffectMirrorReverse` which only needs the effect borrow.
+#[derive(Debug)]
+struct RemovedEnvelopeState {
+    /// Host layer the envelopes belong to. Undo restores them here.
+    layer_id: manifold_core::LayerId,
+    /// Effect type id captured at unexpose time. Envelopes match on
+    /// `(target_effect_type, param_id)`, so we need the type alongside
+    /// the binding id to put them back at the right rows.
+    effect_type: manifold_core::EffectTypeId,
+    /// The pruned envelope rows, in the order they appeared on the
+    /// layer. `retain` doesn't preserve indices, so the restore path
+    /// appends them — fine because envelopes are keyed by content
+    /// `(effect_type, param_id)`, not position.
+    envelopes: Vec<manifold_core::effects::ParamEnvelope>,
 }
 
 impl ToggleNodeParamExposeCommand {
@@ -943,7 +971,7 @@ impl Command for ToggleNodeParamExposeCommand {
         };
 
         // Effect-side mirror. Only runs for GraphTarget::Effect.
-        let effect_mirror = match &self.target {
+        let mut effect_mirror = match &self.target {
             GraphTarget::Effect(effect_id) => {
                 let effect = match project.find_effect_by_id_mut(effect_id) {
                     Some(fx) => fx,
@@ -971,6 +999,60 @@ impl Command for ToggleNodeParamExposeCommand {
             GraphTarget::Generator(_) => None,
         };
 
+        // Envelope orphan cleanup. Only matters for Effect targets that
+        // produced a `RemovedUserBinding` mirror — envelopes live on
+        // the host Layer (not on `EffectInstance`, not on `Master`),
+        // so we need a separate borrow against the layer. Master
+        // effects skip this entirely; clip-hosted effects don't
+        // surface in the graph editor so they shouldn't reach here.
+        if let (GraphTarget::Effect(effect_id), Some(mirror)) =
+            (&self.target, effect_mirror.as_mut())
+            && let EffectMirrorReverse::RemovedUserBinding {
+                binding,
+                removed_envelope_state,
+                ..
+            } = mirror
+        {
+            let removed_id = binding.id.clone();
+            // Walk the timeline to find which layer (if any) hosts
+            // this effect AND grab its effect_type. Clip-hosted
+            // effects yield a None layer (we don't have a layer ref
+            // for them), so envelopes there are skipped — matches the
+            // legacy command's "Layer-only" envelope scope.
+            let host: Option<(manifold_core::LayerId, manifold_core::EffectTypeId)> = project
+                .timeline
+                .layers
+                .iter()
+                .find_map(|l| {
+                    l.effects.as_ref().and_then(|fxs| {
+                        fxs.iter()
+                            .find(|fx| &fx.id == effect_id)
+                            .map(|fx| (l.layer_id.clone(), fx.effect_type().clone()))
+                    })
+                });
+            if let Some((layer_id, effect_type)) = host
+                && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&layer_id)
+            {
+                let envs = layer.envelopes_mut();
+                let mut taken = Vec::new();
+                envs.retain(|e| {
+                    let keep = !(e.target_effect_type == effect_type
+                        && e.param_id == removed_id);
+                    if !keep {
+                        taken.push(e.clone());
+                    }
+                    keep
+                });
+                if !taken.is_empty() {
+                    *removed_envelope_state = Some(RemovedEnvelopeState {
+                        layer_id,
+                        effect_type,
+                        envelopes: taken,
+                    });
+                }
+            }
+        }
+
         self.reverse = NodeExposeReverse::Captured {
             prev_in_set,
             effect_mirror,
@@ -987,9 +1069,36 @@ impl Command for ToggleNodeParamExposeCommand {
             return;
         };
 
-        // Effect-side restore first (must happen before the graph-side
-        // restore if either fails for a deleted target, the effect
-        // walk will short-circuit cleanly).
+        // Envelope restore runs FIRST so its borrow of
+        // `project.timeline` is released before the effect-side
+        // restore needs its own walk through the same data. Take the
+        // envelope payload off the mirror up front; the effect-side
+        // restore doesn't use it.
+        let envelope_state = if let Some(EffectMirrorReverse::RemovedUserBinding {
+            removed_envelope_state,
+            ..
+        }) = effect_mirror.as_ref()
+        {
+            removed_envelope_state.as_ref().map(|s| {
+                (
+                    s.layer_id.clone(),
+                    s.effect_type.clone(),
+                    s.envelopes.clone(),
+                )
+            })
+        } else {
+            None
+        };
+        if let Some((layer_id, _effect_type, envelopes)) = envelope_state
+            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&layer_id)
+        {
+            // Envelopes are keyed by content `(target_effect_type,
+            // param_id)`, not by position — append is sufficient.
+            layer.envelopes_mut().extend(envelopes);
+        }
+
+        // Effect-side restore (binding + slot + drivers + Ableton
+        // mappings). Envelope payload is already restored above.
         if let (GraphTarget::Effect(effect_id), Some(mirror)) = (&self.target, effect_mirror)
             && let Some(effect) = project.find_effect_by_id_mut(effect_id)
         {
@@ -1134,6 +1243,10 @@ fn mirror_effect_side(
             slot_value,
             removed_drivers,
             removed_ableton_mappings,
+            // Envelope cleanup needs the layer borrow, not the effect
+            // borrow — populated by the caller in `execute()` after
+            // `mirror_effect_side` returns.
+            removed_envelope_state: None,
         }
     }
 }
@@ -1158,6 +1271,10 @@ fn unmirror_effect_side(
             slot_value,
             removed_drivers,
             removed_ableton_mappings,
+            // Envelope restore is handled separately in the command's
+            // `undo()` because it needs the layer borrow, not the
+            // effect borrow.
+            removed_envelope_state: _,
         } => {
             let pos = position.min(effect.user_param_bindings.len());
             let binding_id = binding.id.clone();
@@ -1843,6 +1960,94 @@ mod tests {
         assert_eq!(
             fx.drivers.as_ref().unwrap()[0].param_id,
             std::borrow::Cow::<'static, str>::Owned(user_param_id.clone()),
+        );
+    }
+
+    #[test]
+    fn unexposing_a_user_binding_on_layer_effect_prunes_and_restores_envelopes() {
+        // Same shape as the driver/Ableton orphan-cleanup test, but
+        // for envelopes — which live on the layer, not the effect.
+        // The unified command walks the timeline to find the host
+        // layer, prunes envelopes matching the binding's (effect_type,
+        // param_id), captures them, and restores on undo.
+        use manifold_core::effects::{ParamConvert, ParamEnvelope};
+        use manifold_core::layer::Layer;
+        use manifold_core::types::LayerType;
+
+        let effect_type = EffectTypeId::new("test.mirror");
+        let effect_id = EffectId::new("envelope-cleanup-test");
+
+        // Layer-hosted effect (not master — master has no envelopes).
+        let mut project = Project::default();
+        let mut layer = Layer::new("Test".to_string(), LayerType::Generator, 0);
+        let layer_id = layer.layer_id.clone();
+        let mut fx = EffectInstance::new(effect_type.clone());
+        fx.id = effect_id.clone();
+        layer.effects = Some(vec![fx]);
+        project.timeline.layers.push(layer);
+
+        // Expose first, attach an envelope to the synthesised id.
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+        );
+        expose.execute(&mut project);
+
+        let user_param_id = {
+            let fx = project.find_effect_by_id(&effect_id).unwrap();
+            fx.user_param_bindings[0].id.clone()
+        };
+        {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
+            layer.envelopes_mut().push(ParamEnvelope::new_for_effect(
+                effect_type.clone(),
+                user_param_id.clone(),
+            ));
+            // Add an unrelated envelope that should NOT get pruned —
+            // different param_id.
+            layer.envelopes_mut().push(ParamEnvelope::new_for_effect(
+                effect_type.clone(),
+                "unrelated.param".to_string(),
+            ));
+        }
+
+        // Unexpose. The matching envelope must be pruned; the unrelated
+        // one must survive.
+        let mut unexpose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            false,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+        );
+        unexpose.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+        assert_eq!(envs.len(), 1, "matching envelope pruned, unrelated kept");
+        assert_eq!(envs[0].param_id, "unrelated.param");
+
+        // Undo restores the pruned envelope alongside the binding.
+        unexpose.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+        assert_eq!(envs.len(), 2, "matching envelope restored");
+        assert!(
+            envs.iter().any(|e| e.param_id == user_param_id),
+            "restored envelope points back at the binding's id"
         );
     }
 
