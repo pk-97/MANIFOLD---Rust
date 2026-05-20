@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "name": "PlasmaClassicDecomposed",
+  "description": "Plasma Classic, decomposed through the Batch 5.5 procedural-math vocabulary. Four sinusoidal terms summed and remapped to [0, 1]:\n  v1 = sin((uv.x-0.5) * 5.5 + t*1.3)\n  v2 = sin((uv.y-0.5) * 4.4 + t*0.9)\n  v3 = sin((uv.x+uv.y-1) * 3.3 + t*1.1)\n  v4 = sin(length(uv-0.5)*6.6 + t*0.7)\n  out = (v1+v2+v3+v4)/4 mapped to [0, 1]\n\nMatches the legacy plasma_classic shader's first four terms; v5 (time-rotated uv.x) is omitted pending a rotate_2d primitive and the smoothstep contrast curve approximation by a linear remap. Hardcoded complexity (freq=5.5, the legacy default). The first decomposition target — proves the procedural-math vocabulary + port-shadows-param + system.generator_input compose into an animated procedural texture.",
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+
+    { "id": 10, "typeId": "node.channel_mix", "handle": "cm_v1",
+      "params": {
+        "row0": { "type": "Vec4", "value": [1.0, 0.0, 0.0, -0.5] }
+      }
+    },
+    { "id": 11, "typeId": "node.sin_texture", "handle": "sin_v1",
+      "params": {
+        "freq":  { "type": "Float", "value": 5.5 },
+        "phase": { "type": "Float", "value": 0.0 }
+      }
+    },
+
+    { "id": 20, "typeId": "node.channel_mix", "handle": "cm_v2",
+      "params": {
+        "row0": { "type": "Vec4", "value": [0.0, 1.0, 0.0, -0.5] }
+      }
+    },
+    { "id": 21, "typeId": "node.sin_texture", "handle": "sin_v2",
+      "params": {
+        "freq":  { "type": "Float", "value": 4.4 },
+        "phase": { "type": "Float", "value": 0.0 }
+      }
+    },
+
+    { "id": 30, "typeId": "node.channel_mix", "handle": "cm_v3",
+      "params": {
+        "row0": { "type": "Vec4", "value": [1.0, 1.0, 0.0, -1.0] }
+      }
+    },
+    { "id": 31, "typeId": "node.sin_texture", "handle": "sin_v3",
+      "params": {
+        "freq":  { "type": "Float", "value": 3.3 },
+        "phase": { "type": "Float", "value": 0.0 }
+      }
+    },
+
+    { "id": 40, "typeId": "node.distance_to_point", "handle": "dist",
+      "params": {
+        "cx":    { "type": "Float", "value": 0.5 },
+        "cy":    { "type": "Float", "value": 0.5 },
+        "scale": { "type": "Float", "value": 6.6 }
+      }
+    },
+    { "id": 41, "typeId": "node.sin_texture", "handle": "sin_v4",
+      "params": {
+        "freq":  { "type": "Float", "value": 1.0 },
+        "phase": { "type": "Float", "value": 0.0 }
+      }
+    },
+
+    { "id": 50, "typeId": "node.value", "handle": "c_1p3", "params": { "value": { "type": "Float", "value": 1.3 } } },
+    { "id": 51, "typeId": "node.math",  "handle": "mul_p_v1", "params": { "op": { "type": "Enum", "value": 2 } } },
+    { "id": 52, "typeId": "node.value", "handle": "c_0p9", "params": { "value": { "type": "Float", "value": 0.9 } } },
+    { "id": 53, "typeId": "node.math",  "handle": "mul_p_v2", "params": { "op": { "type": "Enum", "value": 2 } } },
+    { "id": 54, "typeId": "node.value", "handle": "c_1p1", "params": { "value": { "type": "Float", "value": 1.1 } } },
+    { "id": 55, "typeId": "node.math",  "handle": "mul_p_v3", "params": { "op": { "type": "Enum", "value": 2 } } },
+    { "id": 56, "typeId": "node.value", "handle": "c_0p7", "params": { "value": { "type": "Float", "value": 0.7 } } },
+    { "id": 57, "typeId": "node.math",  "handle": "mul_p_v4", "params": { "op": { "type": "Enum", "value": 2 } } },
+
+    { "id": 60, "typeId": "node.mix", "handle": "sum_12",  "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 61, "typeId": "node.mix", "handle": "sum_123", "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 62, "typeId": "node.mix", "handle": "sum_all", "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+
+    { "id": 70, "typeId": "node.scale_offset_texture", "handle": "normalize",
+      "params": {
+        "scale":  { "type": "Float", "value": 0.125 },
+        "offset": { "type": "Float", "value": 0.5 }
+      }
+    },
+
+    { "id": 99, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0,  "fromPort": "time", "toNode": 51, "toPort": "a" },
+    { "fromNode": 50, "fromPort": "out",  "toNode": 51, "toPort": "b" },
+    { "fromNode": 51, "fromPort": "out",  "toNode": 11, "toPort": "phase" },
+
+    { "fromNode": 0,  "fromPort": "time", "toNode": 53, "toPort": "a" },
+    { "fromNode": 52, "fromPort": "out",  "toNode": 53, "toPort": "b" },
+    { "fromNode": 53, "fromPort": "out",  "toNode": 21, "toPort": "phase" },
+
+    { "fromNode": 0,  "fromPort": "time", "toNode": 55, "toPort": "a" },
+    { "fromNode": 54, "fromPort": "out",  "toNode": 55, "toPort": "b" },
+    { "fromNode": 55, "fromPort": "out",  "toNode": 31, "toPort": "phase" },
+
+    { "fromNode": 0,  "fromPort": "time", "toNode": 57, "toPort": "a" },
+    { "fromNode": 56, "fromPort": "out",  "toNode": 57, "toPort": "b" },
+    { "fromNode": 57, "fromPort": "out",  "toNode": 41, "toPort": "phase" },
+
+    { "fromNode": 1, "fromPort": "out", "toNode": 10, "toPort": "source" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
+
+    { "fromNode": 1, "fromPort": "out", "toNode": 20, "toPort": "source" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "in" },
+
+    { "fromNode": 1, "fromPort": "out", "toNode": 30, "toPort": "source" },
+    { "fromNode": 30, "fromPort": "out", "toNode": 31, "toPort": "in" },
+
+    { "fromNode": 40, "fromPort": "out", "toNode": 41, "toPort": "in" },
+
+    { "fromNode": 11, "fromPort": "out", "toNode": 60, "toPort": "a" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 60, "toPort": "b" },
+    { "fromNode": 60, "fromPort": "out", "toNode": 61, "toPort": "a" },
+    { "fromNode": 31, "fromPort": "out", "toNode": 61, "toPort": "b" },
+    { "fromNode": 61, "fromPort": "out", "toNode": 62, "toPort": "a" },
+    { "fromNode": 41, "fromPort": "out", "toNode": 62, "toPort": "b" },
+
+    { "fromNode": 62, "fromPort": "out", "toNode": 70, "toPort": "in" },
+    { "fromNode": 70, "fromPort": "out", "toNode": 99, "toPort": "in" }
+  ]
+}

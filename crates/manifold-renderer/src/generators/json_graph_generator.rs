@@ -401,6 +401,30 @@ mod tests {
         preset.execute_frame(frame_time());
     }
 
+    /// Load the bundled `PlasmaClassicDecomposed.json` preset from
+    /// disk and execute it. The first Tier 1 generator — a
+    /// non-trivial graph (~25 nodes) exercising the procedural-math
+    /// vocabulary + port-shadows-param + system.generator_input. If
+    /// this loads and executes cleanly, the infrastructure is sound.
+    #[test]
+    fn bundled_plasma_classic_decomposed_loads_and_executes() {
+        let json = include_str!(
+            "../../assets/generator-presets/PlasmaClassicDecomposed.json"
+        );
+        let mut preset = JsonGraphGenerator::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("bundled PlasmaClassicDecomposed must load");
+        assert_eq!(preset.type_id().as_str(), "PlasmaClassicDecomposed");
+        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0);
+        preset.execute_frame(frame_time());
+        // Advance time and execute again — phase should propagate
+        // through the wired Math chains without the graph panicking.
+        preset.set_frame_context(0.5, 0.25, 1.78, 0.0, 0.5);
+        preset.execute_frame(frame_time());
+    }
+
     /// Load the bundled `TrivialPassthrough.json` preset from disk and
     /// execute it. Confirms the generator-presets directory wiring,
     /// the on-disk schema, and the full loader path are aligned.
