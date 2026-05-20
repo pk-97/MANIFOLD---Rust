@@ -6,6 +6,7 @@
 //! flat `node.*` type IDs. The atom/effect split is presentation metadata,
 //! not a structural divide.
 
+mod abs_texture;
 mod affine_transform;
 mod array_feedback;
 mod auto_gain;
@@ -101,6 +102,7 @@ mod watercolor;
 mod wet_dry_mix;
 mod wireframe_depth;
 
+pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
 pub use array_feedback::ArrayFeedback;
 pub use auto_gain::{AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID, AutoGain};
