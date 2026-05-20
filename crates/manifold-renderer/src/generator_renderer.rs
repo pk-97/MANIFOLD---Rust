@@ -40,6 +40,14 @@ struct LayerGeneratorState {
     generator: Box<dyn Generator>,
     generator_type: GeneratorTypeId,
     trigger_count: u32,
+    /// `Layer::generator_graph_version` at the time this generator
+    /// was constructed. When the layer's version bumps (graph-editor
+    /// edit landed via `ToggleNodeParamExposeCommand` / `AddGraphNodeCommand`
+    /// / `SetGraphNodeParamCommand` / etc), `acquire_clip` rebuilds
+    /// the generator with the new override def. `None` when the
+    /// generator was built from the bundled preset (no override
+    /// present at construction time).
+    override_version: Option<u32>,
     /// Cached string params from the layer's clips. When a clip provides a
     /// string param (e.g. fontFamily), it's stored here so that subsequent clips
     /// without that key still get the layer's value. This avoids the first-clip
@@ -136,6 +144,14 @@ impl GeneratorRenderer {
 
     /// Internal: acquire a clip with generator type and layer identity.
     /// Port of C# GeneratorRenderer.Acquire().
+    ///
+    /// `override_def` is the layer's `generator_graph` field (the
+    /// per-layer JSON-graph override the graph editor writes to);
+    /// `override_version` is the matching `generator_graph_version`
+    /// monotonic counter. When either changes — type swap, override
+    /// added, version bump — the existing generator is dropped and
+    /// rebuilt against the new state. `override_def = None` falls
+    /// back to the bundled JSON preset.
     fn acquire_clip(
         &mut self,
         clip_id: &str,
@@ -143,25 +159,42 @@ impl GeneratorRenderer {
         layer_id: LayerId,
         layer_index: i32,
         clip_index: u32,
+        override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+        override_version: u32,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
             return true;
         }
 
-        // Ensure layer has a generator of the right type
+        // Compare against the layer's current generator state. Rebuild
+        // when: (a) no generator yet, (b) type changed, or (c) the
+        // override version differs from what we last built against
+        // (graph-editor edit landed). `None` here means "no override
+        // present this frame"; `Some(v)` means "override is at v".
+        // Encoding "no override" as `None` lets us distinguish the
+        // initial bundled-preset path from a v0 override.
+        let current_override_version: Option<u32> =
+            override_def.map(|_| override_version);
         let needs_create = self
             .layer_generators
             .get(&layer_id)
-            .is_none_or(|ls| ls.generator_type != gen_type);
+            .is_none_or(|ls| {
+                ls.generator_type != gen_type
+                    || ls.override_version != current_override_version
+            });
 
         if needs_create {
-            if let Some(generator) = self.registry.create(self.device(), &gen_type) {
+            if let Some(generator) =
+                self.registry
+                    .create_with_override(self.device(), &gen_type, override_def)
+            {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
                         generator,
                         generator_type: gen_type.clone(),
                         trigger_count: 0,
+                        override_version: current_override_version,
                         layer_string_defaults: std::collections::BTreeMap::new(),
                         merged_string_params: std::collections::BTreeMap::new(),
                         string_params_dirty: true,
@@ -449,7 +482,16 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
-            if let Some(generator) = self.registry.create(self.device(), &new_type) {
+            // Type swap discards the per-layer override — the layer
+            // hasn't been re-edited against the new type yet, so the
+            // override would refer to the old graph shape. The next
+            // `acquire_clip` will re-snapshot the (possibly cleared)
+            // override and rebuild if a user edits against the new
+            // type. Pass `None` here.
+            if let Some(generator) =
+                self.registry
+                    .create_with_override(self.device(), &new_type, None)
+            {
                 // Preserve layer_string_defaults across type changes
                 let old_defaults = self
                     .layer_generators
@@ -462,6 +504,7 @@ impl GeneratorRenderer {
                         generator,
                         generator_type: new_type.clone(),
                         trigger_count: old_trigger_count,
+                        override_version: None,
                         layer_string_defaults: old_defaults,
                         merged_string_params: std::collections::BTreeMap::new(),
                         string_params_dirty: true,
@@ -504,12 +547,20 @@ impl ClipRenderer for GeneratorRenderer {
         let clip_index = layer
             .and_then(|l| l.clips.iter().position(|c| c.id == clip.id))
             .unwrap_or(0) as u32;
+        // Per-layer generator graph override + its monotonic version
+        // counter. `acquire_clip` rebuilds the generator when the
+        // version changes so graph-editor edits actually drive
+        // rendering.
+        let override_def = layer.and_then(|l| l.generator_graph.as_ref());
+        let override_version = layer.map(|l| l.generator_graph_version).unwrap_or(0);
         let acquired = self.acquire_clip(
             &clip.id,
             gen_type,
             layer_id.clone(),
             layer_index,
             clip_index,
+            override_def,
+            override_version,
         );
 
         // Populate layer string defaults by scanning ALL clips on this layer.

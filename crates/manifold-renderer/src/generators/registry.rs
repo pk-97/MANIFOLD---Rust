@@ -80,9 +80,56 @@ impl GeneratorRegistry {
         device: &GpuDevice,
         gen_type: &manifold_core::GeneratorTypeId,
     ) -> Option<Box<dyn Generator>> {
-        // JSON preset path
+        self.create_with_override(device, gen_type, None)
+    }
+
+    /// Same as [`Self::create`] but routes a per-layer
+    /// `EffectGraphDef` override (from `Layer::generator_graph`)
+    /// straight into [`JsonGraphGenerator::from_def_with_device`].
+    /// `override_def = None` falls back to the bundled JSON preset.
+    ///
+    /// Returns `None` if neither the override nor the bundled preset
+    /// can be loaded AND no Rust factory matches.
+    ///
+    /// **Important**: the override path is JSON-graph-only. Rust
+    /// generators (the legacy `inventory::submit!` factories) can't
+    /// be overridden — the override field on the layer is silently
+    /// ignored in that case, the Rust factory's `create` runs as
+    /// usual. Rust-only generators don't surface in the graph editor,
+    /// so the layer's override field can't have been populated
+    /// against them via the normal UI flow.
+    pub fn create_with_override(
+        &self,
+        device: &GpuDevice,
+        gen_type: &manifold_core::GeneratorTypeId,
+        override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    ) -> Option<Box<dyn Generator>> {
+        let registry = PrimitiveRegistry::with_builtin();
+
+        // Override path: the layer's per-instance graph wins over the
+        // bundled JSON when present.
+        if let Some(def) = override_def {
+            match JsonGraphGenerator::from_def_with_device(
+                def.clone(),
+                &registry,
+                device,
+                1920,
+                1080,
+                self.target_format,
+            ) {
+                Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
+                Err(e) => {
+                    log::warn!(
+                        "Per-layer override for generator {} failed to load: {e} — \
+                         falling back to bundled preset",
+                        gen_type.as_str(),
+                    );
+                }
+            }
+        }
+
+        // Bundled JSON preset path.
         if let Some(json) = bundled_generator_preset_json(gen_type) {
-            let registry = PrimitiveRegistry::with_builtin();
             match JsonGraphGenerator::from_json_str_with_device(
                 json,
                 &registry,
@@ -106,7 +153,7 @@ impl GeneratorRegistry {
             }
         }
 
-        // Rust factory fallback
+        // Rust factory fallback.
         for factory in inventory::iter::<super::registration::GeneratorFactory> {
             if factory.id == *gen_type {
                 return Some((factory.create)(device));

@@ -150,6 +150,17 @@ impl JsonGraphGenerator {
         registry: &PrimitiveRegistry,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let doc: EffectGraphDef = serde_json::from_str(json)?;
+        Self::from_def(doc, registry)
+    }
+
+    /// Build a generator from an already-parsed `EffectGraphDef`. Same
+    /// path as [`Self::from_json_str`] minus the JSON parse step. Used
+    /// when a per-layer override needs to drive rendering without
+    /// round-tripping through serde — see `GeneratorRegistry::create_with_override`.
+    pub fn from_def(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+    ) -> Result<Self, JsonGeneratorLoadError> {
         if doc.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
             return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
                 found: doc.version,
@@ -294,7 +305,23 @@ impl JsonGraphGenerator {
         height: u32,
         format: GpuTextureFormat,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        let mut g = Self::from_json_str(json, registry)?;
+        let doc: EffectGraphDef = serde_json::from_str(json)?;
+        Self::from_def_with_device(doc, registry, device, width, height, format)
+    }
+
+    /// Same as [`Self::from_json_str_with_device`] but skips the JSON
+    /// parse step — used by `GeneratorRegistry::create_with_override`
+    /// when a per-layer override `EffectGraphDef` should drive
+    /// rendering instead of the bundled preset JSON.
+    pub fn from_def_with_device(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let mut g = Self::from_def(doc, registry)?;
         let mut backend = MetalBackend::new(device, width, height, format);
         // Pre-bind a 1×1 placeholder at the FinalOutput-source slot so
         // the slot exists across frames; `install_target` swaps in the

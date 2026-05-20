@@ -751,11 +751,21 @@ enum EffectMirrorReverse {
     },
     /// The (handle, param) is a non-preset param; we removed an
     /// existing `UserParamBinding`. Undo reinserts it at `position`
-    /// with the captured slot value.
+    /// with the captured slot value, plus re-attaches any orphaned
+    /// drivers / Ableton mappings that referenced the binding's id.
     RemovedUserBinding {
         binding: manifold_core::effects::UserParamBinding,
         position: usize,
         slot_value: manifold_core::effects::ParamSlot,
+        /// Drivers pruned from `EffectInstance.drivers` because their
+        /// `param_id` matched the removed binding's id. Without this
+        /// pruning the rows would survive in the project file but
+        /// never resolve to a target, leaving silently-dead
+        /// automation behind.
+        removed_drivers: Vec<manifold_core::effects::ParameterDriver>,
+        /// Ableton mappings pruned for the same reason.
+        removed_ableton_mappings:
+            Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
     },
     /// No-op: the Effect-side state already matched the requested
     /// state (idempotent re-toggle). Nothing to undo on the mirror.
@@ -1044,7 +1054,7 @@ fn mirror_effect_side(
         if existing_position.is_some() {
             return EffectMirrorReverse::NoOp;
         }
-        let id = generate_unified_user_param_id(
+        let id = crate::commands::effects::generate_user_param_id(
             node_handle,
             inner_param,
             &effect.user_param_bindings,
@@ -1068,6 +1078,7 @@ fn mirror_effect_side(
             return EffectMirrorReverse::NoOp;
         };
         let binding = effect.user_param_bindings[position].clone();
+        let binding_id = binding.id.clone();
         // Capture the slot value BEFORE removal (the slot lives at
         // static_count + position).
         let static_count = manifold_core::effect_definition_registry::try_get(effect.effect_type())
@@ -1079,11 +1090,50 @@ fn mirror_effect_side(
             .get(slot_idx)
             .copied()
             .unwrap_or(ParamSlot::exposed(inner_default));
-        let _ = effect.remove_user_binding_by_id(&binding.id);
+        // Prune any effect-local automation that referenced this
+        // binding's id. After removal the id stops resolving anywhere
+        // and the rows would silently never apply — capture them on
+        // the reverse state so undo restores both the binding AND the
+        // automation it carried.
+        let removed_drivers = if let Some(ds) = effect.drivers.as_mut() {
+            let mut taken = Vec::new();
+            ds.retain(|d| {
+                let keep = d.param_id != binding_id;
+                if !keep {
+                    taken.push(d.clone());
+                }
+                keep
+            });
+            if ds.is_empty() {
+                effect.drivers = None;
+            }
+            taken
+        } else {
+            Vec::new()
+        };
+        let removed_ableton_mappings = if let Some(ms) = effect.ableton_mappings.as_mut() {
+            let mut taken = Vec::new();
+            ms.retain(|m| {
+                let keep = m.param_id != binding_id;
+                if !keep {
+                    taken.push(m.clone());
+                }
+                keep
+            });
+            if ms.is_empty() {
+                effect.ableton_mappings = None;
+            }
+            taken
+        } else {
+            Vec::new()
+        };
+        let _ = effect.remove_user_binding_by_id(&binding_id);
         EffectMirrorReverse::RemovedUserBinding {
             binding,
             position,
             slot_value,
+            removed_drivers,
+            removed_ableton_mappings,
         }
     }
 }
@@ -1106,6 +1156,8 @@ fn unmirror_effect_side(
             binding,
             position,
             slot_value,
+            removed_drivers,
+            removed_ableton_mappings,
         } => {
             let pos = position.min(effect.user_param_bindings.len());
             let binding_id = binding.id.clone();
@@ -1119,31 +1171,22 @@ fn unmirror_effect_side(
                     effect.param_values.push(slot_value);
                 }
             }
+            // Restore the automation rows that referenced this binding.
+            // The same id now resolves through `param_id_to_value_index`
+            // since we re-inserted the binding above.
+            if !removed_drivers.is_empty() {
+                effect
+                    .drivers
+                    .get_or_insert_with(Vec::new)
+                    .extend(removed_drivers);
+            }
+            if !removed_ableton_mappings.is_empty() {
+                effect
+                    .ableton_mappings
+                    .get_or_insert_with(Vec::new)
+                    .extend(removed_ableton_mappings);
+            }
         }
-    }
-}
-
-/// Mint a deterministic user_param_id for an effect's user-tail
-/// binding. Mirrors the existing `generate_user_param_id` in
-/// `crate::commands::effects` — we duplicate the logic here to avoid a
-/// cross-module pub-item dependency from `graph.rs` into `effects.rs`.
-fn generate_unified_user_param_id(
-    inner_node_handle: &str,
-    inner_param: &str,
-    existing: &[manifold_core::effects::UserParamBinding],
-) -> String {
-    let short = inner_node_handle
-        .rsplit_once('.')
-        .map(|(_, t)| t)
-        .unwrap_or(inner_node_handle);
-    let prefix = format!("user.{short}.{inner_param}");
-    let mut n: u32 = 1;
-    loop {
-        let candidate = format!("{prefix}.{n}");
-        if !existing.iter().any(|b| b.id == candidate) {
-            return candidate;
-        }
-        n += 1;
     }
 }
 
@@ -1672,6 +1715,134 @@ mod tests {
         assert!(
             !node.exposed_params.contains("rotation"),
             "undo restores prior exposed_params state"
+        );
+    }
+
+    #[test]
+    fn unexposing_a_user_binding_prunes_and_restores_orphan_automation() {
+        // When the user un-checks a non-preset-bound exposure on an
+        // effect (i.e. it was previously exposed via a UserParamBinding),
+        // any drivers / Ableton mappings that referenced the binding's
+        // param_id would otherwise become orphans — still in the
+        // project file, never matched at resolve time. The unified
+        // command prunes them on unexpose and restores them on undo.
+        use manifold_core::ableton_mapping::{
+            AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
+            AbletonParamMapping,
+        };
+        use manifold_core::effects::{ParamConvert, ParameterDriver};
+        use manifold_core::types::{BeatDivision, DriverWaveform};
+
+        // Set up an effect with one user-exposed inner param + driver
+        // + Ableton mapping that target its synthesised id.
+        let mut project = Project::default();
+        let effect_id = EffectId::new("orphan-cleanup-test");
+        let mut fx = EffectInstance::new(EffectTypeId::new("test.mirror"));
+        fx.id = effect_id.clone();
+        project.settings.master_effects.push(fx);
+
+        // Expose first.
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+        );
+        expose.execute(&mut project);
+
+        // Now attach a driver + ableton mapping to the synthesised
+        // user_param_id.
+        let user_param_id = {
+            let fx = project.find_effect_by_id(&effect_id).unwrap();
+            assert_eq!(fx.user_param_bindings.len(), 1);
+            fx.user_param_bindings[0].id.clone()
+        };
+        {
+            let fx = project.find_effect_by_id_mut(&effect_id).unwrap();
+            fx.drivers = Some(vec![ParameterDriver {
+                param_id: std::borrow::Cow::Owned(user_param_id.clone()),
+                beat_division: BeatDivision::Quarter,
+                waveform: DriverWaveform::Sine,
+                enabled: true,
+                phase: 0.0,
+                base_value: 0.5,
+                trim_min: 0.0,
+                trim_max: 1.0,
+                reversed: false,
+                legacy_param_index: None,
+                is_paused_by_user: false,
+            }]);
+            fx.ableton_mappings = Some(vec![AbletonParamMapping {
+                param_id: std::borrow::Cow::Owned(user_param_id.clone()),
+                address: AbletonMacroAddress {
+                    track_id: 0,
+                    device_id: 0,
+                    param_id: 0,
+                    device_identity: AbletonDeviceIdentity {
+                        device_class_name: "InstrumentGroupDevice".into(),
+                    },
+                    track_name: "Master".into(),
+                    device_name: "Manifold".into(),
+                    macro_name: "Macro 1".into(),
+                },
+                range_min: 0.0,
+                range_max: 1.0,
+                inverted: false,
+                legacy_param_index: None,
+                last_value: 0.0,
+                status: AbletonMappingStatus::Active,
+            }]);
+        }
+
+        // Unexpose. Drivers + Ableton mappings must be pruned.
+        let mut unexpose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            false,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+        );
+        unexpose.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        assert!(
+            fx.drivers.is_none() || fx.drivers.as_ref().unwrap().is_empty(),
+            "drivers pruned on unexpose"
+        );
+        assert!(
+            fx.ableton_mappings.is_none()
+                || fx.ableton_mappings.as_ref().unwrap().is_empty(),
+            "ableton_mappings pruned on unexpose"
+        );
+
+        // Undo restores both.
+        unexpose.undo(&mut project);
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        assert_eq!(fx.user_param_bindings.len(), 1, "binding restored");
+        assert_eq!(
+            fx.drivers.as_ref().map(|d| d.len()).unwrap_or(0),
+            1,
+            "driver restored"
+        );
+        assert_eq!(
+            fx.ableton_mappings.as_ref().map(|m| m.len()).unwrap_or(0),
+            1,
+            "ableton mapping restored"
+        );
+        assert_eq!(
+            fx.drivers.as_ref().unwrap()[0].param_id,
+            std::borrow::Cow::<'static, str>::Owned(user_param_id.clone()),
         );
     }
 
