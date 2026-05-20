@@ -1,26 +1,29 @@
-//! Graph mutation commands — Phase 3 of per-card divergence.
+//! Graph mutation commands — Phase 3 of per-card divergence,
+//! generalized to support both effect graphs and generator graphs.
 //!
-//! Each command operates on an [`EffectInstance`](
-//! manifold_core::effects::EffectInstance)'s per-card graph topology
-//! ([`EffectInstance::graph`]). They lift a `None` graph to a clone of
-//! the supplied catalog default on first edit, apply the mutation,
-//! and bump [`EffectInstance::graph_version`] so the renderer can
-//! detect the change.
+//! Each command operates on the `EffectGraphDef` that a
+//! [`manifold_core::GraphTarget`] points at. Targets resolve to:
 //!
-//! All commands key on stable [`EffectId`] rather than `target +
-//! index` — the editor canvas is always open on a specific instance,
-//! and the id is reorder-stable. Each command stores reverse state for
-//! undo/redo.
+//! - [`GraphTarget::Effect`] → [`EffectInstance::graph`] with
+//!   `EffectInstance::graph_version` as the version counter.
+//! - [`GraphTarget::Generator`] → [`crate::commands::graph::Layer::generator_graph`]
+//!   (via `Project::timeline::find_layer_by_id_mut`) with
+//!   `Layer::generator_graph_version` as the version counter.
+//!
+//! Commands lift a `None` graph to a clone of the supplied catalog
+//! default on first edit, apply the mutation, then bump the target's
+//! version counter so the renderer detects the change. Reverse state
+//! for undo/redo is stored on each command instance.
 //!
 //! Phase 3 of the per-card-divergence plan in
 //! `docs/NODE_GRAPH_SYSTEM.md`.
 
 use std::collections::BTreeMap;
 
+use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
-use manifold_core::id::EffectId;
 use manifold_core::project::Project;
 
 use crate::command::Command;
@@ -29,21 +32,119 @@ use crate::command::Command;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Lift a `None` graph to a clone of `catalog_default`, returning a
-/// mutable reference to the def. If the graph is already `Some`,
-/// returns a reference to the existing one. Common prelude for every
-/// graph-mutation command.
-fn ensure_graph<'a>(
-    instance: &'a mut manifold_core::effects::EffectInstance,
+/// Resolve a [`GraphTarget`] to a mutable [`EffectGraphDef`] inside
+/// `project`, lifting a `None` graph to a clone of `catalog_default`
+/// on first edit. Runs `f` against the def, then bumps the target's
+/// version counter so the renderer notices the change.
+///
+/// Returns `Some(R)` from `f`, or `None` if the target no longer
+/// resolves (effect / layer was deleted between command creation and
+/// execution — both possible across undo/redo cycles).
+fn with_target_graph_mut<F, R>(
+    project: &mut Project,
+    target: &GraphTarget,
     catalog_default: &EffectGraphDef,
-) -> &'a mut EffectGraphDef {
-    instance.graph.get_or_insert_with(|| catalog_default.clone())
+    f: F,
+) -> Option<R>
+where
+    F: FnOnce(&mut EffectGraphDef) -> R,
+{
+    match target {
+        GraphTarget::Effect(eid) => {
+            let inst = project.find_effect_by_id_mut(eid)?;
+            let def = inst.graph.get_or_insert_with(|| catalog_default.clone());
+            let r = f(def);
+            inst.graph_version = inst.graph_version.wrapping_add(1);
+            Some(r)
+        }
+        GraphTarget::Generator(lid) => {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(lid)?;
+            let def = layer
+                .generator_graph
+                .get_or_insert_with(|| catalog_default.clone());
+            let r = f(def);
+            layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
+            Some(r)
+        }
+    }
 }
 
-/// Bump `graph_version` to signal the renderer that the topology has
-/// changed. Wraps on overflow so a long session doesn't panic.
-fn bump_version(instance: &mut manifold_core::effects::EffectInstance) {
-    instance.graph_version = instance.graph_version.wrapping_add(1);
+/// Variant of [`with_target_graph_mut`] that doesn't lift the graph
+/// from `None` — `f` only runs if the target already has a `Some(def)`.
+/// Used by undo paths that mutate an already-edited graph; the catalog
+/// default isn't needed because if the graph is `None` there's nothing
+/// to undo.
+fn with_existing_target_graph_mut<F, R>(
+    project: &mut Project,
+    target: &GraphTarget,
+    f: F,
+) -> Option<R>
+where
+    F: FnOnce(&mut EffectGraphDef) -> R,
+{
+    match target {
+        GraphTarget::Effect(eid) => {
+            let inst = project.find_effect_by_id_mut(eid)?;
+            let def = inst.graph.as_mut()?;
+            let r = f(def);
+            inst.graph_version = inst.graph_version.wrapping_add(1);
+            Some(r)
+        }
+        GraphTarget::Generator(lid) => {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(lid)?;
+            let def = layer.generator_graph.as_mut()?;
+            let r = f(def);
+            layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
+            Some(r)
+        }
+    }
+}
+
+/// Helper for the Revert command: take the target's current
+/// `Option<EffectGraphDef>` (consuming it; leaves `None` in place) and
+/// return what was there. Bumps the version counter.
+fn take_target_graph(
+    project: &mut Project,
+    target: &GraphTarget,
+) -> Option<Option<EffectGraphDef>> {
+    match target {
+        GraphTarget::Effect(eid) => {
+            let inst = project.find_effect_by_id_mut(eid)?;
+            let prev = inst.graph.take();
+            inst.graph_version = inst.graph_version.wrapping_add(1);
+            Some(prev)
+        }
+        GraphTarget::Generator(lid) => {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(lid)?;
+            let prev = layer.generator_graph.take();
+            layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
+            Some(prev)
+        }
+    }
+}
+
+/// Helper for the Revert command: install a given graph (or `None`)
+/// at the target, bumping the version counter.
+fn install_target_graph(
+    project: &mut Project,
+    target: &GraphTarget,
+    graph: Option<EffectGraphDef>,
+) {
+    match target {
+        GraphTarget::Effect(eid) => {
+            if let Some(inst) = project.find_effect_by_id_mut(eid) {
+                inst.graph = graph;
+                inst.graph_version = inst.graph_version.wrapping_add(1);
+            }
+        }
+        GraphTarget::Generator(lid) => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
+                layer.generator_graph = graph;
+                layer.generator_graph_version =
+                    layer.generator_graph_version.wrapping_add(1);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +156,7 @@ fn bump_version(instance: &mut manifold_core::effects::EffectInstance) {
 /// subsequent [`ConnectPortsCommand`] connects it.
 #[derive(Debug)]
 pub struct AddGraphNodeCommand {
-    effect_id: EffectId,
+    target: GraphTarget,
     node_type_id: String,
     pos: Option<(f32, f32)>,
     catalog_default: EffectGraphDef,
@@ -67,13 +168,13 @@ pub struct AddGraphNodeCommand {
 
 impl AddGraphNodeCommand {
     pub fn new(
-        effect_id: EffectId,
+        target: GraphTarget,
         node_type_id: String,
         pos: Option<(f32, f32)>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
-            effect_id,
+            target,
             node_type_id,
             pos,
             catalog_default,
@@ -90,44 +191,43 @@ impl AddGraphNodeCommand {
 
 impl Command for AddGraphNodeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            eprintln!(
-                "[manifold-editing] AddGraphNode: effect id {:?} not found",
-                self.effect_id
-            );
-            return;
-        };
-        let def = ensure_graph(instance, &self.catalog_default);
-        let next_id = def
-            .nodes
-            .iter()
-            .map(|n| n.id)
-            .max()
-            .map_or(0, |m| m + 1);
-        let id = self.minted_id.unwrap_or(next_id);
-        def.nodes.push(EffectGraphNode {
-            id,
-            type_id: self.node_type_id.clone(),
-            handle: None,
-            params: BTreeMap::new(),
-            editor_pos: self.pos,
-            wgsl_source: None,
-            output_formats: BTreeMap::new(),
+        let node_type_id = self.node_type_id.clone();
+        let pos = self.pos;
+        let prev_minted = self.minted_id;
+        let minted = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            let next_id = def
+                .nodes
+                .iter()
+                .map(|n| n.id)
+                .max()
+                .map_or(0, |m| m + 1);
+            let id = prev_minted.unwrap_or(next_id);
+            def.nodes.push(EffectGraphNode {
+                id,
+                type_id: node_type_id,
+                handle: None,
+                params: BTreeMap::new(),
+                editor_pos: pos,
+                wgsl_source: None,
+                output_formats: BTreeMap::new(),
+            });
+            id
         });
-        self.minted_id = Some(id);
-        bump_version(instance);
+        match minted {
+            Some(id) => self.minted_id = Some(id),
+            None => eprintln!(
+                "[manifold-editing] AddGraphNode: target {} did not resolve",
+                self.target.label()
+            ),
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(id) = self.minted_id else { return };
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        if let Some(def) = instance.graph.as_mut() {
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
             def.nodes.retain(|n| n.id != id);
             def.wires.retain(|w| w.from_node != id && w.to_node != id);
-        }
-        bump_version(instance);
+        });
     }
 
     fn description(&self) -> &str {
@@ -143,7 +243,7 @@ impl Command for AddGraphNodeCommand {
 /// Both the node and the disconnected wires are stashed for undo.
 #[derive(Debug)]
 pub struct RemoveGraphNodeCommand {
-    effect_id: EffectId,
+    target: GraphTarget,
     node_id: u32,
     catalog_default: EffectGraphDef,
     /// Reverse state. `None` before first execute; populated to the
@@ -158,9 +258,9 @@ struct RemovedNode {
 }
 
 impl RemoveGraphNodeCommand {
-    pub fn new(effect_id: EffectId, node_id: u32, catalog_default: EffectGraphDef) -> Self {
+    pub fn new(target: GraphTarget, node_id: u32, catalog_default: EffectGraphDef) -> Self {
         Self {
-            effect_id,
+            target,
             node_id,
             catalog_default,
             removed: None,
@@ -170,43 +270,38 @@ impl RemoveGraphNodeCommand {
 
 impl Command for RemoveGraphNodeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let def = ensure_graph(instance, &self.catalog_default);
-        let Some(node_pos) = def.nodes.iter().position(|n| n.id == self.node_id) else {
-            // Idempotent: node already gone.
-            return;
-        };
-        let node = def.nodes.remove(node_pos);
-        let removed_wires: Vec<EffectGraphWire> = def
-            .wires
-            .iter()
-            .filter(|w| w.from_node == self.node_id || w.to_node == self.node_id)
-            .cloned()
-            .collect();
-        def.wires
-            .retain(|w| w.from_node != self.node_id && w.to_node != self.node_id);
-        self.removed = Some(RemovedNode {
-            node,
-            wires: removed_wires,
-        });
-        bump_version(instance);
+        let node_id = self.node_id;
+        let removed =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+                let node_pos = def.nodes.iter().position(|n| n.id == node_id)?;
+                let node = def.nodes.remove(node_pos);
+                let removed_wires: Vec<EffectGraphWire> = def
+                    .wires
+                    .iter()
+                    .filter(|w| w.from_node == node_id || w.to_node == node_id)
+                    .cloned()
+                    .collect();
+                def.wires
+                    .retain(|w| w.from_node != node_id && w.to_node != node_id);
+                Some(RemovedNode {
+                    node,
+                    wires: removed_wires,
+                })
+            })
+            .flatten();
+        if removed.is_some() {
+            self.removed = removed;
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(removed) = self.removed.clone() else {
             return;
         };
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let Some(def) = instance.graph.as_mut() else {
-            return;
-        };
-        def.nodes.push(removed.node);
-        def.wires.extend(removed.wires);
-        bump_version(instance);
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            def.nodes.push(removed.node);
+            def.wires.extend(removed.wires);
+        });
     }
 
     fn description(&self) -> &str {
@@ -224,7 +319,7 @@ impl Command for RemoveGraphNodeCommand {
 /// (same semantics as the runtime [`Graph::connect`]).
 #[derive(Debug)]
 pub struct ConnectPortsCommand {
-    effect_id: EffectId,
+    target: GraphTarget,
     from_node: u32,
     from_port: String,
     to_node: u32,
@@ -237,7 +332,7 @@ pub struct ConnectPortsCommand {
 
 impl ConnectPortsCommand {
     pub fn new(
-        effect_id: EffectId,
+        target: GraphTarget,
         from_node: u32,
         from_port: String,
         to_node: u32,
@@ -245,7 +340,7 @@ impl ConnectPortsCommand {
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
-            effect_id,
+            target,
             from_node,
             from_port,
             to_node,
@@ -258,48 +353,48 @@ impl ConnectPortsCommand {
 
 impl Command for ConnectPortsCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let def = ensure_graph(instance, &self.catalog_default);
-        // Displace any existing wire to the same input port.
-        if let Some(existing) = def
-            .wires
-            .iter()
-            .position(|w| w.to_node == self.to_node && w.to_port == self.to_port)
-        {
-            self.displaced = Some(def.wires.remove(existing));
-        }
-        def.wires.push(EffectGraphWire {
-            from_node: self.from_node,
-            from_port: self.from_port.clone(),
-            to_node: self.to_node,
-            to_port: self.to_port.clone(),
-        });
-        bump_version(instance);
+        let from_node = self.from_node;
+        let from_port = self.from_port.clone();
+        let to_node = self.to_node;
+        let to_port = self.to_port.clone();
+        let displaced =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+                let displaced = def
+                    .wires
+                    .iter()
+                    .position(|w| w.to_node == to_node && w.to_port == to_port)
+                    .map(|i| def.wires.remove(i));
+                def.wires.push(EffectGraphWire {
+                    from_node,
+                    from_port,
+                    to_node,
+                    to_port,
+                });
+                displaced
+            })
+            .flatten();
+        self.displaced = displaced;
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let Some(def) = instance.graph.as_mut() else {
-            return;
-        };
-        // Remove the wire we added.
-        if let Some(pos) = def.wires.iter().position(|w| {
-            w.from_node == self.from_node
-                && w.from_port == self.from_port
-                && w.to_node == self.to_node
-                && w.to_port == self.to_port
-        }) {
-            def.wires.remove(pos);
-        }
-        // Restore the displaced wire if there was one.
-        if let Some(wire) = self.displaced.take() {
-            def.wires.push(wire);
-        }
-        bump_version(instance);
+        let from_node = self.from_node;
+        let from_port = self.from_port.clone();
+        let to_node = self.to_node;
+        let to_port = self.to_port.clone();
+        let displaced = self.displaced.take();
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            if let Some(pos) = def.wires.iter().position(|w| {
+                w.from_node == from_node
+                    && w.from_port == from_port
+                    && w.to_node == to_node
+                    && w.to_port == to_port
+            }) {
+                def.wires.remove(pos);
+            }
+            if let Some(wire) = displaced {
+                def.wires.push(wire);
+            }
+        });
     }
 
     fn description(&self) -> &str {
@@ -315,7 +410,7 @@ impl Command for ConnectPortsCommand {
 /// disconnect on an unwired port stashes `None` for undo and no-ops.
 #[derive(Debug)]
 pub struct DisconnectPortsCommand {
-    effect_id: EffectId,
+    target: GraphTarget,
     to_node: u32,
     to_port: String,
     catalog_default: EffectGraphDef,
@@ -325,13 +420,13 @@ pub struct DisconnectPortsCommand {
 
 impl DisconnectPortsCommand {
     pub fn new(
-        effect_id: EffectId,
+        target: GraphTarget,
         to_node: u32,
         to_port: String,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
-            effect_id,
+            target,
             to_node,
             to_port,
             catalog_default,
@@ -342,32 +437,25 @@ impl DisconnectPortsCommand {
 
 impl Command for DisconnectPortsCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let def = ensure_graph(instance, &self.catalog_default);
-        if let Some(pos) = def
-            .wires
-            .iter()
-            .position(|w| w.to_node == self.to_node && w.to_port == self.to_port)
-        {
-            self.removed = Some(def.wires.remove(pos));
-            bump_version(instance);
-        }
+        let to_node = self.to_node;
+        let to_port = self.to_port.clone();
+        let removed = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            def.wires
+                .iter()
+                .position(|w| w.to_node == to_node && w.to_port == to_port)
+                .map(|pos| def.wires.remove(pos))
+        })
+        .flatten();
+        self.removed = removed;
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(wire) = self.removed.take() else {
             return;
         };
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let Some(def) = instance.graph.as_mut() else {
-            return;
-        };
-        def.wires.push(wire);
-        bump_version(instance);
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            def.wires.push(wire);
+        });
     }
 
     fn description(&self) -> &str {
@@ -384,7 +472,7 @@ impl Command for DisconnectPortsCommand {
 /// `graph_version` so the snapshot pipeline sees the new position.
 #[derive(Debug)]
 pub struct MoveGraphNodeCommand {
-    effect_id: EffectId,
+    target: GraphTarget,
     node_id: u32,
     new_pos: (f32, f32),
     catalog_default: EffectGraphDef,
@@ -394,13 +482,13 @@ pub struct MoveGraphNodeCommand {
 
 impl MoveGraphNodeCommand {
     pub fn new(
-        effect_id: EffectId,
+        target: GraphTarget,
         node_id: u32,
         new_pos: (f32, f32),
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
-            effect_id,
+            target,
             node_id,
             new_pos,
             catalog_default,
@@ -411,34 +499,32 @@ impl MoveGraphNodeCommand {
 
 impl Command for MoveGraphNodeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let def = ensure_graph(instance, &self.catalog_default);
-        let Some(node) = def.nodes.iter_mut().find(|n| n.id == self.node_id) else {
-            return;
-        };
-        if self.previous_pos.is_none() {
-            self.previous_pos = Some(node.editor_pos);
+        let node_id = self.node_id;
+        let new_pos = self.new_pos;
+        let prev_already_captured = self.previous_pos.is_some();
+        let captured =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+                let node = def.nodes.iter_mut().find(|n| n.id == node_id)?;
+                let prev = node.editor_pos;
+                node.editor_pos = Some(new_pos);
+                Some(prev)
+            })
+            .flatten();
+        if !prev_already_captured && let Some(prev) = captured {
+            self.previous_pos = Some(prev);
         }
-        node.editor_pos = Some(self.new_pos);
-        bump_version(instance);
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(previous) = self.previous_pos else {
             return;
         };
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let Some(def) = instance.graph.as_mut() else {
-            return;
-        };
-        if let Some(node) = def.nodes.iter_mut().find(|n| n.id == self.node_id) {
-            node.editor_pos = previous;
-        }
-        bump_version(instance);
+        let node_id = self.node_id;
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            if let Some(node) = def.nodes.iter_mut().find(|n| n.id == node_id) {
+                node.editor_pos = previous;
+            }
+        });
     }
 
     fn description(&self) -> &str {
@@ -456,7 +542,7 @@ impl Command for MoveGraphNodeCommand {
 /// param type without a renderer-side dependency.
 #[derive(Debug)]
 pub struct SetGraphNodeParamCommand {
-    effect_id: EffectId,
+    target: GraphTarget,
     node_id: u32,
     param_name: String,
     new_value: SerializedParamValue,
@@ -469,14 +555,14 @@ pub struct SetGraphNodeParamCommand {
 
 impl SetGraphNodeParamCommand {
     pub fn new(
-        effect_id: EffectId,
+        target: GraphTarget,
         node_id: u32,
         param_name: String,
         new_value: SerializedParamValue,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
-            effect_id,
+            target,
             node_id,
             param_name,
             new_value,
@@ -488,42 +574,49 @@ impl SetGraphNodeParamCommand {
 
 impl Command for SetGraphNodeParamCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let def = ensure_graph(instance, &self.catalog_default);
-        let Some(node) = def.nodes.iter_mut().find(|n| n.id == self.node_id) else {
-            return;
-        };
-        let prev = node.params.insert(self.param_name.clone(), self.new_value);
-        if self.previous_value.is_none() {
+        let node_id = self.node_id;
+        let param_name = self.param_name.clone();
+        let new_value = self.new_value;
+        let prev_already_captured = self.previous_value.is_some();
+        // Closure return: `Option<SerializedParamValue>` — None if the
+        // key didn't exist before the insert, Some(prev) if it did.
+        // `with_target_graph_mut` wraps in another Option for target
+        // resolution. `.flatten()` collapses: `None` here means either
+        // the target didn't resolve OR the node id wasn't in the graph.
+        let captured: Option<Option<SerializedParamValue>> =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+                def.nodes
+                    .iter_mut()
+                    .find(|n| n.id == node_id)
+                    .map(|node| node.params.insert(param_name, new_value))
+            })
+            .flatten();
+        if !prev_already_captured && let Some(prev) = captured {
+            // `prev: Option<SerializedParamValue>` — distinguishes
+            // "key was absent" from "key existed with value `v`". Stored
+            // as `Some(prev)` so undo knows we successfully captured.
             self.previous_value = Some(prev);
         }
-        bump_version(instance);
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(prev) = self.previous_value.take() else {
             return;
         };
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        let Some(def) = instance.graph.as_mut() else {
-            return;
-        };
-        let Some(node) = def.nodes.iter_mut().find(|n| n.id == self.node_id) else {
-            return;
-        };
-        match prev {
-            Some(v) => {
-                node.params.insert(self.param_name.clone(), v);
+        let node_id = self.node_id;
+        let param_name = self.param_name.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            if let Some(node) = def.nodes.iter_mut().find(|n| n.id == node_id) {
+                match prev {
+                    Some(v) => {
+                        node.params.insert(param_name, v);
+                    }
+                    None => {
+                        node.params.remove(&param_name);
+                    }
+                }
             }
-            None => {
-                node.params.remove(&self.param_name);
-            }
-        }
-        bump_version(instance);
+        });
     }
 
     fn description(&self) -> &str {
@@ -532,33 +625,33 @@ impl Command for SetGraphNodeParamCommand {
 }
 
 // ---------------------------------------------------------------------------
-// Revert Effect Graph
+// Revert Graph (effect or generator)
 // ---------------------------------------------------------------------------
 
-/// Clear an [`EffectInstance`](manifold_core::effects::EffectInstance)'s
-/// per-card graph override, reverting the effect to the bundled
-/// preset. The next chain rebuild reads the catalog default instead of
-/// the saved-in-place graph.
+/// Clear the per-target graph override (either an `EffectInstance::graph`
+/// or a `Layer::generator_graph`), reverting to the bundled preset.
+/// The next chain rebuild reads the catalog default instead of the
+/// saved-in-place graph.
 ///
-/// Idempotent on execute: if `instance.graph` is already `None`, the
+/// Idempotent on execute: if the override is already `None`, the
 /// command stores `None` for undo and does nothing else. On undo,
 /// restores the previous `Some(def)` if there was one.
 ///
-/// The "library picker" in §6.6 #30 surfaces this command as the user-
-/// facing "Reset to Default Preset" action on a diverged effect.
+/// The "library picker" surfaces this command as the user-facing
+/// "Reset to Default Preset" action on a diverged effect or generator.
 #[derive(Debug)]
 pub struct RevertEffectGraphCommand {
-    effect_id: EffectId,
-    /// Pre-execute snapshot of `instance.graph`. `None` if the effect
-    /// was already on the catalog default, `Some(def)` if it had a
-    /// per-card override that this command cleared.
+    target: GraphTarget,
+    /// Pre-execute snapshot of the target's `graph`. `None` if the
+    /// effect/generator was already on the catalog default, `Some(def)`
+    /// if it had an override that this command cleared.
     previous: Option<Option<EffectGraphDef>>,
 }
 
 impl RevertEffectGraphCommand {
-    pub fn new(effect_id: EffectId) -> Self {
+    pub fn new(target: GraphTarget) -> Self {
         Self {
-            effect_id,
+            target,
             previous: None,
         }
     }
@@ -566,30 +659,24 @@ impl RevertEffectGraphCommand {
 
 impl Command for RevertEffectGraphCommand {
     fn execute(&mut self, project: &mut Project) {
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
         if self.previous.is_none() {
-            self.previous = Some(instance.graph.take());
+            // First execute: capture and clear.
+            self.previous = take_target_graph(project, &self.target);
         } else {
-            instance.graph = None;
+            // Re-execute (after undo): clear without re-capturing.
+            install_target_graph(project, &self.target, None);
         }
-        bump_version(instance);
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(prev) = self.previous.take() else {
             return;
         };
-        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
-            return;
-        };
-        instance.graph = prev;
-        bump_version(instance);
+        install_target_graph(project, &self.target, prev);
     }
 
     fn description(&self) -> &str {
-        "Revert Effect Graph"
+        "Revert Graph"
     }
 }
 
@@ -600,9 +687,10 @@ impl Command for RevertEffectGraphCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::EffectId;
+    use manifold_core::EffectTypeId;
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
     use manifold_core::effects::EffectInstance;
-    use manifold_core::EffectTypeId;
 
     /// Catalog default for a Mirror-like graph: source → uv_transform
     /// → mix → final_output, four nodes plus four wires. Mirrors the
@@ -693,7 +781,7 @@ mod tests {
     fn add_graph_node_lifts_from_none_and_appends_node() {
         let (mut project, id) = project_with_one_master_effect();
         let mut cmd = AddGraphNodeCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             "node.blur".to_string(),
             Some((50.0, 60.0)),
             mirror_catalog_default(),
@@ -717,7 +805,7 @@ mod tests {
     fn add_graph_node_undo_removes_node() {
         let (mut project, id) = project_with_one_master_effect();
         let mut cmd = AddGraphNodeCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             "node.blur".to_string(),
             None,
             mirror_catalog_default(),
@@ -741,7 +829,7 @@ mod tests {
             Some(mirror_catalog_default());
 
         let mut cmd =
-            RemoveGraphNodeCommand::new(id.clone(), 1, mirror_catalog_default());
+            RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
         cmd.execute(&mut project);
 
         let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
@@ -762,7 +850,7 @@ mod tests {
             Some(mirror_catalog_default());
 
         let mut cmd =
-            RemoveGraphNodeCommand::new(id.clone(), 1, mirror_catalog_default());
+            RemoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, mirror_catalog_default());
         cmd.execute(&mut project);
         cmd.undo(&mut project);
 
@@ -779,7 +867,7 @@ mod tests {
 
         // Rewire mix.b from uv_transform → directly from source.
         let mut cmd = ConnectPortsCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             0,
             "out".to_string(),
             2,
@@ -814,7 +902,7 @@ mod tests {
             Some(mirror_catalog_default());
 
         let mut cmd = DisconnectPortsCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             2,
             "a".to_string(),
             mirror_catalog_default(),
@@ -842,7 +930,7 @@ mod tests {
             Some(mirror_catalog_default());
 
         let mut cmd =
-            MoveGraphNodeCommand::new(id.clone(), 1, (100.0, 200.0), mirror_catalog_default());
+            MoveGraphNodeCommand::new(GraphTarget::Effect(id.clone()), 1, (100.0, 200.0), mirror_catalog_default());
         cmd.execute(&mut project);
 
         let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
@@ -862,7 +950,7 @@ mod tests {
             Some(mirror_catalog_default());
 
         let mut cmd = SetGraphNodeParamCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             1,
             "mode".to_string(),
             SerializedParamValue::Enum { value: 7 },
@@ -897,7 +985,7 @@ mod tests {
         project.find_effect_by_id_mut(&id).unwrap().graph = Some(def.clone());
 
         let mut cmd = SetGraphNodeParamCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             1,
             "mode".to_string(),
             SerializedParamValue::Enum { value: 7 },
@@ -919,7 +1007,7 @@ mod tests {
         let (mut project, id) = project_with_one_master_effect();
         // Diverge by adding a Blur — graph now Some(...).
         let mut add = AddGraphNodeCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             "node.blur".to_string(),
             None,
             mirror_catalog_default(),
@@ -927,7 +1015,7 @@ mod tests {
         add.execute(&mut project);
         assert!(project.find_effect_by_id(&id).unwrap().graph.is_some());
 
-        let mut revert = RevertEffectGraphCommand::new(id.clone());
+        let mut revert = RevertEffectGraphCommand::new(GraphTarget::Effect(id.clone()));
         revert.execute(&mut project);
         assert!(
             project.find_effect_by_id(&id).unwrap().graph.is_none(),
@@ -950,7 +1038,7 @@ mod tests {
         let (mut project, id) = project_with_one_master_effect();
         assert!(project.find_effect_by_id(&id).unwrap().graph.is_none());
 
-        let mut revert = RevertEffectGraphCommand::new(id.clone());
+        let mut revert = RevertEffectGraphCommand::new(GraphTarget::Effect(id.clone()));
         revert.execute(&mut project);
         assert!(project.find_effect_by_id(&id).unwrap().graph.is_none());
 
@@ -965,7 +1053,7 @@ mod tests {
     fn graph_edits_survive_json_round_trip() {
         let (mut project, id) = project_with_one_master_effect();
         let mut cmd = AddGraphNodeCommand::new(
-            id.clone(),
+            GraphTarget::Effect(id.clone()),
             "node.blur".to_string(),
             Some((10.0, 20.0)),
             mirror_catalog_default(),
@@ -983,5 +1071,108 @@ mod tests {
         let def = back.graph.as_ref().unwrap();
         assert_eq!(def.nodes.len(), 5, "appended Blur survived");
         assert!(def.nodes.iter().any(|n| n.type_id == "node.blur"));
+    }
+
+    // ─── Generator-target parity ────────────────────────────────────
+    //
+    // The same commands targeting `GraphTarget::Generator(layer_id)`
+    // must mutate `Layer::generator_graph` rather than `EffectInstance::graph`.
+    // These tests exercise the unified pipeline against the generator
+    // persistence path — proves there's truly one set of commands.
+
+    use manifold_core::LayerId;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    /// Project with one timeline layer, no generator override.
+    fn project_with_one_generator_layer() -> (Project, LayerId) {
+        let mut project = Project::default();
+        let layer = Layer::new("Test Layer".to_string(), LayerType::Generator, 0);
+        let lid = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+        (project, lid)
+    }
+
+    #[test]
+    fn add_graph_node_against_generator_target_lifts_layer_generator_graph() {
+        let (mut project, lid) = project_with_one_generator_layer();
+        let mut cmd = AddGraphNodeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            "node.uv_field".to_string(),
+            Some((40.0, 50.0)),
+            mirror_catalog_default(),
+        );
+
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        assert!(
+            layer.generator_graph.is_some(),
+            "generator_graph must lift from None on first edit",
+        );
+        let def = layer.generator_graph.as_ref().unwrap();
+        assert_eq!(def.nodes.len(), 5, "catalog 4 + new node = 5");
+        assert!(def.nodes.iter().any(|n| n.type_id == "node.uv_field"));
+        assert_eq!(layer.generator_graph_version, 1);
+    }
+
+    #[test]
+    fn revert_clears_generator_graph_and_undo_restores_it() {
+        let (mut project, lid) = project_with_one_generator_layer();
+        // Pre-populate with the catalog default (acts as an existing
+        // user-edited override).
+        project
+            .timeline
+            .find_layer_by_id_mut(&lid)
+            .unwrap()
+            .1
+            .generator_graph = Some(mirror_catalog_default());
+
+        let mut revert = RevertEffectGraphCommand::new(GraphTarget::Generator(lid.clone()));
+        revert.execute(&mut project);
+        assert!(
+            project
+                .timeline
+                .find_layer_by_id(&lid)
+                .unwrap()
+                .1
+                .generator_graph
+                .is_none(),
+            "execute clears the override",
+        );
+
+        revert.undo(&mut project);
+        assert!(
+            project
+                .timeline
+                .find_layer_by_id(&lid)
+                .unwrap()
+                .1
+                .generator_graph
+                .is_some(),
+            "undo restores the previous override",
+        );
+    }
+
+    #[test]
+    fn set_graph_node_param_against_generator_target_routes_to_layer() {
+        let (mut project, lid) = project_with_one_generator_layer();
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            1, // uv_transform node id from mirror_catalog_default
+            "rotation".to_string(),
+            SerializedParamValue::Float { value: 45.0 },
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph.as_ref().unwrap();
+        let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
+        let v = node.params.get("rotation").unwrap();
+        match v {
+            SerializedParamValue::Float { value } => assert!((value - 45.0).abs() < 1e-6),
+            _ => panic!("expected Float param value"),
+        }
     }
 }

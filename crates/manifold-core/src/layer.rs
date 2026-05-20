@@ -80,6 +80,27 @@ pub struct Layer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gen_params: Option<GeneratorParamState>,
 
+    /// Per-layer override for the generator's internal graph
+    /// (`EffectGraphDef`). Mirrors `EffectInstance.graph` — `None`
+    /// means the runtime uses the catalog default (the bundled JSON
+    /// preset for the layer's `generator_type`); `Some(def)` means
+    /// the user has edited the graph through the editor and the
+    /// override is the new source of truth.
+    ///
+    /// Wire-compatible with V1.x project files via `#[serde(default)]`:
+    /// older files omit the field, load as `None`, and behave exactly
+    /// as before (catalog-default graph).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator_graph: Option<crate::effect_graph_def::EffectGraphDef>,
+
+    /// Bump counter the renderer watches to detect generator-graph
+    /// topology changes. Parallel to `EffectInstance.graph_version`.
+    /// Persisted to disk so saved projects load with their last-known
+    /// graph version (avoids spurious "topology changed" rebuilds on
+    /// first frame after load).
+    #[serde(default)]
+    pub generator_graph_version: u32,
+
     // ── Video/MIDI assignment ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_folder_path: Option<String>,
@@ -826,6 +847,8 @@ impl Default for Layer {
             effect_groups: None,
             envelopes: None,
             gen_params: None,
+            generator_graph: None,
+            generator_graph_version: 0,
             video_folder_path: None,
             relative_video_folder_path: None,
             midi_note: -1,

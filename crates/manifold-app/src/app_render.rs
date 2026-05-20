@@ -202,12 +202,22 @@ impl Application {
             // Tell the canvas whether the watched effect is diverged
             // from its bundled preset so the "Reset to Default" pill
             // appears in the header only when there's something to
-            // revert. Polled each frame off `local_project`.
+            // revert. Polled each frame off `local_project`. Works
+            // for both effect and generator targets.
             let has_mod = self
-                .watched_effect_id
+                .watched_graph_target
                 .as_ref()
-                .and_then(|eid| self.local_project.find_effect_by_id(eid))
-                .is_some_and(|fx| fx.graph.is_some());
+                .is_some_and(|target| match target {
+                    manifold_core::GraphTarget::Effect(eid) => self
+                        .local_project
+                        .find_effect_by_id(eid)
+                        .is_some_and(|fx| fx.graph.is_some()),
+                    manifold_core::GraphTarget::Generator(lid) => self
+                        .local_project
+                        .timeline
+                        .find_layer_by_id(lid)
+                        .is_some_and(|(_, l)| l.generator_graph.is_some()),
+                });
             canvas.set_has_graph_mod(has_mod);
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.offscreen_dirty = true;
@@ -468,20 +478,30 @@ impl Application {
                 }
                 PanelAction::OpenGeneratorGraphEditor => {
                     // Ask the content thread to snapshot the active
-                    // layer's generator graph for the editor canvas.
-                    // View-only today — per-layer graph overrides +
-                    // edit commands keyed by LayerId land in the
-                    // follow-up commit.
+                    // layer's generator graph and set the unified
+                    // watched_graph_target so every PanelAction edit
+                    // handler downstream dispatches against the
+                    // generator graph rather than an effect.
                     if let Some(lid) = self.active_layer_id.clone() {
-                        self.send_content_cmd(
-                            ContentCommand::WatchGeneratorGraph(Some(lid)),
-                        );
+                        self.send_content_cmd(ContentCommand::WatchGeneratorGraph(Some(
+                            lid.clone(),
+                        )));
+                        self.watched_graph_target =
+                            Some(manifold_core::GraphTarget::Generator(lid.clone()));
+                        // Cache the catalog default — the bundled JSON
+                        // for the layer's generator type — so the edit
+                        // commands can lift None → default on first edit.
+                        self.watched_catalog_default = self
+                            .active_layer_id
+                            .as_ref()
+                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                            .map(|(_, l)| l.generator_type().clone())
+                            .filter(|gt| !gt.is_none())
+                            .and_then(|gt| {
+                                manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(&gt)
+                            })
+                            .and_then(|json| serde_json::from_str(json).ok());
                     }
-                    // Clear any effect-side watch so the canvas
-                    // doesn't show stale per-card state behind the
-                    // generator graph.
-                    self.watched_effect_id = None;
-                    self.watched_catalog_default = None;
                     self.current_editor_target = None;
                     self.pending_open_graph_editor = true;
                     continue;
@@ -525,7 +545,8 @@ impl Application {
                     // commands (AddGraphNode, ConnectPorts, ...) can
                     // lift `instance.graph` from `None` on first edit
                     // without round-tripping through the renderer.
-                    self.watched_effect_id = effect_id.clone();
+                    self.watched_graph_target =
+                        effect_id.clone().map(manifold_core::GraphTarget::Effect);
                     self.watched_catalog_default = effect_id.as_ref().and_then(|eid| {
                         let instance = self.local_project.find_effect_by_id(eid)?;
                         manifold_renderer::node_graph::catalog_graph_def_for(
@@ -549,7 +570,7 @@ impl Application {
                 }
                 PanelAction::AddGraphNode { type_id } => {
                     if let (Some(eid), Some(default)) = (
-                        self.watched_effect_id.as_ref(),
+                        self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
                         // Drop below the auto-laid catalog row so the
@@ -576,7 +597,7 @@ impl Application {
                     to_port,
                 } => {
                     if let (Some(eid), Some(default)) = (
-                        self.watched_effect_id.as_ref(),
+                        self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
                         let cmd = manifold_editing::commands::graph::ConnectPortsCommand::new(
@@ -592,7 +613,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::RevertEffectGraph => {
-                    if let Some(eid) = self.watched_effect_id.as_ref() {
+                    if let Some(eid) = self.watched_graph_target.as_ref() {
                         let cmd =
                             manifold_editing::commands::graph::RevertEffectGraphCommand::new(
                                 eid.clone(),
@@ -603,7 +624,7 @@ impl Application {
                 }
                 PanelAction::DisconnectPorts { to_node, to_port } => {
                     if let (Some(eid), Some(default)) = (
-                        self.watched_effect_id.as_ref(),
+                        self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
                         let cmd = manifold_editing::commands::graph::DisconnectPortsCommand::new(
@@ -618,7 +639,7 @@ impl Application {
                 }
                 PanelAction::RemoveGraphNode { node_id } => {
                     if let (Some(eid), Some(default)) = (
-                        self.watched_effect_id.as_ref(),
+                        self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
                         let cmd = manifold_editing::commands::graph::RemoveGraphNodeCommand::new(
@@ -632,7 +653,7 @@ impl Application {
                 }
                 PanelAction::MoveGraphNode { node_id, new_pos } => {
                     if let (Some(eid), Some(default)) = (
-                        self.watched_effect_id.as_ref(),
+                        self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
                         let cmd = manifold_editing::commands::graph::MoveGraphNodeCommand::new(
@@ -651,7 +672,7 @@ impl Application {
                     new_value,
                 } => {
                     if let (Some(eid), Some(default)) = (
-                        self.watched_effect_id.as_ref(),
+                        self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
                         let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
@@ -1555,7 +1576,7 @@ impl Application {
         // watched effect id — that's the gate for "edits will land
         // somewhere" since every graph command keys on EffectId.
         self.graph_palette.configure(
-            self.watched_effect_id.is_some() && self.watched_catalog_default.is_some(),
+            self.watched_graph_target.is_some() && self.watched_catalog_default.is_some(),
             self.palette_atoms_cache.clone(),
         );
 

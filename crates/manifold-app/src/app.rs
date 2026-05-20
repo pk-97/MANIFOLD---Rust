@@ -296,13 +296,17 @@ pub struct Application {
         manifold_editing::commands::effect_target::EffectTarget,
         usize,
     )>,
-    /// Stable `EffectId` for the watched effect. Mirrors what was
-    /// sent over `WatchEffectGraph` and is the key Phase 3 graph
-    /// commands address. `None` when no editor is open.
-    pub(crate) watched_effect_id: Option<manifold_core::EffectId>,
-    /// Catalog-default graph def for the watched effect's type.
+    /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
+    /// (Effect target) or `OpenGeneratorGraphEditor` (Generator target);
+    /// cleared when the editor closes. Every graph mutation command
+    /// dispatched from PanelAction handlers passes through this — one
+    /// editor surface, one command set, two persistence destinations.
+    pub(crate) watched_graph_target: Option<manifold_core::GraphTarget>,
+    /// Catalog-default graph def for the watched target's type.
     /// Cached at editor-open time so the mutation commands have it
-    /// available to lift `None` graphs on first edit.
+    /// available to lift `None` graphs on first edit. For effects this
+    /// is the bundled effect preset; for generators it's the bundled
+    /// generator preset.
     pub(crate) watched_catalog_default:
         Option<manifold_core::effect_graph_def::EffectGraphDef>,
 
@@ -467,7 +471,7 @@ impl Application {
                 })
                 .collect(),
             current_editor_target: None,
-            watched_effect_id: None,
+            watched_graph_target: None,
             watched_catalog_default: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.

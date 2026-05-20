@@ -15,6 +15,7 @@ pub mod generator_metadata_submissions;
 pub mod generator_registration;
 pub mod generator_type_id;
 pub mod generator_type_registry;
+pub mod graph_target;
 pub mod id;
 pub mod layer;
 pub mod macro_bank;
@@ -38,6 +39,7 @@ pub use color::Color;
 pub use effect_type_id::EffectTypeId;
 pub use effects::{EffectContainer, ParamSource};
 pub use generator_type_id::GeneratorTypeId;
+pub use graph_target::GraphTarget;
 pub use id::{ClipId, EffectGroupId, EffectId, LayerId, MarkerId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
