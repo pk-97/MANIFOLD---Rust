@@ -65,3 +65,20 @@ pub struct LinePoint {
 }
 
 const _: () = assert!(std::mem::size_of::<LinePoint>() == 8);
+
+/// A detected blob (bounding box) emitted by the FFI blob detector
+/// and consumed by overlay-render primitives. 16 bytes.
+///
+/// All four components are in normalized 0..1 image space: `x` /
+/// `y` are the top-left corner, `width` / `height` are the box
+/// extents. Out-of-range values are clamped at render time.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug, Default)]
+pub struct Blob {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<Blob>() == 16);
