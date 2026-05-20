@@ -58,6 +58,7 @@ mod rotate_4d;
 mod sample_volume_2d;
 mod scatter_particles;
 mod scatter_particles_3d;
+mod seed_particles_from_texture;
 mod seed_particles;
 mod separable_gaussian;
 mod smoothing;
@@ -131,6 +132,7 @@ pub use rotate_4d::Rotate4D;
 pub use sample_volume_2d::SampleVolume2D;
 pub use scatter_particles::ScatterParticles;
 pub use scatter_particles_3d::ScatterParticles3D;
+pub use seed_particles_from_texture::SeedParticlesFromTexture;
 pub use seed_particles::SeedParticles;
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
