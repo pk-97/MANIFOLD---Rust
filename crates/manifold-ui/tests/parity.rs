@@ -181,18 +181,15 @@ fn generator_param_count_plasma() {
         6
     );
 }
-#[test]
-fn generator_param_count_basic_shapes() {
-    // 4 positional params (line, scale, fill, clip_trigger) — must match
-    // BasicShapes.json's preset positional layout in lockstep. When the
-    // two diverge, the runtime reads `apply_param_values` against the
-    // preset's source_index while `gp.param_values` is inventory-indexed,
-    // misaligning every binding (see generator_metadata_submissions.rs).
-    assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES).param_count,
-        4
-    );
-}
+// `generator_param_count_basic_shapes` removed — post-§11 BasicShapes
+// lives entirely in `assets/generator-presets/BasicShapes.json` and is
+// only registered when manifold-renderer is linked (via the
+// `LoadedPresetSource` inventory submission). manifold-ui doesn't depend
+// on manifold-renderer, so the registry lookup would panic here. The
+// JSON file IS the schema — its content is the source of truth, and
+// nothing in this crate needs to verify it against a hard-coded
+// expectation. Param-surface regressions are caught by the renderer-side
+// `every_bundled_preset_binding_resolves_to_an_outer_param` sweep.
 #[test]
 fn generator_param_count_concentric_tunnel() {
     assert_eq!(

@@ -21,6 +21,7 @@
 //!    preset becomes available in the picker on next launch.
 
 use manifold_core::GeneratorTypeId;
+use manifold_core::effect_graph_def::EffectGraphDef;
 
 // build.rs emits `BUNDLED_GENERATOR_PRESETS_GENERATED` — one entry per
 // `assets/generator-presets/*.json`, sorted by filename stem.
@@ -32,6 +33,35 @@ include!(concat!(
 /// Alias for the build.rs-generated array; stable name kept for
 /// downstream consumers.
 const BUNDLED_GENERATOR_PRESETS: &[(&str, &str)] = BUNDLED_GENERATOR_PRESETS_GENERATED;
+
+/// Loader function for the core's
+/// [`manifold_core::generator_definition_registry::LoadedPresetSource`]
+/// inventory. Walks the bundled preset table, parses each JSON document,
+/// and returns the `preset_metadata` field from every entry that carries
+/// one (v2 schema). Mirrors `loaded_presets_from_bundled` on the
+/// effect side.
+///
+/// Cached at the `loaded_preset_metadata()` callsite — invoked once per
+/// process. The §11 generator unification means a JSON preset's
+/// `presetMetadata` block IS the canonical schema for that generator,
+/// and the legacy inventory submission (if any) is overridden.
+pub fn loaded_generator_presets_from_bundled()
+-> Vec<manifold_core::effect_graph_def::PresetMetadata> {
+    BUNDLED_GENERATOR_PRESETS
+        .iter()
+        .filter_map(|(id, json)| {
+            let def: EffectGraphDef = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("bundled generator preset {id}: parse failed: {e}"));
+            def.preset_metadata
+        })
+        .collect()
+}
+
+inventory::submit! {
+    manifold_core::generator_definition_registry::LoadedPresetSource {
+        load: loaded_generator_presets_from_bundled,
+    }
+}
 
 /// Raw embedded JSON for the bundled generator preset of
 /// `generator_type`, or `None` if no preset is registered for that id.

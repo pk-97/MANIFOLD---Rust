@@ -7,7 +7,9 @@
     "displayName": "Basic Shapes",
     "category": "Procedural",
     "oscPrefix": "basicShapes",
+    "legacyDiscriminant": 2,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "line",
@@ -17,7 +19,8 @@
         "defaultValue": 0.015,
         "wholeNumbers": false,
         "isToggle": false,
-        "formatString": "F4"
+        "formatString": "F4",
+        "oscSuffix": "line"
       },
       {
         "id": "scale",
@@ -27,7 +30,8 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
-        "formatString": "F2"
+        "formatString": "F2",
+        "oscSuffix": "scale"
       },
       {
         "id": "fill",
@@ -37,7 +41,9 @@
         "defaultValue": 1.0,
         "wholeNumbers": true,
         "isToggle": false,
-        "formatString": "F0"
+        "formatString": "F0",
+        "oscSuffix": "fill",
+        "valueLabels": ["Solid", "Mixed", "Wireframe"]
       },
       {
         "id": "clip_trigger",
@@ -47,7 +53,8 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
-        "formatString": "F0"
+        "formatString": "F0",
+        "oscSuffix": "clipTrigger"
       }
     ],
     "bindings": [

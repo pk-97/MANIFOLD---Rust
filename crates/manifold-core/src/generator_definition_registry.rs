@@ -1,7 +1,9 @@
 use ahash::AHashMap;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
+use crate::effect_graph_def::{ParamSpecDef, PresetMetadata};
+use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::effects::ParamDef;
 use crate::generator_type_id::GeneratorTypeId;
 
@@ -53,6 +55,19 @@ static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> = LazyLock:
         if let Some(def) = m.get_mut(&alias_meta.id) {
             def.legacy_param_aliases = alias_meta.aliases;
         }
+    }
+    // JSON-loaded presets (§11 unified-registry migration, generator
+    // mirror of the effect-side path in `effect_definition_registry`).
+    // A JSON-loaded preset wins over an inventory submission for the
+    // same id — same dual-source pattern so a generator that ships
+    // with a bundled JSON preset *and* a legacy inventory entry uses
+    // the JSON as the canonical schema. Eliminates the inventory-vs-
+    // preset positional layout drift class structurally: there's only
+    // one positional namespace per generator (the JSON's), and the
+    // inventory entry becomes dead code overridden here.
+    for preset in loaded_preset_metadata() {
+        let gen_id = GeneratorTypeId::from_string(preset.id.as_str().to_string());
+        m.insert(gen_id, preset_metadata_to_generator_def(preset));
     }
     m
 });
@@ -206,6 +221,143 @@ fn format_float_with_format_string(value: f32, fmt: &str) -> String {
         _ => format!("{:.2}", value),
     }
 }
+
+// ─── JSON-loaded preset registry ───
+//
+// Mirror of [`crate::effect_definition_registry::loaded_preset_metadata`]
+// and the surrounding `LoadedPresetSource` infrastructure. The renderer
+// crate submits one `LoadedPresetSource` covering every JSON file under
+// `crates/manifold-renderer/assets/generator-presets/`, and those entries
+// feed `DEFINITIONS` above with JSON-as-schema (winning over any legacy
+// inventory submission for the same id).
+
+/// JSON-loaded preset metadata for inclusion in [`DEFINITIONS`].
+///
+/// Each [`LoadedPresetSource`] submission in the inventory contributes a
+/// function pointer that produces a `Vec<PresetMetadata>` when called.
+/// The renderer crate submits one source pointing at
+/// `loaded_generator_presets_from_bundled` — which parses
+/// `assets/generator-presets/*.json` (via the renderer's build.rs-
+/// generated table) and returns every entry whose `version` makes it
+/// carry [`PresetMetadata`].
+///
+/// Sources are invoked once on first access and cached for the process
+/// lifetime.
+pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
+    static CACHE: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut all = Vec::new();
+        for source in inventory::iter::<LoadedPresetSource> {
+            all.extend((source.load)());
+        }
+        all
+    })
+}
+
+/// Inventory submission point for JSON-loaded generator preset metadata.
+/// Mirrors [`crate::effect_definition_registry::LoadedPresetSource`].
+pub struct LoadedPresetSource {
+    pub load: fn() -> Vec<PresetMetadata>,
+}
+
+inventory::collect!(LoadedPresetSource);
+
+/// Convert a parsed [`PresetMetadata`] (shared JSON wire shape with
+/// effects) into the existing [`GeneratorDef`] consumed by the rest of
+/// the codebase. String fields move from owned to `&'static str` via
+/// `Box::leak`; bounded by the (finite) number of shipping presets and
+/// happens once at startup.
+///
+/// Mirrors [`crate::effect_definition_registry::preset_metadata_to_effect_def`].
+pub fn preset_metadata_to_generator_def(meta: &PresetMetadata) -> GeneratorDef {
+    let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
+    let param_count = param_defs.len();
+    let id_to_index: AHashMap<String, usize> = meta
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.id.is_empty())
+        .map(|(i, p)| (p.id.clone(), i))
+        .collect();
+    let param_ids: Vec<&'static str> = meta.params.iter().map(|p| leak_str(&p.id)).collect();
+    GeneratorDef {
+        display_name: leak_str(&meta.display_name),
+        is_line_based: meta.is_line_based,
+        param_count,
+        param_defs,
+        // String params live outside the v2 PresetMetadata schema for
+        // now. Generators that need them (Text, NumberStation, …) keep
+        // their inventory submission; the §11 path applies to graph-
+        // backed generators without string-param surface.
+        string_param_defs: Vec::new(),
+        osc_prefix: Some(leak_str(&meta.osc_prefix)),
+        id_to_index,
+        param_ids,
+        legacy_param_aliases: leak_alias_table(&meta.param_aliases),
+    }
+}
+
+/// Convert a [`PresetMetadata`] into the picker-side
+/// [`crate::generator_type_registry::GeneratorTypeRegistration`].
+///
+/// Mirrors
+/// [`crate::effect_definition_registry::preset_metadata_to_type_registration`].
+pub fn preset_metadata_to_type_registration(
+    meta: &PresetMetadata,
+) -> crate::generator_type_registry::GeneratorTypeRegistration {
+    crate::generator_type_registry::GeneratorTypeRegistration {
+        id: GeneratorTypeId::from_string(meta.id.as_str().to_string()),
+        display_name: leak_str(&meta.display_name),
+        available: meta.available,
+    }
+}
+
+fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
+    ParamDef {
+        id: p.id.clone(),
+        name: p.name.clone(),
+        min: p.min,
+        max: p.max,
+        default_value: p.default_value,
+        whole_numbers: p.whole_numbers,
+        is_toggle: p.is_toggle,
+        value_labels: if p.value_labels.is_empty() {
+            None
+        } else {
+            Some(p.value_labels.clone())
+        },
+        format_string: p.format_string.clone(),
+        osc_suffix: if p.osc_suffix.is_empty() {
+            None
+        } else {
+            Some(p.osc_suffix.clone())
+        },
+    }
+}
+
+fn leak_str(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
+}
+
+fn leak_alias_table(
+    entries: &[crate::effect_graph_def::AliasEntry],
+) -> &'static [ParamAlias] {
+    let v: Vec<ParamAlias> = entries
+        .iter()
+        .map(|e| {
+            let old: &'static str = leak_str(&e.old);
+            let new: Option<&'static str> = e.new.as_deref().map(leak_str);
+            (old, new)
+        })
+        .collect();
+    Box::leak(v.into_boxed_slice())
+}
+
+// `ParamValueAlias` is unused by generators today (no value-alias path
+// in `GeneratorDef`); held in scope to keep the conversion shape
+// identical to the effect side when value aliases land for generators.
+#[allow(dead_code)]
+fn _value_alias_keepalive(_: ParamValueAlias) {}
 
 // ─── Registry Builder ───
 

@@ -1531,6 +1531,7 @@ fn prepare_generator_mirror(
         osc_prefix: String::new(),
         legacy_discriminant: None,
         available: true,
+        is_line_based: false,
         params: Vec::new(),
         bindings: Vec::new(),
         skip_mode: Default::default(),
@@ -2471,6 +2472,7 @@ mod tests {
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
                 available: true,
+                is_line_based: false,
                 params: vec![
                     ParamSpecDef {
                         id: "shape".into(),
@@ -2703,6 +2705,7 @@ mod tests {
                 osc_prefix: "wireframe".into(),
                 legacy_discriminant: None,
                 available: true,
+                is_line_based: false,
                 params: vec![
                     ParamSpecDef {
                         id: "shape".into(),
@@ -3107,6 +3110,7 @@ mod tests {
                 osc_prefix: "test".into(),
                 legacy_discriminant: None,
                 available: true,
+                is_line_based: false,
                 params: vec![ParamSpecDef {
                     id: "pattern".into(),
                     name: "Pattern".into(),

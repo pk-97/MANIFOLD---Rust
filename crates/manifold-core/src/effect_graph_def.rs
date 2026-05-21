@@ -221,6 +221,14 @@ pub struct PresetMetadata {
     /// Defaults to `true`; set `false` for hidden / stub effects.
     #[serde(default = "default_available")]
     pub available: bool,
+    /// Generator-only: whether the generator emits line geometry
+    /// (Lissajous, WireframeZoo, Tesseract, …) rather than a 2D texture.
+    /// Drives `is_line_based` plumbing on the renderer side. Ignored
+    /// for effect presets — kept on `PresetMetadata` (instead of
+    /// forking generator metadata into its own schema) so generators
+    /// can ride the same §11 unified-registry path effects already use.
+    #[serde(default)]
+    pub is_line_based: bool,
     /// Outer-card slider definitions. Each entry corresponds to one
     /// host-visible parameter.
     pub params: Vec<ParamSpecDef>,
@@ -482,6 +490,7 @@ mod tests {
             osc_prefix: "edge_stretch_by_color".to_string(),
             legacy_discriminant: None,
             available: true,
+            is_line_based: false,
             params: vec![ParamSpecDef {
                 id: "amount".to_string(),
                 name: "Amount".to_string(),

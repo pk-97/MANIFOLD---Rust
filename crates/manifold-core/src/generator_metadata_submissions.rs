@@ -31,33 +31,13 @@ inventory::submit! {
 
 // ── Basic Shapes ───────────────────────────────────────────────────────
 //
-// Decomposed into a JSON graph (assets/generator-presets/BasicShapes.json)
-// + `node.shape_2d` primitive. The inventory's positional layout MUST
-// match the preset's `params` order — when they diverge, the runtime
-// reads bindings against `binding.source_index` (preset-indexed) while
-// `gp.param_values` is inventory-indexed, scrambling every slider.
-// The legacy vestigial `shape` slot was dropped here so old V1.x Map
-// projects load via id (the "shape" key is silently ignored) and new
-// projects keep [line, scale, fill, clip_trigger] in lockstep with the
-// JSON preset.
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::BASIC_SHAPES,
-        display_name: "Basic Shapes",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "basicShapes",
-        legacy_discriminant: Some(2),
-        params: &[
-            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.015, "F4", "line"),
-            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::whole_labels("fill", "Fill", 0.0, 2.0, 1.0, &["Solid","Mixed","Wireframe"], "fill"),
-            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
-        ],
-        string_params: &[],
-    }
-}
+// First generator on the §11 unified-registry path: its schema lives
+// entirely in `assets/generator-presets/BasicShapes.json`. The JSON
+// preset's `presetMetadata` block is the canonical source of params,
+// defaults, value labels, OSC suffixes, and `legacyDiscriminant: 2`
+// — the inventory submission that used to live here was overridden by
+// the JSON anyway and is now deleted to eliminate the parallel-list
+// drift class structurally (no two sources to keep in sync).
 
 // ── Concentric Tunnel ──────────────────────────────────────────────────
 

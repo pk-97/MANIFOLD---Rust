@@ -737,6 +737,7 @@ mod tests {
             osc_prefix: "bloom_from_json".to_string(),
             legacy_discriminant: Some(12),
             available: true,
+            is_line_based: false,
             params: vec![ParamSpecDef {
                 id: "amount".to_string(),
                 name: "Amount".to_string(),
@@ -833,6 +834,7 @@ mod tests {
             osc_prefix: "parity_check".to_string(),
             legacy_discriminant: None,
             available: true,
+            is_line_based: false,
             params: vec![ParamSpecDef {
                 id: "amount".to_string(),
                 name: "Amount".to_string(),

@@ -25,6 +25,21 @@ static REGISTRY: LazyLock<Vec<GeneratorTypeRegistration>> = LazyLock::new(|| {
             v.push(meta.to_type_registration());
         }
     }
+    // JSON-loaded presets (§11 unified-registry migration, generator
+    // mirror of `effect_type_registry`). Without this loop, the
+    // "Set Generator" popup only shows inventory-submitted generators
+    // — a JSON-only generator (no `inventory::submit!` block) would
+    // load and render fine but never appear in the picker.
+    for preset in crate::generator_definition_registry::loaded_preset_metadata() {
+        let id = crate::generator_type_id::GeneratorTypeId::from_string(
+            preset.id.as_str().to_string(),
+        );
+        if !v.iter().any(|r| r.id == id) {
+            v.push(
+                crate::generator_definition_registry::preset_metadata_to_type_registration(preset),
+            );
+        }
+    }
     v
 });
 
