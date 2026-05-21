@@ -31,6 +31,13 @@ crate::primitive! {
     purpose: "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in WireframeZoo-shaped graphs: WireframeShape → Rotate3D → (project) → render.",
     inputs: {
         in: Array(MeshVertex) required,
+        // Port-shadows-param: when a wire is connected, the wired
+        // value wins over the inline `angle_*` param. Lets the graph
+        // drive angles from time / LFO / math nodes without lifting
+        // each angle into a separate Value node.
+        angle_x: ScalarF32 optional,
+        angle_y: ScalarF32 optional,
+        angle_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MeshVertex),
@@ -83,18 +90,9 @@ impl Primitive for Rotate3D {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let angle_x = match ctx.params.get("angle_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let angle_y = match ctx.params.get("angle_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let angle_z = match ctx.params.get("angle_z") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let angle_x = ctx.scalar_or_param("angle_x", 0.0);
+        let angle_y = ctx.scalar_or_param("angle_y", 0.0);
+        let angle_z = ctx.scalar_or_param("angle_z", 0.0);
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -160,15 +158,22 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn rotate_3d_declares_mesh_in_and_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+    fn rotate_3d_declares_mesh_in_and_three_optional_angle_inputs() {
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let layout = ArrayType {
             item_size: std::mem::size_of::<MeshVertex>() as u32,
             item_align: std::mem::align_of::<MeshVertex>() as u32,
         };
         assert_eq!(Rotate3D::TYPE_ID, "node.rotate_3d");
-        assert_eq!(Rotate3D::INPUTS.len(), 1);
+        assert_eq!(Rotate3D::INPUTS.len(), 4);
+        assert_eq!(Rotate3D::INPUTS[0].name, "in");
+        assert!(Rotate3D::INPUTS[0].required);
         assert_eq!(Rotate3D::INPUTS[0].ty, PortType::Array(layout));
+        for (i, name) in ["angle_x", "angle_y", "angle_z"].iter().enumerate() {
+            assert_eq!(Rotate3D::INPUTS[i + 1].name, *name);
+            assert!(!Rotate3D::INPUTS[i + 1].required);
+            assert_eq!(Rotate3D::INPUTS[i + 1].ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(Rotate3D::OUTPUTS.len(), 1);
         assert_eq!(Rotate3D::OUTPUTS[0].ty, PortType::Array(layout));
     }

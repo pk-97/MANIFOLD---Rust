@@ -152,25 +152,26 @@ inventory::submit! {
     }
 }
 
-// ── Wireframe Zoo ──────────────────────────────────────────────────────
+// ── Wireframe ──────────────────────────────────────────────────────────
 
 inventory::submit! {
     GeneratorMetadata {
         id: GeneratorTypeId::WIREFRAME_ZOO,
-        display_name: "Wireframe Zoo",
+        display_name: "Wireframe",
         is_line_based: true,
         available: true,
         osc_prefix: "wireframeZoo",
         legacy_discriminant: Some(10),
         params: &[
-            ParamSpec::continuous("xy", "XY", 0.0, 2.0, 0.5, "F2", "rotXY"),
-            ParamSpec::continuous("zw", "ZW", 0.0, 2.0, 0.3, "F2", "rotZW"),
-            ParamSpec::continuous("xw", "XW", 0.0, 2.0, 0.2, "F2", "rotXW"),
+            ParamSpec::continuous("rotate_x_speed", "Rotate X Speed", 0.0, 2.0, 0.5, "F2", "rotateXSpeed"),
+            ParamSpec::continuous("rotate_y_speed", "Rotate Y Speed", 0.0, 2.0, 0.3, "F2", "rotateYSpeed"),
+            ParamSpec::continuous("rotate_z_speed", "Rotate Z Speed", 0.0, 2.0, 0.2, "F2", "rotateZSpeed"),
             ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.003, "F4", "line"),
             ParamSpec::whole_labels("shape", "Shape", 0.0, 4.0, 0.0, &["Tetra","Cube","Octa","Icosa","Dodeca"], "shape"),
-            ParamSpec::toggle("verts", "Vertices", 0.0, 1.0, 1.0, "verts"),
-            ParamSpec::continuous("v_size", "Vertex Size", 0.1, 4.0, 1.0, "F1", "vsize"),
+            ParamSpec::toggle("show_verts", "Show Vertices", 0.0, 1.0, 1.0, "showVerts"),
+            ParamSpec::continuous("vert_size", "Vertex Size", 0.1, 4.0, 1.0, "F1", "vertSize"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
         string_params: &[],
     }
@@ -541,8 +542,25 @@ const SNAP_AND_MODE_ALIASES: &[crate::effect_registration::ParamAlias] = &[
     ("snap_mode", Some("clip_trigger_mode")),
 ];
 
+/// WireframeZoo rename aliases — the legacy outer-card param IDs
+/// (`xy` / `zw` / `xw` / `verts` / `v_size`) are 4D-plane / shorthand
+/// names that don't communicate to general users. The decomposition
+/// pass renamed them to `rotate_x_speed` / `rotate_y_speed` /
+/// `rotate_z_speed` / `show_verts` / `vert_size`. This alias table
+/// redirects id-keyed wire / mapping targets in saved projects.
+const WIREFRAME_ZOO_ALIASES: &[crate::effect_registration::ParamAlias] = &[
+    ("xy", Some("rotate_x_speed")),
+    ("zw", Some("rotate_y_speed")),
+    ("xw", Some("rotate_z_speed")),
+    ("verts", Some("show_verts")),
+    ("v_size", Some("vert_size")),
+];
+
 inventory::submit! {
     GeneratorAliasMetadata { id: GeneratorTypeId::PLASMA, aliases: SNAP_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::WIREFRAME_ZOO, aliases: WIREFRAME_ZOO_ALIASES }
 }
 inventory::submit! {
     GeneratorAliasMetadata { id: GeneratorTypeId::CONCENTRIC_TUNNEL, aliases: SNAP_AND_MODE_ALIASES }

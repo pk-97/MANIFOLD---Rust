@@ -35,6 +35,12 @@ crate::primitive! {
     purpose: "Project an Array<MeshVertex> (3D positions) to an Array<LinePoint> (2D screen coords) with either orthographic or perspective projection. Output is in [0, 1] screen space, centered at (0.5, 0.5). For WireframeZoo decomposition: WireframeShape → Rotate3D → Project3D → (line renderer).",
     inputs: {
         in: Array(MeshVertex) required,
+        // Port-shadows-param: control-rate wires take precedence over
+        // the inline `proj_scale` / `proj_dist` param values. Lets
+        // outer-card sliders drive the zoom factor via math nodes
+        // (e.g. `outer_scale × wireframe_zoom_factor → proj_scale`).
+        proj_scale: ScalarF32 optional,
+        proj_dist: ScalarF32 optional,
     },
     outputs: {
         out: Array(LinePoint),
@@ -91,14 +97,8 @@ impl Primitive for Project3D {
             Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
-        let proj_scale = match ctx.params.get("proj_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.25,
-        };
-        let proj_dist = match ctx.params.get("proj_dist") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 3.0,
-        };
+        let proj_scale = ctx.scalar_or_param("proj_scale", 0.25);
+        let proj_dist = ctx.scalar_or_param("proj_dist", 3.0);
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -178,8 +178,18 @@ mod tests {
             item_align: std::mem::align_of::<LinePoint>() as u32,
         };
         assert_eq!(Project3D::TYPE_ID, "node.project_3d");
-        assert_eq!(Project3D::INPUTS.len(), 1);
+        assert_eq!(Project3D::INPUTS.len(), 3);
+        assert_eq!(Project3D::INPUTS[0].name, "in");
+        assert!(Project3D::INPUTS[0].required);
         assert_eq!(Project3D::INPUTS[0].ty, PortType::Array(mesh_layout));
+        for (i, name) in ["proj_scale", "proj_dist"].iter().enumerate() {
+            assert_eq!(Project3D::INPUTS[i + 1].name, *name);
+            assert!(!Project3D::INPUTS[i + 1].required);
+            assert_eq!(
+                Project3D::INPUTS[i + 1].ty,
+                PortType::Scalar(crate::node_graph::ports::ScalarType::F32)
+            );
+        }
         assert_eq!(Project3D::OUTPUTS.len(), 1);
         assert_eq!(Project3D::OUTPUTS[0].ty, PortType::Array(point_layout));
     }

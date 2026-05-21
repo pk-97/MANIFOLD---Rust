@@ -220,7 +220,7 @@ fn generator_param_count_lissajous() {
 fn generator_param_count_wireframe_zoo() {
     assert_eq!(
         generator_definition_registry::get(&GeneratorTypeId::WIREFRAME_ZOO).param_count,
-        8
+        9
     );
 }
 #[test]

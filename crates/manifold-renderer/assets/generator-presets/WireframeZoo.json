@@ -1,0 +1,232 @@
+{
+  "version": 2,
+  "name": "Wireframe",
+  "description": "Wireframe shapes — five 3D polyhedra (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) rotated continuously around three axes and drawn as line wireframes. Decomposed from the legacy `WireframeZooGenerator` Rust struct into the curated primitive library.\n\n`node.wireframe_shape` produces the matched vertex + edge buffers for the selected shape; three `node.math` nodes turn `time × rate` into per-axis Euler angles fed into `node.rotate_3d`; `node.project_3d` flattens to screen space; `node.render_lines` (with its new optional `edges` input wired) renders the wireframe with the legacy line + dot semantics.\n\nClip-trigger mode cycles the shape through the ClipTriggerCycle uniqueness invariant on each retrigger.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size`) are aliased to the new general-user names (`rotate_x_speed` / `rotate_y_speed` / `rotate_z_speed` / `show_verts` / `vert_size`) for save-file backward compatibility.",
+  "presetMetadata": {
+    "id": "WireframeZoo",
+    "displayName": "Wireframe",
+    "category": "Procedural",
+    "oscPrefix": "wireframeZoo",
+    "available": true,
+    "params": [
+      {
+        "id": "rotate_x_speed",
+        "name": "Rotate X Speed",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "rotate_y_speed",
+        "name": "Rotate Y Speed",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "rotate_z_speed",
+        "name": "Rotate Z Speed",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "line",
+        "name": "Line",
+        "min": 0.0005,
+        "max": 0.03,
+        "defaultValue": 0.003,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "shape",
+        "name": "Shape",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "show_verts",
+        "name": "Show Vertices",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
+      },
+      {
+        "id": "vert_size",
+        "name": "Vertex Size",
+        "min": 0.1,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.25,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
+      }
+    ],
+    "paramAliases": [
+      { "old": "xy",     "new": "rotate_x_speed" },
+      { "old": "zw",     "new": "rotate_y_speed" },
+      { "old": "xw",     "new": "rotate_z_speed" },
+      { "old": "verts",  "new": "show_verts" },
+      { "old": "v_size", "new": "vert_size" }
+    ],
+    "bindings": [
+      { "id": "rotate_x_speed", "label": "Rotate X Speed", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "angle_x_mul", "param": "b" },
+        "convert": { "type": "Float" } },
+      { "id": "rotate_y_speed", "label": "Rotate Y Speed", "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "angle_y_mul", "param": "b" },
+        "convert": { "type": "Float" } },
+      { "id": "rotate_z_speed", "label": "Rotate Z Speed", "defaultValue": 0.2,
+        "target": { "kind": "handleNode", "handle": "angle_z_mul", "param": "b" },
+        "convert": { "type": "Float" } },
+      { "id": "line", "label": "Line", "defaultValue": 0.003,
+        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "convert": { "type": "Float" } },
+      { "id": "shape", "label": "Shape", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "shape" },
+        "convert": { "type": "EnumRound" } },
+      { "id": "show_verts", "label": "Show Vertices", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render", "param": "show_verts" },
+        "convert": { "type": "BoolThreshold" } },
+      { "id": "vert_size", "label": "Vertex Size", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render", "param": "vert_size" },
+        "convert": { "type": "Float" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "scale_mul", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
+        "convert": { "type": "BoolThreshold" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    {
+      "id": 1, "typeId": "node.math", "handle": "angle_x_mul",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.5 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 2, "typeId": "node.math", "handle": "angle_y_mul",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.3 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 3, "typeId": "node.math", "handle": "angle_z_mul",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.2 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 4, "typeId": "node.math", "handle": "scale_mul",
+      "params": {
+        "a":  { "type": "Float", "value": 1.0 },
+        "b":  { "type": "Float", "value": 0.25 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 5, "typeId": "node.wireframe_shape", "handle": "shape",
+      "params": {
+        "shape":         { "type": "Enum",  "value": 0 },
+        "clip_trigger":  { "type": "Bool",  "value": false },
+        "trigger_count": { "type": "Float", "value": 0.0 }
+      }
+    },
+    { "id": 6, "typeId": "node.rotate_3d", "handle": "rotate" },
+    {
+      "id": 7, "typeId": "node.project_3d", "handle": "project",
+      "params": {
+        "mode":       { "type": "Enum",  "value": 0 },
+        "proj_scale": { "type": "Float", "value": 0.25 },
+        "proj_dist":  { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 8, "typeId": "node.render_lines", "handle": "render",
+      "params": {
+        "edge_thickness":    { "type": "Float", "value": 0.003 },
+        "closed_loop":       { "type": "Bool",  "value": false },
+        "show_verts":        { "type": "Bool",  "value": true  },
+        "vert_size":         { "type": "Float", "value": 1.0   },
+        "animate":           { "type": "Bool",  "value": false },
+        "speed":             { "type": "Float", "value": 1.0   },
+        "window":            { "type": "Float", "value": 0.1   },
+        "beat_flash_amount": { "type": "Float", "value": 0.0   },
+        "color_r":           { "type": "Float", "value": 1.0   },
+        "color_g":           { "type": "Float", "value": 1.0   },
+        "color_b":           { "type": "Float", "value": 1.0   },
+        "color_a":           { "type": "Float", "value": 1.0   }
+      }
+    },
+    { "id": 9, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },
+    { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
+    { "fromNode": 0, "fromPort": "time", "toNode": 3, "toPort": "a" },
+
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 5, "toPort": "trigger_count" },
+
+    { "fromNode": 5, "fromPort": "vertices", "toNode": 6, "toPort": "in" },
+
+    { "fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "angle_x" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "angle_y" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "angle_z" },
+
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 7, "toPort": "proj_scale" },
+
+    { "fromNode": 7, "fromPort": "out",   "toNode": 8, "toPort": "points" },
+    { "fromNode": 5, "fromPort": "edges", "toNode": 8, "toPort": "edges"  },
+
+    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+  ]
+}
