@@ -153,10 +153,10 @@
         "convert": { "type": "Float" } },
       { "id": "snap",        "label": "Snap",        "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mux_x", "param": "selector" },
-        "convert": { "type": "BoolThreshold" } },
+        "convert": { "type": "Float" } },
       { "id": "snap",        "label": "Snap",        "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mux_y", "param": "selector" },
-        "convert": { "type": "BoolThreshold" } }
+        "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
