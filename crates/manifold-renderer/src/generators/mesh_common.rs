@@ -66,6 +66,35 @@ pub struct LinePoint {
 
 const _: () = assert!(std::mem::size_of::<LinePoint>() == 8);
 
+/// An explicit edge between two vertices in an `Array<LinePoint>` or
+/// `Array<MeshVertex>` buffer, identified by their indices. Used by
+/// wireframe-shape producers (Platonic solids, Tesseract, Duocylinder,
+/// any future user-imported wireframe mesh) to tell `node.render_lines`
+/// which vertex pairs to connect, when the topology isn't the implicit
+/// "sequential" / "closed loop" pattern that curve generators use. 8
+/// bytes.
+///
+/// Unused slots in a fixed-capacity edge buffer are marked with
+/// `a == u32::MAX` (sentinel); `node.render_lines` skips any slot
+/// matching this on its way through the buffer.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct EdgePair {
+    pub a: u32,
+    pub b: u32,
+}
+
+impl EdgePair {
+    /// Sentinel value for unused slots in a fixed-capacity edges
+    /// buffer. `node.render_lines` checks `a == u32::MAX` and skips.
+    pub const SENTINEL: EdgePair = EdgePair {
+        a: u32::MAX,
+        b: u32::MAX,
+    };
+}
+
+const _: () = assert!(std::mem::size_of::<EdgePair>() == 8);
+
 /// A detected blob (bounding box) emitted by the FFI blob detector
 /// and consumed by overlay-render primitives. 16 bytes.
 ///

@@ -32,7 +32,7 @@ struct Project3DUniforms {
 crate::primitive! {
     name: Project3D,
     type_id: "node.project_3d",
-    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<LinePoint> (2D screen coords) with either orthographic or perspective projection. Output is in [0, 1] screen space, centered at (0.5, 0.5). For WireframeZoo decomposition: GeneratePlatonicSolid → Rotate3D → Project3D → (line renderer).",
+    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<LinePoint> (2D screen coords) with either orthographic or perspective projection. Output is in [0, 1] screen space, centered at (0.5, 0.5). For WireframeZoo decomposition: WireframeShape → Rotate3D → Project3D → (line renderer).",
     inputs: {
         in: Array(MeshVertex) required,
     },

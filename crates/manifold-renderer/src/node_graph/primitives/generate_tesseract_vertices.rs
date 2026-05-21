@@ -1,7 +1,7 @@
 //! `node.generate_tesseract_vertices` — emit the 16 corner vertices of
 //! a 4D unit hypercube (tesseract) into an `Array<Vec4Vertex>`.
 //!
-//! The 4D-side counterpart of [`crate::node_graph::primitives::GeneratePlatonicSolid`].
+//! The 4D-side counterpart of [`crate::node_graph::primitives::WireframeShape`].
 //! Output is the unique vertex set (16 corners); edge connectivity for
 //! wireframe rendering is the downstream consumer's concern — the
 //! 32-edge topology for a tesseract is the canonical bit-flip pattern

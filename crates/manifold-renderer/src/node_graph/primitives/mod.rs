@@ -52,7 +52,7 @@ mod generate_duocylinder_vertices;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
 mod generate_lissajous;
-mod generate_platonic_solid;
+mod wireframe_shape;
 mod generate_tesseract_vertices;
 mod glitch;
 mod halation;
@@ -179,8 +179,9 @@ pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
 pub use generate_lissajous::GenerateLissajous;
-pub use generate_platonic_solid::{
-    GeneratePlatonicSolid, PLATONIC_MAX_VERTS, PLATONIC_SHAPES,
+pub use wireframe_shape::{
+    WIREFRAME_MAX_EDGES, WIREFRAME_MAX_VERTS, WIREFRAME_SHAPE_COUNT, WIREFRAME_SHAPES,
+    WireframeShape,
 };
 pub use generate_tesseract_vertices::{
     GenerateTesseractVertices, TESSERACT_VERTEX_COUNT,
