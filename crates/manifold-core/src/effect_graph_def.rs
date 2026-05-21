@@ -225,7 +225,14 @@ pub struct PresetMetadata {
     /// host-visible parameter.
     pub params: Vec<ParamSpecDef>,
     /// Routing from each outer slider to one or more inner-graph node
-    /// parameters. Parallel array to `params` keyed by `BindingDef::id`.
+    /// parameters. **Not a parallel array to `params`** — bindings
+    /// reference outer sliders by [`BindingDef::id`], and one outer
+    /// slider can fan out to multiple inner-node params by emitting
+    /// multiple bindings that share an `id` (e.g. a single `clip_trigger`
+    /// toggle driving both `mux_x.selector` and `mux_y.selector`).
+    /// Consumers MUST address bindings by `id` against `params`, not by
+    /// position — positional indexing silently strands the second
+    /// binding in a fan-out on its `default_value`.
     pub bindings: Vec<BindingDef>,
     /// When the runtime should drop this effect entirely (no GPU work).
     #[serde(default)]

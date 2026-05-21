@@ -127,8 +127,16 @@ pub struct JsonGraphGenerator {
 
 /// One resolved outer-card → inner-node binding for a JSON generator
 /// preset. Built once at construction by walking the preset's
-/// `BindingDef` list against the live graph's handle map; subsequent
-/// frames index this vec by `GeneratorContext::params[i]` position.
+/// `BindingDef` list against the live graph's handle map.
+///
+/// `source_index` is the position into the host's outer-card `values`
+/// array that this binding draws from — resolved by matching
+/// `BindingDef::id` against `PresetMetadata::params`. Distinct from the
+/// binding's own position in the `bindings` array: a single outer
+/// slider can fan out to multiple inner-node params (e.g. Lissajous's
+/// `clip_trigger` toggle drives both `mux_x.selector` and
+/// `mux_y.selector`), so binding-position indexing would silently
+/// strand the second binding on its default.
 struct BindingResolution {
     target_node: NodeInstanceId,
     /// Param name on the target node. The graph's `set_param` API
@@ -137,6 +145,10 @@ struct BindingResolution {
     /// times the number of generator constructions in a session — and
     /// matches the existing pattern in `loaded_preset_view`.
     target_param: &'static str,
+    /// Position into the outer-card `values` slice this binding reads
+    /// from. Two bindings with the same `source_index` share an outer
+    /// slider — the fan-out case.
+    source_index: usize,
     default: f32,
     convert: manifold_core::effects::ParamConvert,
 }
@@ -208,12 +220,26 @@ impl JsonGraphGenerator {
             return Err(JsonGeneratorLoadError::MissingFinalOutput);
         }
 
-        // Capture the binding specs before into_graph consumes `doc`.
-        // These get resolved against the live graph's handle map below.
+        // Capture the binding specs + outer-card param ids before
+        // `into_graph` consumes `doc`. The id list resolves each
+        // binding's `source_index` (which outer slider it draws from)
+        // below — keyed by id rather than position so a single slider
+        // can fan out to multiple inner-node params.
         let binding_specs: Vec<manifold_core::effect_graph_def::BindingDef> = doc
             .preset_metadata
             .as_ref()
             .map(|m| m.bindings.clone())
+            .unwrap_or_default();
+        let outer_param_index: std::collections::HashMap<String, usize> = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| {
+                m.params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (p.id.clone(), i))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let graph = doc.into_graph(registry)?;
@@ -256,11 +282,25 @@ impl JsonGraphGenerator {
             .filter_map(|b| match &b.target {
                 BindingTarget::HandleNode { handle, param } => {
                     let node_id = *handle_map.get(handle.as_str())?;
+                    let source_index = match outer_param_index.get(b.id.as_str()) {
+                        Some(idx) => *idx,
+                        None => {
+                            log::warn!(
+                                "JsonGraphGenerator: binding id `{}` (target \
+                                 `{handle}.{param}`) has no matching outer-card param \
+                                 — the binding will always emit its default ({}). \
+                                 Add a `params` entry with id=`{}` or remove the binding.",
+                                b.id, b.default_value, b.id,
+                            );
+                            return None;
+                        }
+                    };
                     let leaked_param: &'static str =
                         Box::leak(param.clone().into_boxed_str());
                     Some(BindingResolution {
                         target_node: node_id,
                         target_param: leaked_param,
+                        source_index,
                         default: b.default_value,
                         convert: b.convert,
                     })
@@ -477,14 +517,21 @@ impl JsonGraphGenerator {
     }
 
     /// Push the host's slider values through the preset's bindings to
-    /// the matching inner-node params. Each `values[i]` lands on the
-    /// `i`-th binding declared in `presetMetadata.bindings`. Missing
-    /// entries fall back to the binding's `default_value`. No-op if the
-    /// preset declared no bindings.
+    /// the matching inner-node params. Each binding reads from the
+    /// outer-card slider whose `id` it was declared with — resolved to
+    /// a `source_index` into `values` at construction time. Two
+    /// bindings sharing an `id` (one slider fanning out to multiple
+    /// inner-node params) both pick up the same `values[source_index]`,
+    /// not just the first one. Missing entries fall back to the
+    /// binding's `default_value`. No-op if the preset declared no
+    /// bindings.
     pub fn apply_param_values(&mut self, values: &[f32]) {
         use manifold_core::effects::ParamConvert;
-        for (i, binding) in self.bindings.iter().enumerate() {
-            let v = values.get(i).copied().unwrap_or(binding.default);
+        for binding in &self.bindings {
+            let v = values
+                .get(binding.source_index)
+                .copied()
+                .unwrap_or(binding.default);
             let pv = match binding.convert {
                 ParamConvert::Float => ParamValue::Float(v),
                 ParamConvert::IntRound => ParamValue::Int(v.round() as i32),
@@ -596,6 +643,14 @@ impl Generator for JsonGraphGenerator {
         );
         let slot = metal.pre_bind_texture_2d(self.final_output_input_resource, placeholder);
         self.final_output_slot = Some(slot);
+        // `resize` also wiped every pinned `Array<T>` buffer (the chain
+        // build's vertex/particle pre-allocations). Re-run the same
+        // pre-allocate pass we did at construction so downstream
+        // primitives don't render against an empty wire — symptom is a
+        // black generator output on the first frame after a project
+        // load, which only recovers when the user edits the graph
+        // (forcing a fresh `from_def_with_device` rebuild).
+        Self::pre_allocate_array_buffers(&self.graph, &self.plan, device, metal);
     }
 }
 
@@ -607,6 +662,78 @@ mod tests {
 
     use manifold_core::Beats;
     use manifold_core::Seconds;
+
+    /// Regression for the "Lissajous repeats back-to-back in
+    /// clip-trigger mode" bug. The preset declares two bindings keyed
+    /// by the same outer-card id (`clip_trigger` → `mux_x.selector`
+    /// AND `clip_trigger` → `mux_y.selector`). Before the source-index
+    /// fix, `apply_param_values` indexed `values` by binding position,
+    /// so the 12th binding fell off the end of the 11-element
+    /// `values` slice and `mux_y.selector` stayed pinned at its
+    /// default 0.0 — meaning Y stayed on the LFO while X cycled
+    /// through the frequency-ratio table. Adjacent ratio rows share
+    /// the `a` value (rows 0/1, 3/4, 6/7), so two consecutive triggers
+    /// produced visually identical curves whenever the slow LFO_y
+    /// hadn't moved far between them.
+    ///
+    /// The assertion: drive `clip_trigger = 1.0` and confirm BOTH
+    /// mux selectors land on 1.0, not just the first.
+    #[test]
+    fn fan_out_binding_writes_every_target_with_the_same_outer_value() {
+        let json = include_str!(
+            "../../assets/generator-presets/Lissajous.json"
+        );
+        let mut g = JsonGraphGenerator::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("Lissajous preset must load");
+
+        let mux_x_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "mux_x")
+            .map(|(_, id)| id)
+            .expect("Lissajous declares a `mux_x` handle");
+        let mux_y_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "mux_y")
+            .map(|(_, id)| id)
+            .expect("Lissajous declares a `mux_y` handle");
+
+        // Outer-card slider order from Lissajous.json `params[]`:
+        //   freq_x_rate, freq_y_rate, phase_rate, line, show_verts,
+        //   vert_size, animate, speed, window, scale, clip_trigger
+        // The last value (index 10) is `clip_trigger = 1.0` —
+        // enabling the ratio-stepped mode that drives both muxes.
+        g.apply_param_values(&[
+            0.13, 0.09, 0.07, 0.002, 1.0,
+            1.0, 0.0, 1.0, 0.1, 1.0,
+            1.0,
+        ]);
+
+        let mux_x = g.graph.get_node(mux_x_id).unwrap();
+        assert!(
+            matches!(
+                mux_x.params.get("selector"),
+                Some(ParamValue::Float(v)) if (*v - 1.0).abs() < 1e-5
+            ),
+            "mux_x.selector should be 1.0, got {:?}",
+            mux_x.params.get("selector"),
+        );
+        let mux_y = g.graph.get_node(mux_y_id).unwrap();
+        assert!(
+            matches!(
+                mux_y.params.get("selector"),
+                Some(ParamValue::Float(v)) if (*v - 1.0).abs() < 1e-5
+            ),
+            "mux_y.selector should be 1.0 (fan-out from same `clip_trigger` \
+             outer slider as mux_x), got {:?}. If this is 0.0, the binding \
+             is incorrectly indexed by position instead of by source id.",
+            mux_y.params.get("selector"),
+        );
+    }
 
     /// Regression test for the "Plasma looks frozen" bug: outer-card
     /// slider values must reach the inner-node param via the preset's
@@ -815,6 +942,92 @@ mod tests {
         // through the wired Math chains without the graph panicking.
         preset.set_frame_context(0.5, 0.25, 1.78, 0.0, 0.5);
         preset.execute_frame(frame_time());
+    }
+
+    /// Regression for the "loaded project renders black until the user
+    /// opens the graph editor" bug: `JsonGraphGenerator::resize` calls
+    /// through to `MetalBackend::resize`, which wipes every pinned
+    /// binding — including the `Array<T>` output buffers the chain-build
+    /// pre-allocated. Before the fix, `resize` only re-pre-bound the
+    /// final-output placeholder; the curve-vertex buffer stayed unbound
+    /// and downstream `render_lines` saw an empty wire, producing a
+    /// black frame. The host's first `resize_gpu` call after project
+    /// load is what triggered the bug in production.
+    ///
+    /// Asserts that every `Array<T>` resource that was bound after
+    /// construction is still bound (and points at a real buffer) after
+    /// a `resize`.
+    #[test]
+    fn resize_re_pre_allocates_array_buffers() {
+        use crate::node_graph::{Backend, PortType};
+        let device = crate::test_device();
+        let json = include_str!(
+            "../../assets/generator-presets/Lissajous.json"
+        );
+        let mut g = JsonGraphGenerator::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("Lissajous preset must load");
+
+        let array_resources: Vec<ResourceId> = (0..g.plan.resource_count() as u32)
+            .map(ResourceId)
+            .filter(|id| matches!(g.plan.resource_type(*id), Some(PortType::Array(_))))
+            .collect();
+        assert!(
+            !array_resources.is_empty(),
+            "Lissajous preset must produce at least one Array<T> wire \
+             (the curve-vertex buffer) — otherwise the regression isn't \
+             exercising the bug",
+        );
+
+        // All Array resources bound + backed by a real buffer at construction.
+        {
+            let metal = g
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<MetalBackend>())
+                .expect("production path constructs a MetalBackend");
+            for &res in &array_resources {
+                let slot = metal
+                    .slot_for(res)
+                    .unwrap_or_else(|| panic!("Array resource {res:?} unbound after construction"));
+                assert!(
+                    Backend::array_buffer(metal, slot).is_some(),
+                    "Array resource {res:?} has no backing buffer after construction",
+                );
+            }
+        }
+
+        // Simulate the host's first resize_gpu call (project's actual
+        // render resolution diverges from the 1920x1080 construction
+        // default).
+        Generator::resize(&mut g, &device, 1280, 720);
+
+        // Same bindings must survive.
+        let metal = g
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("production path constructs a MetalBackend");
+        for &res in &array_resources {
+            let slot = metal.slot_for(res).unwrap_or_else(|| {
+                panic!(
+                    "Array resource {res:?} unbound after resize — \
+                     the pre-allocate pass didn't re-run",
+                )
+            });
+            assert!(
+                Backend::array_buffer(metal, slot).is_some(),
+                "Array resource {res:?} has no backing buffer after resize",
+            );
+        }
     }
 
     /// Load the bundled `TrivialPassthrough.json` preset from disk and

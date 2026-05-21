@@ -91,4 +91,49 @@ mod tests {
             });
         }
     }
+
+    /// Class-level guard for the "Lissajous's clip-trigger toggle
+    /// only drove mux_x, not mux_y" bug. Every binding in every
+    /// bundled preset must reference an outer-card slider that
+    /// actually exists — the `id` shared between [`BindingDef::id`]
+    /// and [`ParamSpecDef::id`] is the rendezvous point.
+    ///
+    /// Why this matters as a sweep test (vs. a per-preset assertion):
+    /// the bug class is "preset author adds a fan-out binding +
+    /// forgets the matching outer slider, OR typos the id". The
+    /// runtime degrades gracefully (warn + drop) but the symptom is
+    /// silent — the inner param sits forever on the binding's
+    /// `default_value`. CI catching it before merge is the only
+    /// safety net that scales to N future presets.
+    #[test]
+    fn every_bundled_preset_binding_resolves_to_an_outer_param() {
+        use manifold_core::effect_graph_def::EffectGraphDef;
+        let mut violations: Vec<String> = Vec::new();
+        for (preset_id, json) in BUNDLED_GENERATOR_PRESETS {
+            let doc: EffectGraphDef = serde_json::from_str(json).unwrap_or_else(|e| {
+                panic!("bundled preset {preset_id}: parse failed: {e}")
+            });
+            let Some(meta) = doc.preset_metadata.as_ref() else {
+                continue; // legacy preset without metadata — no bindings to validate
+            };
+            let param_ids: std::collections::HashSet<&str> =
+                meta.params.iter().map(|p| p.id.as_str()).collect();
+            for binding in &meta.bindings {
+                if !param_ids.contains(binding.id.as_str()) {
+                    violations.push(format!(
+                        "preset `{preset_id}`: binding id=`{}` (target {:?}) does not match \
+                         any outer-card param id. Either add a `params` entry with \
+                         id=`{}` or remove the binding — otherwise it will silently \
+                         pin its inner target at default_value={} on every frame.",
+                        binding.id, binding.target, binding.id, binding.default_value,
+                    ));
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "Bundled preset bindings reference nonexistent outer params:\n  - {}",
+            violations.join("\n  - "),
+        );
+    }
 }
