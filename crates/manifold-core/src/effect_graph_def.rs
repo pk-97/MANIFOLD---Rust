@@ -289,6 +289,21 @@ pub struct BindingDef {
     pub target: BindingTarget,
     #[serde(default)]
     pub convert: ParamConvert,
+    /// `true` when this binding was added at runtime by the user (via the
+    /// graph editor's "expose this inner param" checkbox) rather than
+    /// shipping with the preset's bundled metadata. Removing the
+    /// matching exposure unchecks: bundled bindings only flip
+    /// `exposed_params` (the slot survives so drivers/Ableton/etc. keep
+    /// addressing it); user-added bindings get pulled from `params` +
+    /// `bindings` entirely along with their `param_values` slot.
+    /// Skipped on serialize when `false` so bundled-preset JSON stays
+    /// byte-identical to the on-disk source.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub user_added: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Where a binding's value flows. Mirror of the renderer-side
@@ -488,6 +503,7 @@ mod tests {
                     param: "amount".to_string(),
                 },
                 convert: ParamConvert::Float,
+                user_added: false,
             }],
             skip_mode: SkipModeDef::OnZero {
                 param_id: "amount".to_string(),

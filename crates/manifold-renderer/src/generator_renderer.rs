@@ -304,6 +304,63 @@ impl GeneratorRenderer {
             self.layer_generators.retain(|id, _| alive.contains(id));
         }
 
+        // Per-frame override-version sweep. `acquire_clip` only
+        // rebuilds the generator on clip start, so without this pass
+        // a graph-editor edit on an already-active layer wouldn't
+        // pick up the new bindings until the clip restarts.
+        // Iterate over a snapshot of active layer ids and compare
+        // each layer's `generator_graph_version` against the version
+        // captured in `LayerGeneratorState.override_version`; rebuild
+        // on mismatch, preserving `trigger_count`.
+        //
+        // Allocates a tiny `Vec<LayerId>` per frame (one entry per
+        // active layer, typically 1-5). Acceptable for this rebuild
+        // path since the alternative would require restructuring
+        // `layer_generators` for split borrows.
+        let layer_ids_to_check: Vec<manifold_core::LayerId> = self
+            .layer_generators
+            .keys()
+            .cloned()
+            .collect();
+        for layer_id in &layer_ids_to_check {
+            let Some(layer) = layers.iter().find(|l| &l.layer_id == layer_id) else {
+                continue;
+            };
+            let current_override_version: Option<u32> =
+                layer.generator_graph.as_ref().map(|_| layer.generator_graph_version);
+            let needs_rebuild = self
+                .layer_generators
+                .get(layer_id)
+                .is_some_and(|ls| ls.override_version != current_override_version);
+            if !needs_rebuild {
+                continue;
+            }
+            let preserved_trigger_count = self
+                .layer_generators
+                .get(layer_id)
+                .map(|ls| ls.trigger_count)
+                .unwrap_or(0);
+            let gen_type = layer.generator_type().clone();
+            let override_def = layer.generator_graph.as_ref();
+            if let Some(generator) =
+                self.registry
+                    .create_with_override(self.device(), &gen_type, override_def)
+            {
+                self.layer_generators.insert(
+                    layer_id.clone(),
+                    LayerGeneratorState {
+                        generator,
+                        generator_type: gen_type,
+                        trigger_count: preserved_trigger_count,
+                        override_version: current_override_version,
+                        layer_string_defaults: std::collections::BTreeMap::new(),
+                        merged_string_params: std::collections::BTreeMap::new(),
+                        string_params_dirty: true,
+                    },
+                );
+            }
+        }
+
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();
         self.render_scratch

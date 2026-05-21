@@ -758,6 +758,7 @@ mod tests {
                     param: "amount".to_string(),
                 },
                 convert: ParamConvert::Float,
+                user_added: false,
             }],
             skip_mode: SkipModeDef::OnZero {
                 param_id: "amount".to_string(),

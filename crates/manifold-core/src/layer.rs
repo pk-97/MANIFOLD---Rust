@@ -285,6 +285,24 @@ impl Layer {
         }
     }
 
+    /// Resolve a generator param id to its slot index in
+    /// `gen_params.param_values`. Tier-aware: when this layer carries a
+    /// per-instance `generator_graph` with `preset_metadata`, the lookup
+    /// walks the graph's `params` list (which includes user-added
+    /// bindings); otherwise it falls back to the static
+    /// `generator_definition_registry`. Returns `None` if the id isn't
+    /// recognised.
+    pub fn resolve_gen_param_slot(&self, param_id: &str) -> Option<usize> {
+        if let Some(graph) = &self.generator_graph
+            && let Some(meta) = graph.preset_metadata.as_ref()
+            && !meta.params.is_empty()
+        {
+            return meta.params.iter().position(|p| p.id == param_id);
+        }
+        let gen_type = self.generator_type();
+        crate::generator_definition_registry::param_id_to_index(gen_type, param_id)
+    }
+
     /// Ensure both clip ordering caches are up-to-date.
     /// From Unity Layer.cs EnsureClipOrderingCaches (lines 457-473).
     pub fn ensure_clip_ordering_caches(&mut self) {

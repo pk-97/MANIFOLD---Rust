@@ -1099,7 +1099,14 @@ pub fn sync_inspector_data(
             let gen_config = layer
                 .gen_params()
                 .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)
-                .map(|gp| gen_params_to_config(gp, lid, clip_string_params));
+                .map(|gp| {
+                    gen_params_to_config(
+                        gp,
+                        lid,
+                        clip_string_params,
+                        layer.generator_graph.as_ref(),
+                    )
+                });
             let layer_id = layer.layer_id.clone();
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
@@ -1408,14 +1415,37 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 }
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
+///
+/// When the layer has a per-instance `generator_graph`, the function
+/// walks the graph's `preset_metadata.params` to source the outer-card
+/// slider list — that's where both bundled and user-added bindings
+/// live (approach A in `docs/EFFECT_GENERATOR_CARD_UNIFICATION.md`).
+/// Without a graph (legacy non-graph-backed generators), it falls
+/// back to the static `generator_definition_registry` def.
 fn gen_params_to_config(
     gp: &manifold_core::generator::GeneratorParamState,
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
+    generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
 ) -> GenParamConfig {
-    let reg_def = match manifold_core::generator_definition_registry::try_get(gp.generator_type()) {
-        Some(d) => d,
-        None => {
+    let reg_def = manifold_core::generator_definition_registry::try_get(gp.generator_type());
+    let graph_meta = generator_graph.and_then(|g| g.preset_metadata.as_ref());
+
+    // Resolve the canonical slider list:
+    // - If the layer carries a per-instance graph WITH metadata, use
+    //   its `params` (includes user-added entries at the tail).
+    // - Otherwise fall back to the registry (legacy / non-graph-backed
+    //   generators).
+    // The `id_to_index` map for driver/envelope/Ableton id resolution
+    // is built from the same source so user-added ids resolve.
+    enum Source<'a> {
+        Graph(&'a Vec<manifold_core::effect_graph_def::ParamSpecDef>),
+        Registry(&'a manifold_core::generator_definition_registry::GeneratorDef),
+    }
+    let source = match (graph_meta, reg_def) {
+        (Some(m), _) if !m.params.is_empty() => Source::Graph(&m.params),
+        (_, Some(d)) => Source::Registry(d),
+        _ => {
             return GenParamConfig {
                 gen_type_name: gp.generator_type().to_string(),
                 params: vec![],
@@ -1441,53 +1471,113 @@ fn gen_params_to_config(
             };
         }
     };
-    let n = reg_def.param_defs.len();
-    let params: Vec<GenParamInfo> = reg_def
-        .param_defs
-        .iter()
-        .enumerate()
-        .map(|(pi, pd)| {
-            let osc_address =
-                manifold_core::generator_definition_registry::get_osc_address_for_layer(
-                    gp.generator_type(),
-                    layer_id,
-                    pi,
-                );
-            let abl_mapping = gp.ableton_mappings.as_ref().and_then(|mappings| {
-                if pd.id.is_empty() {
-                    return None;
-                }
-                mappings.iter().find(|m| m.param_id == pd.id)
-            });
-            let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
-                macro_name: mapping.address.macro_name.clone(),
-                track_name: mapping.address.track_name.clone(),
-                device_name: mapping.address.device_name.clone(),
-                status: mapping.status,
-                inverted: mapping.inverted,
-            });
-            let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-            GenParamInfo {
-                // Generator params are static-tier only today
-                // (no per-instance user binding on generators).
-                // Same `Cow::Owned` policy as the effect side for
-                // shape consistency.
-                param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                name: pd.name.clone(),
-                min: pd.min,
-                max: pd.max,
-                default: pd.default_value,
-                whole_numbers: pd.whole_numbers,
-                is_toggle: pd.is_toggle,
-                value_labels: pd.value_labels.clone(),
-                osc_address,
-                ableton_display,
-                ableton_range,
-            }
-        })
-        .collect();
 
-    // Per-param driver state
+    // Build the param info list + an id→index lookup table. The graph
+    // path knows about user-added entries; the registry path is
+    // static-only.
+    let (params, id_to_index): (Vec<GenParamInfo>, ahash::AHashMap<String, usize>) =
+        match source {
+            Source::Graph(graph_params) => {
+                let mut id_to_index =
+                    ahash::AHashMap::with_capacity(graph_params.len());
+                let infos: Vec<GenParamInfo> = graph_params
+                    .iter()
+                    .enumerate()
+                    .map(|(pi, pd)| {
+                        id_to_index.insert(pd.id.clone(), pi);
+                        let osc_address =
+                            manifold_core::generator_definition_registry::get_osc_address_for_layer(
+                                gp.generator_type(),
+                                layer_id,
+                                pi,
+                            );
+                        let abl_mapping = gp.ableton_mappings.as_ref().and_then(|mappings| {
+                            if pd.id.is_empty() {
+                                return None;
+                            }
+                            mappings.iter().find(|m| m.param_id == pd.id)
+                        });
+                        let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
+                            macro_name: mapping.address.macro_name.clone(),
+                            track_name: mapping.address.track_name.clone(),
+                            device_name: mapping.address.device_name.clone(),
+                            status: mapping.status,
+                            inverted: mapping.inverted,
+                        });
+                        let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+                        GenParamInfo {
+                            param_id: std::borrow::Cow::Owned(pd.id.clone()),
+                            name: pd.name.clone(),
+                            min: pd.min,
+                            max: pd.max,
+                            default: pd.default_value,
+                            whole_numbers: pd.whole_numbers,
+                            is_toggle: pd.is_toggle,
+                            value_labels: if pd.value_labels.is_empty() {
+                                None
+                            } else {
+                                Some(pd.value_labels.clone())
+                            },
+                            osc_address,
+                            ableton_display,
+                            ableton_range,
+                        }
+                    })
+                    .collect();
+                (infos, id_to_index)
+            }
+            Source::Registry(def) => {
+                let mut id_to_index =
+                    ahash::AHashMap::with_capacity(def.param_defs.len());
+                let infos: Vec<GenParamInfo> = def
+                    .param_defs
+                    .iter()
+                    .enumerate()
+                    .map(|(pi, pd)| {
+                        id_to_index.insert(pd.id.clone(), pi);
+                        let osc_address =
+                            manifold_core::generator_definition_registry::get_osc_address_for_layer(
+                                gp.generator_type(),
+                                layer_id,
+                                pi,
+                            );
+                        let abl_mapping = gp.ableton_mappings.as_ref().and_then(|mappings| {
+                            if pd.id.is_empty() {
+                                return None;
+                            }
+                            mappings.iter().find(|m| m.param_id == pd.id)
+                        });
+                        let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
+                            macro_name: mapping.address.macro_name.clone(),
+                            track_name: mapping.address.track_name.clone(),
+                            device_name: mapping.address.device_name.clone(),
+                            status: mapping.status,
+                            inverted: mapping.inverted,
+                        });
+                        let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+                        GenParamInfo {
+                            param_id: std::borrow::Cow::Owned(pd.id.clone()),
+                            name: pd.name.clone(),
+                            min: pd.min,
+                            max: pd.max,
+                            default: pd.default_value,
+                            whole_numbers: pd.whole_numbers,
+                            is_toggle: pd.is_toggle,
+                            value_labels: pd.value_labels.clone(),
+                            osc_address,
+                            ableton_display,
+                            ableton_range,
+                        }
+                    })
+                    .collect();
+                (infos, id_to_index)
+            }
+        };
+    let n = params.len();
+
+    // Per-param driver state. Walks both tiers — `id_to_index` was
+    // built against the chosen source (graph metadata when present,
+    // registry otherwise), so user-added ids resolve.
     let mut driver_active = vec![false; n];
     let mut trim_min = vec![0.0f32; n];
     let mut trim_max = vec![1.0f32; n];
@@ -1497,14 +1587,11 @@ fn gen_params_to_config(
     let mut driver_dotted = vec![false; n];
     let mut driver_triplet = vec![false; n];
     if let Some(ref drivers) = gp.drivers {
-        let id_to_index =
-            manifold_core::generator_definition_registry::try_get(gp.generator_type())
-                .map(|d| &d.id_to_index);
         for d in drivers {
             if !d.enabled {
                 continue;
             }
-            let Some(&pi) = id_to_index.and_then(|m| m.get(d.param_id.as_ref())) else {
+            let Some(&pi) = id_to_index.get(d.param_id.as_ref()) else {
                 continue;
             };
             if pi < n {
@@ -1520,7 +1607,7 @@ fn gen_params_to_config(
         }
     }
 
-    // Per-param envelope state
+    // Per-param envelope state — same id_to_index source.
     let mut envelope_active = vec![false; n];
     let mut target_norm = vec![1.0f32; n];
     let mut env_attack = vec![0.0f32; n];
@@ -1532,14 +1619,11 @@ fn gen_params_to_config(
     let mut env_range_min = vec![0.0f32; n];
     let mut env_range_max = vec![1.0f32; n];
     if let Some(ref envelopes) = gp.envelopes {
-        let env_id_to_index =
-            manifold_core::generator_definition_registry::try_get(gp.generator_type())
-                .map(|d| &d.id_to_index);
         for env in envelopes {
             if !env.enabled {
                 continue;
             }
-            let Some(&pi) = env_id_to_index.and_then(|m| m.get(env.param_id.as_ref())) else {
+            let Some(&pi) = id_to_index.get(env.param_id.as_ref()) else {
                 continue;
             };
             if pi < n {
@@ -1557,23 +1641,29 @@ fn gen_params_to_config(
         }
     }
 
-    // String param defs → populate with current clip values
+    // String param defs → populate with current clip values. Source
+    // remains the registry — string params are a Rust-side concept
+    // (text inputs, font dropdowns) without a graph-metadata
+    // equivalent yet.
     let string_params: Vec<GenStringParamInfo> = reg_def
-        .string_param_defs
-        .iter()
-        .map(|sp_def| {
-            let value = clip_string_params
-                .and_then(|m| m.get(sp_def.key))
-                .cloned()
-                .unwrap_or_else(|| sp_def.default_value.to_string());
-            GenStringParamInfo {
-                name: sp_def.name.to_string(),
-                key: sp_def.key.to_string(),
-                value,
-                use_dropdown: sp_def.use_dropdown,
-            }
+        .map(|def| {
+            def.string_param_defs
+                .iter()
+                .map(|sp_def| {
+                    let value = clip_string_params
+                        .and_then(|m| m.get(sp_def.key))
+                        .cloned()
+                        .unwrap_or_else(|| sp_def.default_value.to_string());
+                    GenStringParamInfo {
+                        name: sp_def.name.to_string(),
+                        key: sp_def.key.to_string(),
+                        value,
+                        use_dropdown: sp_def.use_dropdown,
+                    }
+                })
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
 
     GenParamConfig {
         gen_type_name: manifold_core::generator_type_registry::display_name(gp.generator_type())

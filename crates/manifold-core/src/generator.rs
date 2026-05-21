@@ -182,60 +182,56 @@ impl GeneratorParamState {
     }
 
     /// Write to effective (modulated) param value.
-    /// Unity GeneratorParamState.cs lines 51-61.
+    ///
+    /// Auto-extends `param_values` to cover `index`, then writes. The
+    /// effect-side mirror (`EffectInstance::set_param`) uses the same
+    /// pattern — neither path gates on a registry def existing for the
+    /// host type, because JSON-only generators (Wireframe, etc.) have
+    /// no static-registry entry but still need slider writes to land.
+    /// Clamping against the registry's declared range still happens
+    /// when a def exists; absence is treated as "pass through unchanged."
     pub fn set_param(&mut self, index: usize, value: f32) {
         use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(&self.generator_type) {
-            if self.param_values.len() != def.param_count {
-                self.migrate_to_registry_length();
-            }
-            if index < self.param_values.len() {
-                self.param_values[index] =
-                    generator_definition_registry::clamp_param(&self.generator_type, index, value);
-            }
+        while self.param_values.len() <= index {
+            self.param_values.push(0.0);
         }
+        self.param_values[index] =
+            generator_definition_registry::clamp_param(&self.generator_type, index, value);
     }
 
-    /// Migrate `param_values` (and `base_param_values`, if present) to match
-    /// the current registry's parameter count for this generator type, while
-    /// preserving every existing value. Missing tail entries are filled from
-    /// the registry's default values; excess entries are truncated.
+    /// Ensure `param_values` (and `base_param_values`, if present) is
+    /// AT LEAST as long as the registry's parameter count for this
+    /// generator type, padding the tail with registry default values.
     ///
-    /// This is what makes adding a new parameter to a generator non-destructive
-    /// for projects saved before the parameter existed. Without this migration,
-    /// the first slider interaction on an old clip would call
+    /// **Extend-only.** When `param_values.len() > def.param_count`, the
+    /// tail is left intact — the surplus belongs to user-added bindings
+    /// stored in the layer's per-instance `generator_graph.preset_metadata`
+    /// (approach A in `docs/EFFECT_GENERATOR_CARD_UNIFICATION.md`).
+    /// Truncating here would wipe those user-added slots on the first
+    /// slider interaction.
+    ///
+    /// Without this migration, the first slider interaction on a project
+    /// saved before a new bundled param was added would call
     /// `init_defaults_for_type` and wipe every saved value.
     pub fn migrate_to_registry_length(&mut self) {
         use crate::generator_definition_registry;
         let Some(def) = generator_definition_registry::try_get(&self.generator_type) else {
             return;
         };
-        let target = def.param_count;
-        if self.param_values.len() != target {
-            let mut migrated = Vec::with_capacity(target);
-            for i in 0..target {
-                let v = self
-                    .param_values
-                    .get(i)
-                    .copied()
-                    .unwrap_or(def.param_defs[i].default_value);
-                migrated.push(v);
+        let min_target = def.param_count;
+        if self.param_values.len() < min_target {
+            self.param_values.reserve(min_target - self.param_values.len());
+            for i in self.param_values.len()..min_target {
+                self.param_values.push(def.param_defs[i].default_value);
             }
-            self.param_values = migrated;
         }
-        if let Some(base) = &self.base_param_values
-            && base.len() != target
+        if let Some(base) = &mut self.base_param_values
+            && base.len() < min_target
         {
-            let old = base.clone();
-            let mut migrated = Vec::with_capacity(target);
-            for i in 0..target {
-                let v = old
-                    .get(i)
-                    .copied()
-                    .unwrap_or(def.param_defs[i].default_value);
-                migrated.push(v);
+            base.reserve(min_target - base.len());
+            for i in base.len()..min_target {
+                base.push(def.param_defs[i].default_value);
             }
-            self.base_param_values = Some(migrated);
         }
     }
 
@@ -251,25 +247,44 @@ impl GeneratorParamState {
     }
 
     /// Set the user-intended base value.
-    /// Unity GeneratorParamState.cs lines 75-88.
+    ///
+    /// Auto-extends both `param_values` and `base_param_values` to
+    /// cover `index`, then writes. Matches the effect-side
+    /// `EffectInstance::set_base_param` shape: registry presence is
+    /// only consulted for clamping, never as a gate on the write
+    /// itself. Without this, JSON-only generators (Wireframe, etc.)
+    /// silently dropped every slider drag — they have no Rust-side
+    /// `inventory::submit!` entry and `generator_definition_registry::try_get`
+    /// returns `None`. User-added bindings (whose slot indices sit
+    /// past the registry's declared `param_count`) ride the same path.
+    ///
+    /// When the registry IS present and `param_values` is shorter than
+    /// `def.param_count` (project saved before a bundled param was
+    /// added), `migrate_to_registry_length` runs first to pad the tail
+    /// with registry defaults — same migrate-on-touch behaviour the
+    /// pre-unification code relied on.
     pub fn set_param_base(&mut self, index: usize, value: f32) {
         use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(&self.generator_type) {
-            if self.param_values.len() != def.param_count {
-                self.migrate_to_registry_length();
-            }
-            self.ensure_base_values();
-            if index < self.param_values.len() {
-                let clamped =
-                    generator_definition_registry::clamp_param(&self.generator_type, index, value);
-                if let Some(base) = &mut self.base_param_values
-                    && index < base.len()
-                {
-                    base[index] = clamped;
-                }
-                self.param_values[index] = clamped;
+        if let Some(def) = generator_definition_registry::try_get(&self.generator_type)
+            && self.param_values.len() < def.param_count
+        {
+            self.migrate_to_registry_length();
+        }
+        self.ensure_base_values();
+        while self.param_values.len() <= index {
+            self.param_values.push(0.0);
+        }
+        if let Some(base) = &mut self.base_param_values {
+            while base.len() <= index {
+                base.push(0.0);
             }
         }
+        let clamped =
+            generator_definition_registry::clamp_param(&self.generator_type, index, value);
+        if let Some(base) = &mut self.base_param_values {
+            base[index] = clamped;
+        }
+        self.param_values[index] = clamped;
     }
 
     /// Find the driver for a given param id, or None.
@@ -606,5 +621,49 @@ mod tests {
         assert_eq!(state.param_values[0], 2.5);
         assert_eq!(state.param_values[1], 8.0);
         assert_eq!(state.param_values[2], 9.0);
+    }
+
+    #[test]
+    fn set_param_base_writes_through_for_json_only_generator_with_no_registry_entry() {
+        // Regression test for the bug Peter spotted while smoke-testing:
+        // JSON-only generators (Wireframe, TrivialPassthrough, etc.)
+        // have no `inventory::submit!` entry, so `try_get` returns
+        // `None`. The previous `set_param_base` body was entirely
+        // gated on registry presence — every slider drag was silently
+        // dropped on these generators, including bundled params.
+        //
+        // After the fix, registry absence stops gating the write.
+        // Clamping is the only thing that depends on a def existing.
+        let unknown_type = GeneratorTypeId::from_string("DoesNotExist".to_string());
+        assert!(
+            generator_definition_registry::try_get(&unknown_type).is_none(),
+            "fixture relies on this type NOT being in the registry"
+        );
+
+        let mut state = GeneratorParamState {
+            generator_type: unknown_type,
+            param_values: vec![0.0, 1.0], // two bundled slots
+            base_param_values: Some(vec![0.0, 1.0]),
+            ..Default::default()
+        };
+
+        state.set_param_base(1, 0.75);
+
+        assert_eq!(state.param_values[1], 0.75, "write landed on bundled slot");
+        assert_eq!(
+            state.base_param_values.as_ref().unwrap()[1],
+            0.75,
+            "write landed on base slot too"
+        );
+
+        // User-added tail slot — slot index past the original length.
+        state.set_param_base(2, 0.42);
+        assert_eq!(state.param_values.len(), 3, "param_values auto-extended");
+        assert_eq!(state.param_values[2], 0.42, "tail write landed");
+        assert_eq!(
+            state.base_param_values.as_ref().unwrap()[2],
+            0.42,
+            "tail base write landed too"
+        );
     }
 }

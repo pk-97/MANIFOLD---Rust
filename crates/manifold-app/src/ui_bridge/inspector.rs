@@ -1759,11 +1759,8 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(slot) = layer.resolve_gen_param_slot(param_id.as_ref())
                 && let Some(gp) = layer.gen_params()
-                && let Some(slot) = manifold_core::generator_definition_registry::param_id_to_index(
-                    gp.generator_type(),
-                    param_id.as_ref(),
-                )
             {
                 let val = gp.get_param_base(slot);
                 *drag_snapshot = Some(val);
@@ -1778,15 +1775,13 @@ pub(super) fn dispatch_inspector(
         PanelAction::GenParamChanged(param_id, val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = layer.gen_params_mut()
-                    && let Some(slot) =
-                        manifold_core::generator_definition_registry::param_id_to_index(
-                            gp.generator_type(),
-                            param_id.as_ref(),
-                        )
-                {
-                    gp.set_param_base(slot, *val);
+                if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                    let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                    if let Some(slot) = slot
+                        && let Some(gp) = layer.gen_params_mut()
+                    {
+                        gp.set_param_base(slot, *val);
+                    }
                 }
                 if let Some(crate::app::ActiveInspectorDrag::GenParam { value, .. }) =
                     active_inspector_drag
@@ -1799,15 +1794,13 @@ pub(super) fn dispatch_inspector(
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(slot) =
-                                manifold_core::generator_definition_registry::param_id_to_index(
-                                    gp.generator_type(),
-                                    pid.as_ref(),
-                                )
-                        {
-                            gp.set_param_base(slot, v);
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
+                            let slot = layer.resolve_gen_param_slot(pid.as_ref());
+                            if let Some(slot) = slot
+                                && let Some(gp) = layer.gen_params_mut()
+                            {
+                                gp.set_param_base(slot, v);
+                            }
                         }
                     })),
                 );
@@ -1819,11 +1812,8 @@ pub(super) fn dispatch_inspector(
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(slot) = layer.resolve_gen_param_slot(param_id.as_ref())
                 && let Some(gp) = layer.gen_params()
-                && let Some(slot) = manifold_core::generator_definition_registry::param_id_to_index(
-                    gp.generator_type(),
-                    param_id.as_ref(),
-                )
             {
                 let new_val = gp.get_param_base(slot);
                 if (old_val - new_val).abs() > f32::EPSILON {
@@ -1847,12 +1837,9 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                if let Some(gp) = layer.gen_params_mut()
-                    && let Some(slot) =
-                        manifold_core::generator_definition_registry::param_id_to_index(
-                            gp.generator_type(),
-                            param_id.as_ref(),
-                        )
+                let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                if let Some(slot) = slot
+                    && let Some(gp) = layer.gen_params_mut()
                 {
                     let old_val = gp.get_param_base(slot);
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
@@ -1876,12 +1863,9 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                if let Some(gp) = layer.gen_params_mut()
-                    && let Some(slot) =
-                        manifold_core::generator_definition_registry::param_id_to_index(
-                            gp.generator_type(),
-                            param_id.as_ref(),
-                        )
+                let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                if let Some(slot) = slot
+                    && let Some(gp) = layer.gen_params_mut()
                 {
                     let old = gp.get_param_base(slot);
                     if (old - *default_val).abs() > f32::EPSILON {
@@ -1909,9 +1893,11 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx {
                 let layer_id = active_layer.clone().unwrap_or_default();
                 let target = DriverTarget::GeneratorParam { layer_id };
-                if let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = layer.gen_params()
-                {
+                if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                    let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                    let Some(gp) = layer.gen_params() else {
+                        return DispatchResult::handled();
+                    };
                     let driver_idx = gp.drivers.as_ref().and_then(|ds| {
                         ds.iter().position(|d| d.param_id == *param_id)
                     });
@@ -1925,12 +1911,8 @@ pub(super) fn dispatch_inspector(
                             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                         }
                     } else {
-                        let base_value =
-                            manifold_core::generator_definition_registry::param_id_to_index(
-                                gp.generator_type(),
-                                param_id.as_ref(),
-                            )
-                            .and_then(|slot| gp.param_values.get(slot).copied())
+                        let base_value = slot
+                            .and_then(|s| gp.param_values.get(s).copied())
                             .unwrap_or(0.0);
                         let driver = ParameterDriver {
                             param_id: param_id.clone(),
@@ -2616,16 +2598,28 @@ pub(super) fn dispatch_inspector(
             {
                 let layer_id = layer.layer_id.clone();
 
-                let (min, max) = manifold_core::generator_definition_registry::param_id_to_index(
-                    gp.generator_type(),
-                    param_id.as_ref(),
-                )
-                .and_then(|slot| {
-                    manifold_core::generator_definition_registry::try_get(gp.generator_type())
-                        .and_then(|def| def.param_defs.get(slot))
-                        .map(|pd| (pd.min, pd.max))
-                })
-                .unwrap_or((0.0, 1.0));
+                // Tier-aware (min, max) lookup: prefer the layer's
+                // graph metadata, fall back to registry. User-added
+                // bindings live only on the graph; the registry-only
+                // lookup would yield (0.0, 1.0) and silently squash
+                // the slider's true range.
+                let (min, max) = if let Some(graph) = layer.generator_graph.as_ref()
+                    && let Some(meta) = graph.preset_metadata.as_ref()
+                    && let Some(spec) = meta.params.iter().find(|p| p.id == *param_id)
+                {
+                    (spec.min, spec.max)
+                } else {
+                    manifold_core::generator_definition_registry::param_id_to_index(
+                        gp.generator_type(),
+                        param_id.as_ref(),
+                    )
+                    .and_then(|slot| {
+                        manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                            .and_then(|def| def.param_defs.get(slot))
+                            .map(|pd| (pd.min, pd.max))
+                    })
+                    .unwrap_or((0.0, 1.0))
+                };
 
                 let mapping = MacroMapping {
                     target: MacroMappingTarget::GenParam {
