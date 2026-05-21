@@ -66,23 +66,13 @@ crate::primitive! {
     picker: { label: "Math", category: Driver },
 }
 
-fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for Math {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // Port-shadows-param for both inputs: wired scalar overrides
         // the inline param, otherwise the param's static value drives
         // the op. Constants embedded in the graph live as param values
         // on this node instead of as separate Value-node wires.
-        let a = read_scalar(ctx, "a", 0.0);
+        let a = ctx.scalar_or_param("a", 0.0);
         let op = match ctx.params.get("op") {
             Some(ParamValue::Enum(v)) => (*v as usize).min(MATH_OPS.len() - 1),
             Some(ParamValue::Float(f)) => (f.round().max(0.0) as usize).min(MATH_OPS.len() - 1),
@@ -104,7 +94,7 @@ impl Primitive for Math {
             return;
         }
 
-        let b = read_scalar(ctx, "b", 0.0);
+        let b = ctx.scalar_or_param("b", 0.0);
         let out = match op {
             0 => a + b,
             1 => a - b,

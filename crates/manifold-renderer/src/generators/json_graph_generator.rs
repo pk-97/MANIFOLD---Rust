@@ -29,7 +29,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::{
     EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID, FrameTime,
     GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, MetalBackend, NodeInstanceId,
-    ParamValue, PrimitiveRegistry, ResourceId, Slot, compile,
+    ParamValue, PrimitiveRegistry, ResourceId, Slot, StateStore, compile,
 };
 use crate::render_target::RenderTarget;
 
@@ -123,6 +123,20 @@ pub struct JsonGraphGenerator {
     /// `GeneratorContext::params[i]` into the target node's param.
     /// Empty when the preset declares no bindings.
     bindings: Vec<BindingResolution>,
+    /// Per-instance persistent state for stateful primitives in the
+    /// graph (Feedback prev-frame textures, ArrayFeedback prev-frame
+    /// buffers, EnvelopeFollower smoothed values, etc.). The runtime
+    /// keys state by `(NodeInstanceId, OwnerKey)`; for generators we
+    /// use a single `owner_key = 0` because the `JsonGraphGenerator`
+    /// instance is itself per-layer and gets dropped on generator
+    /// rebuild, so the NodeInstanceId alone uniquely identifies a
+    /// primitive's state.
+    ///
+    /// State lifecycle:
+    ///   - Allocated lazily by primitives on first frame.
+    ///   - Wiped by [`Self::reset_state`] (export warmup re-seek).
+    ///   - Dropped entirely on generator rebuild (`Self::from_def`).
+    state_store: StateStore,
 }
 
 /// One resolved outer-card → inner-node binding for a JSON generator
@@ -139,12 +153,12 @@ pub struct JsonGraphGenerator {
 /// strand the second binding on its default.
 struct BindingResolution {
     target_node: NodeInstanceId,
-    /// Param name on the target node. The graph's `set_param` API
-    /// requires `&'static str`, so we Box::leak the param name once at
-    /// construction. The leak is bounded — one per preset binding,
-    /// times the number of generator constructions in a session — and
-    /// matches the existing pattern in `loaded_preset_view`.
-    target_param: &'static str,
+    /// Param name on the target node. Owned because the binding spec
+    /// comes from deserialized JSON, which lives in `String`s. The
+    /// graph's `set_param` API accepts `&str` and looks the canonical
+    /// `&'static str` up from the primitive's `parameters()` list at
+    /// call time, so no leak / interning is required here.
+    target_param: String,
     /// Position into the outer-card `values` slice this binding reads
     /// from. Two bindings with the same `source_index` share an outer
     /// slider — the fan-out case.
@@ -230,7 +244,7 @@ impl JsonGraphGenerator {
             .as_ref()
             .map(|m| m.bindings.clone())
             .unwrap_or_default();
-        let outer_param_index: std::collections::HashMap<String, usize> = doc
+        let outer_param_index: ahash::AHashMap<String, usize> = doc
             .preset_metadata
             .as_ref()
             .map(|m| {
@@ -275,7 +289,7 @@ impl JsonGraphGenerator {
         // dropped (the host doesn't surface a runtime warn from
         // primitive load yet).
         use manifold_core::effect_graph_def::BindingTarget;
-        let handle_map: std::collections::HashMap<&str, NodeInstanceId> =
+        let handle_map: ahash::AHashMap<&str, NodeInstanceId> =
             graph.handles().collect();
         let bindings: Vec<BindingResolution> = binding_specs
             .iter()
@@ -295,11 +309,9 @@ impl JsonGraphGenerator {
                             return None;
                         }
                     };
-                    let leaked_param: &'static str =
-                        Box::leak(param.clone().into_boxed_str());
                     Some(BindingResolution {
                         target_node: node_id,
-                        target_param: leaked_param,
+                        target_param: param.clone(),
                         source_index,
                         default: b.default_value,
                         convert: b.convert,
@@ -320,6 +332,7 @@ impl JsonGraphGenerator {
             final_output_slot: None,
             target_format: None,
             bindings,
+            state_store: StateStore::new(),
         })
     }
 
@@ -391,46 +404,82 @@ impl JsonGraphGenerator {
     }
 
     /// Walk the compiled plan, find every `Array<T>` output, and
-    /// allocate + pre-bind a `GpuBuffer` of `(item_size × capacity)`
-    /// bytes at the resource id. Capacity comes from the producing
-    /// node's `max_capacity` param — the chain-build convention
-    /// shared across `seed_particles`, `generate_*_vertices`,
-    /// `blob_detect_ffi`, etc. A node whose Array<T> output port
-    /// has no `max_capacity` param triggers a warn and is skipped;
-    /// downstream primitives will then warn at draw time that the
-    /// buffer isn't bound.
+    /// allocate + pre-bind a `GpuBuffer` sized via
+    /// [`crate::node_graph::EffectNode::array_output_capacity`].
+    ///
+    /// Per-node logic: gather every Array input that's already
+    /// pre-bound (the plan is topologically sorted, so producer
+    /// outputs are bound before transform inputs), pass that capacity
+    /// table to `array_output_capacity`, allocate `(item_size × N)`
+    /// bytes for each Array output the node claims. Three patterns
+    /// resolve through the same method — Producer reads
+    /// `params["max_capacity"]`; Transform reads the matching input
+    /// port's bound count; Computed runs an inline expression on
+    /// `params`. See the trait docs.
+    ///
+    /// A node whose `array_output_capacity` returns `None` for an
+    /// Array output triggers a warn and is skipped; downstream
+    /// primitives will then warn at draw time that the buffer isn't
+    /// bound — pre-bound zero-allocation is a hard contract.
     fn pre_allocate_array_buffers(
         graph: &Graph,
         plan: &ExecutionPlan,
         device: &GpuDevice,
         backend: &mut MetalBackend,
     ) {
-        use crate::node_graph::PortType;
+        use crate::node_graph::{Backend, PortType};
+
+        // Re-usable scratch — every step rebuilds its own (port, count)
+        // list of pre-bound Array inputs. Allocated once outside the
+        // step loop to keep the construction-time cost predictable.
+        let mut input_capacities: Vec<(&str, u32)> = Vec::with_capacity(8);
 
         for step in plan.steps() {
             let Some(node_inst) = graph.get_node(step.node) else {
                 continue;
             };
             let node_type = node_inst.node.type_id().as_str();
+
+            // Gather Array inputs' bound capacities for this step. The
+            // plan walk is topological so any Array input from a prior
+            // step is already pre-bound; missing entries are silent
+            // (a transform with an unbound input simply can't size
+            // itself, and the override returns None below).
+            input_capacities.clear();
+            for (port_name, res_id) in &step.inputs {
+                let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
+                    continue;
+                };
+                let Some(slot) = backend.slot_for(*res_id) else {
+                    continue;
+                };
+                let Some(buf) = Backend::array_buffer(backend, slot) else {
+                    continue;
+                };
+                let count = (buf.size / layout.item_size as u64) as u32;
+                input_capacities.push((*port_name, count));
+            }
+
             for (port_name, res_id) in &step.outputs {
                 let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
                     continue;
                 };
-                let capacity = match node_inst.params.get("max_capacity") {
-                    Some(ParamValue::Int(n)) => (*n).max(1) as u64,
-                    Some(ParamValue::Float(f)) => f.round().max(1.0) as u64,
-                    _ => {
-                        log::warn!(
-                            "JsonGraphGenerator: node `{node_type}` produces an \
-                             Array<T> on port `{port_name}` but has no `max_capacity` \
-                             param — output buffer not allocated, downstream will \
-                             see an empty wire. Add a `max_capacity: Int` param to \
-                             the primitive (chain-build convention).",
-                        );
-                        continue;
-                    }
+                let Some(capacity) = node_inst.node.array_output_capacity(
+                    port_name,
+                    &node_inst.params,
+                    &input_capacities,
+                ) else {
+                    log::warn!(
+                        "JsonGraphGenerator: node `{node_type}` declared an \
+                         Array<T> output on port `{port_name}` but \
+                         `EffectNode::array_output_capacity` returned None — \
+                         output buffer not allocated, downstream consumers \
+                         will see an empty wire. Override the method, or for \
+                         producer primitives add a `max_capacity` param.",
+                    );
+                    continue;
                 };
-                let bytes = capacity * layout.item_size as u64;
+                let bytes = capacity as u64 * layout.item_size as u64;
                 if bytes == 0 {
                     log::warn!(
                         "JsonGraphGenerator: node `{node_type}` on port \
@@ -540,7 +589,7 @@ impl JsonGraphGenerator {
             };
             let _ = self
                 .graph
-                .set_param(binding.target_node, binding.target_param, pv);
+                .set_param(binding.target_node, &binding.target_param, pv);
         }
     }
 
@@ -586,21 +635,25 @@ impl Generator for JsonGraphGenerator {
         // First call pre-binds + swaps; later calls swap in place.
         self.install_target(target);
 
-        // 3. Run the graph. We dispatch through execute_frame_with_gpu;
-        // graphs that hold state (Feedback, mip chains) would need the
-        // _with_state path — JSON generators don't compose stateful
-        // primitives yet, so this is sufficient.
+        // 3. Run the graph through the state-aware executor entry so
+        // stateful primitives (Feedback, ArrayFeedback, EnvelopeFollower,
+        // Smoothing, Temporal) work without per-frame panics. State is
+        // keyed by (NodeInstanceId, owner_key=0); the generator instance
+        // is itself per-layer, so the NodeInstanceId alone uniquely
+        // identifies state inside this graph.
         let frame_time = FrameTime {
             beats: Beats(ctx.beat),
             seconds: Seconds(ctx.time),
             delta: Seconds(ctx.dt as f64),
             frame_count: 0,
         };
-        self.executor.execute_frame_with_gpu(
+        self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
             frame_time,
             gpu,
+            &mut self.state_store,
+            /* owner_key */ 0,
         );
 
         // No anim_progress tracking inside the JSON graph (yet) — pass
@@ -608,6 +661,28 @@ impl Generator for JsonGraphGenerator {
         // that emits anim_progress and pipe its output to the
         // generator's return value.
         ctx.anim_progress
+    }
+
+    fn reset_state(&mut self, _device: &GpuDevice) {
+        // Two parallel state stores need clearing:
+        // 1. Per-primitive `extra_fields` state — ArrayFeedback's prev
+        //    buffer, RenderLines' anim_progress, ClipTriggerCycle's
+        //    last_emitted, plus any pipeline caches the macro emits.
+        //    Each primitive's `clear_state()` is the canonical reset
+        //    hook for these.
+        // 2. The runtime's `StateStore` — temporal::Feedback's prev-
+        //    frame textures, EnvelopeFollower / Smoothing accumulators,
+        //    array_feedback's prev-frame buffer in the store.
+        //
+        // Both have to fire because they hold distinct slices of state
+        // for the same logical "this primitive's per-instance memory."
+        // The Rust generator side (Plasma, FluidSim, etc.) hoists all
+        // state into the struct itself, so a single `clear_state` is
+        // enough — the graph side splits it across two surfaces.
+        for inst in self.graph.nodes_mut() {
+            inst.node.clear_state();
+        }
+        self.state_store.cleanup_all();
     }
 
     fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {

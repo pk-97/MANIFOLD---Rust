@@ -60,6 +60,26 @@ crate::primitive! {
 }
 
 impl Primitive for TriangulateGrid {
+    /// Output capacity = `(src_cols-1) × (src_rows-1) × 6` triangle
+    /// vertices — the canonical 6-vertex-per-quad triangulation.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        if port_name != "out" {
+            return None;
+        }
+        let read_dim = |name| match params.get(name) {
+            Some(ParamValue::Int(n)) => Some((*n).max(2) as u32),
+            _ => None,
+        };
+        let cols = read_dim("src_cols")?;
+        let rows = read_dim("src_rows")?;
+        Some((cols - 1).saturating_mul(rows - 1).saturating_mul(6))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let src_cols = match ctx.params.get("src_cols") {
             Some(ParamValue::Int(n)) => (*n).max(2) as u32,

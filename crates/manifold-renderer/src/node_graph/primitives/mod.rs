@@ -434,6 +434,77 @@ mod tests {
         ));
     }
 
+    /// Every primitive that declares an `Array<T>` output port must
+    /// know how to size that output via
+    /// [`EffectNode::array_output_capacity`] — either from a node-local
+    /// param, from a same-as-input passthrough, or computed from
+    /// multiple params. Test verifies the contract is *resolvable*
+    /// from defaults: with the primitive's `parameters()` defaults
+    /// installed AND assuming any Array input was bound at a generous
+    /// upper bound, the method must return `Some(_)`.
+    ///
+    /// Why this matters: the chain build / `JsonGraphGenerator`
+    /// pre-allocator reads this method on every Array-producing node
+    /// at construction. If it returns `None`, the buffer is never
+    /// allocated, downstream renders nothing — the Lissajous
+    /// black-frame bug class (commit 23e440aa). This test promotes
+    /// the contract from "convention you can forget" to "CI-enforced
+    /// invariant" across every primitive, including future ones.
+    ///
+    /// Walks the live [`super::super::PrimitiveRegistry`] so new
+    /// primitives are picked up automatically — no central list to
+    /// maintain.
+    #[test]
+    fn every_array_output_declares_a_valid_capacity_source() {
+        use super::super::PrimitiveRegistry;
+        use super::super::ports::PortType;
+        use ahash::AHashMap;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut violations: Vec<String> = Vec::new();
+        for type_id in registry.known_type_ids() {
+            let Some(node) = registry.construct(type_id) else {
+                continue;
+            };
+            // Synthesize a default-param bag matching `parameters()`.
+            let mut params: AHashMap<&'static str, ParamValue> = AHashMap::default();
+            for def in node.parameters() {
+                params.insert(def.name, def.default);
+            }
+            // Pretend every Array input was bound at a large but finite
+            // capacity. Same-as-input transforms should resolve against
+            // this; producers should ignore it.
+            let mut synthetic_inputs: Vec<(&str, u32)> = Vec::new();
+            for port in node.inputs() {
+                if matches!(port.ty, PortType::Array(_)) {
+                    synthetic_inputs.push((port.name, 1024));
+                }
+            }
+
+            for port in node.outputs() {
+                if !matches!(port.ty, PortType::Array(_)) {
+                    continue;
+                }
+                let cap = node.array_output_capacity(port.name, &params, &synthetic_inputs);
+                if cap.is_none() {
+                    violations.push(format!(
+                        "{type_id}: Array output `{}` — \
+                         array_output_capacity returned None with default \
+                         params and Array inputs bound at 1024. Override \
+                         the method on the primitive, or for producers add \
+                         a `max_capacity` param with an Int/Float default.",
+                        port.name,
+                    ));
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "Array-output capacity invariant violations:\n  {}",
+            violations.join("\n  "),
+        );
+    }
+
     /// Param values can be set on a primitive instance through the Graph API.
     #[test]
     fn primitive_params_accept_typed_overrides() {

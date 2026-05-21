@@ -59,6 +59,21 @@ crate::primitive! {
 }
 
 impl Primitive for Project4D {
+    /// Output `out` is sized to match input `in` — one projected
+    /// `LinePoint` per input 4D vertex.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        if port_name == "out" {
+            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        } else {
+            None
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let proj_scale = match ctx.params.get("proj_scale") {
             Some(ParamValue::Float(f)) => *f,

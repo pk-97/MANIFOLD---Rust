@@ -1,5 +1,6 @@
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::generators::generator_math::{PROJ_SCALE, rotate_3d};
 use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
 use crate::gpu_encoder::GpuEncoder;
@@ -222,6 +223,8 @@ fn normalize_shape(verts: &[[f32; 3]]) -> Vec<[f32; 3]> {
 pub struct WireframeZooGenerator {
     line_pipeline: LinePipeline,
     helper: LineGeneratorHelper,
+    /// Shape cycle (`trigger_count % SHAPE_COUNT`). See [`ClipTriggerCycle`].
+    clip_trigger_cycle: ClipTriggerCycle,
 }
 
 impl WireframeZooGenerator {
@@ -232,6 +235,7 @@ impl WireframeZooGenerator {
         Self {
             line_pipeline,
             helper,
+            clip_trigger_cycle: ClipTriggerCycle::new(),
         }
     }
 }
@@ -288,8 +292,12 @@ impl Generator for WireframeZooGenerator {
             1.0
         };
 
-        // Shape selection via trigger_count (param is ignored in favor of trigger cycling)
-        let shape_idx = (ctx.trigger_count % SHAPE_COUNT) as usize;
+        // Shape selection via trigger_count (param is ignored in favor of trigger cycling).
+        // Goes through `ClipTriggerCycle` so consecutive triggers never repeat the same
+        // shape — same defense-in-depth as the other clip-trigger-cycling generators.
+        let shape_idx = self
+            .clip_trigger_cycle
+            .step(ctx.trigger_count, SHAPE_COUNT) as usize;
 
         // Get shape data and normalize vertices to unit sphere
         // (Unity: WireframeZooGenerator.NormalizeShape() applied at init)

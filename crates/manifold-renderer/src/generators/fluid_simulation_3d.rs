@@ -313,6 +313,10 @@ pub struct FluidSimulation3DGenerator {
     frame_count: u64,
     initialized: bool,
     last_trigger_count: u32,
+    /// Cycle for `trigger_count % PATTERN_COUNT` seed-pattern selection.
+    /// Guarantees consecutive triggers never seed the same pattern even on a
+    /// clean modulus wrap — see [`ClipTriggerCycle`].
+    clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle,
     clip_trigger_envelope: f32,
     active_clip_trigger_mode: i32,
     inject_zone_index: i32,
@@ -409,6 +413,7 @@ impl FluidSimulation3DGenerator {
             frame_count: 0,
             initialized: false,
             last_trigger_count: u32::MAX,
+            clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle::new(),
             clip_trigger_envelope: 0.0,
             active_clip_trigger_mode: 0,
             inject_zone_index: -1,
@@ -589,9 +594,15 @@ impl Generator for FluidSimulation3DGenerator {
                 self.clip_trigger_envelope = 1.0;
                 self.active_clip_trigger_mode = clip_trigger_mode.clamp(0, 4);
                 if self.active_clip_trigger_mode == 3 {
+                    // Goes through `ClipTriggerCycle` so consecutive
+                    // triggers never seed the same pattern even on a
+                    // clean modulus wrap.
+                    let pattern = self
+                        .clip_trigger_cycle
+                        .step(ctx.trigger_count, PATTERN_COUNT);
                     self.dispatch_seed_pattern(
                         gpu,
-                        ctx.trigger_count % PATTERN_COUNT,
+                        pattern,
                         ctx.trigger_count,
                         container_type,
                         ctr_scale,

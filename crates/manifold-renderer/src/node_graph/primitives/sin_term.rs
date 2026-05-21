@@ -109,20 +109,6 @@ crate::primitive! {
     picker: { label: "Projected Sin Term", category: Atom },
 }
 
-fn read_scalar(
-    ctx: &EffectNodeContext<'_, '_>,
-    name: &str,
-    default: f32,
-) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for SinTerm {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let a = match ctx.params.get("a") {
@@ -137,12 +123,12 @@ impl Primitive for SinTerm {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
         };
-        let freq = read_scalar(ctx, "freq", std::f32::consts::TAU);
+        let freq = ctx.scalar_or_param("freq", std::f32::consts::TAU);
         let freq_scale = match ctx.params.get("freq_scale") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
         };
-        let time = read_scalar(ctx, "time", 0.0);
+        let time = ctx.scalar_or_param("time", 0.0);
         let time_scale = match ctx.params.get("time_scale") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,

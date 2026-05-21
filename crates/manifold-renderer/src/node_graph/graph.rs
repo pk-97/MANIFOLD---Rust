@@ -186,23 +186,35 @@ impl Graph {
     /// Set a parameter value on a node instance. Errors if the node or
     /// parameter doesn't exist. No type coercion — the caller is expected
     /// to supply a [`ParamValue`] of the parameter's declared kind.
+    ///
+    /// Accepts `&str` for `name`: the actual storage key in
+    /// `ParamValues` is the `&'static str` discovered on the primitive's
+    /// own `parameters()` list. Callers don't need to materialize a
+    /// `&'static str` themselves — the lookup that validates the
+    /// param name also yields the canonical static reference. This is
+    /// how JSON-driven bindings avoid `Box::leak`-ing every param key
+    /// they want to set.
     pub fn set_param(
         &mut self,
         id: NodeInstanceId,
-        name: &'static str,
+        name: &str,
         value: ParamValue,
     ) -> Result<(), GraphError> {
         let inst = self
             .nodes
             .get_mut(&id)
             .ok_or(GraphError::NodeNotFound(id))?;
-        if !inst.node.parameters().iter().any(|p| p.name == name) {
-            return Err(GraphError::ParamNotFound {
+        let static_name = inst
+            .node
+            .parameters()
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.name)
+            .ok_or_else(|| GraphError::ParamNotFound {
                 node: id,
                 param: name.to_string(),
-            });
-        }
-        inst.params.insert(name, value);
+            })?;
+        inst.params.insert(static_name, value);
         Ok(())
     }
 
@@ -252,23 +264,27 @@ impl Graph {
     pub fn set_param_exposed(
         &mut self,
         id: NodeInstanceId,
-        name: &'static str,
+        name: &str,
         exposed: bool,
     ) -> Result<(), GraphError> {
         let inst = self
             .nodes
             .get_mut(&id)
             .ok_or(GraphError::NodeNotFound(id))?;
-        if !inst.node.parameters().iter().any(|p| p.name == name) {
-            return Err(GraphError::ParamNotFound {
+        let static_name = inst
+            .node
+            .parameters()
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.name)
+            .ok_or_else(|| GraphError::ParamNotFound {
                 node: id,
                 param: name.to_string(),
-            });
-        }
+            })?;
         if exposed {
-            inst.exposed_params.insert(name);
+            inst.exposed_params.insert(static_name);
         } else {
-            inst.exposed_params.remove(name);
+            inst.exposed_params.remove(static_name);
         }
         Ok(())
     }
@@ -313,6 +329,14 @@ impl Graph {
     /// Iterate every node in the graph. Iteration order is unspecified.
     pub fn nodes(&self) -> impl Iterator<Item = &NodeInstance> {
         self.nodes.values()
+    }
+
+    /// Mutable iterator over every node in the graph. Order is
+    /// unspecified. Used by lifecycle paths like
+    /// [`crate::generators::json_graph_generator::JsonGraphGenerator::reset_state`]
+    /// that need to call `clear_state` on every node.
+    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut NodeInstance> {
+        self.nodes.values_mut()
     }
 
     pub fn node_count(&self) -> usize {

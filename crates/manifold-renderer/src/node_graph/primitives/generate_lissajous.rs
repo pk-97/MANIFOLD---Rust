@@ -98,16 +98,6 @@ crate::primitive! {
     picker: { label: "Generate Lissajous", category: Atom },
 }
 
-fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for GenerateLissajous {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // Port-shadows-param for freq_x / freq_y / phase. Inline
@@ -115,9 +105,9 @@ impl Primitive for GenerateLissajous {
         // wired scalars override them. `scale` and `vertex_count`
         // are param-only — wiring them is unlikely to be useful so
         // we skip the port plumbing for clarity.
-        let freq_x = read_scalar(ctx, "freq_x", 2.0);
-        let freq_y = read_scalar(ctx, "freq_y", 3.0);
-        let phase = read_scalar(ctx, "phase", 0.0);
+        let freq_x = ctx.scalar_or_param("freq_x", 2.0);
+        let freq_y = ctx.scalar_or_param("freq_y", 3.0);
+        let phase = ctx.scalar_or_param("phase", 0.0);
         let scale = match ctx.params.get("scale") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,

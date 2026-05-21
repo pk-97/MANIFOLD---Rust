@@ -93,27 +93,13 @@ crate::primitive! {
     picker: { label: "Distance to Point", category: Atom },
 }
 
-fn read_scalar(
-    ctx: &EffectNodeContext<'_, '_>,
-    name: &str,
-    default: f32,
-) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for DistanceToPoint {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let cx = read_scalar(ctx, "cx", 0.5);
-        let cy = read_scalar(ctx, "cy", 0.5);
-        let scale = read_scalar(ctx, "scale", 1.0);
-        let scale_x = read_scalar(ctx, "scale_x", 1.0);
-        let scale_y = read_scalar(ctx, "scale_y", 1.0);
+        let cx = ctx.scalar_or_param("cx", 0.5);
+        let cy = ctx.scalar_or_param("cy", 0.5);
+        let scale = ctx.scalar_or_param("scale", 1.0);
+        let scale_x = ctx.scalar_or_param("scale_x", 1.0);
+        let scale_y = ctx.scalar_or_param("scale_y", 1.0);
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;

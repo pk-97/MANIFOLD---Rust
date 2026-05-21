@@ -69,21 +69,11 @@ crate::primitive! {
     picker: { label: "Field Combine", category: Atom },
 }
 
-fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for FieldCombine {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let a = read_scalar(ctx, "a", 1.0);
-        let b = read_scalar(ctx, "b", 0.0);
-        let c = read_scalar(ctx, "c", 0.0);
+        let a = ctx.scalar_or_param("a", 1.0);
+        let b = ctx.scalar_or_param("b", 0.0);
+        let c = ctx.scalar_or_param("c", 0.0);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;

@@ -21,7 +21,6 @@ pub mod nested_cubes;
 pub mod oily_fluid;
 pub mod oscilloscope_xy;
 pub mod particle_text;
-pub mod plasma;
 pub mod registration;
 pub mod registry;
 pub mod star_field;

@@ -157,6 +157,32 @@ pub trait Primitive: PrimitiveSpec {
     /// Override only on primitives that carry instance-level format
     /// state (the `node.wgsl_compute_*` family).
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
+
+    /// Mirror of
+    /// [`EffectNode::array_output_capacity`](crate::node_graph::effect_node::EffectNode::array_output_capacity).
+    /// Override on transform primitives (capacity inherited from a
+    /// named Array input port) and on computed-capacity primitives
+    /// (capacity = `f(params)`). The default reads `params["max_capacity"]`,
+    /// which is correct for producer-style primitives that declare
+    /// the convention param.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        let is_array_output = Self::OUTPUTS
+            .iter()
+            .any(|p| p.name == port_name && matches!(p.ty, crate::node_graph::ports::PortType::Array(_)));
+        if !is_array_output {
+            return None;
+        }
+        match params.get("max_capacity") {
+            Some(crate::node_graph::parameters::ParamValue::Int(n)) => Some((*n).max(1) as u32),
+            Some(crate::node_graph::parameters::ParamValue::Float(f)) => Some((*f).round().max(1.0) as u32),
+            _ => None,
+        }
+    }
 }
 
 /// Blanket `EffectNode` impl for any `Primitive`. Reads all surface
@@ -194,6 +220,14 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
         Primitive::set_output_format(self, port, format);
+    }
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        Primitive::array_output_capacity(self, port_name, params, input_capacities)
     }
 }
 
@@ -620,6 +654,26 @@ mod tests {
 
     impl Primitive for SmokeTestArrayPorts {
         fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+
+        /// Test fixture mirrors the same-as-input transform pattern so
+        /// the registry-wide invariant test sees a valid capacity
+        /// declaration. Without this the test would flag this primitive
+        /// as a "didn't declare capacity" violation.
+        fn array_output_capacity(
+            &self,
+            port_name: &str,
+            _params: &crate::node_graph::effect_node::ParamValues,
+            input_capacities: &[(&str, u32)],
+        ) -> Option<u32> {
+            if port_name == "items_out" {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "items_in")
+                    .map(|(_, n)| *n)
+            } else {
+                None
+            }
+        }
     }
 
     #[test]

@@ -56,6 +56,22 @@ crate::primitive! {
 }
 
 impl Primitive for NeighborSmooth {
+    /// Output `out` is sized to match input `in` — neighbor smoothing
+    /// over an Array<InstanceTransform> produces the same number of
+    /// transforms.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        if port_name == "out" {
+            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        } else {
+            None
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let grid_size = match ctx.params.get("grid_size") {
             Some(ParamValue::Int(n)) => (*n).max(2) as u32,

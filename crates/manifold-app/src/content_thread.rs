@@ -30,6 +30,18 @@ use crate::content_pipeline::ContentPipeline;
 use crate::content_state::ContentState;
 use crate::frame_timer::FrameTimer;
 
+/// Cache entry for the watched generator layer's editor-canvas snapshot.
+/// Holds the snapshot inside an `Arc` so the per-frame
+/// `ContentState::active_graph_snapshot` field can clone the refcount
+/// (no deep copy). Invalidated when either the layer id or the layer's
+/// `generator_graph_version` changes — i.e. on watch swap or
+/// graph-editor edit landing on the watched layer.
+pub struct CachedGeneratorGraphSnapshot {
+    pub layer_id: manifold_core::LayerId,
+    pub version: u32,
+    pub snapshot: Arc<manifold_renderer::node_graph::GraphSnapshot>,
+}
+
 /// Owns all content-side state and runs the content loop.
 pub struct ContentThread {
     pub engine: PlaybackEngine,
@@ -109,6 +121,18 @@ pub struct ContentThread {
     /// Mutually exclusive in practice — setting one clears the other,
     /// because only one editor canvas is visible at a time.
     pub watched_graph_generator_layer: Option<manifold_core::LayerId>,
+    /// Cached editor-canvas snapshot for the watched generator layer.
+    ///
+    /// Built lazily by [`Self::active_generator_graph_snapshot`] and
+    /// invalidated when `(LayerId, generator_graph_version)` changes
+    /// (on layer switch or a graph-editor edit landing on the watched
+    /// layer). Avoids the per-content-tick re-parse of the bundled
+    /// preset JSON that the non-cached path used to do every state
+    /// push the editor was open. Cache holds at most one entry: only
+    /// one canvas is visible at a time so a larger map would just be
+    /// empty.
+    pub cached_generator_graph_snapshot:
+        Option<CachedGeneratorGraphSnapshot>,
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
@@ -972,6 +996,28 @@ impl ContentThread {
         let perc_show = self.percussion_orchestrator.show_progress_bar()
             && !self.cached_perc_message.is_empty();
 
+        // Resolve the editor-canvas graph snapshot once. Effect path
+        // returns a plain `GraphSnapshot` (cheap to construct, no
+        // cache needed); generator path returns a cached `Arc` clone
+        // (avoids re-parsing the bundled JSON every state push when
+        // the canvas is open). Effect wins when both are watched —
+        // they're mutually exclusive in practice but the order here
+        // matches the pre-cache behaviour. Sequencing matters for
+        // the borrow checker: the effect call uses `&self`, so it
+        // has to complete before the generator call takes `&mut self`.
+        let effect_snap = self
+            .watched_graph_effect
+            .as_ref()
+            .and_then(|eid| self.active_graph_snapshot(eid))
+            .map(Arc::new);
+        let active_graph_snapshot_arc = if effect_snap.is_some() {
+            effect_snap
+        } else if let Some(layer_id) = self.watched_graph_generator_layer.clone() {
+            self.active_generator_graph_snapshot(&layer_id)
+        } else {
+            None
+        };
+
         let state = ContentState {
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
@@ -1124,16 +1170,7 @@ impl ContentThread {
                 .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
             project_snapshot: snapshot,
             modulation_snapshot,
-            active_graph_snapshot: self
-                .watched_graph_effect
-                .as_ref()
-                .and_then(|eid| self.active_graph_snapshot(eid))
-                .or_else(|| {
-                    self.watched_graph_generator_layer
-                        .as_ref()
-                        .and_then(|lid| self.active_generator_graph_snapshot(lid))
-                })
-                .map(Arc::new),
+            active_graph_snapshot: active_graph_snapshot_arc,
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.
@@ -1180,43 +1217,59 @@ impl ContentThread {
     }
 
     /// Generator-side counterpart of [`Self::active_graph_snapshot`].
-    /// Builds the editor canvas's snapshot for the currently-watched
-    /// layer's generator. The graph source is the bundled JSON preset
-    /// for the layer's `generator_type` (loaded by `build.rs` into
-    /// `bundled_generator_presets`); per-layer overrides are pending
-    /// the edit-side follow-up.
+    /// Returns the editor canvas's snapshot for the currently-watched
+    /// layer's generator as a refcount-clone of a cached `Arc`.
     ///
-    /// Returns `None` if the layer no longer resolves, has no generator
-    /// assigned, or the assigned generator type has no JSON preset
-    /// (e.g., a legacy Rust-only generator).
+    /// Cache is invalidated when either:
+    ///   - The watched layer id changes (user switched canvases).
+    ///   - The layer's `generator_graph_version` changes (a
+    ///     graph-editor edit landed on this layer).
+    ///
+    /// On miss, rebuilds the snapshot: clones the override
+    /// `EffectGraphDef` (or parses the bundled JSON for a pristine
+    /// layer), grafts `preset_metadata` back from the bundle if the
+    /// override lost it, runs `GraphSnapshot::from_def`, and
+    /// populates `outer_routings` from the preset bindings. The
+    /// rebuild itself is the same work the non-cached path did every
+    /// state push; caching collapses that to once-per-edit.
+    ///
+    /// Returns `None` if the layer no longer resolves, has no
+    /// generator assigned, or the assigned generator type has no
+    /// JSON preset (e.g., a legacy Rust-only generator).
     fn active_generator_graph_snapshot(
-        &self,
+        &mut self,
         layer_id: &manifold_core::LayerId,
-    ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
+    ) -> Option<Arc<manifold_renderer::node_graph::GraphSnapshot>> {
         let project = self.engine.project()?;
         let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
         let gen_type = layer.generator_type();
         if gen_type.is_none() {
             return None;
         }
+        let current_version = layer.generator_graph_version;
+
+        // Cache hit: same layer + same version → return the cached
+        // Arc clone, no parse / build work.
+        if let Some(cache) = self.cached_generator_graph_snapshot.as_ref()
+            && &cache.layer_id == layer_id
+            && cache.version == current_version
+        {
+            return Some(Arc::clone(&cache.snapshot));
+        }
         // Prefer the layer's per-instance override (where the
         // ToggleNodeParamExposeCommand writes its exposure state) when
         // it's populated. Falls back to the bundled JSON preset for a
-        // pristine layer that hasn't been edited yet. preset_metadata
+        // pristine layer that hasn't been edited yet. `preset_metadata`
         // from the bundled JSON is grafted onto the override if the
-        // override lost it during edits, so outer_routings + binding
-        // backfill keep working either way.
+        // override lost it during edits — same canonical helper the
+        // runtime path uses, so editor canvas and live render resolve
+        // to the same bindings set.
         let def: manifold_core::effect_graph_def::EffectGraphDef =
             if let Some(override_def) = layer.generator_graph.as_ref() {
                 let mut d = override_def.clone();
-                if d.preset_metadata.is_none()
-                    && let Some(json) = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
-                        gen_type,
-                    )
-                    && let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json)
-                {
-                    d.preset_metadata = base.preset_metadata;
-                }
+                manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
+                    &mut d, gen_type,
+                );
                 d
             } else {
                 let json = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
@@ -1251,7 +1304,13 @@ impl ContentThread {
                 })
                 .collect();
         }
-        Some(snap)
+        let arc = Arc::new(snap);
+        self.cached_generator_graph_snapshot = Some(CachedGeneratorGraphSnapshot {
+            layer_id: layer_id.clone(),
+            version: current_version,
+            snapshot: Arc::clone(&arc),
+        });
+        Some(arc)
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.

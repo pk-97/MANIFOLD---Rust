@@ -70,20 +70,10 @@ crate::primitive! {
     picker: { label: "Smoothstep", category: Atom },
 }
 
-fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for SmoothstepTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let low = read_scalar(ctx, "low", 0.0);
-        let high = read_scalar(ctx, "high", 1.0);
+        let low = ctx.scalar_or_param("low", 0.0);
+        let high = ctx.scalar_or_param("high", 1.0);
         let mode = match ctx.params.get("mode") {
             Some(ParamValue::Enum(v)) => (*v).min((SMOOTHSTEP_MODES.len() - 1) as u32),
             Some(ParamValue::Float(f)) => (f.round() as u32).min((SMOOTHSTEP_MODES.len() - 1) as u32),

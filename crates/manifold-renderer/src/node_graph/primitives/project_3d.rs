@@ -71,6 +71,21 @@ crate::primitive! {
 }
 
 impl Primitive for Project3D {
+    /// Output `out` is sized to match input `in` — one projected
+    /// `LinePoint` per input vertex.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        if port_name == "out" {
+            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        } else {
+            None
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let mode = match ctx.params.get("mode") {
             Some(ParamValue::Enum(n)) => *n,

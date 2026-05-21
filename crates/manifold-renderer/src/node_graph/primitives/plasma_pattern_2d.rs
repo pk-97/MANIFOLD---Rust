@@ -134,21 +134,11 @@ crate::primitive! {
     },
 }
 
-fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for PlasmaPattern2D {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let time = read_scalar(ctx, "time", 0.0);
-        let aspect = read_scalar(ctx, "aspect", 1.0);
-        let trigger_count = read_scalar(ctx, "trigger_count", 0.0);
+        let time = ctx.scalar_or_param("time", 0.0);
+        let aspect = ctx.scalar_or_param("aspect", 1.0);
+        let trigger_count = ctx.scalar_or_param("trigger_count", 0.0);
 
         let pattern_param = match ctx.params.get("pattern") {
             Some(ParamValue::Enum(v)) => *v,

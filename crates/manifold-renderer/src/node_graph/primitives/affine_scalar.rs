@@ -54,21 +54,11 @@ crate::primitive! {
     picker: { label: "Affine Scalar", category: Driver },
 }
 
-fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
-    match ctx.inputs.scalar(name) {
-        Some(ParamValue::Float(f)) => f,
-        _ => match ctx.params.get(name) {
-            Some(ParamValue::Float(f)) => *f,
-            _ => default,
-        },
-    }
-}
-
 impl Primitive for AffineScalar {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let a = read_scalar(ctx, "a", 0.0);
-        let scale = read_scalar(ctx, "scale", 1.0);
-        let offset = read_scalar(ctx, "offset", 0.0);
+        let a = ctx.scalar_or_param("a", 0.0);
+        let scale = ctx.scalar_or_param("scale", 1.0);
+        let offset = ctx.scalar_or_param("offset", 0.0);
         ctx.outputs
             .set_scalar("out", ParamValue::Float(a * scale + offset));
     }

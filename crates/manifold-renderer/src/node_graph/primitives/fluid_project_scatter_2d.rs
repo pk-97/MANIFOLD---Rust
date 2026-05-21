@@ -218,6 +218,24 @@ crate::primitive! {
 }
 
 impl Primitive for FluidProjectScatter2D {
+    /// Display accumulator is `disp_w × disp_h` u32 cells.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        if port_name != "accum" {
+            return None;
+        }
+        let read_dim = |name| match params.get(name) {
+            Some(ParamValue::Int(n)) => Some((*n).max(1) as u32),
+            Some(ParamValue::Float(f)) => Some(f.round().max(1.0) as u32),
+            _ => None,
+        };
+        Some(read_dim("disp_w")?.saturating_mul(read_dim("disp_h")?))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
             Some(ParamValue::Int(n)) => (*n).max(0) as u32,

@@ -1641,6 +1641,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_project_snapshot: None,
                 watched_graph_effect: None,
                 watched_graph_generator_layer: None,
+                cached_generator_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
                 cached_midi_clock_position: Arc::from(""),
                 cached_midi_clock_device: Arc::from(""),

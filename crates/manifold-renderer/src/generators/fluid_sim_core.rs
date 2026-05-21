@@ -187,6 +187,10 @@ pub struct FluidSimCore {
 
     // Clip-trigger envelope state
     last_trigger_count: i32,
+    /// Cycle for `trigger_count % PATTERN_COUNT` seed-pattern selection.
+    /// Guarantees consecutive triggers never seed the same pattern even on a
+    /// clean modulus wrap. See [`crate::generators::clip_trigger::ClipTriggerCycle`].
+    clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle,
     clip_trigger_envelope: f32,
     active_clip_trigger_mode: i32,
 
@@ -263,6 +267,7 @@ impl FluidSimCore {
             initialized: false,
             current_density_res: 0.5,
             last_trigger_count: -1,
+            clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle::new(),
             clip_trigger_envelope: 0.0,
             active_clip_trigger_mode: 0,
             inject_active: false,
@@ -494,7 +499,12 @@ impl FluidSimCore {
                 self.active_clip_trigger_mode = (params.clip_trigger_mode.round() as i32).clamp(0, 4);
 
                 if self.active_clip_trigger_mode == 3 {
-                    let pattern = (trigger_count as u32) % PATTERN_COUNT;
+                    // Goes through `ClipTriggerCycle` so consecutive
+                    // triggers never seed the same pattern even on a clean
+                    // modulus wrap (the bug class Lissajous hit).
+                    let pattern = self
+                        .clip_trigger_cycle
+                        .step(trigger_count as u32, PATTERN_COUNT);
                     self.dispatch_seed(gpu, pattern, trigger_count as u32, visible_count);
                     // Skip the full pipeline on the seed frame — the seed
                     // writes ~96 MB to the particle buffer and running

@@ -169,6 +169,30 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             .as_deref_mut()
             .expect("EffectNodeContext::state_store called without a StateStore bound")
     }
+
+    /// Resolve a scalar value via the port-shadows-param convention:
+    ///
+    /// 1. If a scalar wire is connected to the input port named
+    ///    `name`, return its current `f32` value.
+    /// 2. Else, if the node has a param named `name` of type Float,
+    ///    return that.
+    /// 3. Else return `default`.
+    ///
+    /// The canonical helper for any primitive whose input port and
+    /// param share a name (`freq_x`, `phase`, `scale`, `amount`, …).
+    /// Before this helper existed eight primitives carried local
+    /// `fn read_scalar` copies; centralizing here removes the
+    /// duplication and lets future primitives just call
+    /// `ctx.scalar_or_param("name", default)`.
+    pub fn scalar_or_param(&self, name: &str, default: f32) -> f32 {
+        match self.inputs.scalar(name) {
+            Some(crate::node_graph::parameters::ParamValue::Float(f)) => f,
+            _ => match self.params.get(name) {
+                Some(crate::node_graph::parameters::ParamValue::Float(f)) => *f,
+                _ => default,
+            },
+        }
+    }
 }
 
 /// Runtime services a node may require from the executor during
@@ -374,4 +398,64 @@ pub trait EffectNode: Send {
     /// override is in place before `compile()` walks outputs. No-op
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
+
+    /// How many items to pre-allocate for the named `Array<T>` output
+    /// port. The chain build / JsonGraphGenerator pre-allocator calls
+    /// this once after the node's params are set and all its input
+    /// Array buffers are bound; the result drives a single
+    /// `(item_size × capacity)`-byte buffer allocation.
+    ///
+    /// **Three canonical patterns** map onto this single method, all
+    /// implementable on the producer node itself:
+    ///
+    /// 1. **Producer** — capacity is fixed by a node-local param. The
+    ///    default impl reads `params["max_capacity"]` and returns its
+    ///    integer value. Generator-style primitives
+    ///    (`seed_particles`, `generate_lissajous`, …) match this
+    ///    pattern without an override.
+    ///
+    /// 2. **Transform (same-as-input)** — capacity matches a named
+    ///    input port's bound buffer count. `integrate_particles`,
+    ///    `rotate_3d`, `project_4d` etc. override this and return
+    ///    `input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)`.
+    ///    The pre-allocator hands the bound capacities in via the
+    ///    `input_capacities` slice — one entry per Array input that
+    ///    was successfully pre-bound earlier in the plan walk.
+    ///
+    /// 3. **Computed-from-params** — capacity is a function of
+    ///    multiple params (e.g. `scatter_particles`' `width × height`,
+    ///    `triangulate_grid`'s `(src_cols-1) × (src_rows-1) × 6`).
+    ///    Override and compute from `params` directly.
+    ///
+    /// Returning `None` for an Array output declares "I can't tell you
+    /// the capacity right now" — the pre-allocator emits a `log::warn!`
+    /// and skips the allocation. Downstream consumers see an empty
+    /// wire and warn at draw time. Almost always a bug.
+    ///
+    /// A registry-wide test
+    /// (`every_array_output_declares_a_valid_capacity_source`) walks
+    /// every registered primitive's outputs and asserts every Array
+    /// output's declared capacity is resolvable from default params /
+    /// default input shape — catches "primitive declares Array output
+    /// but forgot to teach the pre-allocator how to size it" at CI
+    /// time.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        let is_array_output = self
+            .outputs()
+            .iter()
+            .any(|p| p.name == port_name && matches!(p.ty, crate::node_graph::ports::PortType::Array(_)));
+        if !is_array_output {
+            return None;
+        }
+        match params.get("max_capacity") {
+            Some(ParamValue::Int(n)) => Some((*n).max(1) as u32),
+            Some(ParamValue::Float(f)) => Some(f.round().max(1.0) as u32),
+            _ => None,
+        }
+    }
 }

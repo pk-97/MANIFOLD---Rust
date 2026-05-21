@@ -53,6 +53,22 @@ struct ArrayFeedbackState {
 impl NodeState for ArrayFeedbackState {}
 
 impl Primitive for ArrayFeedback {
+    /// Output `out` is sized to match the input `in`. The persistent
+    /// `prev` buffer in `StateStore` reallocates internally if the
+    /// wire's byte length changes.
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        if port_name == "out" {
+            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+        } else {
+            None
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;

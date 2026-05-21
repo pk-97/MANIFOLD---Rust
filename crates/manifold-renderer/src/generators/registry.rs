@@ -107,10 +107,20 @@ impl GeneratorRegistry {
         let registry = PrimitiveRegistry::with_builtin();
 
         // Override path: the layer's per-instance graph wins over the
-        // bundled JSON when present.
+        // bundled JSON when present. If the override lost its
+        // `preset_metadata` during a prior graph edit, graft it back
+        // from the bundled JSON before constructing — otherwise the
+        // bindings list would deserialize empty and the live frame
+        // would render with every inner-node param pinned at its JSON
+        // default, *while the editor canvas still shows correct
+        // routings*. That mismatch is silent and load-bearing on every
+        // graph-edit command's `preset_metadata` preservation; doing
+        // the graft once here is the durable defense.
         if let Some(def) = override_def {
+            let mut grafted = def.clone();
+            graft_preset_metadata_from_bundle(&mut grafted, gen_type);
             match JsonGraphGenerator::from_def_with_device(
-                def.clone(),
+                grafted,
                 &registry,
                 device,
                 1920,
@@ -178,4 +188,34 @@ impl GeneratorRegistry {
         out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         out
     }
+}
+
+/// If `def.preset_metadata` is `None`, parse the bundled JSON for
+/// `gen_type` and graft its `preset_metadata` onto `def` in-place.
+/// No-op if the override already carries metadata, or if no bundled
+/// preset matches the type id (legacy Rust-only generator).
+///
+/// This is the single durable defense against the "edit command
+/// dropped the `preset_metadata` and bindings vanished" failure mode
+/// — without it, the runtime would render with every inner-node
+/// param pinned at its JSON default while the editor canvas still
+/// shows correct routings (silent mismatch). The
+/// `content_thread::active_generator_graph_snapshot` path mirrors
+/// this graft on the snapshot side so both surfaces resolve to the
+/// same set of bindings.
+pub fn graft_preset_metadata_from_bundle(
+    def: &mut manifold_core::effect_graph_def::EffectGraphDef,
+    gen_type: &manifold_core::GeneratorTypeId,
+) {
+    if def.preset_metadata.is_some() {
+        return;
+    }
+    let Some(json) = bundled_generator_preset_json(gen_type) else {
+        return;
+    };
+    let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json)
+    else {
+        return;
+    };
+    def.preset_metadata = base.preset_metadata;
 }
