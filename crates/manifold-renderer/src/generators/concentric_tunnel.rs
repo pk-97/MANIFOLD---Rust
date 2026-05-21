@@ -16,8 +16,8 @@ const SHAPE: usize = 0;
 const LINE: usize = 1;
 const SPEED: usize = 2;
 const SCALE: usize = 3;
-const SNAP: usize = 4;
-const SNAP_MODE: usize = 5;
+const CLIP_TRIGGER: usize = 4;
+const CLIP_TRIGGER_MODE: usize = 5;
 const SHAPE_COUNT: u32 = 6;
 
 const MODE_SHAPE: i32 = 0;
@@ -36,7 +36,7 @@ struct ConcentricTunnelUniforms {
     anim_speed: f32,
     uv_scale: f32,
     shape_type: f32,
-    snap_mode: f32,
+    clip_trigger_mode: f32,
     trigger_count: f32,
     _pad: [f32; 3],
 }
@@ -86,21 +86,21 @@ impl Generator for ConcentricTunnelGenerator {
         } else {
             1.0
         };
-        let snap_on = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
-        let mode = if ctx.param_count > SNAP_MODE as u32 {
-            (ctx.params[SNAP_MODE].round() as i32).clamp(MODE_SHAPE, MODE_BOTH)
+        let triggered = ctx.param_count > CLIP_TRIGGER as u32 && ctx.params[CLIP_TRIGGER] > 0.5;
+        let mode = if ctx.param_count > CLIP_TRIGGER_MODE as u32 {
+            (ctx.params[CLIP_TRIGGER_MODE].round() as i32).clamp(MODE_SHAPE, MODE_BOTH)
         } else {
             MODE_SHAPE
         };
 
         let anim_speed = BEAT_VALUES[speed_idx];
 
-        let mut snap_mode_shader = 0.0_f32;
-        let shape = if snap_on {
+        let mut clip_trigger_mode_shader = 0.0_f32;
+        let shape = if triggered {
             let cycle_shape = mode == MODE_SHAPE || mode == MODE_BOTH;
             let spawn_rings = mode == MODE_SPAWN || mode == MODE_BOTH;
             if spawn_rings {
-                snap_mode_shader = if mode == MODE_BOTH { 2.0 } else { 1.0 };
+                clip_trigger_mode_shader = if mode == MODE_BOTH { 2.0 } else { 1.0 };
             }
             if cycle_shape {
                 (ctx.trigger_count % SHAPE_COUNT) as f32
@@ -127,7 +127,7 @@ impl Generator for ConcentricTunnelGenerator {
             anim_speed,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
             shape_type: shape,
-            snap_mode: snap_mode_shader,
+            clip_trigger_mode: clip_trigger_mode_shader,
             trigger_count: ctx.trigger_count as f32,
             _pad: [0.0; 3],
         };

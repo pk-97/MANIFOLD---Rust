@@ -6,7 +6,7 @@ struct Uniforms {
     anim_speed: f32,
     uv_scale: f32,
     shape_type: f32,
-    snap_mode: f32,
+    clip_trigger_mode: f32,
     trigger_count: f32,
     _pad0: f32,
     _pad1: f32,
@@ -89,8 +89,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ring_freq = 1.0 / beats_per_ring;
     var expansion = u.beat * ring_freq;
 
-    // Spawn mode: when snap_mode > 0.5, add trigger_count to expansion
-    if u.snap_mode > 0.5 {
+    // Spawn mode: when clip_trigger_mode > 0.5, add trigger_count to expansion
+    if u.clip_trigger_mode > 0.5 {
         expansion += u.trigger_count;
     }
 

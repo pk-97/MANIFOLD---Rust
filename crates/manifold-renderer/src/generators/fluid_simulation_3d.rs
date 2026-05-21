@@ -2,7 +2,7 @@
 // Line-by-line translation of FluidSimulation3DGenerator.cs.
 //
 // 7 passes per frame (steps 1-4 amortized to alternate frames):
-//   [alternate frames, forced on snap:]
+//   [alternate frames, forced on clip-trigger:]
 //   3D Scatter (2 compute) -> 3D Blur Density (3 compute passes: X, Y, Z)
 //   -> GradientCurl3D (compute) -> 3D Blur VectorField (3 compute passes: X, Y, Z)
 //   [every frame:]
@@ -32,8 +32,8 @@ const TURBULENCE: usize = 3;
 const SPEED: usize = 4;
 const CONTRAST: usize = 5;
 const PARTICLES: usize = 7;
-const SNAP: usize = 8;
-const SNAP_MODE: usize = 9;
+const CLIP_TRIGGER: usize = 8;
+const CLIP_TRIGGER_MODE: usize = 9;
 const PARTICLE_SIZE: usize = 10;
 const ANTI_CLUMP: usize = 11;
 const INJECT_FORCE: usize = 12;
@@ -50,7 +50,7 @@ const FLATTEN: usize = 20;
 const MAX_PARTICLES: u32 = 8_000_000;
 const BAKE_GROUP_SIZE: u32 = 8;
 const PATTERN_COUNT: u32 = 7;
-const SNAP_DECAY_RATE: f32 = 12.0;
+const CLIP_TRIGGER_DECAY_RATE: f32 = 12.0;
 const INJECT_DURATION_SECS: f32 = 0.5;
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0;
 const THREAD_GROUP_SIZE: u32 = 256;
@@ -313,8 +313,8 @@ pub struct FluidSimulation3DGenerator {
     frame_count: u64,
     initialized: bool,
     last_trigger_count: u32,
-    snap_envelope: f32,
-    active_snap_mode: i32,
+    clip_trigger_envelope: f32,
+    active_clip_trigger_mode: i32,
     inject_zone_index: i32,
     inject_elapsed: f32,
     next_inject_zone: i32,
@@ -409,8 +409,8 @@ impl FluidSimulation3DGenerator {
             frame_count: 0,
             initialized: false,
             last_trigger_count: u32::MAX,
-            snap_envelope: 0.0,
-            active_snap_mode: 0,
+            clip_trigger_envelope: 0.0,
+            active_clip_trigger_mode: 0,
             inject_zone_index: -1,
             inject_elapsed: 0.0,
             next_inject_zone: 0,
@@ -539,8 +539,8 @@ impl Generator for FluidSimulation3DGenerator {
         let speed = param(ctx, SPEED, 1.0);
         let contrast = param(ctx, CONTRAST, 3.5);
         let particles_param = param(ctx, PARTICLES, 2.0);
-        let snap = param(ctx, SNAP, 0.0);
-        let snap_mode_f = param(ctx, SNAP_MODE, 0.0);
+        let clip_trigger =param(ctx, CLIP_TRIGGER, 0.0);
+        let clip_trigger_mode_f = param(ctx, CLIP_TRIGGER_MODE, 0.0);
         let particle_size = param(ctx, PARTICLE_SIZE, 3.0);
         let anti_clump = param(ctx, ANTI_CLUMP, 20.0);
         let inject_force_p = param(ctx, INJECT_FORCE, 0.005);
@@ -557,7 +557,7 @@ impl Generator for FluidSimulation3DGenerator {
         let diffusion = (anti_clump / 60.0) * 0.05;
 
         let container_type = container_f.round() as u32;
-        let snap_mode = snap_mode_f.round() as i32;
+        let clip_trigger_mode =clip_trigger_mode_f.round() as i32;
         let active_count = active_count_from_param(particles_param);
         let desired_vol_res = vol_res_from_param(vol_res_param);
         // Lock display resolution at full size (density_res = 1.0)
@@ -568,7 +568,7 @@ impl Generator for FluidSimulation3DGenerator {
 
         if !self.initialized {
             self.init_particles_gpu(gpu);
-            // Skip the full pipeline on the init frame — same stall as snap
+            // Skip the full pipeline on the init frame — same stall as clip-trigger
             // seed (particle buffer write→read in the same command buffer).
             self.frame_count += 1;
             return ctx.anim_progress;
@@ -580,15 +580,15 @@ impl Generator for FluidSimulation3DGenerator {
         let dh = self.disp_h;
 
         let cam_fwd_sim = compute_cam_fwd_euler(rot_x, rot_y);
-        let snap_active = snap > 0.5;
+        let triggered = clip_trigger > 0.5;
 
         if ctx.trigger_count != self.last_trigger_count {
-            let should_snap = snap_active && self.last_trigger_count != u32::MAX;
+            let should_trigger = triggered && self.last_trigger_count != u32::MAX;
             self.last_trigger_count = ctx.trigger_count;
-            if should_snap {
-                self.snap_envelope = 1.0;
-                self.active_snap_mode = snap_mode.clamp(0, 4);
-                if self.active_snap_mode == 3 {
+            if should_trigger {
+                self.clip_trigger_envelope = 1.0;
+                self.active_clip_trigger_mode = clip_trigger_mode.clamp(0, 4);
+                if self.active_clip_trigger_mode == 3 {
                     self.dispatch_seed_pattern(
                         gpu,
                         ctx.trigger_count % PATTERN_COUNT,
@@ -603,7 +603,7 @@ impl Generator for FluidSimulation3DGenerator {
                     // write→read. New positions render next frame.
                     self.frame_count += 1;
                     return ctx.anim_progress;
-                } else if self.active_snap_mode == 4 {
+                } else if self.active_clip_trigger_mode == 4 {
                     self.inject_zone_index = self.next_inject_zone;
                     self.inject_elapsed = 0.0;
                     self.next_inject_zone = (self.next_inject_zone + 1) % 4;
@@ -611,14 +611,14 @@ impl Generator for FluidSimulation3DGenerator {
             }
         }
 
-        if self.snap_envelope > 0.001 {
-            self.snap_envelope *= (-SNAP_DECAY_RATE * ctx.dt).exp();
+        if self.clip_trigger_envelope > 0.001 {
+            self.clip_trigger_envelope *= (-CLIP_TRIGGER_DECAY_RATE * ctx.dt).exp();
         } else {
-            self.snap_envelope = 0.0;
+            self.clip_trigger_envelope = 0.0;
         }
 
-        if self.snap_envelope > 0.0 && self.active_snap_mode == 0 {
-            turbulence *= 1.0 + 9.0 * self.snap_envelope;
+        if self.clip_trigger_envelope > 0.0 && self.active_clip_trigger_mode == 0 {
+            turbulence *= 1.0 + 9.0 * self.clip_trigger_envelope;
         }
 
         if self.inject_zone_index >= 0 {
@@ -640,13 +640,13 @@ impl Generator for FluidSimulation3DGenerator {
 
         let mut cur_flow = flow;
         let mut curl_angle = curl;
-        if self.snap_envelope > 0.0 {
-            match self.active_snap_mode {
+        if self.clip_trigger_envelope > 0.0 {
+            match self.active_clip_trigger_mode {
                 1 => {
-                    curl_angle += 180.0 * self.snap_envelope;
+                    curl_angle += 180.0 * self.clip_trigger_envelope;
                 }
                 2 => {
-                    cur_flow += (-cur_flow - cur_flow) * self.snap_envelope;
+                    cur_flow += (-cur_flow - cur_flow) * self.clip_trigger_envelope;
                 }
                 _ => {}
             }
@@ -663,7 +663,7 @@ impl Generator for FluidSimulation3DGenerator {
         ]);
 
         let volume_frame_parity = self.frame_count.is_multiple_of(2);
-        let update_volume = volume_frame_parity || self.snap_envelope > 0.01;
+        let update_volume = volume_frame_parity || self.clip_trigger_envelope > 0.01;
         let base_blur_radius = feather.round() as i32;
         let res_scale = vol_res as f32 / 640.0;
         let scaled_radius = ((base_blur_radius as f32 * res_scale).round() as i32).max(1);
@@ -1173,7 +1173,7 @@ impl Generator for FluidSimulation3DGenerator {
         self.display_density_tex = None;
         self.disp_w = 0;
         self.disp_h = 0;
-        self.snap_envelope = 0.0;
+        self.clip_trigger_envelope = 0.0;
         self.inject_elapsed = 0.0;
     }
 }

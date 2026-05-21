@@ -22,7 +22,7 @@ const SPEED: usize = 4;
 const WINDOW: usize = 5;
 const WAVE: usize = 6;
 const SCALE: usize = 7;
-const SNAP: usize = 8;
+const CLIP_TRIGGER: usize = 8;
 
 const SAMPLES: usize = 256;
 const RATIO_COUNT: usize = 10;
@@ -104,12 +104,12 @@ impl Generator for OscilloscopeXYGenerator {
         } else {
             1.0
         };
-        let snap = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
+        let clip_trigger = ctx.param_count > CLIP_TRIGGER as u32 && ctx.params[CLIP_TRIGGER] > 0.5;
 
         // Unity: Project() — lines 57-130
         let (a_main, b_main, a_harm, b_harm);
 
-        if snap {
+        if clip_trigger {
             // Trigger-driven: fixed ratio per trigger (Unity lines 65-73)
             let main_idx = (ctx.trigger_count as usize) % RATIO_COUNT;
             let harm_idx = (ctx.trigger_count as usize + 3) % RATIO_COUNT;

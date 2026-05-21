@@ -15,7 +15,7 @@ use crate::gpu_encoder::GpuEncoder;
 // Unity constants
 pub const MAX_PARTICLES: u32 = 8_000_000;
 pub const PATTERN_COUNT: u32 = 7;
-const SNAP_DECAY_RATE: f32 = 12.0;
+const CLIP_TRIGGER_DECAY_RATE: f32 = 12.0;
 /// Blur/vector field resolution divider. 2 = half scatter res (matches Unity).
 const PRE_SHRINK: u32 = 2;
 const INJECT_DURATION_SECS: f32 = 0.5;
@@ -119,8 +119,8 @@ pub struct FluidSimParams {
     pub contrast: f32,
     pub scale: f32,
     pub particles_millions: f32,
-    pub snap: f32,
-    pub snap_mode: f32,
+    pub clip_trigger: f32,
+    pub clip_trigger_mode: f32,
     pub splat_size: f32,
     pub anti_clump: f32,
     pub inject_force: f32,
@@ -138,8 +138,8 @@ impl Default for FluidSimParams {
             contrast: 3.0,
             scale: 1.0,
             particles_millions: 2.0,
-            snap: 0.0,
-            snap_mode: 0.0,
+            clip_trigger: 0.0,
+            clip_trigger_mode: 0.0,
             splat_size: 3.0,
             anti_clump: 20.0,
             inject_force: 0.005,
@@ -187,8 +187,8 @@ pub struct FluidSimCore {
 
     // Snap envelope state
     last_trigger_count: i32,
-    snap_envelope: f32,
-    active_snap_mode: i32,
+    clip_trigger_envelope: f32,
+    active_clip_trigger_mode: i32,
 
     // Injection state machine
     inject_active: bool,
@@ -263,8 +263,8 @@ impl FluidSimCore {
             initialized: false,
             current_density_res: 0.5,
             last_trigger_count: -1,
-            snap_envelope: 0.0,
-            active_snap_mode: 0,
+            clip_trigger_envelope: 0.0,
+            active_clip_trigger_mode: 0,
             inject_active: false,
             inject_point: [0.0; 2],
             inject_elapsed: 0.0,
@@ -465,8 +465,9 @@ impl FluidSimCore {
 
         if !self.initialized {
             self.init_particles_gpu(gpu, visible_count);
-            // Skip the full pipeline on the init frame — same stall as snap
-            // seed (particle buffer write→read in the same command buffer).
+            // Skip the full pipeline on the init frame — same stall as
+            // the clip-trigger seed (particle buffer write→read in the
+            // same command buffer).
             // First real render happens next frame with data already resident.
             self.frame_count += 1;
             return;
@@ -478,32 +479,32 @@ impl FluidSimCore {
         let bw = (sw / PRE_SHRINK).max(1);
         let bh = (sh / PRE_SHRINK).max(1);
 
-        // --- Snap envelope state machine ---
+        // --- Clip-trigger envelope state machine ---
         let trigger_count = ctx.trigger_count as i32;
         let mut noise_amplitude = params.noise;
-        let mut rotation_deg_snap = params.rotation_deg;
-        let mut slope_snap = params.slope;
+        let mut rotation_deg_after_trigger = params.rotation_deg;
+        let mut slope_after_trigger = params.slope;
 
         if trigger_count != self.last_trigger_count {
-            let should_snap = params.snap > 0.5 && self.last_trigger_count >= 0;
+            let should_trigger = params.clip_trigger > 0.5 && self.last_trigger_count >= 0;
             self.last_trigger_count = trigger_count;
 
-            if should_snap {
-                self.snap_envelope = 1.0;
-                self.active_snap_mode = (params.snap_mode.round() as i32).clamp(0, 4);
+            if should_trigger {
+                self.clip_trigger_envelope = 1.0;
+                self.active_clip_trigger_mode = (params.clip_trigger_mode.round() as i32).clamp(0, 4);
 
-                if self.active_snap_mode == 3 {
+                if self.active_clip_trigger_mode == 3 {
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
                     self.dispatch_seed(gpu, pattern, trigger_count as u32, visible_count);
                     // Skip the full pipeline on the seed frame — the seed
                     // writes ~96 MB to the particle buffer and running
                     // splat+simulate immediately after creates a GPU pipeline
                     // stall (~16 ms). The new positions render next frame when
-                    // the write is already resident, making the snap feel
-                    // tighter and eliminating the fence-wait spike.
+                    // the write is already resident, making the trigger
+                    // feel tighter and eliminating the fence-wait spike.
                     self.frame_count += 1;
                     return;
-                } else if self.active_snap_mode == 4 {
+                } else if self.active_clip_trigger_mode == 4 {
                     self.inject_active = true;
                     self.inject_point =
                         random_inject_uv(trigger_count as u32, self.frame_count as u32);
@@ -512,23 +513,23 @@ impl FluidSimCore {
             }
         }
 
-        if self.snap_envelope > 0.001 {
-            self.snap_envelope *= (-SNAP_DECAY_RATE * ctx.dt).exp();
+        if self.clip_trigger_envelope > 0.001 {
+            self.clip_trigger_envelope *= (-CLIP_TRIGGER_DECAY_RATE * ctx.dt).exp();
         } else {
-            self.snap_envelope = 0.0;
+            self.clip_trigger_envelope = 0.0;
         }
 
-        if self.snap_envelope > 0.0 {
-            match self.active_snap_mode {
+        if self.clip_trigger_envelope > 0.0 {
+            match self.active_clip_trigger_mode {
                 0 => {
-                    noise_amplitude *= 1.0 + 9.0 * self.snap_envelope;
+                    noise_amplitude *= 1.0 + 9.0 * self.clip_trigger_envelope;
                 }
                 1 => {
-                    rotation_deg_snap += 180.0 * self.snap_envelope;
+                    rotation_deg_after_trigger += 180.0 * self.clip_trigger_envelope;
                 }
                 2 => {
-                    slope_snap =
-                        params.slope + ((-params.slope) - params.slope) * self.snap_envelope;
+                    slope_after_trigger =
+                        params.slope + ((-params.slope) - params.slope) * self.clip_trigger_envelope;
                 }
                 _ => {}
             }
@@ -686,11 +687,11 @@ impl FluidSimCore {
 
         // Gradient + Rotate
         let density_area_scale = (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
-        let rot_rad = rotation_deg_snap * std::f32::consts::PI / 180.0;
+        let rot_rad = rotation_deg_after_trigger * std::f32::consts::PI / 180.0;
         let gradient_uniforms = GradientUniforms {
             texel_x: blur_texel_x,
             texel_y: blur_texel_y,
-            slope_strength: slope_snap * density_area_scale,
+            slope_strength: slope_after_trigger * density_area_scale,
             rot_cos: rot_rad.cos(),
             rot_sin: rot_rad.sin(),
             _pad0: 0.0,
@@ -866,7 +867,7 @@ impl FluidSimCore {
         self.blur_temp_tex = None;
         self.scatter_width = 0;
         self.scatter_height = 0;
-        self.snap_envelope = 0.0;
+        self.clip_trigger_envelope = 0.0;
         self.inject_active = false;
         self.inject_elapsed = 0.0;
     }

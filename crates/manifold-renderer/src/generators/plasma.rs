@@ -18,7 +18,7 @@ const COMPLEXITY: usize = 1;
 const CONTRAST: usize = 2;
 const SPEED: usize = 3;
 const SCALE: usize = 4;
-const SNAP: usize = 5;
+const CLIP_TRIGGER: usize = 5;
 const PATTERN_COUNT: u32 = 8;
 
 /// Plasma WGSL source — shared across all specialized pattern variants.
@@ -86,9 +86,9 @@ impl Generator for PlasmaGenerator {
         } else {
             1.0
         };
-        let snap = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
+        let clip_trigger = ctx.param_count > CLIP_TRIGGER as u32 && ctx.params[CLIP_TRIGGER] > 0.5;
 
-        let pattern_type = if snap {
+        let pattern_type = if clip_trigger {
             (ctx.trigger_count % PATTERN_COUNT) as f32
         } else if ctx.param_count > PATTERN as u32 {
             ctx.params[PATTERN].round()

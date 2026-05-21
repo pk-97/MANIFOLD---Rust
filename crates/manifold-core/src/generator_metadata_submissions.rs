@@ -4,7 +4,7 @@
 //! (including test binaries) gets the metadata via `inventory`.
 //! The GPU-dependent `GeneratorFactory` submissions remain in `manifold-renderer`.
 
-use crate::generator_registration::{GeneratorMetadata, ParamSpec};
+use crate::generator_registration::{GeneratorAliasMetadata, GeneratorMetadata, ParamSpec};
 use crate::generator_type_id::GeneratorTypeId;
 
 // ── Plasma ─────────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ inventory::submit! {
             ParamSpec::continuous("contrast", "Contrast", 0.0, 1.0, 0.5, "F2", "contrast"),
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
         string_params: &[],
     }
@@ -64,8 +64,8 @@ inventory::submit! {
             ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.008, "F4", "line"),
             ParamSpec::whole_labels("rate", "Rate", 0.0, 4.0, 2.0, &["1/4","1/2","1","2","4"], "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 2.0, 0.0, &["Shape","Spawn","Both"], "snapmode"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
+            ParamSpec::whole_labels("clip_trigger_mode", "Clip Trigger Mode", 0.0, 2.0, 0.0, &["Shape","Spawn","Both"], "clipTriggerMode"),
         ],
         string_params: &[],
     }
@@ -146,7 +146,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.5, "F2", "window"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
         string_params: &[],
     }
@@ -195,7 +195,7 @@ inventory::submit! {
             ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.59, "F2", "window"),
             ParamSpec::continuous("wave", "Wave", 0.1, 3.0, 0.3, "F1", "wave"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.75, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
         string_params: &[],
     }
@@ -220,8 +220,8 @@ inventory::submit! {
             ParamSpec::continuous("contrast", "Contrast", 1.0, 8.0, 3.5, "F1", "contrast"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::continuous("count_m", "Particle Count", 0.1, 8.0, 2.0, "F1", "M"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
+            ParamSpec::whole_labels("clip_trigger_mode", "Clip Trigger Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "clipTriggerMode"),
             ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),
             ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
@@ -250,8 +250,8 @@ inventory::submit! {
             ParamSpec::continuous("contrast", "Contrast", 1.0, 8.0, 3.5, "F1", "contrast"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::continuous("count_m", "Particle Count", 0.1, 8.0, 2.0, "F1", "M"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
+            ParamSpec::whole_labels("clip_trigger_mode", "Clip Trigger Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "clipTriggerMode"),
             ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),
             ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
@@ -283,10 +283,10 @@ inventory::submit! {
             ParamSpec::continuous("filter", "Filter", 0.1, 10.0, 2.0, "F1", "filter"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::continuous("scatter", "Scatter", 0.0, 1.0, 0.0, "F2", "scatter"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 1.0, 0.0,
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
+            ParamSpec::whole_labels("clip_trigger_mode", "Clip Trigger Mode", 0.0, 1.0, 0.0,
                 &["Envelope", "Pose"],
-                "snapMode",
+                "clipTriggerMode",
             ),
         ],
         string_params: &[],
@@ -402,7 +402,7 @@ inventory::submit! {
             ParamSpec::toggle("invert", "Invert", 0.0, 1.0, 0.0, "invert"),
             ParamSpec::continuous("sharpen", "Sharpen", 0.0, 3.0, 1.0, "F1", "sharpen"),
             ParamSpec::whole_labels("scan", "Scan", 0.0, 2.0, 0.0, &["250µm 7T", "300µm HiRes", "Edlow 100µm"], "scan"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
         string_params: &[],
     }
@@ -478,8 +478,8 @@ inventory::submit! {
             ParamSpec::continuous("contrast", "Contrast", 1.0, 8.0, 3.5, "F1", "contrast"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::continuous("count_m", "Particle Count", 0.1, 8.0, 2.0, "F1", "M"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
+            ParamSpec::whole_labels("clip_trigger_mode", "Clip Trigger Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "clipTriggerMode"),
             ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),
             ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
@@ -517,4 +517,54 @@ inventory::submit! {
         ],
         string_params: &[],
     }
+}
+
+// ── Param aliases ─────────────────────────────────────────────────────
+//
+// Backward-compat for the `snap` / `snap_mode` → `clip_trigger` /
+// `clip_trigger_mode` rename. Projects saved before the rename
+// reference these params by their old id in driver bindings and
+// Ableton mappings; the alias table redirects lookups on load.
+//
+// One submission per generator that had a snap param. Driver values
+// stored positionally in `Layer.gen_params.param_values` aren't
+// affected — they're keyed by index, not by id — so the rename is
+// transparent for plain slider state. Only id-keyed wire / mapping
+// targets need the alias.
+
+const SNAP_ALIASES: &[crate::effect_registration::ParamAlias] = &[
+    ("snap", Some("clip_trigger")),
+];
+
+const SNAP_AND_MODE_ALIASES: &[crate::effect_registration::ParamAlias] = &[
+    ("snap", Some("clip_trigger")),
+    ("snap_mode", Some("clip_trigger_mode")),
+];
+
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::PLASMA, aliases: SNAP_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::CONCENTRIC_TUNNEL, aliases: SNAP_AND_MODE_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::LISSAJOUS, aliases: SNAP_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::OSCILLOSCOPE_XY, aliases: SNAP_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::FLUID_SIMULATION, aliases: SNAP_AND_MODE_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::FLUID_SIMULATION_3D, aliases: SNAP_AND_MODE_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::NESTED_CUBES, aliases: SNAP_AND_MODE_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::MRI_VOLUME, aliases: SNAP_ALIASES }
+}
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::PARTICLE_TEXT, aliases: SNAP_AND_MODE_ALIASES }
 }

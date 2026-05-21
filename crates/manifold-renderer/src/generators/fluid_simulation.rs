@@ -26,8 +26,8 @@ const SPEED: usize = 4;
 const CONTRAST: usize = 5;
 const SCALE: usize = 6;
 const PARTICLES: usize = 7;
-const SNAP: usize = 8;
-const SNAP_MODE: usize = 9;
+const CLIP_TRIGGER: usize = 8;
+const CLIP_TRIGGER_MODE: usize = 9;
 const SPLAT_SIZE: usize = 10;
 const ANTI_CLUMP: usize = 11;
 const INJECT_FORCE: usize = 12;
@@ -73,8 +73,8 @@ impl Generator for FluidSimulationGenerator {
             contrast: param(ctx, CONTRAST, 3.0),
             scale: param(ctx, SCALE, 1.0),
             particles_millions: param(ctx, PARTICLES, 2.0),
-            snap: param(ctx, SNAP, 0.0),
-            snap_mode: param(ctx, SNAP_MODE, 0.0),
+            clip_trigger: param(ctx, CLIP_TRIGGER, 0.0),
+            clip_trigger_mode: param(ctx, CLIP_TRIGGER_MODE, 0.0),
             splat_size: param(ctx, SPLAT_SIZE, 3.0),
             anti_clump: param(ctx, ANTI_CLUMP, 20.0),
             inject_force: param(ctx, INJECT_FORCE, 0.005),

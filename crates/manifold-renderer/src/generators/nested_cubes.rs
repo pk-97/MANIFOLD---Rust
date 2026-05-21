@@ -36,14 +36,14 @@ const SPEED: usize = 0;
 const FILTER: usize = 1;
 const SCALE: usize = 2;
 const SCATTER: usize = 3;
-const SNAP: usize = 4;
-const SNAP_MODE: usize = 5;
+const CLIP_TRIGGER: usize = 4;
+const CLIP_TRIGGER_MODE: usize = 5;
 
 const MODE_ENVELOPE: i32 = 0;
 const MODE_POSE: i32 = 1;
 
 /// Exponential decay rate for envelope mode (~300ms to near-zero).
-const SNAP_DECAY_RATE: f32 = 10.0;
+const CLIP_TRIGGER_DECAY_RATE: f32 = 10.0;
 
 /// Number of preset poses for pose mode.
 const POSE_COUNT: u32 = 6;
@@ -67,7 +67,7 @@ struct NestedCubesUniforms {
     angles_0_3: [f32; 4],
     /// x: size[4], y: angle[4], z: color (0=black, 1=white), w: scatter (0..1)
     extra: [f32; 4],
-    /// x: time (seconds), y: snap_envelope (0..1)
+    /// x: time (seconds), y: clip_trigger_envelope (0..1)
     extra2: [f32; 4],
 }
 
@@ -86,7 +86,7 @@ pub struct NestedCubesGenerator {
     /// Committed target angles (what cubes settle to).
     target_angles: [f32; 5],
     /// Snap envelope (1.0 on trigger, decays to 0).
-    snap_envelope: f32,
+    clip_trigger_envelope: f32,
     /// Last seen trigger count for detecting new triggers.
     last_trigger_count: i32,
     /// Current pose index for pose mode.
@@ -142,7 +142,7 @@ impl NestedCubesGenerator {
             depth_height: 0,
             current_angles: initial_angles,
             target_angles: initial_angles,
-            snap_envelope: 0.0,
+            clip_trigger_envelope: 0.0,
             last_trigger_count: -1,
             pose_index: 0,
         }
@@ -199,9 +199,9 @@ impl Generator for NestedCubesGenerator {
         } else {
             0.0
         };
-        let snap_on = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
-        let snap_mode = if ctx.param_count > SNAP_MODE as u32 {
-            (ctx.params[SNAP_MODE].round() as i32).clamp(MODE_ENVELOPE, MODE_POSE)
+        let triggered = ctx.param_count > CLIP_TRIGGER as u32 && ctx.params[CLIP_TRIGGER] > 0.5;
+        let clip_trigger_mode = if ctx.param_count > CLIP_TRIGGER_MODE as u32 {
+            (ctx.params[CLIP_TRIGGER_MODE].round() as i32).clamp(MODE_ENVELOPE, MODE_POSE)
         } else {
             MODE_ENVELOPE
         };
@@ -212,14 +212,14 @@ impl Generator for NestedCubesGenerator {
         // Detect new trigger
         let trigger_count = ctx.trigger_count as i32;
         if trigger_count != self.last_trigger_count {
-            let should_snap = snap_on && self.last_trigger_count >= 0;
+            let should_trigger = triggered && self.last_trigger_count >= 0;
             self.last_trigger_count = trigger_count;
 
-            if should_snap {
-                match snap_mode {
+            if should_trigger {
+                match clip_trigger_mode {
                     MODE_ENVELOPE => {
                         // Kick envelope, advance targets by 90° * speed
-                        self.snap_envelope = 1.0;
+                        self.clip_trigger_envelope = 1.0;
                         let rotation = 90.0 * speed;
                         for i in 0..5 {
                             self.target_angles[i] += rotation;
@@ -237,10 +237,10 @@ impl Generator for NestedCubesGenerator {
         }
 
         // Decay envelope
-        if self.snap_envelope > 0.001 {
-            self.snap_envelope *= (-SNAP_DECAY_RATE * dt).exp();
+        if self.clip_trigger_envelope > 0.001 {
+            self.clip_trigger_envelope *= (-CLIP_TRIGGER_DECAY_RATE * dt).exp();
         } else {
-            self.snap_envelope = 0.0;
+            self.clip_trigger_envelope = 0.0;
         }
 
         // EMA-smooth current angles toward targets
@@ -274,7 +274,7 @@ impl Generator for NestedCubesGenerator {
                 self.current_angles[3],
             ],
             extra: [sizes[4], self.current_angles[4], 0.0, scatter],
-            extra2: [time, self.snap_envelope, 0.0, 0.0],
+            extra2: [time, self.clip_trigger_envelope, 0.0, 0.0],
         };
 
         self.ensure_depth_texture(gpu.device, ctx.width, ctx.height);
@@ -334,7 +334,7 @@ impl Generator for NestedCubesGenerator {
         let initial: [f32; 5] = std::array::from_fn(|i| (i as f32 / 4.0) * 360.0);
         self.current_angles = initial;
         self.target_angles = initial;
-        self.snap_envelope = 0.0;
+        self.clip_trigger_envelope = 0.0;
         self.last_trigger_count = -1;
         self.pose_index = 0;
     }

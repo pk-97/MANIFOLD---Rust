@@ -53,7 +53,7 @@ inventory::submit! {
             ParamSpec::continuous("contrast", "Contrast", 0.0, 1.0, 0.63, "F2", "contrast"),
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 1.0, "snap"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 1.0, "clipTrigger"),
         ],
         string_params: &[],
     }

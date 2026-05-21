@@ -14,7 +14,9 @@ use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
 use crate::generators::registration::GeneratorFactory;
-use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+use manifold_core::generator_registration::{
+    GeneratorAliasMetadata, GeneratorMetadata, ParamSpec,
+};
 
 inventory::submit! {
     GeneratorMetadata {
@@ -30,7 +32,7 @@ inventory::submit! {
             ParamSpec::continuous("chaos", "Chaos", 0.0, 1.0, 0.3, "F2", "chaos"),
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
             ParamSpec::continuous("count_m", "Particle Count", 0.1, 2.0, 0.5, "F1", "M"),
             ParamSpec::continuous("diffusion", "Diffusion", 0.0, 0.05, 0.0, "F3", "diffusion"),
             ParamSpec::continuous("tilt", "Tilt", -1.0, 1.0, 0.3, "F2", "tilt"),
@@ -47,13 +49,23 @@ inventory::submit! {
     }
 }
 
+// Backward-compat for the `snap` → `clip_trigger` param rename.
+// Driver bindings and Ableton mappings saved against the old id
+// redirect to the new one on load.
+inventory::submit! {
+    GeneratorAliasMetadata {
+        id: GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
+        aliases: &[("snap", Some("clip_trigger"))],
+    }
+}
+
 // Parameter indices (match generator_definition_registry order)
 const TYPE: usize = 0;
 const CONTRAST: usize = 1;
 const CHAOS: usize = 2;
 const SPEED: usize = 3;
 const SCALE: usize = 4;
-const SNAP: usize = 5;
+const CLIP_TRIGGER: usize = 5;
 const PARTICLES: usize = 6;
 const DIFFUSION: usize = 7;
 const TILT: usize = 8;
@@ -314,8 +326,8 @@ impl Generator for StrangeAttractorGenerator {
         let millions = param(ctx, PARTICLES, 0.5);
 
         // Snap mode: type cycles on trigger
-        let snap = param(ctx, SNAP, 0.0) > 0.5;
-        let atype = if snap {
+        let clip_trigger = param(ctx, CLIP_TRIGGER, 0.0) > 0.5;
+        let atype = if clip_trigger {
             if ctx.trigger_count as i32 != self.last_trigger_count {
                 self.last_trigger_count = ctx.trigger_count as i32;
             }

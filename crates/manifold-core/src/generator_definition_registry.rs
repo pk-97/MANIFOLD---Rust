@@ -241,7 +241,8 @@ mod tests {
     #[test]
     fn param_id_to_index_resolves_plasma_ids() {
         // Plasma — declared in generator_metadata_submissions.rs:
-        //   pattern (0), complexity (1), contrast (2), speed (3), scale (4), snap (5)
+        //   pattern (0), complexity (1), contrast (2), speed (3),
+        //   scale (4), clip_trigger (5)
         assert_eq!(
             param_id_to_index(&GeneratorTypeId::PLASMA, "pattern"),
             Some(0)
@@ -262,7 +263,27 @@ mod tests {
             param_id_to_index(&GeneratorTypeId::PLASMA, "scale"),
             Some(4)
         );
-        assert_eq!(param_id_to_index(&GeneratorTypeId::PLASMA, "snap"), Some(5));
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, "clip_trigger"),
+            Some(5)
+        );
+    }
+
+    /// Backward-compat for the `snap` → `clip_trigger` rename:
+    /// projects saved before the rename store the legacy id in driver
+    /// bindings; the alias table resolves it on lookup so they still
+    /// route to the renamed param at index 5. Direct lookup of the
+    /// raw "snap" string (without alias resolution) would return None.
+    #[test]
+    fn legacy_snap_id_still_resolves_via_alias() {
+        use crate::effect_registration::resolve_param_alias;
+        let def = get(&GeneratorTypeId::PLASMA);
+        let resolved = resolve_param_alias(def.legacy_param_aliases, "snap");
+        assert_eq!(resolved, Some("clip_trigger"));
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, resolved.unwrap()),
+            Some(5),
+        );
     }
 
     #[test]

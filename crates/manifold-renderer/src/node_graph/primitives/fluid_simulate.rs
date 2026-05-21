@@ -9,7 +9,7 @@
 //! toroidal wrap. Dead+visible particles get revived; excess
 //! particles outside the wrap region die.
 //!
-//! Wire upstream: node.fluid_seed (initialise on snap), then
+//! Wire upstream: node.fluid_seed (initialise on clip-trigger), then
 //! [particles] → node.fluid_simulate every frame.
 //! Wire field/density inputs from node.fluid_gradient_rotate and
 //! node.resolve_accumulator (or whatever produces the density
@@ -46,7 +46,7 @@ struct FluidSimUniforms {
 crate::primitive! {
     name: FluidSimulate,
     type_id: "node.fluid_simulate",
-    purpose: "Per-frame FluidSim integrator. Samples a vector force field + density texture at each particle's UV, applies simplex-noise advection (density-adaptive), per-particle diffusion, and an optional injection disturbance — integrates one Euler step with toroidal wrap. Pair upstream with node.fluid_seed (init/snap) and node.fluid_gradient_rotate (field). Excess particles (i >= visible_count) die at the wrap boundary; dead+visible particles get revived.",
+    purpose: "Per-frame FluidSim integrator. Samples a vector force field + density texture at each particle's UV, applies simplex-noise advection (density-adaptive), per-particle diffusion, and an optional injection disturbance — integrates one Euler step with toroidal wrap. Pair upstream with node.fluid_seed (init / clip-trigger) and node.fluid_gradient_rotate (field). Excess particles (i >= visible_count) die at the wrap boundary; dead+visible particles get revived.",
     inputs: {
         in: Array(Particle) required,
         field: Texture2D required,

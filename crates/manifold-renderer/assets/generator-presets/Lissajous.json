@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Lissajous",
-  "description": "Lissajous curve generator — decomposed from the legacy `LissajousGenerator` Rust struct into the curated primitive library.\n\nTwo modes share the same render path:\n\n- **Smooth**: the X and Y frequencies are continuously oscillating sines (`a = 2 + 1.5*sin(time*freq_x_rate)`, `b = 3 + 2*sin(time*freq_y_rate)`) producing a slowly morphing closed curve. Phase advances linearly at `time * phase_rate`.\n- **Snap**: on each clip retrigger the frequencies jump to the next row of a curated 10-row harmonic-ratio table (1:2, 1:3, 2:3, 3:4, …). Phase keeps evolving smoothly.\n\nThe outer-card `snap` toggle picks between the two via a pair of MuxScalar nodes; the table itself lives inside `node.frequency_ratio`. `node.generate_lissajous` always interpolates between the floor and ceil integer ratios so non-integer frequencies don't produce non-closing scribbles. `node.render_lines` carries the animation + dot rendering + beat-flash from the legacy `LineGeneratorHelper`.\n\nBit-perfect parity with the legacy generator at default params.",
+  "description": "Lissajous curve generator — decomposed from the legacy `LissajousGenerator` Rust struct into the curated primitive library.\n\nTwo modes share the same render path:\n\n- **Smooth**: the X and Y frequencies are continuously oscillating sines (`a = 2 + 1.5*sin(time*freq_x_rate)`, `b = 3 + 2*sin(time*freq_y_rate)`) producing a slowly morphing closed curve. Phase advances linearly at `time * phase_rate`.\n- **Clip Trigger**: on each clip retrigger the frequencies jump to the next row of a curated 10-row harmonic-ratio table (1:2, 1:3, 2:3, 3:4, …). Phase keeps evolving smoothly.\n\nThe outer-card `clip_trigger` toggle picks between the two via a pair of MuxScalar nodes; the table itself lives inside `node.frequency_ratio`. `node.generate_lissajous` always interpolates between the floor and ceil integer ratios so non-integer frequencies don't produce non-closing scribbles. `node.render_lines` carries the animation + dot rendering + beat-flash from the legacy `LineGeneratorHelper`.\n\nBit-perfect parity with the legacy generator at default params.",
   "presetMetadata": {
     "id": "Lissajous",
     "displayName": "Lissajous",
@@ -110,8 +110,8 @@
         "formatString": "F2"
       },
       {
-        "id": "snap",
-        "name": "Snap",
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
         "min": 0.0,
         "max": 1.0,
         "defaultValue": 0.0,
@@ -119,6 +119,9 @@
         "isToggle": true,
         "formatString": "F0"
       }
+    ],
+    "paramAliases": [
+      { "old": "snap", "new": "clip_trigger" }
     ],
     "bindings": [
       { "id": "freq_x_rate", "label": "Freq X Rate", "defaultValue": 0.13,
@@ -151,10 +154,10 @@
       { "id": "scale",       "label": "Scale",       "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "curve", "param": "scale" },
         "convert": { "type": "Float" } },
-      { "id": "snap",        "label": "Snap",        "defaultValue": 0.0,
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mux_x", "param": "selector" },
         "convert": { "type": "Float" } },
-      { "id": "snap",        "label": "Snap",        "defaultValue": 0.0,
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mux_y", "param": "selector" },
         "convert": { "type": "Float" } }
     ],

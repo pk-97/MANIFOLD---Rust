@@ -60,8 +60,8 @@
         "formatString": "F2"
       },
       {
-        "id": "snap",
-        "name": "Snap",
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
         "min": 0.0,
         "max": 1.0,
         "defaultValue": 0.0,
@@ -69,6 +69,9 @@
         "isToggle": true,
         "formatString": "F0"
       }
+    ],
+    "paramAliases": [
+      { "old": "snap", "new": "clip_trigger" }
     ],
     "bindings": [
       { "id": "pattern",    "label": "Pattern",    "defaultValue": 0.0,
@@ -86,8 +89,8 @@
       { "id": "scale",      "label": "Scale",      "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "plasma", "param": "scale" },
         "convert": { "type": "Float" } },
-      { "id": "snap",       "label": "Snap",       "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "plasma", "param": "snap" },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "plasma", "param": "clip_trigger" },
         "convert": { "type": "BoolThreshold" } }
     ],
     "skipMode": { "kind": "never" }

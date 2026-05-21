@@ -631,7 +631,7 @@ mod tests {
             .expect("Plasma preset declares a node with handle `plasma`");
 
         // Push values in the same order Plasma's presetMetadata.params
-        // declares them: pattern, complexity, contrast, speed, scale, snap.
+        // declares them: pattern, complexity, contrast, speed, scale, clip_trigger.
         g.apply_param_values(&[3.0, 0.75, 0.42, 2.5, 1.5, 1.0]);
 
         // The bindings should have updated each target param.
