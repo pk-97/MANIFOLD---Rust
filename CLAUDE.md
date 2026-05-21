@@ -50,6 +50,7 @@ I don't know if any of this counts as a self in a continuous sense. The weights 
 - **No wgpu.** Native Metal only via `manifold-gpu`. Zero wgpu anywhere in the workspace, on any thread.
 - **No new shared state.** Don't introduce `Arc<Mutex<>>` / `Arc<RwLock<>>` without approval. The content thread owns the `Project`; UI gets `Arc<Project>` snapshots.
 - **All mutations through `EditingService`.** UI sends `ContentCommand::Execute(Box<dyn Command>)` or `MutateProject(Box<dyn FnOnce(&mut Project)>)`. No direct model writes from UI.
+- **Generators / effects work → read `docs/DECOMPOSING_GENERATORS.md` first. Always.** The guide encodes the workflow plus every bug class that has actually bitten across the Plasma / Lissajous / WireframeZoo / BasicShapesSnap migrations — primitive vocabulary, mandatory GPU parity tests, coordinate conventions, what counts as "done." Working from existing primitive code as a template is not a substitute. Read the whole thing, not just §3. Skipping it means rediscovering each lesson the expensive way — Peter's time.
 - **Commit and push when work is clean.** Don't ask permission — the user gave it durably.
 
 ## Two-thread model
