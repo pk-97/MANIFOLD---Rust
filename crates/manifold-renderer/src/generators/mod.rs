@@ -1,4 +1,3 @@
-pub mod basic_shapes_snap;
 pub mod black_hole;
 pub mod bundled_generator_presets;
 pub mod clip_trigger;

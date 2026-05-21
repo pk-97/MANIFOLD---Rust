@@ -1,3 +1,17 @@
+// node.shape_2d — bit-exact port of the legacy BasicShapesSnap compute
+// shader. Renders one of three 2D SDF shapes (Square / Diamond /
+// Octagon) into an RGBA16F texture, with trigger-driven cycling
+// through shapes + 8 rotation steps. The `fill_mode` enum picks the
+// cycling strategy:
+//
+//   0 — Solid:     tc%3 shape, tc/3%8 rotation, always solid
+//   1 — Mixed:     tc%6 variant; variant%3 shape; variant>=3 wireframe; tc/6%8 rotation
+//   2 — Wireframe: tc%3 shape, tc/3%8 rotation, always wireframe
+//
+// Cycling is unconditional — wire `trigger_count` from
+// system.generator_input.trigger_count to drive it from clip retriggers,
+// or leave it unwired for a static (variant-0) shape.
+
 struct Uniforms {
     aspect_ratio: f32,
     line_thickness: f32,

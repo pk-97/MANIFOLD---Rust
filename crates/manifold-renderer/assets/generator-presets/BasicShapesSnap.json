@@ -1,0 +1,66 @@
+{
+  "version": 2,
+  "name": "BasicShapesSnap",
+  "description": "Trigger-cycled 2D SDF shapes — Square / Diamond / Octagon, anti-aliased with a per-pixel finite-difference fwidth. The `fill_mode` enum picks the cycling strategy: Solid (3 shapes × 8 rotations, always filled), Mixed (6 variants × 8 rotations, alternating fill/wireframe — original snap behaviour), or Wireframe (3 shapes × 8 rotations, always outlined). Cycling is unconditional — `trigger_count` from system.generator_input drives shape + rotation; leave the wire unconnected for a static variant-0 shape.\n\nDecomposed from the legacy `BasicShapesSnapGenerator` into a single curated `node.shape_2d` primitive — the Plasma precedent for single-shader generators.",
+  "presetMetadata": {
+    "id": "BasicShapesSnap",
+    "displayName": "Basic Shapes",
+    "category": "Procedural",
+    "oscPrefix": "basicShapesSnap",
+    "available": true,
+    "params": [
+      {
+        "id": "line",
+        "name": "Line",
+        "min": 0.0005,
+        "max": 0.03,
+        "defaultValue": 0.015,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.25,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "fill",
+        "name": "Fill",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0"
+      }
+    ],
+    "bindings": [
+      { "id": "line",  "label": "Line",  "defaultValue": 0.015,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "line" },
+        "convert": { "type": "Float" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "scale" },
+        "convert": { "type": "Float" } },
+      { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "fill_mode" },
+        "convert": { "type": "EnumRound" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "node.shape_2d", "handle": "shape" },
+    { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "aspect",        "toNode": 1, "toPort": "aspect" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 1, "toPort": "trigger_count" },
+    { "fromNode": 1, "fromPort": "out",           "toNode": 2, "toPort": "in" }
+  ]
+}

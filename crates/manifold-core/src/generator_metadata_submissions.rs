@@ -30,6 +30,13 @@ inventory::submit! {
 }
 
 // ── Basic Shapes Snap ──────────────────────────────────────────────────
+//
+// Decomposed into a JSON graph (assets/generator-presets/BasicShapesSnap.json)
+// + `node.shape_2d` primitive. The legacy outer-card `shape` param was
+// declared in metadata but ignored by the legacy shader — kept here at
+// the same positional index so saved projects round-trip cleanly
+// through positional Array form. The JSON preset's bindings ignore it,
+// matching legacy behaviour.
 
 inventory::submit! {
     GeneratorMetadata {
@@ -41,7 +48,7 @@ inventory::submit! {
         legacy_discriminant: Some(2),
         params: &[
             ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.015, "F4", "line"),
-            ParamSpec::whole_labels("shape", "Shape", 0.0, 2.0, 0.0, &["Square","Diamond","Octagon"], "shape"),
+            ParamSpec::whole_labels("shape", "Shape (vestigial)", 0.0, 2.0, 0.0, &["Square","Diamond","Octagon"], "shape"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::whole_labels("fill", "Fill", 0.0, 2.0, 1.0, &["Solid","Mixed","Wireframe"], "fill"),
         ],
