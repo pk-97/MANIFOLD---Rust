@@ -24,6 +24,8 @@ The trap: decomposing for its own sake. A generator that is one shader doing one
 
 The win condition: the legacy Rust generator gets deleted, the JSON preset is the only path, and the primitives that fell out are useful in *other* graphs too.
 
+**Time budgeting**: the first decomposition that uses a new primitive family (Plasma → curated procedural texture; Lissajous → curve sources; WireframeZoo → 3D wireframe pipeline) pays a one-time tax to build out that family — typically 3-5 primitive extensions plus the JSON preset. Subsequent decompositions in the same family are far cheaper because the primitives already exist. Tesseract / Duocylinder will inherit the entire 3D wireframe pipeline from WireframeZoo's decomposition; they'll likely be JSON-only changes plus one or two 4D primitive additions. Don't budget the second decomposition like the first.
+
 ## 2. The mental model
 
 A generator is a sub-graph from `system.generator_input` to `final_output`.
@@ -157,6 +159,8 @@ This is a hard rule and lives in [feedback_collapse_to_primitives](../.claude/pr
 
 When a decomposition needs new behaviour and an existing primitive is close to it, extend the existing one. Add an optional input port, a mode enum, an output port. The bar to clear: the extension must be **simple** (one or two additive changes, not a rewrite) and **contained** (doesn't pollute the existing primitive's surface with concepts that have nothing to do with its core job). Both Plasma's `clip_trigger` cycling and Lissajous's port-shadowable inputs were added this way.
 
+**Expect adjacent extensions to cascade.** A single generator decomposition usually grows port-shadow on 2-3 adjacent primitives, not just the producer. WireframeZoo needed: `wireframe_shape` (the new family primitive), `rotate_3d` (port-shadow `angle_x/y/z`, previously static-only), `project_3d` (port-shadow `proj_scale/proj_dist`, previously static-only), `render_lines` (optional `edges` input). Plan for this in the inventory step (§3 step 3) — every time-varying value the legacy generator computed needs a wirable port on the consumer primitive.
+
 Why extend over build:
 
 - Every new primitive is a registry entry, a `composition_notes` string, parity tests, and a slot in the user's mental palette. Cheap individually, expensive at the catalog level.
@@ -178,11 +182,21 @@ WireframeZoo demonstrates the extend pattern: instead of a new `render_wireframe
 
 Bad middle ground: a family primitive with three barely-related variants, or a single-purpose primitive that grows a `mode` enum to cover its second use case. Both should be split or merged accordingly.
 
-### 6.4 Outer-card params are the user surface
+### 6.4 Watch for hidden constants in the legacy code
+
+Legacy Rust generators almost always have a handful of inline numeric constants that don't live in any visible param. WireframeZoo had `proj_scale = 0.25 * outer_scale` — that 0.25 was a screen-fit factor never exposed to the user but load-bearing for the visual size. To preserve UX with the new graph, the constant has to live somewhere — either:
+
+- As a default on the consumer primitive (clean when the constant is genuinely a sensible default — `project_3d.proj_scale = 0.25` is one).
+- As a math node in the graph (clean when the constant is part of an arithmetic chain the user shouldn't see — `outer_scale × 0.25` became a `math(Multiply)` node).
+- Baked into the upstream primitive's output (clean when the constant is intrinsic to that primitive — e.g. `generate_lissajous` bakes `PROJ_SCALE = 0.25` into its sample positions).
+
+The trap is missing a hidden constant and shipping a preset that's visually wrong by a multiplier. Read the legacy generator's `render()` end-to-end and circle every bare numeric literal before authoring the JSON.
+
+### 6.5 Outer-card params are the user surface
 
 Every outer-card param costs UI real estate and the user's attention. Before declaring one, ask: would the user reach for this in performance? If the answer is "only when authoring the preset," the value should be baked into the JSON's defaults, not exposed. Plasma exposes 8 outer params (pattern, complexity, contrast, speed, scale, clip_trigger, plus generator_input scalars). Lissajous exposes 10. Anything past ~12 outer params is a smell — the graph is doing too much, or it should split into two presets with different defaults.
 
-### 6.5 Name nodes for what they do, not how they're built
+### 6.6 Name nodes for what they do, not how they're built
 
 Node names are the user's vocabulary. They show up in the palette, the graph editor, MCP/API agent prompts, and the autocomplete a future user types into a search box. They are a UX surface, not a code surface.
 
@@ -230,6 +244,8 @@ Post-audit (2026-05-21), these are enforced by the runtime, the macro, or a CI t
 - **`composition_notes` in the `primitive!` macro slot** — the AI authoring surface. Even though no UI consumes it today (per audit §8), every primitive must populate it with a short, specific note describing when/how to compose this primitive. This is the vocabulary an MCP/API agent will read.
 - **`StateStore` works for generators** — post-audit, `JsonGraphGenerator` owns a `StateStore` and dispatches through `execute_frame_with_state`. You can compose `feedback`, `array_feedback`, `temporal::*`, `smoothing`, `envelope_follower_ar` freely. No `assert!` panic at runtime, no plan-time check needed.
 - **`preset_metadata` is grafted on both surfaces** — the runtime (`JsonGraphGenerator::from_def`) and the editor snapshot (`ContentThread::active_generator_graph_snapshot`) both call `graft_preset_metadata_from_bundle` before resolving bindings. An override with `preset_metadata = None` no longer silently strands every binding. This was the §9 critical asymmetry; it's closed.
+- **`ParamConvert` variants are fixed at four**: `Float`, `IntRound`, `BoolThreshold`, `EnumRound`. No scaling, no offset, no enum-aware mapping. Anything that isn't a direct passthrough or one of those four conversions needs a `math` node in the graph between the outer-card slider and the inner-node target. Don't waste time looking for a `FloatScaled` convert — it doesn't exist.
+- **Shared MTLBuffer is CPU + GPU visible.** Array<T> output buffers are allocated with `create_buffer_shared`, so the CPU can read them via `GpuBuffer::mapped_ptr()`. **But same-frame GPU-write → CPU-read does not see the write without an explicit fence** (the compute dispatch is queued, not completed, when the next primitive's CPU code runs). Two clean options when one primitive produces Array<T> and another consumes it CPU-side: (a) producer CPU-writes the data (works when the data is static or cheap to compute), (b) consumer reads next frame's data, accepting one-frame staleness. WireframeShape uses (a) for its edge tables. Don't try to read same-frame GPU-written data CPU-side.
 
 ## 8. Bug classes to recognise
 
