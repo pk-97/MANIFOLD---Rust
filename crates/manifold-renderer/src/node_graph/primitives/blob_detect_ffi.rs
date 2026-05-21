@@ -287,9 +287,7 @@ impl Primitive for BlobDetectFfi {
         let mut count: u32 = 0;
         if let Some(bs) = self.blob_state.as_ref() {
             let n = bs.blobs.len().min(MAX_BLOB_CAP);
-            for i in 0..n {
-                src_blobs[i] = bs.blobs[i];
-            }
+            src_blobs[..n].copy_from_slice(&bs.blobs[..n]);
             count = n as u32;
         }
         if let Some(bs) = self.blob_state.as_mut() {

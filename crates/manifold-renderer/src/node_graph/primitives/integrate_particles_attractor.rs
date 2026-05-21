@@ -82,7 +82,7 @@ crate::primitive! {
             label: "Camera Angle",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-6.28318, 6.28318)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {
@@ -153,7 +153,7 @@ crate::primitive! {
 impl Primitive for IntegrateParticlesAttractor {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let attractor_type = match ctx.params.get("attractor_type") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let particle_count = match ctx.params.get("particle_count") {

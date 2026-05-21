@@ -111,7 +111,7 @@ impl Primitive for FluidSeed {
             _ => 100_000,
         };
         let pattern_index = match ctx.params.get("pattern") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let trigger_count = match ctx.params.get("trigger_count") {

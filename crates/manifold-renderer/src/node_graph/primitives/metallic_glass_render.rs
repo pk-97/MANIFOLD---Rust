@@ -88,7 +88,7 @@ crate::primitive! {
             label: "Camera Orbit",
             ty: ParamType::Float,
             default: ParamValue::Float(0.7),
-            range: Some((-6.28318, 6.28318)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {
@@ -243,7 +243,7 @@ impl Primitive for MetallicGlassRender {
             grid_info: [grid_size as f32, texel_size, aspect, 0.0],
         };
 
-        let quads = (grid_size - 1) as u32;
+        let quads = grid_size - 1;
         let vertex_count = quads * quads * 6;
 
         let gpu = ctx.gpu_encoder();

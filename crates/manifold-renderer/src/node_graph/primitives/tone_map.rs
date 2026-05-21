@@ -110,11 +110,11 @@ impl Primitive for ToneMap {
             _ => 1.0,
         };
         let curve = match ctx.params.get("curve") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let mode = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let paper_white = match ctx.params.get("paper_white") {

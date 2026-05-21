@@ -73,7 +73,7 @@ crate::primitive! {
 impl Primitive for Project3D {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let mode = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let proj_scale = match ctx.params.get("proj_scale") {

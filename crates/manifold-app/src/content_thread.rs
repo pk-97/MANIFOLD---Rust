@@ -1209,14 +1209,13 @@ impl ContentThread {
         let def: manifold_core::effect_graph_def::EffectGraphDef =
             if let Some(override_def) = layer.generator_graph.as_ref() {
                 let mut d = override_def.clone();
-                if d.preset_metadata.is_none() {
-                    if let Some(json) = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
+                if d.preset_metadata.is_none()
+                    && let Some(json) = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
                         gen_type,
-                    ) {
-                        if let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json) {
-                            d.preset_metadata = base.preset_metadata;
-                        }
-                    }
+                    )
+                    && let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json)
+                {
+                    d.preset_metadata = base.preset_metadata;
                 }
                 d
             } else {

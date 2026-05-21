@@ -83,11 +83,11 @@ crate::primitive! {
 impl Primitive for Blur3DSeparable {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let mode = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let axis = match ctx.params.get("axis") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let vol_res = match ctx.params.get("vol_res") {

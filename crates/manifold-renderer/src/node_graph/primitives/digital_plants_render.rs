@@ -81,7 +81,7 @@ crate::primitive! {
             label: "Camera Orbit",
             ty: ParamType::Float,
             default: ParamValue::Float(0.7),
-            range: Some((-6.28318, 6.28318)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {

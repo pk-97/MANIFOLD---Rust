@@ -7,6 +7,7 @@
 //!   - METALLIC (.g): mirrored Sobel-edge → levels-remapped
 //!   - EDGE (.b): raw Sobel magnitude (for downstream PBR vein detail)
 //!   - ALPHA (.a): 1.0
+//!
 //! Temporal-blended with `prev_tex` (default blend 0.15 = stable surface).
 //!
 //! Fused for MetallicGlass parity. Splitting Sobel / mirror /
@@ -56,8 +57,8 @@ crate::primitive! {
             name: "mirror_angle",
             label: "Mirror Angle",
             ty: ParamType::Float,
-            default: ParamValue::Float(0.785398),
-            range: Some((-6.28318, 6.28318)),
+            default: ParamValue::Float(std::f32::consts::FRAC_PI_4),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {
@@ -82,7 +83,7 @@ impl Primitive for MetallicGlassProcess {
         };
         let mirror_angle = match ctx.params.get("mirror_angle") {
             Some(ParamValue::Float(f)) => *f,
-            _ => 0.785398,
+            _ => std::f32::consts::FRAC_PI_4,
         };
         let temporal_blend = match ctx.params.get("temporal_blend") {
             Some(ParamValue::Float(f)) => *f,

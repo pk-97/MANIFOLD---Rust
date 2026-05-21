@@ -112,7 +112,7 @@ crate::primitive! {
             label: "Rotation X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-6.28318, 6.28318)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {
@@ -120,7 +120,7 @@ crate::primitive! {
             label: "Rotation Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-6.28318, 6.28318)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {
@@ -128,7 +128,7 @@ crate::primitive! {
             label: "Rotation Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-6.28318, 6.28318)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
     ],
@@ -144,7 +144,7 @@ impl Primitive for GenerateInstanceTransforms {
             _ => 64,
         };
         let layout = match ctx.params.get("layout") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let seed = match ctx.params.get("seed") {

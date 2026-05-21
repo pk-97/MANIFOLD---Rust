@@ -171,9 +171,9 @@ impl Primitive for WgslCompute1Tex1Tex {
 
         // Decide whether to (re)compile.
         let current_hash = hash_source(&self.source);
-        let needs_compile = self.pipeline.is_none()
-            && !self.compile_failed
-            || self.compiled_source_hash != Some(current_hash) && !self.compile_failed;
+        let needs_compile = (self.pipeline.is_none()
+            || self.compiled_source_hash != Some(current_hash))
+            && !self.compile_failed;
 
         let gpu = ctx.gpu_encoder();
 

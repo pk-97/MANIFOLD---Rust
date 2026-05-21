@@ -54,20 +54,20 @@ impl GeneratorRegistry {
         // baked into each primitive cache at first dispatch regardless.
         let registry = PrimitiveRegistry::with_builtin();
         for type_id in bundled_generator_preset_type_ids() {
-            if let Some(json) = bundled_generator_preset_json(&type_id) {
-                if let Err(e) = JsonGraphGenerator::from_json_str_with_device(
+            if let Some(json) = bundled_generator_preset_json(&type_id)
+                && let Err(e) = JsonGraphGenerator::from_json_str_with_device(
                     json,
                     &registry,
                     device,
                     256,
                     256,
                     self.target_format,
-                ) {
-                    log::warn!(
-                        "Pre-warm of bundled generator preset {} failed: {e}",
-                        type_id.as_str(),
-                    );
-                }
+                )
+            {
+                log::warn!(
+                    "Pre-warm of bundled generator preset {} failed: {e}",
+                    type_id.as_str(),
+                );
             }
         }
         log::info!("Generator pipeline pre-warm complete");
@@ -171,7 +171,7 @@ impl GeneratorRegistry {
             bundled_generator_preset_type_ids().collect();
         for factory in inventory::iter::<super::registration::GeneratorFactory> {
             // Avoid duplicating ids that ship in both sources.
-            if !out.iter().any(|id| *id == factory.id) {
+            if !out.contains(&factory.id) {
                 out.push(factory.id.clone());
             }
         }

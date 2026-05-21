@@ -99,7 +99,7 @@ impl Primitive for AutoGainApply {
             },
         };
         let character = match ctx.params.get("character") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
         let color_push = match ctx.params.get("color_push") {

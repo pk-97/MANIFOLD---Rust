@@ -276,7 +276,7 @@ impl JsonGraphGenerator {
         // primitive load yet).
         use manifold_core::effect_graph_def::BindingTarget;
         let handle_map: std::collections::HashMap<&str, NodeInstanceId> =
-            graph.handles().map(|(h, id)| (h, id)).collect();
+            graph.handles().collect();
         let bindings: Vec<BindingResolution> = binding_specs
             .iter()
             .filter_map(|b| match &b.target {

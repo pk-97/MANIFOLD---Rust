@@ -71,7 +71,7 @@ crate::primitive! {
 impl Primitive for GeneratePlatonicSolid {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let shape = match ctx.params.get("shape") {
-            Some(ParamValue::Enum(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
 
