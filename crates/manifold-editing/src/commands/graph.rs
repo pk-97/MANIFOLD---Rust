@@ -723,6 +723,14 @@ pub struct ToggleNodeParamExposeCommand {
     reverse: NodeExposeReverse,
 }
 
+// Two-variant undo-state enum: `None` until execute() runs, then
+// `Captured` carries everything needed to reverse the toggle. The
+// `Captured` variant grew past the clippy size threshold when the
+// envelope-cleanup work landed, but boxing the captured payload
+// would add heap traffic to every undoable graph-toggle command
+// for no real win — these structs live in an undo stack capped at
+// 200 entries, not on any hot path. Lint suppressed deliberately.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Default)]
 enum NodeExposeReverse {
     #[default]
@@ -739,6 +747,14 @@ enum NodeExposeReverse {
     },
 }
 
+// `RemovedUserBinding` is large because it captures the full
+// `UserParamBinding` + every orphaned driver / Ableton mapping /
+// envelope so undo can faithfully restore the pre-unexpose state.
+// Boxing it would only shrink the enum footprint on the undo
+// stack — the captured payload lives there for at most ~200
+// commands and is never on a render hot path, so the indirection
+// trade isn't worth it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum EffectMirrorReverse {
     /// The (handle, param) maps to a static-block slot; we flipped

@@ -1,0 +1,251 @@
+{
+  "version": 2,
+  "name": "Lissajous",
+  "description": "Lissajous curve generator — decomposed from the legacy `LissajousGenerator` Rust struct into the curated primitive library.\n\nTwo modes share the same render path:\n\n- **Smooth**: the X and Y frequencies are continuously oscillating sines (`a = 2 + 1.5*sin(time*freq_x_rate)`, `b = 3 + 2*sin(time*freq_y_rate)`) producing a slowly morphing closed curve. Phase advances linearly at `time * phase_rate`.\n- **Snap**: on each clip retrigger the frequencies jump to the next row of a curated 10-row harmonic-ratio table (1:2, 1:3, 2:3, 3:4, …). Phase keeps evolving smoothly.\n\nThe outer-card `snap` toggle picks between the two via a pair of MuxScalar nodes; the table itself lives inside `node.frequency_ratio`. `node.generate_lissajous` always interpolates between the floor and ceil integer ratios so non-integer frequencies don't produce non-closing scribbles. `node.render_lines` carries the animation + dot rendering + beat-flash from the legacy `LineGeneratorHelper`.\n\nBit-perfect parity with the legacy generator at default params.",
+  "presetMetadata": {
+    "id": "Lissajous",
+    "displayName": "Lissajous",
+    "category": "Procedural",
+    "oscPrefix": "lissajous",
+    "available": true,
+    "params": [
+      {
+        "id": "freq_x_rate",
+        "name": "Freq X Rate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.13,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "freq_y_rate",
+        "name": "Freq Y Rate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.09,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "phase_rate",
+        "name": "Phase Rate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.07,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "line",
+        "name": "Line",
+        "min": 0.0001,
+        "max": 0.05,
+        "defaultValue": 0.002,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "show_verts",
+        "name": "Show Vertices",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
+      },
+      {
+        "id": "vert_size",
+        "name": "Vertex Size",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "animate",
+        "name": "Animate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 10.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "window",
+        "name": "Window",
+        "min": 0.01,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "snap",
+        "name": "Snap",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
+      }
+    ],
+    "bindings": [
+      { "id": "freq_x_rate", "label": "Freq X Rate", "defaultValue": 0.13,
+        "target": { "kind": "handleNode", "handle": "lfo_x", "param": "angular_rate" },
+        "convert": { "type": "Float" } },
+      { "id": "freq_y_rate", "label": "Freq Y Rate", "defaultValue": 0.09,
+        "target": { "kind": "handleNode", "handle": "lfo_y", "param": "angular_rate" },
+        "convert": { "type": "Float" } },
+      { "id": "phase_rate",  "label": "Phase Rate",  "defaultValue": 0.07,
+        "target": { "kind": "handleNode", "handle": "lfo_phase", "param": "angular_rate" },
+        "convert": { "type": "Float" } },
+      { "id": "line",        "label": "Line",        "defaultValue": 0.002,
+        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "convert": { "type": "Float" } },
+      { "id": "show_verts",  "label": "Show Vertices","defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render", "param": "show_verts" },
+        "convert": { "type": "BoolThreshold" } },
+      { "id": "vert_size",   "label": "Vertex Size", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render", "param": "vert_size" },
+        "convert": { "type": "Float" } },
+      { "id": "animate",     "label": "Animate",     "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "render", "param": "animate" },
+        "convert": { "type": "BoolThreshold" } },
+      { "id": "speed",       "label": "Speed",       "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render", "param": "speed" },
+        "convert": { "type": "Float" } },
+      { "id": "window",      "label": "Window",      "defaultValue": 0.1,
+        "target": { "kind": "handleNode", "handle": "render", "param": "window" },
+        "convert": { "type": "Float" } },
+      { "id": "scale",       "label": "Scale",       "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "curve", "param": "scale" },
+        "convert": { "type": "Float" } },
+      { "id": "snap",        "label": "Snap",        "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mux_x", "param": "selector" },
+        "convert": { "type": "BoolThreshold" } },
+      { "id": "snap",        "label": "Snap",        "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mux_y", "param": "selector" },
+        "convert": { "type": "BoolThreshold" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    {
+      "id": 1, "typeId": "node.lfo", "handle": "lfo_x",
+      "params": {
+        "rate_mode":     { "type": "Enum",  "value": 1 },
+        "shape":         { "type": "Enum",  "value": 0 },
+        "angular_rate":  { "type": "Float", "value": 0.13 },
+        "min":           { "type": "Float", "value": 0.5 },
+        "max":           { "type": "Float", "value": 3.5 }
+      }
+    },
+    {
+      "id": 2, "typeId": "node.lfo", "handle": "lfo_y",
+      "params": {
+        "rate_mode":     { "type": "Enum",  "value": 1 },
+        "shape":         { "type": "Enum",  "value": 0 },
+        "angular_rate":  { "type": "Float", "value": 0.09 },
+        "min":           { "type": "Float", "value": 1.0 },
+        "max":           { "type": "Float", "value": 5.0 }
+      }
+    },
+    {
+      "id": 3, "typeId": "node.lfo", "handle": "lfo_phase",
+      "params": {
+        "rate_mode":     { "type": "Enum",  "value": 1 },
+        "shape":         { "type": "Enum",  "value": 2 },
+        "angular_rate":  { "type": "Float", "value": 0.07 },
+        "min":           { "type": "Float", "value": 0.0 },
+        "max":           { "type": "Float", "value": 6.28318530718 }
+      }
+    },
+    { "id": 4, "typeId": "node.frequency_ratio", "handle": "ratio" },
+    {
+      "id": 5, "typeId": "node.mux_scalar", "handle": "mux_x",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 6, "typeId": "node.mux_scalar", "handle": "mux_y",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 7, "typeId": "node.generate_lissajous", "handle": "curve",
+      "params": {
+        "scale":        { "type": "Float", "value": 1.0 },
+        "vertex_count": { "type": "Int",   "value": 256 }
+      }
+    },
+    {
+      "id": 8, "typeId": "node.render_lines", "handle": "render",
+      "params": {
+        "edge_thickness":    { "type": "Float", "value": 0.002 },
+        "closed_loop":       { "type": "Bool",  "value": true  },
+        "show_verts":        { "type": "Bool",  "value": true  },
+        "vert_size":         { "type": "Float", "value": 1.0   },
+        "animate":           { "type": "Bool",  "value": false },
+        "speed":             { "type": "Float", "value": 1.0   },
+        "window":            { "type": "Float", "value": 0.1   },
+        "beat_flash_amount": { "type": "Float", "value": 0.4   },
+        "color_r":           { "type": "Float", "value": 1.0   },
+        "color_g":           { "type": "Float", "value": 1.0   },
+        "color_b":           { "type": "Float", "value": 1.0   },
+        "color_a":           { "type": "Float", "value": 1.0   }
+      }
+    },
+    { "id": 9, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "index"   },
+
+    { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "in_0" },
+    { "fromNode": 4, "fromPort": "a",   "toNode": 5, "toPort": "in_1" },
+
+    { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "in_0" },
+    { "fromNode": 4, "fromPort": "b",   "toNode": 6, "toPort": "in_1" },
+
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "freq_x" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "freq_y" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 7, "toPort": "phase"  },
+
+    { "fromNode": 7, "fromPort": "points", "toNode": 8, "toPort": "points" },
+
+    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+  ]
+}

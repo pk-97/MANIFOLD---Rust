@@ -11,7 +11,6 @@ pub mod fluid_simulation_3d;
 pub mod generator_math;
 pub mod json_graph_generator;
 pub mod line_pipeline;
-pub mod lissajous;
 pub mod mesh_common;
 pub mod mesh_pipeline;
 pub mod metallic_glass;

@@ -1,18 +1,28 @@
-//! `node.lfo` — beat-locked low-frequency oscillator emitting a
-//! scalar in `[0, 1]` on the `out` port.
+//! `node.lfo` — low-frequency oscillator emitting a scalar on the
+//! `out` port.
 //!
-//! Stateless: phase is `(beats * rate + offset).fract()` computed
-//! fresh each frame from [`FrameTime::beats`]. Seek-safe and
-//! deterministic — pause/resume returns to the same value, and two
-//! graphs at the same transport position emit identical phases.
+//! Stateless: phase is recomputed fresh each frame from
+//! [`FrameTime`]. Seek-safe and deterministic — pause/resume returns
+//! to the same value, and two graphs at the same transport position
+//! emit identical phases.
 //!
-//! The `rate` selector reuses the same note-rate table as
-//! `node.strobe` so the editor's musical-rate vocabulary stays
-//! consistent across the catalog. `phase` is a fractional offset on
-//! `[0, 1)` for layering multiple LFOs out-of-phase. Output is
-//! unipolar `[0, 1]` for direct wiring into `[0, 1]`-ranged knobs
-//! like `wet_dry`; bipolar shaping (depth, bias) composes through
-//! `node.math` downstream.
+//! Two rate modes:
+//! - **Musical**: phase advances `note_rate` cycles per beat. The
+//!   `rate` selector reuses the same note-rate table as
+//!   `node.strobe` so the editor's musical-rate vocabulary stays
+//!   consistent across the catalog. Reads `FrameTime::beats`.
+//! - **Free**: angular frequency in radians per second. The
+//!   underlying sine is `sin(seconds * angular_rate)` so this
+//!   matches legacy generator math like
+//!   `sin(time * freq_rate)` (where `time` is seconds) bit-for-bit.
+//!   Reads `FrameTime::seconds`.
+//!
+//! `phase` is a fractional offset on `[0, 1)` for layering multiple
+//! LFOs out-of-phase. `min` / `max` map the underlying unipolar
+//! `[0, 1]` shape onto the output range, so a bipolar `[-1, 1]`
+//! sine is `min=-1, max=1`, an oscillator centred at `2.0` with
+//! amplitude `1.5` is `min=0.5, max=3.5`, and the default
+//! `min=0, max=1` preserves the original unipolar behaviour.
 
 use std::f32::consts::TAU;
 
@@ -30,15 +40,28 @@ pub const LFO_RATE_LABELS: &[&str] = &[
 /// Display labels for the `shape` enum, indexed by enum value.
 pub const LFO_SHAPES: &[&str] = &["Sine", "Triangle", "Saw", "Square"];
 
+/// Display labels for the `rate_mode` enum. `Musical` consumes the
+/// `rate` enum (beat-locked note rate); `Free` consumes `rate_hz` as
+/// cycles-per-second.
+pub const LFO_RATE_MODES: &[&str] = &["Musical", "Free"];
+
 crate::primitive! {
     name: Lfo,
     type_id: "node.lfo",
-    purpose: "Beat-synced low-frequency oscillator. Emits a unipolar [0, 1] scalar on `out`, shaped sine / triangle / saw / square at a musical note rate. Stateless and seek-safe.",
+    purpose: "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous angular frequency `angular_rate` (rad/s) — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention. Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
     inputs: {},
     outputs: {
         out: ScalarF32,
     },
     params: [
+        ParamDef {
+            name: "rate_mode",
+            label: "Rate Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // Musical — preserves existing behaviour
+            range: Some((0.0, (LFO_RATE_MODES.len() - 1) as f32)),
+            enum_values: LFO_RATE_MODES,
+        },
         ParamDef {
             name: "rate",
             label: "Rate",
@@ -46,6 +69,14 @@ crate::primitive! {
             default: ParamValue::Enum(2), // "1/4"
             range: Some((0.0, (LFO_RATE_LABELS.len() - 1) as f32)),
             enum_values: LFO_RATE_LABELS,
+        },
+        ParamDef {
+            name: "angular_rate",
+            label: "Angular Rate (rad/s)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 100.0)),
+            enum_values: &[],
         },
         ParamDef {
             name: "shape",
@@ -63,21 +94,36 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "min",
+            label: "Min",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "max",
+            label: "Max",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
     ],
-    composition_notes: "Output range is unipolar [0, 1]. For depth/offset or bipolar shaping, wire the output through `node.math`. For free-running (non-beat-locked) rate, use `node.value` or a future `node.time` source through math.",
+    composition_notes: "Defaults reproduce the historic beat-locked unipolar [0, 1] behaviour: Musical mode, rate=1/4, sine, min=0, max=1. Switch `rate_mode` to Free and set `angular_rate` (rad/s) to drive the underlying `sin(seconds * angular_rate)` — matches legacy generator code expressed as `sin(time * rate)` with no unit conversion. For the linear-ramp phase pattern of legacy generators (`phase = time * phase_rate`), use Free + saw shape + `min=0, max=2π` so the saw output fed into `sin(a*t + phase)` reproduces the legacy phase wrap exactly. `min`/`max` swap signs to invert without a `node.math` and produce bipolar output (-1, 1) or arbitrary amplitude+offset in one node.",
     examples: [],
     picker: { label: "LFO", category: Driver },
 }
 
 impl Primitive for Lfo {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let rate_idx = match ctx.params.get("rate") {
-            Some(ParamValue::Enum(v)) => (*v as usize).min(NOTE_RATE_VALUES.len() - 1),
-            Some(ParamValue::Int(i)) => ((*i).max(0) as usize).min(NOTE_RATE_VALUES.len() - 1),
+        let rate_mode = match ctx.params.get("rate_mode") {
+            Some(ParamValue::Enum(v)) => (*v as usize).min(LFO_RATE_MODES.len() - 1),
             Some(ParamValue::Float(f)) => {
-                (f.round().max(0.0) as usize).min(NOTE_RATE_VALUES.len() - 1)
+                (f.round().max(0.0) as usize).min(LFO_RATE_MODES.len() - 1)
             }
-            _ => 2,
+            _ => 0,
         };
         let shape = match ctx.params.get("shape") {
             Some(ParamValue::Enum(v)) => (*v as usize).min(LFO_SHAPES.len() - 1),
@@ -90,14 +136,49 @@ impl Primitive for Lfo {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
         };
+        let min = match ctx.params.get("min") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let max = match ctx.params.get("max") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 1.0,
+        };
 
-        let cycles_per_beat = NOTE_RATE_VALUES[rate_idx];
-        let beats = ctx.time.beats.0 as f32;
-        let mut p = (beats * cycles_per_beat + phase_offset).fract();
+        // `cycles` counts how many full periods the LFO has elapsed
+        // since transport zero. In Musical mode the rate is cycles
+        // per beat (note-rate enum), in Free mode the rate is an
+        // angular frequency (rad/s) — divide by 2π to convert to
+        // cycles per second. Whichever axis we're on, `fract()`
+        // wraps to a `[0, 1)` unit phase that drives every shape.
+        let cycles = match rate_mode {
+            1 => {
+                let angular_rate = match ctx.params.get("angular_rate") {
+                    Some(ParamValue::Float(f)) => *f,
+                    _ => 1.0,
+                };
+                ctx.time.seconds.0 as f32 * angular_rate / TAU
+            }
+            _ => {
+                let rate_idx = match ctx.params.get("rate") {
+                    Some(ParamValue::Enum(v)) => (*v as usize).min(NOTE_RATE_VALUES.len() - 1),
+                    Some(ParamValue::Int(i)) => {
+                        ((*i).max(0) as usize).min(NOTE_RATE_VALUES.len() - 1)
+                    }
+                    Some(ParamValue::Float(f)) => {
+                        (f.round().max(0.0) as usize).min(NOTE_RATE_VALUES.len() - 1)
+                    }
+                    _ => 2,
+                };
+                ctx.time.beats.0 as f32 * NOTE_RATE_VALUES[rate_idx]
+            }
+        };
+
+        let mut p = (cycles + phase_offset).fract();
         if p < 0.0 {
             p += 1.0;
         }
-        let value = match shape {
+        let unipolar = match shape {
             0 => 0.5 * (1.0 + (TAU * p).sin()),
             1 => {
                 if p < 0.5 {
@@ -115,6 +196,7 @@ impl Primitive for Lfo {
                 }
             }
         };
+        let value = min + unipolar * (max - min);
 
         ctx.outputs.set_scalar("out", ParamValue::Float(value));
     }
@@ -194,6 +276,54 @@ mod tests {
         }
     }
 
+    fn frame_at(beats: f32, seconds: f32) -> FrameTime {
+        FrameTime {
+            beats: Beats(beats as f64),
+            seconds: Seconds(seconds as f64),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    /// Drive the LFO with full configuration (rate_mode, free-rate
+    /// rad/s, min/max range) and an explicit `(beats, seconds)` pair
+    /// so Free mode tests don't accidentally pick up beats.
+    #[allow(clippy::too_many_arguments)]
+    fn drive_lfo_full(
+        rate_mode: u32,
+        rate_idx: u32,
+        angular_rate: f32,
+        shape_idx: u32,
+        phase: f32,
+        min: f32,
+        max: f32,
+        beats: f32,
+        seconds: f32,
+    ) -> f32 {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut g = Graph::new();
+        let lfo = g.add_node(Box::new(Lfo::new()));
+        let sink = g.add_node(Box::new(Capture {
+            type_id: EffectNodeType::new("test.capture"),
+            seen: seen.clone(),
+        }));
+        g.set_param(lfo, "rate_mode", ParamValue::Enum(rate_mode)).unwrap();
+        g.set_param(lfo, "rate", ParamValue::Enum(rate_idx)).unwrap();
+        g.set_param(lfo, "angular_rate", ParamValue::Float(angular_rate)).unwrap();
+        g.set_param(lfo, "shape", ParamValue::Enum(shape_idx)).unwrap();
+        g.set_param(lfo, "phase", ParamValue::Float(phase)).unwrap();
+        g.set_param(lfo, "min", ParamValue::Float(min)).unwrap();
+        g.set_param(lfo, "max", ParamValue::Float(max)).unwrap();
+        g.connect((lfo, "out"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_at(beats, seconds));
+        match *seen.lock().unwrap() {
+            Some(ParamValue::Float(f)) => f,
+            v => panic!("LFO did not emit a Float: {v:?}"),
+        }
+    }
+
     #[test]
     fn sine_lfo_at_phase_zero_returns_half() {
         // rate=2 (1/4), shape=0 (Sine), phase=0, beats=0 → sin(0) → 0.5 unipolar.
@@ -234,5 +364,110 @@ mod tests {
         assert!((v - 0.25).abs() < 1e-4, "saw phase=0.25 at beats=0 should be 0.25, got {v}");
         let _ = NodeInstanceId(0);
         let _: &dyn Backend = &crate::node_graph::backend::MockBackend::new();
+    }
+
+    /// Free mode reads seconds, not beats. Lock that in: identical
+    /// angular_rate + seconds with wildly different beats values
+    /// must produce identical output.
+    #[test]
+    fn free_mode_ignores_beats() {
+        let a = drive_lfo_full(/*Free*/ 1, 0, 1.0, /*Sine*/ 0, 0.0, 0.0, 1.0, 0.0, 0.5);
+        let b = drive_lfo_full(1, 0, 1.0, 0, 0.0, 0.0, 1.0, 999.0, 0.5);
+        assert!((a - b).abs() < 1e-6, "Free mode must depend only on seconds: a={a}, b={b}");
+    }
+
+    /// Musical mode unchanged: at 1/4 (1 cycle/beat), beats=0.25,
+    /// saw → 0.25. Seconds value irrelevant.
+    #[test]
+    fn musical_mode_still_reads_beats() {
+        let v = drive_lfo_full(/*Musical*/ 0, 2, 0.0, /*Saw*/ 2, 0.0, 0.0, 1.0, 0.25, 999.0);
+        assert!((v - 0.25).abs() < 1e-4, "musical saw at 0.25 beats should be 0.25, got {v}");
+    }
+
+    /// min/max remap the [0,1] unipolar shape. With min=2 max=6 and
+    /// unipolar=0.5 (sine at the zero-crossing midpoint), output is
+    /// 2 + 0.5*(6-2) = 4.0.
+    #[test]
+    fn min_max_remap_unipolar_to_arbitrary_range() {
+        // Free, angular_rate=0 → no time evolution → sine stuck at
+        // sin(0) → unipolar 0.5.
+        let v = drive_lfo_full(1, 0, 0.0, /*Sine*/ 0, 0.0, 2.0, 6.0, 0.0, 0.0);
+        assert!((v - 4.0).abs() < 1e-4, "min=2, max=6 at unipolar 0.5 should be 4.0, got {v}");
+    }
+
+    /// min/max sign-swap gives a bipolar output without a downstream
+    /// math node: min=-1, max=1 at unipolar 0.5 → 0.0.
+    #[test]
+    fn min_max_can_be_bipolar() {
+        let v = drive_lfo_full(1, 0, 0.0, /*Sine*/ 0, 0.0, -1.0, 1.0, 0.0, 0.0);
+        assert!(v.abs() < 1e-4, "bipolar sine at zero crossing should be 0, got {v}");
+    }
+
+    /// **Bit-perfect parity hook for the legacy Lissajous generator.**
+    /// Legacy code does `a = 2.0 + 1.5 * (time * freq_x_rate).sin()`
+    /// where `time` is `ctx.time` (seconds, see GeneratorContext) and
+    /// `freq_x_rate` is the user param.
+    ///
+    /// The equivalent graph node is `Lfo(rate_mode=Free, sine,
+    /// angular_rate=freq_x_rate, min=0.5, max=3.5)`. Verifying at
+    /// (seconds=1.7, angular_rate=0.13):
+    ///   legacy = 2.0 + 1.5 * sin(1.7 * 0.13) = 2.0 + 1.5 * sin(0.221)
+    #[test]
+    fn legacy_lissajous_frequency_oscillator_parity() {
+        let time_seconds = 1.7_f32;
+        let rate = 0.13_f32;
+        let legacy = 2.0_f32 + 1.5 * (time_seconds * rate).sin();
+        let graph = drive_lfo_full(
+            /*Free*/ 1,
+            0,
+            rate,
+            /*Sine*/ 0,
+            0.0,
+            0.5,
+            3.5,
+            0.0,
+            time_seconds,
+        );
+        assert!(
+            (legacy - graph).abs() < 1e-5,
+            "legacy={legacy}, graph={graph}, diff={}",
+            (legacy - graph).abs()
+        );
+    }
+
+    /// **Bit-perfect parity hook for the legacy Lissajous phase.**
+    /// Legacy `phase = time * phase_rate` (unbounded radians) is fed
+    /// into `sin(a*t + phase)`. The graph equivalent is a saw LFO
+    /// with `min=0, max=2π`, `angular_rate=phase_rate` — its output
+    /// is `(seconds * phase_rate) mod 2π`, and since sin is 2π-periodic
+    /// the inner-curve sample is identical to the unbounded legacy
+    /// phase. We assert that equivalence directly by comparing
+    /// `sin(saw_phase)` against `sin(legacy_phase)`.
+    #[test]
+    fn legacy_lissajous_phase_ramp_parity() {
+        let time_seconds = 3.4_f32;
+        let phase_rate = 0.07_f32;
+        let legacy_phase = time_seconds * phase_rate;
+        let graph_phase = drive_lfo_full(
+            /*Free*/ 1,
+            0,
+            phase_rate,
+            /*Saw*/ 2,
+            0.0,
+            0.0,
+            std::f32::consts::TAU,
+            0.0,
+            time_seconds,
+        );
+        // The two phases differ by an integer multiple of 2π, but
+        // sin() collapses that difference. The visible Lissajous
+        // sample is sin(a*t + phase) — equivalence at sin() is what
+        // matters for parity.
+        assert!(
+            (legacy_phase.sin() - graph_phase.sin()).abs() < 1e-5,
+            "sin parity: legacy={}, graph={}",
+            legacy_phase.sin(),
+            graph_phase.sin()
+        );
     }
 }

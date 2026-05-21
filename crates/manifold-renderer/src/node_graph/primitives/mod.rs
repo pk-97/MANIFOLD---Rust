@@ -39,6 +39,7 @@ mod field_combine;
 mod filter;
 mod flow_field_noise;
 mod fract_texture;
+mod frequency_ratio;
 mod fluid_gradient_curl_3d;
 mod fluid_gradient_rotate;
 mod fluid_project_scatter_2d;
@@ -50,7 +51,7 @@ mod generate_cube_mesh;
 mod generate_duocylinder_vertices;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
-mod generate_parametric_curve;
+mod generate_lissajous;
 mod generate_platonic_solid;
 mod generate_tesseract_vertices;
 mod glitch;
@@ -161,6 +162,7 @@ pub use filter::{
 };
 pub use flow_field_noise::FlowFieldNoise;
 pub use fract_texture::FractTexture;
+pub use frequency_ratio::{FREQUENCY_RATIO_TABLE, FrequencyRatio};
 pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
 pub use fluid_gradient_rotate::FluidGradientRotate;
 pub use fluid_project_scatter_2d::{FLUID_PROJECT_MODES, FluidProjectScatter2D};
@@ -176,7 +178,7 @@ pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
-pub use generate_parametric_curve::{CURVE_TYPES, GenerateParametricCurve};
+pub use generate_lissajous::GenerateLissajous;
 pub use generate_platonic_solid::{
     GeneratePlatonicSolid, PLATONIC_MAX_VERTS, PLATONIC_SHAPES,
 };

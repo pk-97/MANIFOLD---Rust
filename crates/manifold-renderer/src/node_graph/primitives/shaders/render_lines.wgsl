@@ -1,50 +1,86 @@
-// node.render_lines — instanced capsule line renderer over an
-// Array<LinePoint>. Phase C of BUFFER_PORT_PLAN.
+// node.render_lines — instanced capsule renderer for an
+// Array<LinePoint>. One instance per edge or dot; the vertex
+// shader expands 6 vertices into a screen-space quad. The fragment
+// shader evaluates a capsule SDF with fwidth() AA.
 //
-// Each segment connects point[i] to point[(i+1) % N] for closed
-// loops, or point[i] to point[i+1] (0 <= i < N-1) for open
-// strokes. One instance per segment; six vertices per instance
-// form a capsule quad with round caps. Fragment shader evaluates
-// a capsule SDF with fwidth() anti-aliasing.
+// Input positions are in pre-aspect curve space centred at the
+// origin (the natural output of `node.generate_lissajous` and the
+// other curve generators); this shader applies the aspect
+// correction + centre offset before line-thickness math. That
+// matches the legacy `LineGeneratorHelper::prepare_instances` path
+// where the generator's projected_x/y values are post-PROJ_SCALE
+// but pre-aspect.
+//
+// Per-instance `EdgeInstance` carries the two endpoint indices
+// `a, b` and an `alpha` (encoded as f32 bits in a u32). When
+// `a == b` the capsule degenerates to a dot using `dot_thickness`
+// rather than `edge_thickness`. Dot instances are appended after
+// edge instances; `num_edges` tells the vertex shader which
+// thickness to use.
+//
+// `beat_flash_amount` adds a brief luminance boost at each beat,
+// matching the legacy `generator_lines.wgsl` flash for bit-perfect
+// parity with the pre-graph line generators. Set to 0 to disable.
 
 struct LineUniforms {
     rt_width: f32,
     rt_height: f32,
-    half_thickness: f32,
-    closed_loop: u32,
+    edge_half_thickness: f32,
+    dot_half_thickness: f32,
     color: vec4<f32>,
-    num_points: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    num_edges: u32,
+    beat: f32,
+    beat_flash_amount: f32,
+    _pad: f32,
 };
 
 struct LinePoint {
     xy: vec2<f32>,
 };
 
+struct EdgeInstance {
+    a: u32,
+    b: u32,
+    alpha_bits: u32,
+    _pad: u32,
+};
+
 @group(0) @binding(0) var<uniform> u: LineUniforms;
 @group(0) @binding(1) var<storage, read> points: array<LinePoint>;
+@group(0) @binding(2) var<storage, read> edges: array<EdgeInstance>;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) line_len: f32,
+    @location(2) alpha: f32,
 };
+
+// Pre-aspect curve coord → screen-space [0, 1]. Aspect is
+// `rt_width / rt_height`. The curve is centred at the origin in
+// input; we shift to (0.5, 0.5) so the screen centre is its
+// natural focal point.
+fn curve_to_screen(p: vec2<f32>) -> vec2<f32> {
+    let aspect = u.rt_width / u.rt_height;
+    return vec2<f32>(p.x / aspect + 0.5, p.y + 0.5);
+}
 
 @vertex
 fn vs_main(
     @builtin(vertex_index) vid: u32,
     @builtin(instance_index) iid: u32,
 ) -> VsOut {
-    let n = u.num_points;
-    let ia = iid;
-    var ib: u32 = ia + 1u;
-    if u.closed_loop != 0u {
-        ib = (ia + 1u) % n;
+    let edge = edges[iid];
+    let a = curve_to_screen(points[edge.a].xy);
+    let b = curve_to_screen(points[edge.b].xy);
+    let alpha = bitcast<f32>(edge.alpha_bits);
+
+    var half_thick: f32;
+    if iid < u.num_edges {
+        half_thick = u.edge_half_thickness;
+    } else {
+        half_thick = u.dot_half_thickness;
     }
-    let a = points[ia].xy;
-    let b = points[ib].xy;
 
     let dx = (b.x - a.x) * u.rt_width;
     let dy = (b.y - a.y) * u.rt_height;
@@ -54,20 +90,21 @@ fn vs_main(
     var dir: vec2<f32>;
     var line_len: f32;
     if len < 0.001 {
-        perp = vec2<f32>(u.half_thickness / u.rt_width, 0.0);
-        dir = vec2<f32>(0.0, u.half_thickness / u.rt_height);
+        // Degenerate (dot): axis-aligned square quad.
+        perp = vec2<f32>(half_thick / u.rt_width, 0.0);
+        dir = vec2<f32>(0.0, half_thick / u.rt_height);
         line_len = 0.0;
     } else {
         let inv = 1.0 / len;
         perp = vec2<f32>(
-            -dy * inv * u.half_thickness / u.rt_width,
-             dx * inv * u.half_thickness / u.rt_height,
+            -dy * inv * half_thick / u.rt_width,
+             dx * inv * half_thick / u.rt_height,
         );
         dir = vec2<f32>(
-            dx * inv * u.half_thickness / u.rt_width,
-            dy * inv * u.half_thickness / u.rt_height,
+            dx * inv * half_thick / u.rt_width,
+            dy * inv * half_thick / u.rt_height,
         );
-        line_len = len / u.half_thickness;
+        line_len = len / half_thick;
     }
 
     var pos: vec2<f32>;
@@ -109,14 +146,28 @@ fn vs_main(
     out.position = vec4<f32>(ndc.x, ndc.y, 0.0, 1.0);
     out.uv = uv_out;
     out.line_len = line_len;
+    out.alpha = alpha;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    // Capsule SDF: line segment from y=0 to y=line_len, radius 1.
+    // For dots (line_len=0) this degenerates to a circle SDF.
     let t = clamp(in.uv.y, 0.0, in.line_len);
     let d = length(vec2<f32>(in.uv.x, in.uv.y - t));
+
+    // fwidth-based AA: ~1 pixel soft edge at any thickness.
     let fw = fwidth(d);
     let aa = 1.0 - smoothstep(1.0 - fw, 1.0, d);
-    return vec4<f32>(u.color.rgb * aa, u.color.a * aa);
+
+    // Beat flash — matches legacy generator_lines.wgsl. Setting
+    // `beat_flash_amount = 0` skips the boost (smoothstep still
+    // evaluates but contributes zero), which the editor can do for
+    // a non-pulsing line render.
+    let beat_frac = fract(u.beat);
+    let flash = smoothstep(0.1, 0.0, beat_frac) * u.beat_flash_amount;
+    let lum = clamp(aa + flash * aa, 0.0, 1.0) * in.alpha;
+
+    return vec4<f32>(u.color.rgb * lum, u.color.a * lum);
 }
