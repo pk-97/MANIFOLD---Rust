@@ -390,10 +390,24 @@ impl Primitive for RenderLines {
         let dt = ctx.time.delta.0 as f32;
 
         // ── Resolve input/output slots ──
+        // Both buffers are pre-bound by the chain build; an absent
+        // input here means the upstream Array producer didn't get
+        // pre-allocated (or didn't dispatch). Warn instead of
+        // silently dropping the frame so the host gets a single
+        // line of diagnostic instead of a black render.
         let Some(points) = ctx.inputs.array("points") else {
+            log::warn!(
+                "node.render_lines: no GpuBuffer bound to input port `points` — \
+                 nothing to draw this frame. The producing Array<LinePoint> node \
+                 was either skipped or its output buffer wasn't pre-allocated.",
+            );
             return;
         };
         let Some(target) = ctx.outputs.texture_2d("color") else {
+            log::warn!(
+                "node.render_lines: no GpuTexture bound to output port `color` — \
+                 the host did not pre-bind a render target.",
+            );
             return;
         };
         let width = target.width;

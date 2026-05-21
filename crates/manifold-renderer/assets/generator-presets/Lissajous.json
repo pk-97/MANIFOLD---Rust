@@ -209,7 +209,7 @@
       "id": 7, "typeId": "node.generate_lissajous", "handle": "curve",
       "params": {
         "scale":        { "type": "Float", "value": 1.0 },
-        "vertex_count": { "type": "Int",   "value": 256 }
+        "max_capacity": { "type": "Int",   "value": 256 }
       }
     },
     {

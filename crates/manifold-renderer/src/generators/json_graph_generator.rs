@@ -336,8 +336,75 @@ impl JsonGraphGenerator {
         let slot = backend.pre_bind_texture_2d(g.final_output_input_resource, placeholder);
         g.final_output_slot = Some(slot);
         g.target_format = Some(format);
+
+        // Pre-allocate every `Array<T>` output buffer on the plan.
+        // `Backend::acquire` for Texture2D lazily allocates from the
+        // pool, but the Array path is pre-bind-only by contract
+        // (see `MetalBackend::pre_bind_array` doc). The producing
+        // node's `max_capacity` param drives the buffer size; if
+        // absent we skip with a warn rather than picking an
+        // arbitrary fallback that would silently truncate.
+        Self::pre_allocate_array_buffers(&g.graph, &g.plan, device, &mut backend);
+
         g.executor = Executor::new(Box::new(backend));
         Ok(g)
+    }
+
+    /// Walk the compiled plan, find every `Array<T>` output, and
+    /// allocate + pre-bind a `GpuBuffer` of `(item_size × capacity)`
+    /// bytes at the resource id. Capacity comes from the producing
+    /// node's `max_capacity` param — the chain-build convention
+    /// shared across `seed_particles`, `generate_*_vertices`,
+    /// `blob_detect_ffi`, etc. A node whose Array<T> output port
+    /// has no `max_capacity` param triggers a warn and is skipped;
+    /// downstream primitives will then warn at draw time that the
+    /// buffer isn't bound.
+    fn pre_allocate_array_buffers(
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        device: &GpuDevice,
+        backend: &mut MetalBackend,
+    ) {
+        use crate::node_graph::PortType;
+
+        for step in plan.steps() {
+            let Some(node_inst) = graph.get_node(step.node) else {
+                continue;
+            };
+            let node_type = node_inst.node.type_id().as_str();
+            for (port_name, res_id) in &step.outputs {
+                let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
+                    continue;
+                };
+                let capacity = match node_inst.params.get("max_capacity") {
+                    Some(ParamValue::Int(n)) => (*n).max(1) as u64,
+                    Some(ParamValue::Float(f)) => f.round().max(1.0) as u64,
+                    _ => {
+                        log::warn!(
+                            "JsonGraphGenerator: node `{node_type}` produces an \
+                             Array<T> on port `{port_name}` but has no `max_capacity` \
+                             param — output buffer not allocated, downstream will \
+                             see an empty wire. Add a `max_capacity: Int` param to \
+                             the primitive (chain-build convention).",
+                        );
+                        continue;
+                    }
+                };
+                let bytes = capacity * layout.item_size as u64;
+                if bytes == 0 {
+                    log::warn!(
+                        "JsonGraphGenerator: node `{node_type}` on port \
+                         `{port_name}` resolved to a zero-byte Array<T> \
+                         buffer (capacity={capacity}, item_size={}). \
+                         Skipping allocation.",
+                        layout.item_size,
+                    );
+                    continue;
+                }
+                let buffer = device.create_buffer_shared(bytes);
+                backend.pre_bind_array(*res_id, buffer);
+            }
+        }
     }
 
     /// Stable identity for the GeneratorRegistry.

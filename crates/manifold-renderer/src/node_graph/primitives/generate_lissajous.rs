@@ -85,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "vertex_count",
+            name: "max_capacity",
             label: "Vertex Count",
             ty: ParamType::Int,
             default: ParamValue::Int(256),
@@ -93,7 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "vertex_count = how many samples along [0, 2π]. 256 matches the legacy LissajousGenerator; higher = smoother integer-interp blend. `scale` multiplies the curve before pre-aspect mapping — at scale=1.0 the curve fills the inner 50% of the screen (matches legacy generator_math::PROJ_SCALE).",
+    composition_notes: "max_capacity = how many samples along [0, 2π] AND the size the chain build pre-allocates for the output Array<LinePoint>. 256 matches the legacy LissajousGenerator; higher = smoother integer-interp blend. The name `max_capacity` is the canonical chain-build convention — the JsonGraphGenerator walks this param to size the GpuBuffer for the `points` output. `scale` multiplies the curve before pre-aspect mapping — at scale=1.0 the curve fills the inner 50% of the screen (matches legacy generator_math::PROJ_SCALE).",
     examples: [],
     picker: { label: "Generate Lissajous", category: Atom },
 }
@@ -122,13 +122,24 @@ impl Primitive for GenerateLissajous {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
         };
-        let vertex_count = match ctx.params.get("vertex_count") {
+        let vertex_count = match ctx.params.get("max_capacity") {
             Some(ParamValue::Int(n)) => (*n).max(4) as u32,
             Some(ParamValue::Float(f)) => f.round().max(4.0) as u32,
             _ => 256,
         };
 
         let Some(out_buf) = ctx.outputs.array("points") else {
+            // The chain build is supposed to pre-allocate every
+            // Array output. A missing buffer here means the host
+            // skipped this primitive in its allocation pass — the
+            // generator silently produces no points and the
+            // downstream renderer sees an empty buffer. Flag it.
+            log::warn!(
+                "node.generate_lissajous: no GpuBuffer bound to output port `points` — \
+                 the chain build did not pre-allocate this Array<LinePoint>, so the curve \
+                 generator is a no-op this frame. Check JsonGraphGenerator's Array \
+                 pre-allocation pass and confirm `max_capacity` is on the producer node.",
+            );
             return;
         };
         let item_size = std::mem::size_of::<LinePoint>() as u64;
@@ -243,11 +254,11 @@ mod tests {
     }
 
     #[test]
-    fn params_cover_freq_phase_scale_and_vertex_count() {
+    fn params_cover_freq_phase_scale_and_max_capacity() {
         let names: Vec<&str> = GenerateLissajous::PARAMS.iter().map(|p| p.name).collect();
         assert_eq!(
             names,
-            vec!["freq_x", "freq_y", "phase", "scale", "vertex_count"]
+            vec!["freq_x", "freq_y", "phase", "scale", "max_capacity"]
         );
     }
 
