@@ -185,7 +185,7 @@ pub struct FluidSimCore {
     pub initialized: bool,
     current_density_res: f32,
 
-    // Snap envelope state
+    // Clip-trigger envelope state
     last_trigger_count: i32,
     clip_trigger_envelope: f32,
     active_clip_trigger_mode: i32,

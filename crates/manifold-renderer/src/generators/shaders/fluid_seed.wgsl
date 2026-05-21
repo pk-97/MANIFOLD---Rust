@@ -1,7 +1,7 @@
 // FluidPatternSeed — port of Unity FluidParticleSimulate.compute SeedPatternKernel
-// GPU-side pattern seeding for FluidSimulationGen snap mode.
+// GPU-side pattern seeding for FluidSimulationGen clip-trigger mode.
 // 7 geometric patterns (0-6) selectable by pattern_index uniform.
-// Dispatched once on init or on snap trigger.
+// Dispatched once on init or on clip-trigger.
 //
 // Unity patterns:
 //   0: Center cluster (CLT Gaussian approximation)

@@ -17,7 +17,7 @@ struct Uniforms {
     angles_0_3: vec4<f32>,
     // x: size[4], y: angle[4], z: color (0=black, 1=white), w: scatter (0..1)
     extra: vec4<f32>,
-    // x: time (seconds), y: snap_envelope (0..1)
+    // x: time (seconds), y: clip_trigger_envelope (0..1)
     extra2: vec4<f32>,
 };
 
@@ -224,7 +224,7 @@ fn transform(pos: vec3<f32>, face: u32, iid: u32) -> vec4<f32> {
 
     // Base rotation: Y-axis keeps cube structure intact at rest
     let base = rotation_axis(vec3<f32>(0.0, 1.0, 0.0), angle);
-    // Snap kick: per-face random axis, 45° scaled by envelope (decays to identity)
+    // Clip-trigger kick: per-face random axis, 45° scaled by envelope (decays to identity)
     let kick_axis = face_axis(face, iid);
     let kick = rotation_axis(kick_axis, envelope * 45.0);
     let rotated = kick * base * scaled;

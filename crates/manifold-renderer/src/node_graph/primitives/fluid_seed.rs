@@ -17,7 +17,7 @@
 //!   5 — Archimedean spiral
 //!   6 — Edge ring (implodes inward)
 //!
-//! Dispatched on chain init or on snap trigger — not every frame.
+//! Dispatched on chain init or on clip-trigger — not every frame.
 
 use manifold_gpu::GpuBinding;
 
@@ -48,7 +48,7 @@ struct FluidSeedUniforms {
 crate::primitive! {
     name: FluidSeed,
     type_id: "node.fluid_seed",
-    purpose: "Seed an Array<Particle> with one of 7 geometric patterns (center cluster / horizontal lines / vertical lines / concentric rings / diagonal cross / spiral / edge ring). Bit-exact port of FluidSim's Unity SeedPatternKernel. Dispatched on chain init or snap trigger — not every frame. Excess particles (beyond visible_count) sit dead at the center nozzle.",
+    purpose: "Seed an Array<Particle> with one of 7 geometric patterns (center cluster / horizontal lines / vertical lines / concentric rings / diagonal cross / spiral / edge ring). Bit-exact port of FluidSim's Unity SeedPatternKernel. Dispatched on chain init or clip-trigger — not every frame. Excess particles (beyond visible_count) sit dead at the center nozzle.",
     inputs: {},
     outputs: {
         particles: Array(Particle),
@@ -95,7 +95,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "max_capacity governs chain-build allocation; active_count is the upper bound of pattern-placed particles; visible_count is the upper bound of *alive* particles (rest are dead at center nozzle). For FluidSim parity: pair with node.fluid_simulate downstream — the seed runs once on init or on snap, the simulate runs every frame. trigger_count is the hash seed — increment per snap event for fresh randomisation.",
+    composition_notes: "max_capacity governs chain-build allocation; active_count is the upper bound of pattern-placed particles; visible_count is the upper bound of *alive* particles (rest are dead at center nozzle). For FluidSim parity: pair with node.fluid_simulate downstream — the seed runs once on init or on clip-trigger, the simulate runs every frame. trigger_count is the hash seed — increment per clip-trigger event for fresh randomisation.",
     examples: [],
     picker: { label: "Fluid Seed", category: Atom },
 }

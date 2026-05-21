@@ -85,7 +85,7 @@ pub struct NestedCubesGenerator {
     current_angles: [f32; 5],
     /// Committed target angles (what cubes settle to).
     target_angles: [f32; 5],
-    /// Snap envelope (1.0 on trigger, decays to 0).
+    /// Clip-trigger envelope (1.0 on trigger, decays to 0).
     clip_trigger_envelope: f32,
     /// Last seen trigger count for detecting new triggers.
     last_trigger_count: i32,

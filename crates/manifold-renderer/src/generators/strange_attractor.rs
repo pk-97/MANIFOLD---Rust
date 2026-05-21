@@ -325,7 +325,7 @@ impl Generator for StrangeAttractorGenerator {
         let invert = param(ctx, INVERT, 0.0);
         let millions = param(ctx, PARTICLES, 0.5);
 
-        // Snap mode: type cycles on trigger
+        // Clip-trigger mode: type cycles on retrigger
         let clip_trigger = param(ctx, CLIP_TRIGGER, 0.0) > 0.5;
         let atype = if clip_trigger {
             if ctx.trigger_count as i32 != self.last_trigger_count {

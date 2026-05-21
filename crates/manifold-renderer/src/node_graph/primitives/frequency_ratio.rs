@@ -1,7 +1,7 @@
 //! `node.frequency_ratio` — emit two scalars from a curated table
 //! of small-integer harmonic ratios.
 //!
-//! The snap-mode primitive for shape generators that want clean,
+//! The clip-trigger primitive for shape generators that want clean,
 //! musically-meaningful closed curves. Indexing a single `index`
 //! into a 10-row table outputs an `(a, b)` pair where the ratio
 //! `a : b` maps to a recognisable musical interval (1:2 octave,
@@ -10,7 +10,7 @@
 //! fill the box with a non-closing scribble.
 //!
 //! Index is `port-shadows-param`: drive it from a counter / trigger
-//! source for snap-stepped harmonic variety per clip retrigger, or
+//! source for clip-trigger-stepped harmonic variety per retrigger, or
 //! pin it as a constant param when authoring a fixed shape.
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -19,8 +19,9 @@ use crate::node_graph::primitive::Primitive;
 
 /// Curated 10-row harmonic ratio table. Each row is `(a, b)` —
 /// the integer-frequency pair for the Lissajous curve `(sin(a*t),
-/// sin(b*t))`. Lifted from `LissajousGenerator::SNAP_A` /
-/// `SNAP_B` so the snap mode of the decomposed Lissajous graph
+/// sin(b*t))`. Lifted verbatim from the legacy LissajousGenerator's
+/// trigger-cycling tables so the clip-trigger mode of the decomposed
+/// Lissajous graph
 /// matches the legacy generator row-for-row.
 pub const FREQUENCY_RATIO_TABLE: [(f32, f32); 10] = [
     (1.0, 2.0), // 0 — octave             (figure-8)
@@ -38,7 +39,7 @@ pub const FREQUENCY_RATIO_TABLE: [(f32, f32); 10] = [
 crate::primitive! {
     name: FrequencyRatio,
     type_id: "node.frequency_ratio",
-    purpose: "Emit two scalars from a curated table of small-integer harmonic ratios. `a:b` maps to a musical interval (1:2 octave, 2:3 fifth, 3:4 fourth, …). Indexing the 10-row table is the snap-mode primitive for shape generators (Lissajous-style curves) that want clean musically-meaningful closed shapes instead of non-closing scribbles. `index` is port-shadows-param so a counter / trigger source can drive snap-stepped variety per retrigger.",
+    purpose: "Emit two scalars from a curated table of small-integer harmonic ratios. `a:b` maps to a musical interval (1:2 octave, 2:3 fifth, 3:4 fourth, …). Indexing the 10-row table is the clip-trigger primitive for shape generators (Lissajous-style curves) that want clean musically-meaningful closed shapes instead of non-closing scribbles. `index` is port-shadows-param so a counter / trigger source can drive the variety per retrigger.",
     inputs: {
         index: ScalarF32 optional,
     },
@@ -210,10 +211,11 @@ mod tests {
     }
 
     /// Bit-perfect match with the legacy LissajousGenerator's
-    /// `SNAP_A` and `SNAP_B` arrays. The whole point of this
-    /// primitive is that snap-mode rows match the legacy table.
+    /// trigger-cycling tables (the legacy LissajousGenerator's
+    /// per-retrigger ratio arrays). The whole point of this primitive
+    /// is that clip-trigger rows match the legacy table.
     #[test]
-    fn matches_legacy_snap_table_row_for_row() {
+    fn matches_legacy_clip_trigger_table_row_for_row() {
         const LEGACY_A: [f32; 10] = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0, 7.0, 3.0];
         const LEGACY_B: [f32; 10] = [2.0, 3.0, 3.0, 4.0, 5.0, 5.0, 6.0, 8.0, 8.0, 7.0];
         for i in 0..10 {

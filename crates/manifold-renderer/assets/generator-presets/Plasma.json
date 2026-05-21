@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Plasma",
-  "description": "Plasma family — eight bit-exact pattern variants (Classic, Rings, Diamond, Warp, Cells, Noise, Fractal, Lattice) packed into one curated `plasma_pattern_2d` primitive. The whole effect is one node with shared outer params (Pattern, Complexity, Contrast, Speed, Scale, Snap) bound directly to its params — no internal sin-term plumbing, no mux required to switch patterns.\n\nFollows the TD Noise TOP model: one curated operator per pattern family.",
+  "description": "Plasma family — eight bit-exact pattern variants (Classic, Rings, Diamond, Warp, Cells, Noise, Fractal, Lattice) packed into one curated `plasma_pattern_2d` primitive. The whole effect is one node with shared outer params (Pattern, Complexity, Contrast, Speed, Scale, Clip Trigger) bound directly to its params — no internal sin-term plumbing, no mux required to switch patterns.\n\nFollows the TD Noise TOP model: one curated operator per pattern family.",
   "presetMetadata": {
     "id": "Plasma",
     "displayName": "Plasma",

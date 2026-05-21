@@ -308,7 +308,7 @@ mod tests {
             (2.5,   3.7,   0.221, 1.0, 256, 100), // non-integer + non-zero phase
             (3.0,   4.0,   1.234, 0.5, 256, 42),  // user-scaled curve
             (1.0,   2.0,   0.0,   1.0, 512, 256), // higher resolution
-            (7.0,   8.0,   5.0,   2.0, 256, 200), // largest snap-table ratio
+            (7.0,   8.0,   5.0,   2.0, 256, 200), // largest trigger-table ratio
             (3.0,   3.001, 0.0,   1.0, 256, 13),  // tiny non-integer (edge of interp)
         ];
 

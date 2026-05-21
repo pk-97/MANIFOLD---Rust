@@ -7,7 +7,7 @@
 //! that aren't wired round-robin down to `in_0`; if `in_0` isn't wired
 //! either the output stays untouched for the frame.
 //!
-//! Designed for SNAP-style preset cycling (Plasma's 8 patterns,
+//! Designed for clip-trigger-style preset cycling (Plasma's 8 patterns,
 //! ConcentricTunnel's 6 shapes, etc.). The host wires
 //! `system.generator_input.trigger_count → selector` and each
 //! sub-graph variant into `in_0..in_N`.
@@ -40,7 +40,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 crate::primitive! {
     name: MuxTexture,
     type_id: "node.mux_texture",
-    purpose: "N-way Texture2D selector. Routes one of in_0..in_7 to the output based on the selector scalar input (rounded, clamped). Use for SNAP-style preset cycling — wire generator_input.trigger_count to selector and each variant sub-graph to in_0..in_N.",
+    purpose: "N-way Texture2D selector. Routes one of in_0..in_7 to the output based on the selector scalar input (rounded, clamped). Use for clip-trigger-style preset cycling — wire generator_input.trigger_count to selector and each variant sub-graph to in_0..in_N.",
     inputs: {
         selector: ScalarF32 required,
         in_0: Texture2D optional,

@@ -17,7 +17,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Number of pattern variants the primitive covers. Mirrors the legacy
-/// generator's `PATTERN_COUNT` so Snap-mode cycling lands on the same
+/// generator's `PATTERN_COUNT` so clip-trigger cycling lands on the same
 /// indices.
 pub const PLASMA_PATTERN_COUNT: u32 = 8;
 
@@ -171,7 +171,7 @@ impl Primitive for PlasmaPattern2D {
         // `clip_trigger` is declared as a Bool param, but the outer-card
         // binding feeds it via `convert: Float` so the value can arrive
         // as Bool(true) or Float(>0.5). Match the legacy generator's
-        // `params[SNAP] > 0.5` semantics so the toggle actually engages
+        // `params[CLIP_TRIGGER] > 0.5` semantics so the toggle actually engages
         // regardless of which type the binding writes.
         let clip_trigger = match ctx.params.get("clip_trigger") {
             Some(ParamValue::Bool(b)) => *b,
@@ -180,7 +180,7 @@ impl Primitive for PlasmaPattern2D {
             _ => false,
         };
 
-        // Snap mode overrides the static pattern with trigger_count
+        // Clip-trigger mode overrides the static pattern with trigger_count
         // modulo the pattern count — matches the legacy generator's
         // CPU-side resolution exactly.
         let pattern_type = if clip_trigger {
