@@ -462,3 +462,287 @@ mod tests {
         assert_eq!(node.type_id().as_str(), "node.wireframe_shape");
     }
 }
+
+#[cfg(test)]
+mod gpu_tests {
+    //! GPU parity tests against the legacy `WireframeZooGenerator`'s
+    //! CPU pipeline. Mirrors the per-primitive `gpu_tests` pattern
+    //! used by image-side primitives (see separable_gaussian.rs).
+    //!
+    //! What we verify:
+    //!
+    //! - Vertices buffer: runs the WGSL compute shader through the
+    //!   graph executor and reads back the produced `Array<MeshVertex>`
+    //!   via the shared MTLBuffer pointer. Compares positions
+    //!   element-wise against the legacy `normalize_shape() *
+    //!   PROJ_SCALE` reference (inlined in `legacy_reference_*`
+    //!   helpers — the legacy `wireframe_zoo.rs` is deleted, so the
+    //!   reference lives here as the authoritative expectation).
+    //! - Edges buffer: CPU-written by `WireframeShape::run` from the
+    //!   const tables, so the parity assertion is direct.
+    //!
+    //! Bit-parity is the bar. Any drift means a transcription error
+    //! in one of the 50 raw vertex coords or 90 raw edges.
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+
+    use crate::generators::mesh_common::{EdgePair, MeshVertex};
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{
+        ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
+        compile,
+    };
+
+    use super::{WIREFRAME_MAX_EDGES, WIREFRAME_MAX_VERTS, WireframeShape};
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+        for step in plan.steps() {
+            if step.node == node {
+                for &(name, id) in &step.outputs {
+                    if name == port {
+                        return id;
+                    }
+                }
+            }
+        }
+        panic!("no output `{port}` on node {node:?}");
+    }
+
+    /// Legacy raw (unnormalised) vertex tables — copied from the
+    /// pre-deleted `wireframe_zoo.rs`. Used as the parity reference.
+    /// If the legacy generator ever needs to be recreated, this is
+    /// the source of truth.
+    const PHI: f32 = 1.618034;
+    const INV_PHI: f32 = 0.618034;
+    fn legacy_raw_vertices(shape: u32) -> &'static [[f32; 3]] {
+        const TETRA: &[[f32; 3]] = &[
+            [1.0, 1.0, 1.0],
+            [1.0, -1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+        ];
+        const CUBE: &[[f32; 3]] = &[
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ];
+        const OCTA: &[[f32; 3]] = &[
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        const ICOSA: &[[f32; 3]] = &[
+            [-1.0, PHI, 0.0],
+            [1.0, PHI, 0.0],
+            [-1.0, -PHI, 0.0],
+            [1.0, -PHI, 0.0],
+            [0.0, -1.0, PHI],
+            [0.0, 1.0, PHI],
+            [0.0, -1.0, -PHI],
+            [0.0, 1.0, -PHI],
+            [PHI, 0.0, -1.0],
+            [PHI, 0.0, 1.0],
+            [-PHI, 0.0, -1.0],
+            [-PHI, 0.0, 1.0],
+        ];
+        const DODECA: &[[f32; 3]] = &[
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, -1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, -1.0, -1.0],
+            [-1.0, 1.0, 1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [-1.0, -1.0, -1.0],
+            [0.0, PHI, INV_PHI],
+            [0.0, PHI, -INV_PHI],
+            [0.0, -PHI, INV_PHI],
+            [0.0, -PHI, -INV_PHI],
+            [INV_PHI, 0.0, PHI],
+            [INV_PHI, 0.0, -PHI],
+            [-INV_PHI, 0.0, PHI],
+            [-INV_PHI, 0.0, -PHI],
+            [PHI, INV_PHI, 0.0],
+            [PHI, -INV_PHI, 0.0],
+            [-PHI, INV_PHI, 0.0],
+            [-PHI, -INV_PHI, 0.0],
+        ];
+        match shape {
+            0 => TETRA,
+            1 => CUBE,
+            2 => OCTA,
+            3 => ICOSA,
+            _ => DODECA,
+        }
+    }
+
+    /// Legacy expected vertex position: normalise to unit sphere then
+    /// multiply by PROJ_SCALE = 0.25. WireframeShape's WGSL bakes this
+    /// in directly — we expect the GPU output to match this reference.
+    fn legacy_expected_position(shape: u32, i: usize) -> [f32; 3] {
+        let raw = legacy_raw_vertices(shape)[i];
+        let max_dist = legacy_raw_vertices(shape)
+            .iter()
+            .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+            .fold(0.0_f32, f32::max);
+        let k = 0.25 / max_dist;
+        [raw[0] * k, raw[1] * k, raw[2] * k]
+    }
+
+    /// Run WireframeShape standalone through the graph executor with
+    /// `shape` selected. Returns (vertices, edges) read back from
+    /// the shared output buffers.
+    fn run_wireframe_shape(shape: u32) -> (Vec<MeshVertex>, Vec<EdgePair>) {
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut g = Graph::new();
+        let wf = g.add_node(Box::new(WireframeShape::new()));
+        g.set_param(wf, "shape", ParamValue::Enum(shape)).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_verts = output_resource(&plan, wf, "vertices");
+        let r_edges = output_resource(&plan, wf, "edges");
+
+        let vert_bytes = (WIREFRAME_MAX_VERTS as u64) * std::mem::size_of::<MeshVertex>() as u64;
+        let edge_bytes = (WIREFRAME_MAX_EDGES as u64) * std::mem::size_of::<EdgePair>() as u64;
+        let vert_buf = device.create_buffer_shared(vert_bytes);
+        let edge_buf = device.create_buffer_shared(edge_bytes);
+
+        let mut backend = MetalBackend::new(&device, 1, 1, format);
+        let vert_slot = backend.pre_bind_array(r_verts, vert_buf);
+        let edge_slot = backend.pre_bind_array(r_edges, edge_buf);
+
+        let mut native_enc = device.create_encoder("wireframe-test");
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let verts_buf = exec
+            .backend()
+            .array_buffer(vert_slot)
+            .expect("vertices buffer retained");
+        let edges_buf = exec
+            .backend()
+            .array_buffer(edge_slot)
+            .expect("edges buffer retained");
+
+        let v_ptr = verts_buf.mapped_ptr().expect("shared vertices buffer");
+        let e_ptr = edges_buf.mapped_ptr().expect("shared edges buffer");
+        let v_bytes_slice = unsafe {
+            std::slice::from_raw_parts(v_ptr as *const u8, vert_bytes as usize)
+        };
+        let e_bytes_slice = unsafe {
+            std::slice::from_raw_parts(e_ptr as *const u8, edge_bytes as usize)
+        };
+        let v: Vec<MeshVertex> = bytemuck::cast_slice::<u8, MeshVertex>(v_bytes_slice).to_vec();
+        let e: Vec<EdgePair> = bytemuck::cast_slice::<u8, EdgePair>(e_bytes_slice).to_vec();
+        (v, e)
+    }
+
+    /// Hero parity test — every shape, every vertex. WGSL output
+    /// must equal `legacy normalise_shape() × 0.25` element-wise.
+    #[test]
+    fn gpu_vertex_buffer_matches_legacy_normalize_shape_times_proj_scale() {
+        let tol = 1e-4_f32; // fp16-friendly tolerance for any rgba16-quantised internals
+        let shapes = [(0u32, 4usize), (1, 8), (2, 6), (3, 12), (4, 20)];
+        for (shape, count) in shapes {
+            let (verts, _) = run_wireframe_shape(shape);
+            for (i, vert) in verts.iter().enumerate().take(count) {
+                let want = legacy_expected_position(shape, i);
+                let got = vert.position;
+                for c in 0..3 {
+                    assert!(
+                        (got[c] - want[c]).abs() < tol,
+                        "shape={shape} vertex {i} component {c}: got {} want {}",
+                        got[c],
+                        want[c],
+                    );
+                }
+            }
+            // Magnitude check on every active vertex: the bake-in is
+            // 0.25, so the post-normalise distance from origin is
+            // exactly 0.25.
+            for (i, vert) in verts.iter().enumerate().take(count) {
+                let p = vert.position;
+                let mag = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                assert!(
+                    (mag - 0.25).abs() < tol,
+                    "shape={shape} vertex {i} magnitude {mag} != 0.25 ± {tol}",
+                );
+            }
+        }
+    }
+
+    /// Edges buffer: WireframeShape::run CPU-writes the static
+    /// per-shape edge tables and sentinel-pads the tail. The pinned
+    /// vertex indices per shape are bit-exact with the legacy
+    /// WireframeZoo edge connectivity tables.
+    #[test]
+    fn gpu_edges_buffer_carries_correct_topology_with_sentinel_padding() {
+        // (shape, expected_active_edges)
+        let cases = [(0u32, 6usize), (1, 12), (2, 12), (3, 30), (4, 30)];
+        for (shape, expected) in cases {
+            let (_, edges) = run_wireframe_shape(shape);
+            // First `expected` slots must be valid (non-sentinel),
+            // remainder must be sentinel.
+            for (i, edge) in edges.iter().enumerate().take(expected) {
+                assert_ne!(
+                    edge.a,
+                    u32::MAX,
+                    "shape={shape} edge {i} should be active, got sentinel"
+                );
+            }
+            for (i, edge) in edges
+                .iter()
+                .enumerate()
+                .take(WIREFRAME_MAX_EDGES as usize)
+                .skip(expected)
+            {
+                assert_eq!(edge.a, u32::MAX, "shape={shape} edge {i} should be sentinel");
+                assert_eq!(edge.b, u32::MAX);
+            }
+        }
+    }
+
+    /// Tetra edges pinned by hand against the legacy table — a single
+    /// transcription error here would silently render the wrong
+    /// shape (right vertices, wrong wireframe).
+    #[test]
+    fn tetra_edges_match_legacy_pinned_indices() {
+        let expected: &[(u32, u32)] = &[
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 2),
+            (1, 3),
+            (2, 3),
+        ];
+        let (_, edges) = run_wireframe_shape(0);
+        for (i, &(a, b)) in expected.iter().enumerate() {
+            assert_eq!(edges[i].a, a, "tetra edge {i}.a");
+            assert_eq!(edges[i].b, b, "tetra edge {i}.b");
+        }
+    }
+}

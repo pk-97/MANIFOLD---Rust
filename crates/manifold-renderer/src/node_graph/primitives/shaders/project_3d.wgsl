@@ -1,10 +1,15 @@
 // node.project_3d — project Array<MeshVertex> (3D positions) to
-// Array<LinePoint> (2D screen coords) via either orthographic
-// (matches WireframeZoo's XY-scale path) or perspective projection.
+// Array<LinePoint> (2D pre-aspect curve space) via either
+// orthographic (matches WireframeZoo's XY-scale path) or
+// perspective projection.
 //
-// Output range [0, 1] — recentred at (0.5, 0.5) and clamped via
-// project_dist for perspective. Orthographic: out.xy = pos.xy *
-// proj_scale + 0.5.
+// Output is **centred at the origin** (NOT shifted to (0.5, 0.5)),
+// matching the convention of every other Array<LinePoint> producer
+// (generate_lissajous, etc.). The downstream node.render_lines
+// applies the center offset + aspect correction itself.
+//
+// Orthographic: out.xy = pos.xy * proj_scale.
+// Perspective:  out.xy = pos.xy * s * proj_scale, s = proj_dist / (proj_dist + z).
 
 struct Project3DUniforms {
     active_count: u32,
@@ -39,7 +44,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     if i >= u.active_count {
-        points[i].xy = vec2<f32>(0.5, 0.5);
+        // Inactive slots collapse to origin — render_lines treats
+        // these as zero-length segments / degenerate dots that
+        // contribute nothing.
+        points[i].xy = vec2<f32>(0.0, 0.0);
         return;
     }
 
@@ -59,5 +67,5 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         y = p.y * u.proj_scale;
     }
 
-    points[i].xy = vec2<f32>(0.5 + x, 0.5 + y);
+    points[i].xy = vec2<f32>(x, y);
 }

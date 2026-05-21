@@ -1,6 +1,11 @@
 //! `node.project_3d` — project an `Array<MeshVertex>` (3D positions)
-//! to an `Array<LinePoint>` (2D screen coords) via either
+//! to an `Array<LinePoint>` (2D pre-aspect curve space) via either
 //! orthographic or perspective projection.
+//!
+//! **Output is centred at the origin**, matching the convention of
+//! every other `Array<LinePoint>` producer. `node.render_lines`
+//! applies the center offset + aspect correction itself; no
+//! producer should pre-shift to (0.5, 0.5).
 //!
 //! Orthographic mode matches WireframeZoo's XY-scale projection
 //! bit-for-bit. Perspective mode uses the same projection style as
@@ -32,7 +37,7 @@ struct Project3DUniforms {
 crate::primitive! {
     name: Project3D,
     type_id: "node.project_3d",
-    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<LinePoint> (2D screen coords) with either orthographic or perspective projection. Output is in [0, 1] screen space, centered at (0.5, 0.5). For WireframeZoo decomposition: WireframeShape → Rotate3D → Project3D → (line renderer).",
+    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<LinePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.render_lines applies the center offset itself, so the convention matches every other Array<LinePoint> producer (generate_lissajous, etc.). For WireframeZoo decomposition: WireframeShape → Rotate3D → Project3D → render_lines.",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: control-rate wires take precedence over

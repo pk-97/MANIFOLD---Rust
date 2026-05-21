@@ -271,16 +271,22 @@ These are the failure modes that have actually bitten on this codebase. Watch fo
 
 A decomposition ships when:
 
-1. The JSON preset renders bit-exact (or numerically bounded with documented justification) against the legacy generator on the canonical fixture.
-2. New primitives have parity tests against the legacy math (CPU mirror inside the test module).
+1. **Bit-parity, tested, not asserted — and tested on the GPU, not in CPU mirror.** When you migrate an existing native generator, the JSON preset MUST render bit-exact against the legacy generator on the canonical fixture (or numerically bounded with documented justification when bit-exact isn't achievable — e.g. RNG-seeded particle sims). **Bit-parity is not a claim you make in a commit message — it is a test that runs.** The standard the codebase uses for effects is the `gpu_tests` module pattern (see [`separable_gaussian.rs`](../crates/manifold-renderer/src/node_graph/primitives/separable_gaussian.rs) for the canonical shape, or `wireframe_shape.rs` for the Array-output variant):
+   - Build a `Graph` containing the primitive under test, set params, `compile(&g)` into an ExecutionPlan.
+   - For Texture2D outputs: pre-bind via `MetalBackend::pre_bind_texture_2d`, run a frame through `Executor::execute_frame_with_gpu`, read back via `copy_texture_to_buffer` + `mapped_ptr` and decode (fp16/fp32 as the format dictates). For Array<T> outputs: pre-bind via `MetalBackend::pre_bind_array`, run, and read back directly via `mapped_ptr` on the shared buffer (Array<T> buffers are CPU+GPU visible by allocation policy).
+   - Compare element-wise against the legacy reference inlined as `const` data (often raw tables from the deleted Rust generator) or computed inline (e.g. `legacy_normalise(raw) * proj_scale`).
+   - **Don't use CPU mirror functions as the parity test.** A CPU mirror only verifies that the test's expectations match itself. GPU parity tests verify the *shader* matches the legacy, which is the actual artefact running in production.
+   - Coordinate-space conventions are part of bit-parity. If a primitive outputs in `[0, 1]` space and the consumer expects centred-at-origin, that mismatch is a bit-parity failure even when each individual primitive's math is correct in isolation. The GPU test for the producer catches its own contract; chain-level mismatches need a chain test (build the whole graph, run it, check downstream).
+   - **Do not claim "bit-perfect parity" in a commit message unless an automated test in the same commit proves it.** If the parity test is missing or untested, the commit message must say "approximate parity — not yet test-verified" and the next commit should add the test. Anything else is dishonest.
+2. New primitives have parity tests against the legacy math (CPU mirror inside the test module) per the above.
 3. `cargo clippy --workspace -- -D warnings` is clean.
 4. `cargo test --workspace` is green, including the registry sweep test for any new Array<T> primitives.
 5. The legacy Rust generator file is deleted, not just shadowed.
 6. `paramAliases` / `GeneratorAliasMetadata` are wired for any renamed outer params, with a project-load smoke test.
 7. The preset's `composition_notes` on every new primitive describe when an AI agent would reach for that primitive.
-8. The commit message is honest about what shipped, what didn't, and any known parity deltas.
+8. The commit message is honest about what shipped, what didn't, and any known parity deltas. If the visual preview wasn't run in a browser yet, say so explicitly.
 
-The bar is real. This system is the live show.
+The bar is real. This system is the live show. Every shipped decomposition is one Peter loads up before going on stage — a parity bug becomes the gig.
 
 ## 10. Known limits and accepted trade-offs
 
