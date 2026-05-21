@@ -49,8 +49,137 @@ pub const WIREFRAME_MAX_EDGES: u32 = 30;
 struct WireframeUniforms {
     shape: u32,
     vert_capacity: u32,
-    edge_capacity: u32,
-    _pad: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+// ── CPU-side edge tables ────────────────────────────────────────
+//
+// Edges are written CPU-side into the shared `edges` output buffer
+// each frame. Two reasons we don't do this in the WGSL shader:
+//
+// 1. The only consumer (`node.render_lines`) reads the edges buffer
+//    CPU-side to build its per-instance EdgeInstance buffer. A
+//    same-frame GPU write would not be visible to that CPU read
+//    without an explicit fence; CPU-write keeps the data path
+//    trivially serial on the content thread.
+//
+// 2. The edge tables are tiny (≤30 entries × 8 bytes) and topology
+//    is constant per shape. No GPU dispatch is justified.
+
+const TETRA_EDGES: [EdgePair; 6] = [
+    EdgePair { a: 0, b: 1 },
+    EdgePair { a: 0, b: 2 },
+    EdgePair { a: 0, b: 3 },
+    EdgePair { a: 1, b: 2 },
+    EdgePair { a: 1, b: 3 },
+    EdgePair { a: 2, b: 3 },
+];
+
+const CUBE_EDGES: [EdgePair; 12] = [
+    EdgePair { a: 0, b: 1 },
+    EdgePair { a: 1, b: 2 },
+    EdgePair { a: 2, b: 3 },
+    EdgePair { a: 3, b: 0 },
+    EdgePair { a: 4, b: 5 },
+    EdgePair { a: 5, b: 6 },
+    EdgePair { a: 6, b: 7 },
+    EdgePair { a: 7, b: 4 },
+    EdgePair { a: 0, b: 4 },
+    EdgePair { a: 1, b: 5 },
+    EdgePair { a: 2, b: 6 },
+    EdgePair { a: 3, b: 7 },
+];
+
+const OCTA_EDGES: [EdgePair; 12] = [
+    EdgePair { a: 0, b: 2 },
+    EdgePair { a: 0, b: 3 },
+    EdgePair { a: 0, b: 4 },
+    EdgePair { a: 0, b: 5 },
+    EdgePair { a: 1, b: 2 },
+    EdgePair { a: 1, b: 3 },
+    EdgePair { a: 1, b: 4 },
+    EdgePair { a: 1, b: 5 },
+    EdgePair { a: 2, b: 4 },
+    EdgePair { a: 2, b: 5 },
+    EdgePair { a: 3, b: 4 },
+    EdgePair { a: 3, b: 5 },
+];
+
+const ICOSA_EDGES: [EdgePair; 30] = [
+    EdgePair { a: 0, b: 1 },
+    EdgePair { a: 0, b: 5 },
+    EdgePair { a: 0, b: 7 },
+    EdgePair { a: 0, b: 10 },
+    EdgePair { a: 0, b: 11 },
+    EdgePair { a: 1, b: 5 },
+    EdgePair { a: 1, b: 7 },
+    EdgePair { a: 1, b: 8 },
+    EdgePair { a: 1, b: 9 },
+    EdgePair { a: 2, b: 3 },
+    EdgePair { a: 2, b: 4 },
+    EdgePair { a: 2, b: 6 },
+    EdgePair { a: 2, b: 10 },
+    EdgePair { a: 2, b: 11 },
+    EdgePair { a: 3, b: 4 },
+    EdgePair { a: 3, b: 6 },
+    EdgePair { a: 3, b: 8 },
+    EdgePair { a: 3, b: 9 },
+    EdgePair { a: 4, b: 5 },
+    EdgePair { a: 4, b: 9 },
+    EdgePair { a: 4, b: 11 },
+    EdgePair { a: 5, b: 9 },
+    EdgePair { a: 5, b: 11 },
+    EdgePair { a: 6, b: 7 },
+    EdgePair { a: 6, b: 8 },
+    EdgePair { a: 6, b: 10 },
+    EdgePair { a: 7, b: 8 },
+    EdgePair { a: 7, b: 10 },
+    EdgePair { a: 8, b: 9 },
+    EdgePair { a: 10, b: 11 },
+];
+
+const DODECA_EDGES: [EdgePair; 30] = [
+    EdgePair { a: 0, b: 8 },
+    EdgePair { a: 0, b: 12 },
+    EdgePair { a: 0, b: 16 },
+    EdgePair { a: 1, b: 9 },
+    EdgePair { a: 1, b: 13 },
+    EdgePair { a: 1, b: 16 },
+    EdgePair { a: 2, b: 10 },
+    EdgePair { a: 2, b: 12 },
+    EdgePair { a: 2, b: 17 },
+    EdgePair { a: 3, b: 11 },
+    EdgePair { a: 3, b: 13 },
+    EdgePair { a: 3, b: 17 },
+    EdgePair { a: 4, b: 8 },
+    EdgePair { a: 4, b: 14 },
+    EdgePair { a: 4, b: 18 },
+    EdgePair { a: 5, b: 9 },
+    EdgePair { a: 5, b: 15 },
+    EdgePair { a: 5, b: 18 },
+    EdgePair { a: 6, b: 10 },
+    EdgePair { a: 6, b: 14 },
+    EdgePair { a: 6, b: 19 },
+    EdgePair { a: 7, b: 11 },
+    EdgePair { a: 7, b: 15 },
+    EdgePair { a: 7, b: 19 },
+    EdgePair { a: 8, b: 9 },
+    EdgePair { a: 10, b: 11 },
+    EdgePair { a: 12, b: 14 },
+    EdgePair { a: 13, b: 15 },
+    EdgePair { a: 16, b: 17 },
+    EdgePair { a: 18, b: 19 },
+];
+
+fn edges_for_shape(shape: u32) -> &'static [EdgePair] {
+    match shape {
+        0 => &TETRA_EDGES,
+        1 => &CUBE_EDGES,
+        2 => &OCTA_EDGES,
+        3 => &ICOSA_EDGES,
+        _ => &DODECA_EDGES,
+    }
 }
 
 crate::primitive! {
@@ -180,6 +309,27 @@ impl Primitive for WireframeShape {
             return;
         }
 
+        // ── CPU-write the edges buffer ──
+        // Edges live in a shared (CPU+GPU visible) MTLBuffer per
+        // the Array<T> pre-allocation policy, so node.render_lines
+        // reads them CPU-side downstream. Stack-allocated buffer
+        // (fixed cap = 30) padded with sentinels for the unused
+        // tail.
+        let mut edges_scratch = [EdgePair::SENTINEL; WIREFRAME_MAX_EDGES as usize];
+        let active = edges_for_shape(shape);
+        edges_scratch[..active.len()].copy_from_slice(active);
+        let write_count = (edge_capacity as usize).min(edges_scratch.len());
+        // Safety: the buffer is shared-memory (per `pre_allocate_array_buffers`)
+        // and the chain build prebound it; write_count is clamped
+        // to the buffer's capacity; no GPU pass races this write
+        // because the executor walks primitives sequentially on
+        // the content thread and any downstream reader runs after
+        // us on the same thread.
+        unsafe {
+            edge_dst.write(0, bytemuck::cast_slice(&edges_scratch[..write_count]));
+        }
+
+        // ── Dispatch the vertex-write compute shader ──
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
@@ -192,15 +342,9 @@ impl Primitive for WireframeShape {
         let uniforms = WireframeUniforms {
             shape,
             vert_capacity,
-            edge_capacity,
-            _pad: 0,
+            _pad0: 0,
+            _pad1: 0,
         };
-
-        // Dispatch enough threads to fill the larger of the two
-        // buffers. Each thread writes its slot in both buffers (or
-        // pads / sentinels the slot if out of range for the current
-        // shape).
-        let total = vert_capacity.max(edge_capacity);
 
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -214,13 +358,8 @@ impl Primitive for WireframeShape {
                     buffer: vert_dst,
                     offset: 0,
                 },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: edge_dst,
-                    offset: 0,
-                },
             ],
-            [total.div_ceil(64), 1, 1],
+            [vert_capacity.div_ceil(64), 1, 1],
             "node.wireframe_shape",
         );
     }

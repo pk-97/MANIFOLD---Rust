@@ -28,7 +28,7 @@
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use crate::generators::mesh_common::LinePoint;
+use crate::generators::mesh_common::{EdgePair, LinePoint};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -80,6 +80,14 @@ crate::primitive! {
     purpose: "Draw an Array<LinePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.generate_lissajous or other curve-source primitives upstream.",
     inputs: {
         points: Array(LinePoint) required,
+        // Optional explicit edge topology. When wired, each non-sentinel
+        // EdgePair `(a, b)` in the buffer becomes one rendered line
+        // segment from `points[a]` to `points[b]`. When absent, the
+        // primitive falls back to the implicit sequential / closed-loop
+        // topology driven by the `closed_loop` param. Animation is
+        // disabled when explicit edges are wired (sequential window-
+        // based fade doesn't apply to topology-driven edges).
+        edges: Array(EdgePair) optional,
     },
     outputs: {
         color: Texture2D,
@@ -340,6 +348,67 @@ impl RenderLines {
         }
         (num_edges, num_dots)
     }
+
+    /// Build per-instance edge data from an explicit `Array<EdgePair>`
+    /// buffer (the topology-driven path used by wireframe-shape
+    /// generators). Each non-sentinel pair `(a, b)` becomes one
+    /// rendered segment with `alpha = 1`. Animation does not apply
+    /// here (no implicit edge ordering to scroll through); the caller
+    /// is responsible for forcing `animate=false` on this path.
+    ///
+    /// `show_verts=true` appends one degenerate (a==b) dot instance
+    /// per vertex that participates in at least one edge — matches
+    /// the legacy WireframeZoo behaviour where unconnected vertices
+    /// don't show dots.
+    fn build_instances_from_edges(
+        &mut self,
+        edges: &[EdgePair],
+        num_points: u32,
+        show_verts: bool,
+    ) -> (u32, u32) {
+        self.cpu_instances.clear();
+        self.vert_visible.clear();
+        self.vert_visible.resize(num_points as usize, false);
+
+        for edge in edges {
+            // Sentinel slot — skip without touching vert_visible.
+            if edge.a == u32::MAX {
+                continue;
+            }
+            // Out-of-range index would cause the vertex shader to
+            // read garbage; skip with a single warn line per primitive
+            // instance rather than spam every frame.
+            if edge.a >= num_points || edge.b >= num_points {
+                continue;
+            }
+            self.cpu_instances.push(EdgeInstance {
+                a: edge.a,
+                b: edge.b,
+                alpha_bits: 1.0_f32.to_bits(),
+                _pad: 0,
+            });
+            self.vert_visible[edge.a as usize] = true;
+            self.vert_visible[edge.b as usize] = true;
+        }
+
+        let num_edges = self.cpu_instances.len() as u32;
+        let mut num_dots = 0u32;
+        if show_verts {
+            for i in 0..num_points as usize {
+                if !self.vert_visible[i] {
+                    continue;
+                }
+                self.cpu_instances.push(EdgeInstance {
+                    a: i as u32,
+                    b: i as u32,
+                    alpha_bits: 1.0_f32.to_bits(),
+                    _pad: 0,
+                });
+                num_dots += 1;
+            }
+        }
+        (num_edges, num_dots)
+    }
 }
 
 impl Primitive for RenderLines {
@@ -424,15 +493,43 @@ impl Primitive for RenderLines {
         }
 
         // ── Build per-frame instance buffer (CPU side) ──
-        let (num_edges, num_dots) = self.build_instances(
-            num_points,
-            closed_loop,
-            animate,
-            speed,
-            window,
-            show_verts,
-            dt,
-        );
+        // Two paths:
+        //   - `edges` input wired  → topology-driven (e.g. WireframeZoo).
+        //   - `edges` input absent → sequential / closed-loop (e.g. Lissajous).
+        let edges_input = ctx.inputs.array("edges");
+        let (num_edges, num_dots) = if let Some(edges_buf) = edges_input {
+            // Read the shared edges buffer CPU-side. The buffer is
+            // host-mapped (per the Array<T> pre-allocation policy);
+            // the producer's `run()` ran earlier in the executor's
+            // sequential walk so the data is already visible to us.
+            let edge_count = (edges_buf.size as usize) / std::mem::size_of::<EdgePair>();
+            let edges_slice: &[EdgePair] = match edges_buf.mapped_ptr() {
+                Some(ptr) => unsafe {
+                    let byte_slice =
+                        std::slice::from_raw_parts(ptr as *const u8, edges_buf.size as usize);
+                    bytemuck::cast_slice(byte_slice)
+                },
+                None => {
+                    log::warn!(
+                        "node.render_lines: `edges` input buffer is not host-mapped — \
+                         expected a shared-memory Array<EdgePair> from the upstream producer.",
+                    );
+                    &[]
+                }
+            };
+            let _ = edge_count; // sanity: equals edges_slice.len() by construction
+            self.build_instances_from_edges(edges_slice, num_points, show_verts)
+        } else {
+            self.build_instances(
+                num_points,
+                closed_loop,
+                animate,
+                speed,
+                window,
+                show_verts,
+                dt,
+            )
+        };
         let total_instances = num_edges + num_dots;
         if total_instances == 0 {
             let gpu = ctx.gpu_encoder();
@@ -528,18 +625,25 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn declares_linepoint_input_and_texture_output() {
+    fn declares_linepoint_input_optional_edges_and_texture_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
+        let points_layout = ArrayType {
             item_size: std::mem::size_of::<LinePoint>() as u32,
             item_align: std::mem::align_of::<LinePoint>() as u32,
         };
+        let edges_layout = ArrayType {
+            item_size: std::mem::size_of::<EdgePair>() as u32,
+            item_align: std::mem::align_of::<EdgePair>() as u32,
+        };
 
         assert_eq!(RenderLines::TYPE_ID, "node.render_lines");
-        assert_eq!(RenderLines::INPUTS.len(), 1);
+        assert_eq!(RenderLines::INPUTS.len(), 2);
         assert_eq!(RenderLines::INPUTS[0].name, "points");
         assert!(RenderLines::INPUTS[0].required);
-        assert_eq!(RenderLines::INPUTS[0].ty, PortType::Array(layout));
+        assert_eq!(RenderLines::INPUTS[0].ty, PortType::Array(points_layout));
+        assert_eq!(RenderLines::INPUTS[1].name, "edges");
+        assert!(!RenderLines::INPUTS[1].required);
+        assert_eq!(RenderLines::INPUTS[1].ty, PortType::Array(edges_layout));
         assert_eq!(RenderLines::OUTPUTS.len(), 1);
         assert_eq!(RenderLines::OUTPUTS[0].name, "color");
         assert_eq!(RenderLines::OUTPUTS[0].ty, PortType::Texture2D);
@@ -648,6 +752,65 @@ mod tests {
             .collect();
         for pair in alphas.windows(2) {
             assert!(pair[0] >= pair[1], "alphas must monotonically fade: {alphas:?}");
+        }
+    }
+
+    /// Explicit-edges path: each `EdgePair` becomes one segment,
+    /// sentinels are skipped, out-of-range indices are skipped.
+    #[test]
+    fn explicit_edges_path_builds_one_segment_per_valid_pair() {
+        let mut prim = RenderLines::new();
+        let edges = [
+            EdgePair { a: 0, b: 1 },
+            EdgePair { a: 1, b: 2 },
+            EdgePair { a: 2, b: 0 },
+            EdgePair::SENTINEL,
+            EdgePair::SENTINEL,
+        ];
+        let (n_edges, n_dots) = prim.build_instances_from_edges(&edges, 3, false);
+        assert_eq!(n_edges, 3, "three valid pairs, two sentinels");
+        assert_eq!(n_dots, 0);
+        // All three EdgeInstances must reference valid vertex indices.
+        for i in 0..3 {
+            let inst = prim.cpu_instances[i];
+            assert!(inst.a < 3 && inst.b < 3);
+            assert_eq!(f32::from_bits(inst.alpha_bits), 1.0);
+        }
+    }
+
+    /// Out-of-range indices (vertex count smaller than the edge buffer
+    /// references) are skipped silently — the alternative is a black
+    /// frame from a vertex-shader bad read.
+    #[test]
+    fn explicit_edges_path_skips_out_of_range_indices() {
+        let mut prim = RenderLines::new();
+        let edges = [
+            EdgePair { a: 0, b: 1 },
+            EdgePair { a: 5, b: 6 }, // out of range for num_points=3
+        ];
+        let (n_edges, _) = prim.build_instances_from_edges(&edges, 3, false);
+        assert_eq!(n_edges, 1, "only the in-range pair survives");
+    }
+
+    /// `show_verts` in explicit-edges mode draws a dot at every vertex
+    /// that participates in at least one edge — matches the legacy
+    /// WireframeZoo behaviour where unconnected vertices stay hidden.
+    #[test]
+    fn explicit_edges_show_verts_dots_only_connected_vertices() {
+        let mut prim = RenderLines::new();
+        // 4 vertices, but only 0–1–2 form a connected component;
+        // vertex 3 is isolated.
+        let edges = [
+            EdgePair { a: 0, b: 1 },
+            EdgePair { a: 1, b: 2 },
+        ];
+        let (n_edges, n_dots) = prim.build_instances_from_edges(&edges, 4, true);
+        assert_eq!(n_edges, 2);
+        assert_eq!(n_dots, 3, "three connected vertices, vertex 3 stays hidden");
+        // Each dot's a==b.
+        for i in 0..n_dots as usize {
+            let dot = prim.cpu_instances[n_edges as usize + i];
+            assert_eq!(dot.a, dot.b);
         }
     }
 
