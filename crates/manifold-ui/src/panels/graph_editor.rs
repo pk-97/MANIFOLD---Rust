@@ -697,9 +697,20 @@ impl GraphEditorPanel {
     }
 
     fn handle_click_event(&mut self, node_id: u32) -> Vec<PanelAction> {
-        let Some(effect_index) = self.effect_index else {
-            return Vec::new();
-        };
+        // No effect_index guard here on purpose: post-unification the
+        // graph editor is one surface for both Effect-hosted AND
+        // Generator-hosted graphs. Generators have no `effect_index`
+        // by definition, so gating on it silently dropped every
+        // checkbox click on a generator's inner-node row — the bug
+        // that left WireframeShape's Animate / Color / etc. params
+        // un-exposable. The per-row loop below is the real
+        // short-circuit: if `self.rows` is empty (no selected node,
+        // no inner-node rows built), every match arm falls through
+        // and we return Vec::new() at the bottom. The app-side
+        // dispatcher (`PanelAction::ToggleNodeParamExpose` handler in
+        // app_render.rs) already gates on `watched_graph_target` so
+        // there's no risk of emitting an action without a target.
+        //
         // Inner-node checkbox clicks: route to EffectStaticParamExpose
         // when the param is a static-block target (`static_block_slot`
         // is `Some`), otherwise to EffectParamExpose. Static-block
@@ -742,7 +753,6 @@ impl GraphEditorPanel {
                         // command (`ToggleNodeParamExposeCommand`) does
                         // the dispatch internally.
                         let _ = static_block_slot;
-                        let _ = effect_index;
                         return vec![PanelAction::ToggleNodeParamExpose {
                             node_handle: node_handle.clone(),
                             inner_param: inner_param.clone(),
@@ -1180,15 +1190,24 @@ mod tests {
         assert!(panel.handle_click(99999).is_empty());
     }
 
+    /// Post-unification: the graph editor is one surface for both
+    /// Effect-hosted and Generator-hosted graphs. Generators have no
+    /// `effect_index` by definition — so a checkbox click on a
+    /// generator's inner-node row MUST still emit a
+    /// `ToggleNodeParamExpose` action. The app-side dispatcher
+    /// resolves the `watched_graph_target` (Effect or Generator) and
+    /// routes the command accordingly.
+    ///
+    /// Renamed + flipped from the original
+    /// `handle_click_no_effect_index_returns_empty` which asserted
+    /// the pre-unification (broken-for-generators) behaviour.
     #[test]
-    fn handle_click_no_effect_index_returns_empty() {
+    fn handle_click_without_effect_index_still_emits_for_generator_graphs() {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        // Configure with effect_index = None: the editor isn't open
-        // on a specific effect, so clicks must NOT emit.
         panel.configure(
-            None,
+            None, // No effect_index — simulating a Generator graph
             Vec::new(),
             Some(&node),
             HashSet::new(),
@@ -1197,9 +1216,18 @@ mod tests {
             HashSet::new(),
         );
         panel.build(&mut tree, viewport());
-        if let Some(row) = panel.rows.first() {
-            assert!(panel.handle_click(checkbox_id_of(row)).is_empty());
-        }
+        let row = panel.rows.first().expect("at least one inner-node row");
+        let actions = panel.handle_click(checkbox_id_of(row));
+        assert_eq!(
+            actions.len(),
+            1,
+            "click on a generator inner-node row must emit one action"
+        );
+        assert!(
+            matches!(actions[0], PanelAction::ToggleNodeParamExpose { .. }),
+            "must be ToggleNodeParamExpose, got {:?}",
+            actions[0],
+        );
     }
 
     /// Helper: pull a row's value-cell tree id, returning None for
