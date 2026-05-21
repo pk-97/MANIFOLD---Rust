@@ -115,7 +115,7 @@ pub struct SnareSettings {
 impl Default for SnareSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::BASIC_SHAPES_SNAP,
+            generator: GeneratorTypeId::BASIC_SHAPES,
             layer_index: 1,
             clip_duration_beats: Beats(0.75),
             min_confidence: 0.0,
@@ -695,7 +695,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Snare,
             1,
             None,
-            GeneratorTypeId::BASIC_SHAPES_SNAP,
+            GeneratorTypeId::BASIC_SHAPES,
             Beats(0.75),
             0.0,
         ));

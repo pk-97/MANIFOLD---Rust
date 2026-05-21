@@ -46,7 +46,7 @@ impl GeneratorTypeId {
 impl GeneratorTypeId {
     /// Sentinel: layer has no generator (video layer).
     pub const NONE: Self = Self(Cow::Borrowed("None"));
-    pub const BASIC_SHAPES_SNAP: Self = Self(Cow::Borrowed("BasicShapesSnap"));
+    pub const BASIC_SHAPES: Self = Self(Cow::Borrowed("BasicShapes"));
     pub const DUOCYLINDER: Self = Self(Cow::Borrowed("Duocylinder"));
     pub const TESSERACT: Self = Self(Cow::Borrowed("Tesseract"));
     pub const CONCENTRIC_TUNNEL: Self = Self(Cow::Borrowed("ConcentricTunnel"));
@@ -81,7 +81,7 @@ impl GeneratorTypeId {
     pub fn from_legacy_discriminant(v: i32) -> Self {
         match v {
             0 => Self::NONE,
-            2 => Self::BASIC_SHAPES_SNAP,
+            2 => Self::BASIC_SHAPES,
             3 => Self::DUOCYLINDER,
             4 => Self::TESSERACT,
             5 => Self::CONCENTRIC_TUNNEL,
@@ -153,12 +153,22 @@ impl<'de> Deserialize<'de> for GeneratorTypeId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
         Ok(match &value {
-            serde_json::Value::String(s) => Self(Cow::Owned(s.clone())),
+            serde_json::Value::String(s) => Self(Cow::Owned(remap_legacy_string(s).into())),
             serde_json::Value::Number(n) => {
                 Self::from_legacy_discriminant(n.as_i64().unwrap_or(0) as i32)
             }
             _ => Self::NONE,
         })
+    }
+}
+
+/// String-form rename map for project-load compatibility. Old projects
+/// stored the legacy ids verbatim; renames after ship must be remapped
+/// here so saved layers continue to resolve.
+fn remap_legacy_string(s: &str) -> &str {
+    match s {
+        "BasicShapesSnap" => "BasicShapes",
+        other => other,
     }
 }
 

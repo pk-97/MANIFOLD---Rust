@@ -183,8 +183,13 @@ fn generator_param_count_plasma() {
 }
 #[test]
 fn generator_param_count_basic_shapes() {
+    // 4 positional params (line, scale, fill, clip_trigger) — must match
+    // BasicShapes.json's preset positional layout in lockstep. When the
+    // two diverge, the runtime reads `apply_param_values` against the
+    // preset's source_index while `gp.param_values` is inventory-indexed,
+    // misaligning every binding (see generator_metadata_submissions.rs).
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count,
+        generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES).param_count,
         4
     );
 }

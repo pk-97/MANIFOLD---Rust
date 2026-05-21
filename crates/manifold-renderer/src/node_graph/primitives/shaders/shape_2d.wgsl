@@ -1,26 +1,18 @@
-// node.shape_2d — bit-exact port of the legacy BasicShapesSnap compute
-// shader. Renders one of three 2D SDF shapes (Square / Diamond /
-// Octagon) into an RGBA16F texture, with trigger-driven cycling
-// through shapes + 8 rotation steps. The `fill_mode` enum picks the
-// cycling strategy:
-//
-//   0 — Solid:     tc%3 shape, tc/3%8 rotation, always solid
-//   1 — Mixed:     tc%6 variant; variant%3 shape; variant>=3 wireframe; tc/6%8 rotation
-//   2 — Wireframe: tc%3 shape, tc/3%8 rotation, always wireframe
-//
-// Cycling is unconditional — wire `trigger_count` from
-// system.generator_input.trigger_count to drive it from clip retriggers,
-// or leave it unwired for a static (variant-0) shape.
+// node.shape_2d — renders one of three centered 2D SDF shapes (Square /
+// Diamond / Octagon) into an RGBA16F texture. CPU pre-computes the
+// shape index, wireframe flag, and current rotation angle (including the
+// trigger-elapsed quarter-beat ease) — this shader is a thin SDF rasterizer
+// with anti-aliased edges via finite-difference fwidth.
 
 struct Uniforms {
     aspect_ratio: f32,
     line_thickness: f32,
     uv_scale: f32,
-    trigger_count: f32,
-    fill_mode: f32,
+    shape_idx: f32,      // 0 = Square, 1 = Diamond, 2 = Octagon
+    is_wireframe: f32,   // 0 = solid fill, > 0.5 = wireframe outline
+    rotation: f32,       // signed radians; CPU folds direction into the sign
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -55,7 +47,6 @@ fn sd_octagon(p_in: vec2<f32>, r: f32) -> f32 {
     return length(p) * sign(p.y);
 }
 
-// Evaluate the active SDF at point p for the given shape index.
 fn eval_sdf(p: vec2<f32>, shape: u32) -> f32 {
     switch shape {
         case 1u: { return sd_diamond(p, 1.0); }
@@ -74,37 +65,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     p_uv.x *= u.aspect_ratio;
     p_uv *= u.uv_scale;
 
-    let tc = u32(i32(u.trigger_count));
-
-    // Fill mode: 0 = Solid, 1 = Mixed, 2 = Wireframe
-    // Mixed cycles 6 variants (3 shapes x 2 fills), matching original behavior
-    var shape_idx: u32;
-    var is_wireframe: bool;
-    var rot_step: u32;
-
-    if u.fill_mode < 0.5 {
-        // Solid: cycle 3 shapes, always solid
-        shape_idx = tc % 3u;
-        is_wireframe = false;
-        rot_step = (tc / 3u) % 8u;
-    } else if u.fill_mode < 1.5 {
-        // Mixed: cycle 6 variants (3 shapes x 2 fills), original snap behavior
-        let variant = tc % 6u;
-        shape_idx = variant % 3u;
-        is_wireframe = variant >= 3u;
-        rot_step = (tc / 6u) % 8u;
-    } else {
-        // Wireframe: cycle 3 shapes, always wireframe
-        shape_idx = tc % 3u;
-        is_wireframe = true;
-        rot_step = (tc / 3u) % 8u;
-    }
-
-    // Rotation: 4 angles x 2 directions = 8 steps
-    let DEG45 = 0.78539816; // pi/4
-    let target_angle = f32(rot_step % 4u) * DEG45;
-    let rot_direction = select(1.0, -1.0, rot_step >= 4u);
-    let rotation = target_angle * rot_direction;
+    let shape_idx = u32(u.shape_idx);
+    let is_wireframe = u.is_wireframe > 0.5;
+    let rotation = u.rotation;
 
     // Transform UV
     var p = p_uv / 0.315;

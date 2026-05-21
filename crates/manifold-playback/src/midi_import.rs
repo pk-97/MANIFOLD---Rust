@@ -72,12 +72,12 @@ impl MidiImportService {
             .is_empty();
 
         let (use_generator, _resolved_gen_type) = if !is_generator && source_clip_ids_empty {
-            // Video layer with no source clips — fall back to BasicShapesSnap generator
+            // Video layer with no source clips — fall back to BasicShapes generator
             log::warn!(
                 "[MidiImportService] Target video layer has no source clips. \
-                 Falling back to BasicShapesSnap generator clips."
+                 Falling back to BasicShapes generator clips."
             );
-            (true, GeneratorTypeId::BASIC_SHAPES_SNAP)
+            (true, GeneratorTypeId::BASIC_SHAPES)
         } else {
             (is_generator, gen_type.clone())
         };

@@ -1,12 +1,12 @@
 {
   "version": 2,
-  "name": "BasicShapesSnap",
-  "description": "Trigger-cycled 2D SDF shapes — Square / Diamond / Octagon, anti-aliased with a per-pixel finite-difference fwidth. The `fill_mode` enum picks the cycling strategy: Solid (3 shapes × 8 rotations, always filled), Mixed (6 variants × 8 rotations, alternating fill/wireframe — original snap behaviour), or Wireframe (3 shapes × 8 rotations, always outlined). Cycling is unconditional — `trigger_count` from system.generator_input drives shape + rotation; leave the wire unconnected for a static variant-0 shape.\n\nDecomposed from the legacy `BasicShapesSnapGenerator` into a single curated `node.shape_2d` primitive — the Plasma precedent for single-shader generators.",
+  "name": "BasicShapes",
+  "description": "Trigger-cycled 2D SDF shapes — Square / Diamond / Octagon, anti-aliased with a per-pixel finite-difference fwidth. The `fill` enum picks the cycling strategy: Solid (3 shapes × 8 rotations, always filled), Mixed (6 variants × 8 rotations, alternating fill/wireframe — original snap behaviour), or Wireframe (3 shapes × 8 rotations, always outlined). The `Clip Trigger` toggle gates the cycling (defaults OFF): ON drives shape + rotation snap from `trigger_count` and eases the rotation over the quarter beat following each trigger (BPM-coupled, trigger-elapsed). OFF freezes the shape at variant 0 with no rotation animation. Renamed from `BasicShapesSnap` — the snap feel is now opt-in via the toggle, matching the Plasma shape.\n\nDecomposed into a single curated `node.shape_2d` primitive (Plasma precedent for single-shader generators).",
   "presetMetadata": {
-    "id": "BasicShapesSnap",
+    "id": "BasicShapes",
     "displayName": "Basic Shapes",
     "category": "Procedural",
-    "oscPrefix": "basicShapesSnap",
+    "oscPrefix": "basicShapes",
     "available": true,
     "params": [
       {
@@ -38,6 +38,16 @@
         "wholeNumbers": true,
         "isToggle": false,
         "formatString": "F0"
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0"
       }
     ],
     "bindings": [
@@ -49,7 +59,10 @@
         "convert": { "type": "Float" } },
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "shape", "param": "fill_mode" },
-        "convert": { "type": "EnumRound" } }
+        "convert": { "type": "EnumRound" } },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
+        "convert": { "type": "BoolThreshold" } }
     ],
     "skipMode": { "kind": "never" }
   },
