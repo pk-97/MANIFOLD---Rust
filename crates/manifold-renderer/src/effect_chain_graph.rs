@@ -207,6 +207,14 @@ struct EffectSlot {
     /// splice map) are dropped before the slot is built, so this is
     /// the live length of `bindings[0..n_static]`.
     n_static: usize,
+    /// Count of static *outer slots* on the host's
+    /// `EffectInstance.param_values` — distinct from [`Self::n_static`]
+    /// when an orphaned spec binding gets dropped at chain build.
+    /// User tail bindings derive their `source_index` as
+    /// `n_static_slots + j`, so that an orphaned static binding
+    /// doesn't shift every subsequent user-tail slider down one slot.
+    /// In the common case (no orphans) this equals `n_static`.
+    n_static_slots: usize,
     /// Last seen `EffectInstance.user_param_bindings_version`. When
     /// the live effect's version differs, the per-frame apply path
     /// re-hydrates the user tail of [`Self::bindings`] from the live
@@ -393,13 +401,22 @@ impl ChainGraph {
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
-            // ResolvedBinding::from_user). Same positional order as
-            // `EffectInstance.param_values`, so the per-frame apply
-            // walks both in lockstep.
+            // ResolvedBinding::from_user). Each binding carries its
+            // own `source_index` into `EffectInstance.param_values` —
+            // for the current 1:1 effects these match the enumerate
+            // position, but the apply loop indexes via `source_index`
+            // not position, so a future fan-out shape stays correct.
+            //
+            // Slot bookkeeping: `static_view_slot` advances past every
+            // attempt (resolved or not) so that even if `from_static`
+            // drops an orphan binding, the next ones keep landing on
+            // the right slot in `param_values` — which DOES contain a
+            // value for the dropped binding's slot (the host
+            // pre-allocates one slot per `view.bindings` entry).
             let mut bindings: Vec<ResolvedBinding> =
                 Vec::with_capacity(view.bindings.len() + fx.user_param_bindings.len());
-            for b in view.bindings {
-                match ResolvedBinding::from_static(b, &handles) {
+            for (static_view_slot, b) in view.bindings.iter().enumerate() {
+                match ResolvedBinding::from_static(b, &handles, static_view_slot) {
                     Some(rb) => bindings.push(rb),
                     None => eprintln!(
                         "[chain-graph] {}: ParamBinding `{}` references handle that splice \
@@ -410,8 +427,10 @@ impl ChainGraph {
                 }
             }
             let n_static = bindings.len();
-            for core in &fx.user_param_bindings {
-                match ResolvedBinding::from_user(core, &graph, &handles) {
+            let n_static_slots = view.bindings.len();
+            for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
+                let source_index = n_static_slots + user_slot;
+                match ResolvedBinding::from_user(core, &graph, &handles, source_index) {
                     Some(rb) => bindings.push(rb),
                     None => eprintln!(
                         "[chain-graph] {}: UserParamBinding `{}` could not resolve \
@@ -443,6 +462,7 @@ impl ChainGraph {
                 handles,
                 bindings,
                 n_static,
+                n_static_slots,
                 user_bindings_version,
                 binding_cache,
                 ctx_target_node,
@@ -601,8 +621,14 @@ impl ChainGraph {
             // graph editor works).
             if fx.user_param_bindings_version != slot.user_bindings_version {
                 slot.bindings.truncate(slot.n_static);
-                for core in &fx.user_param_bindings {
-                    match ResolvedBinding::from_user(core, &self.graph, &slot.handles) {
+                for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
+                    let source_index = slot.n_static_slots + user_slot;
+                    match ResolvedBinding::from_user(
+                        core,
+                        &self.graph,
+                        &slot.handles,
+                        source_index,
+                    ) {
                         Some(rb) => slot.bindings.push(rb),
                         None => eprintln!(
                             "[chain-graph] {}: UserParamBinding `{}` could not resolve \
