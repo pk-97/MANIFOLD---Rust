@@ -149,9 +149,16 @@ Why keep them as separate Effects rather than collapsing into their atom:
 
 **Transform and Quad Mirror are NOT presets.** Investigation 2026-05-14 found their legacy shaders have semantics the Transform atom doesn't reproduce: aspect-ratio-correct rotation, legacy-subtract-translate, hard-OOB rejection (Transform), and fill-quadrant zoom plus additive piecewise blend (Quad Mirror). Migrating to atom-presets would visually regress existing projects. They stay classified as monolithic shader effects — same category as Glitch, Strobe, Voronoi Prism.
 
-## 3. Generators (23) — deferred
+## 3. Generators — partially decomposed
 
-Generators stay as-is for now. They'll enter the node-graph world in a separate pass (§6.7 of `PRIMITIVE_LIBRARY_DESIGN.md`) once effects have shipped and we've used the system in anger. Display-name pass deferred with them.
+Generator decomposition is now in flight. Three generators ship as JSON-defined graphs built from curated primitives; the rest stay Rust-defined for now. See [`GENERATOR_DECOMPOSITION_PLAN.md`](GENERATOR_DECOMPOSITION_PLAN.md) for the strategic roadmap and [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md) for the authoring guide.
+
+| Generator | Status | Notes |
+|---|---|---|
+| Plasma | JSON-defined | 3-node graph: `system.generator_input → node.plasma_pattern_2d → system.final_output`. Eight pattern variants packed behind one curated primitive. |
+| Lissajous | JSON-defined | 9-node graph using `generate_lissajous`, `frequency_ratio`, `lfo`, `mux_scalar`, `render_lines`. |
+| WireframeZoo (display name "Wireframe") | JSON-defined | 9-node graph using `wireframe_shape`, three `math` nodes, `rotate_3d`, `project_3d`, `render_lines` (with the new `edges` input wired). |
+| 20 others | Rust-defined | Sequenced via the decomposition plan. |
 
 ## 4. The 4 monolithic effects — won't decompose
 
@@ -166,18 +173,20 @@ The remaining 20 effects either are decomposed already (Mirror, Soft Focus, Styl
 
 ## 5. What's deferred
 
-- **3D infrastructure** (Camera3D, Rotation3D/4D, MeshRender, Shadow, Raymarch, LineRasterize) — only needed when generators decompose.
-- **Particle / Array port** (ParticleScatter, ScatterResolve, ParticleSimRK2 + the `Array<T>` port type) — promoted to V1 per [PRIMITIVE_LIBRARY_DESIGN.md §12.3](PRIMITIVE_LIBRARY_DESIGN.md) but not yet built. Both signature generators (Black Hole, FluidSim 2D) want this.
-- **Procedural source atoms** (Plasma, StarField, ConcentricShapes, BasicShapes, ParametricSDF) — Plasma exists as an atomic complex in `atomic/`; the rest defer until generators decompose.
-- **Atomic primitives** (Sobel3, DisplacementMap, VoronoiCells, PerlinFBM) — defer until a composite needs them.
-- **MipChainDown / MipChainUp** — defer until Bloom decomposes from its current composite shader.
+- **Shader-shipped Effects → atom composites** (Bloom, Halation, Watercolor) — composites with their existing monolithic shaders; will decompose as the atom set fills out.
+- **Buffer ports** (audio waveforms outside the Array<T> story) — deferred to V2.
 - **3D volume primitives** (Sample3D, SliceVolume → Texture2D, per-voxel math) — needed by FluidSim3D and any future volumetric work.
-- **Buffer ports** (audio waveforms, particle positions outside the Array story) — deferred to V2.
+- **MipChainDown / MipChainUp** — defer until Bloom decomposes from its current composite shader.
+- **Atomic primitives** (Sobel3, DisplacementMap, VoronoiCells, PerlinFBM) — defer until a composite needs them.
 
-Notes on items that *did* ship since the original deferred list:
+Items that *did* ship since the original deferred list:
+- **Array<T> port type** — particle / mesh / line buffers flow through wires. Producers declare capacity via `EffectNode::array_output_capacity`; backing buffers are shared MTLBuffer (CPU + GPU visible). See `crates/manifold-renderer/src/generators/mesh_common.rs` for the POD types (`MeshVertex`, `LinePoint`, `EdgePair`, `Vec4Vertex`, `InstanceTransform`).
+- **3D infrastructure** — `node.rotate_3d`, `node.project_3d`, `node.render_lines` (with optional explicit-edges input as of the WireframeZoo decomposition), plus `node.generate_cube_mesh`, `node.generate_platonic_solid → node.wireframe_shape`, `node.generate_tesseract_vertices`, `node.generate_duocylinder_vertices`. Drives WireframeZoo (3D wireframes), upcoming Tesseract / Duocylinder (4D), and any future user-imported mesh.
+- **Particle / Array primitives** — `node.seed_particles`, `node.seed_particles_from_texture`, `node.integrate_particles`, `node.integrate_particles_attractor`, `node.scatter_particles`, `node.scatter_particles_3d`, `node.resolve_accumulator`, `node.resolve_3d_accumulator`, `node.array_feedback`. Drives the planned StrangeAttractor + fluid-family decompositions.
+- **Procedural source atoms** — `node.plasma_pattern_2d` (8-variant family), `node.generate_lissajous`, `node.frequency_ratio`, `node.checkerboard`. Single-purpose siblings of the larger family primitives.
 - **BeatGate** shipped (`node.beat_gate`) — drives the decomposed Strobe Opacity composite.
 - **Texture→Scalar bridges** shipped (`luminance`, `peak`, `color_sample`) — see §1.2.
-- **Control-rate primitives** shipped (`value`, `math`, `lfo`, `beat_gate`, `smoothing`) — see §1.3.
+- **Control-rate primitives** shipped (`value`, `math`, `lfo`, `beat_gate`, `smoothing`, `envelope_follower_ar`, `affine_scalar`, `mux_scalar`) — see §1.3.
 
 ## 6. Migration of existing projects
 
