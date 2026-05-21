@@ -81,18 +81,18 @@ impl Primitive for FrequencyRatio {
             },
         };
         let rounded = raw_index.round() as i64;
-        let len_i = FREQUENCY_RATIO_TABLE.len() as i64;
-        // Rust's `%` keeps the sign of the dividend; force a
-        // non-negative integer first so the cycle below sees a
-        // valid u32.
-        let wrapped = ((rounded % len_i) + len_i) % len_i;
-        // Run through the uniqueness invariant — two adjacent
-        // trigger events never land on the same ratio row, even if
-        // the upstream counter glitches and writes the same index
-        // twice in a row.
-        let idx = self
-            .clip_trigger_cycle
-            .step(wrapped as u32, len_i as u32);
+        let len = FREQUENCY_RATIO_TABLE.len() as u32;
+        // Pass the raw, un-wrapped count to the cycle. The cycle's
+        // idempotence detection compares `last_trigger_count` to
+        // the input — if we pre-wrap (`% len`) here, two distinct
+        // trigger events that happen to share a wrapped index
+        // (e.g. counts 1 and 11) look identical to the cycle and
+        // it stalls on the cached emission instead of advancing.
+        // Negative inputs clamp to 0; counters are conventionally
+        // non-negative, and the cycle's u32 input precludes
+        // signed values.
+        let count = rounded.max(0) as u32;
+        let idx = self.clip_trigger_cycle.step(count, len);
         let (a, b) = FREQUENCY_RATIO_TABLE[idx as usize];
 
         ctx.outputs.set_scalar("a", ParamValue::Float(a));
@@ -211,14 +211,26 @@ mod tests {
         assert_eq!((a, b), (2.0, 3.0));
     }
 
-    /// Out-of-range index wraps modulo 10. Both `12` and `-8` should
-    /// land on row 2 (2:3 fifth).
+    /// Positive index above table length wraps modulo 10 via the
+    /// uniqueness cycle. `12 % 10 = 2` → row 2 (2:3 fifth).
     #[test]
-    fn index_wraps_modulo_table_length() {
+    fn positive_index_wraps_modulo_table_length() {
         let (a, b) = run_ratio(12);
         assert_eq!((a, b), (2.0, 3.0));
+    }
+
+    /// Negative indices clamp to 0 rather than wrapping. The cycle's
+    /// `step()` takes `u32`, so signed inputs collapse to zero
+    /// here; counters that drive this primitive are conventionally
+    /// non-negative (trigger_count from `system.generator_input` is
+    /// always >= 0). Locked in so a future refactor doesn't reach
+    /// for the old `((x % len) + len) % len` formula — that breaks
+    /// the cycle's idempotence detection by collapsing distinct
+    /// trigger events that share a wrapped index.
+    #[test]
+    fn negative_index_clamps_to_zero() {
         let (a, b) = run_ratio(-8);
-        assert_eq!((a, b), (2.0, 3.0));
+        assert_eq!((a, b), (1.0, 2.0));
     }
 
     /// Bit-perfect match with the legacy LissajousGenerator's
