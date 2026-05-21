@@ -3,6 +3,7 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::generators::registration::GeneratorFactory;
 
 inventory::submit! {
@@ -41,6 +42,9 @@ pub struct PlasmaGenerator {
     /// Specialized pipelines per pattern type. Metal compiler eliminates the
     /// switch in each variant via function constants.
     pipelines: [manifold_gpu::GpuComputePipeline; 8],
+    /// Defense-in-depth uniqueness invariant on the clip-trigger
+    /// pattern cycle — see [`ClipTriggerCycle`] docs.
+    clip_trigger_cycle: ClipTriggerCycle,
 }
 
 impl PlasmaGenerator {
@@ -57,7 +61,10 @@ impl PlasmaGenerator {
                 &format!("Plasma {}", names[i]),
             )
         });
-        Self { pipelines }
+        Self {
+            pipelines,
+            clip_trigger_cycle: ClipTriggerCycle::new(),
+        }
     }
 }
 
@@ -89,7 +96,8 @@ impl Generator for PlasmaGenerator {
         let clip_trigger = ctx.param_count > CLIP_TRIGGER as u32 && ctx.params[CLIP_TRIGGER] > 0.5;
 
         let pattern_type = if clip_trigger {
-            (ctx.trigger_count % PATTERN_COUNT) as f32
+            self.clip_trigger_cycle
+                .step(ctx.trigger_count, PATTERN_COUNT) as f32
         } else if ctx.param_count > PATTERN as u32 {
             ctx.params[PATTERN].round()
         } else {

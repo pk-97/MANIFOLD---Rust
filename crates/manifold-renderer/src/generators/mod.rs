@@ -1,6 +1,7 @@
 pub mod basic_shapes_snap;
 pub mod black_hole;
 pub mod bundled_generator_presets;
+pub mod clip_trigger;
 pub mod compute_common;
 pub mod concentric_tunnel;
 pub mod digital_plants;

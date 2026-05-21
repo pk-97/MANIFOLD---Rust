@@ -60,6 +60,9 @@ crate::primitive! {
     composition_notes: "Index rounds to nearest integer and wraps modulo 10, so wiring an unbounded counter into the input port cycles through the table. The table is small-integer ratios chosen for visually-clean closed Lissajous curves — for non-Lissajous uses the same harmonic vocabulary still produces musically-coherent outputs.",
     examples: [],
     picker: { label: "Frequency Ratio", category: Driver },
+    extra_fields: {
+        clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
+    },
 }
 
 impl Primitive for FrequencyRatio {
@@ -78,10 +81,18 @@ impl Primitive for FrequencyRatio {
             },
         };
         let rounded = raw_index.round() as i64;
-        let len = FREQUENCY_RATIO_TABLE.len() as i64;
+        let len_i = FREQUENCY_RATIO_TABLE.len() as i64;
         // Rust's `%` keeps the sign of the dividend; force a
-        // non-negative index so negative counters wrap cleanly.
-        let idx = ((rounded % len) + len) % len;
+        // non-negative integer first so the cycle below sees a
+        // valid u32.
+        let wrapped = ((rounded % len_i) + len_i) % len_i;
+        // Run through the uniqueness invariant — two adjacent
+        // trigger events never land on the same ratio row, even if
+        // the upstream counter glitches and writes the same index
+        // twice in a row.
+        let idx = self
+            .clip_trigger_cycle
+            .step(wrapped as u32, len_i as u32);
         let (a, b) = FREQUENCY_RATIO_TABLE[idx as usize];
 
         ctx.outputs.set_scalar("a", ParamValue::Float(a));

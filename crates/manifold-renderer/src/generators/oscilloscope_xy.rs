@@ -1,5 +1,6 @@
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::generators::generator_math::{PROJ_SCALE, hash_beat};
 use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
 use crate::gpu_encoder::GpuEncoder;
@@ -34,6 +35,10 @@ const RATIO_B: [f32; 10] = [2.0, 3.0, 4.0, 5.0, 5.0, 6.0, 7.0, 8.0, 5.0, 8.0];
 pub struct OscilloscopeXYGenerator {
     line_pipeline: LinePipeline,
     helper: LineGeneratorHelper,
+    /// Defense-in-depth uniqueness invariant on the clip-trigger
+    /// ratio cycle. `harm_idx` follows `main_idx` by a fixed
+    /// offset, so one cycle covers both.
+    clip_trigger_cycle: ClipTriggerCycle,
 }
 
 impl OscilloscopeXYGenerator {
@@ -52,6 +57,7 @@ impl OscilloscopeXYGenerator {
         Self {
             line_pipeline,
             helper,
+            clip_trigger_cycle: ClipTriggerCycle::new(),
         }
     }
 }
@@ -111,8 +117,10 @@ impl Generator for OscilloscopeXYGenerator {
 
         if clip_trigger {
             // Trigger-driven: fixed ratio per trigger (Unity lines 65-73)
-            let main_idx = (ctx.trigger_count as usize) % RATIO_COUNT;
-            let harm_idx = (ctx.trigger_count as usize + 3) % RATIO_COUNT;
+            let main_idx = self
+                .clip_trigger_cycle
+                .step(ctx.trigger_count, RATIO_COUNT as u32) as usize;
+            let harm_idx = (main_idx + 3) % RATIO_COUNT;
             a_main = RATIO_A[main_idx];
             b_main = RATIO_B[main_idx];
             a_harm = RATIO_A[harm_idx];

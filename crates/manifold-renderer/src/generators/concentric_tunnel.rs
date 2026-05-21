@@ -3,6 +3,7 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::generators::registration::GeneratorFactory;
 
 inventory::submit! {
@@ -43,6 +44,9 @@ struct ConcentricTunnelUniforms {
 
 pub struct ConcentricTunnelGenerator {
     pipeline: manifold_gpu::GpuComputePipeline,
+    /// Defense-in-depth uniqueness invariant on the clip-trigger
+    /// shape cycle (`trigger_count % SHAPE_COUNT`).
+    clip_trigger_cycle: ClipTriggerCycle,
 }
 
 impl ConcentricTunnelGenerator {
@@ -52,7 +56,10 @@ impl ConcentricTunnelGenerator {
             "cs_main",
             "ConcentricTunnel",
         );
-        Self { pipeline }
+        Self {
+            pipeline,
+            clip_trigger_cycle: ClipTriggerCycle::new(),
+        }
     }
 }
 
@@ -103,7 +110,8 @@ impl Generator for ConcentricTunnelGenerator {
                 clip_trigger_mode_shader = if mode == MODE_BOTH { 2.0 } else { 1.0 };
             }
             if cycle_shape {
-                (ctx.trigger_count % SHAPE_COUNT) as f32
+                self.clip_trigger_cycle
+                    .step(ctx.trigger_count, SHAPE_COUNT) as f32
             } else {
                 if ctx.param_count > SHAPE as u32 {
                     ctx.params[SHAPE].round()

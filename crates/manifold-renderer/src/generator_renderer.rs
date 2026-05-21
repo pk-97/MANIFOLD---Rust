@@ -184,6 +184,21 @@ impl GeneratorRenderer {
             });
 
         if needs_create {
+            // Preserve `trigger_count` across rebuild. Without this,
+            // editing the override graph mid-clip OR changing the
+            // generator type resets the counter to 0, which makes the
+            // next clip-trigger's `count % N` calculation potentially
+            // collide with the value the previous instance just
+            // emitted — the user sees the same pattern back-to-back
+            // even though the math should never produce duplicates.
+            // The counter is conceptually "how many times has this
+            // layer been triggered" and is generator-agnostic, so
+            // carrying it forward is semantically correct.
+            let preserved_trigger_count = self
+                .layer_generators
+                .get(&layer_id)
+                .map(|ls| ls.trigger_count)
+                .unwrap_or(0);
             if let Some(generator) =
                 self.registry
                     .create_with_override(self.device(), &gen_type, override_def)
@@ -193,7 +208,7 @@ impl GeneratorRenderer {
                     LayerGeneratorState {
                         generator,
                         generator_type: gen_type.clone(),
-                        trigger_count: 0,
+                        trigger_count: preserved_trigger_count,
                         override_version: current_override_version,
                         layer_string_defaults: std::collections::BTreeMap::new(),
                         merged_string_params: std::collections::BTreeMap::new(),

@@ -129,6 +129,9 @@ crate::primitive! {
     composition_notes: "Wire `time` from system.generator_input.time and `aspect` from system.generator_input.aspect for the standard generator setup. When `clip_trigger = true` the active pattern cycles by `trigger_count % 8` instead of the static `pattern` param — wire trigger_count from system.generator_input.trigger_count to drive per-retrigger switching from a NoteOn source. `speed` scales time; `scale` is inverted internally so larger values zoom out. Contrast = 0 gives the widest band, contrast = 1 the sharpest threshold.",
     examples: [],
     picker: { label: "Plasma Pattern 2D", category: Atom },
+    extra_fields: {
+        clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
+    },
 }
 
 fn read_scalar(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
@@ -181,10 +184,11 @@ impl Primitive for PlasmaPattern2D {
         };
 
         // Clip-trigger mode overrides the static pattern with trigger_count
-        // modulo the pattern count — matches the legacy generator's
-        // CPU-side resolution exactly.
+        // modulo the pattern count, run through the uniqueness invariant
+        // so two adjacent triggers never land on the same pattern.
         let pattern_type = if clip_trigger {
-            (trigger_count.floor() as i64).rem_euclid(PLASMA_PATTERN_COUNT as i64) as f32
+            let raw = trigger_count.floor().max(0.0) as u32;
+            self.clip_trigger_cycle.step(raw, PLASMA_PATTERN_COUNT) as f32
         } else {
             pattern_param as f32
         };

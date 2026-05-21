@@ -6,6 +6,7 @@ use manifold_core::GeneratorTypeId;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::generators::registration::GeneratorFactory;
 
 inventory::submit! {
@@ -65,6 +66,9 @@ pub struct MriVolumeGenerator {
     pending_slice_index: i32,
     // Scan library
     scans: Vec<ScanInfo>,
+    // Defense-in-depth uniqueness invariant on the clip-trigger
+    // axis cycle (`trigger_count % 3`).
+    clip_trigger_cycle: ClipTriggerCycle,
 }
 
 impl MriVolumeGenerator {
@@ -127,6 +131,7 @@ impl MriVolumeGenerator {
             pending_axis: -1,
             pending_slice_index: -1,
             scans,
+            clip_trigger_cycle: ClipTriggerCycle::new(),
         }
     }
 
@@ -210,7 +215,7 @@ impl Generator for MriVolumeGenerator {
             (param(ctx, SCAN, 0.0).round() as i32).clamp(0, self.scans.len() as i32 - 1);
         let clip_trigger = param(ctx, CLIP_TRIGGER, 0.0) > 0.5;
         let axis = if clip_trigger {
-            (ctx.trigger_count % 3) as i32
+            self.clip_trigger_cycle.step(ctx.trigger_count, 3) as i32
         } else {
             (param(ctx, SLICE_AXIS, 0.0).round() as i32).clamp(0, 2)
         };

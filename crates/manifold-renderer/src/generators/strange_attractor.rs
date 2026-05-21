@@ -13,6 +13,7 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::generators::registration::GeneratorFactory;
 use manifold_core::generator_registration::{
     GeneratorAliasMetadata, GeneratorMetadata, ParamSpec,
@@ -157,6 +158,9 @@ pub struct StrangeAttractorGenerator {
     initialized: bool,
     last_attractor_type: i32,
     last_trigger_count: i32,
+    /// Defense-in-depth uniqueness invariant on the clip-trigger
+    /// attractor-type cycle (`trigger_count % ATTRACTOR_COUNT`).
+    clip_trigger_cycle: ClipTriggerCycle,
 }
 
 impl StrangeAttractorGenerator {
@@ -206,6 +210,7 @@ impl StrangeAttractorGenerator {
             initialized: false,
             last_attractor_type: -1,
             last_trigger_count: -1,
+            clip_trigger_cycle: ClipTriggerCycle::new(),
         }
     }
 
@@ -331,7 +336,8 @@ impl Generator for StrangeAttractorGenerator {
             if ctx.trigger_count as i32 != self.last_trigger_count {
                 self.last_trigger_count = ctx.trigger_count as i32;
             }
-            ctx.trigger_count % ATTRACTOR_COUNT
+            self.clip_trigger_cycle
+                .step(ctx.trigger_count, ATTRACTOR_COUNT)
         } else {
             if ctx.trigger_count as i32 != self.last_trigger_count {
                 self.last_trigger_count = ctx.trigger_count as i32;
