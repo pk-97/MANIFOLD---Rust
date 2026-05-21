@@ -3,7 +3,16 @@
 // an Array<MeshVertex>.
 //
 // Vertex positions ported from generators/wireframe_zoo.rs's CPU-side
-// const tables, normalised to the unit sphere in-shader.
+// const tables, normalised to magnitude WIREFRAME_DEFAULT_RADIUS in-shader.
+//
+// Why not unit sphere? The 0.25-radius is the curated default
+// "wireframe-fits-on-screen" magnitude — it's PROJ_SCALE from the
+// legacy line generators. Baking it here means downstream
+// node.project_3d.proj_scale defaults to 1.0 (the user-facing
+// "default zoom") instead of needing a graph-side math node to
+// multiply outer-card Scale by 0.25. The constant lives where it
+// belongs — inside the primitive responsible for screen-friendly
+// vertex magnitudes — not in the binding layer or as a graph node.
 //
 // Edges are NOT written here — the paired Array<EdgePair> output is
 // CPU-written in Rust because the only consumer (node.render_lines)
@@ -32,6 +41,11 @@ struct MeshVertex {
 
 const PHI: f32 = 1.618034;
 const INV_PHI: f32 = 0.618034;
+
+// Default screen-friendly wireframe radius. Matches the legacy
+// generators::generator_math::PROJ_SCALE so visual size is bit-
+// identical against the pre-graph WireframeZoo renderer.
+const WIREFRAME_DEFAULT_RADIUS: f32 = 0.25;
 
 // Vertex counts per shape: tetra=4, cube=8, octa=6, icosa=12, dodeca=20.
 
@@ -161,12 +175,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let raw = vert_for_shape(u.shape, i);
     let len = length(raw);
-    let pos = select(raw / len, vec3<f32>(0.0), len < 1e-8);
+    // Normalise to WIREFRAME_DEFAULT_RADIUS (0.25), not unit sphere.
+    let pos = select(raw * (WIREFRAME_DEFAULT_RADIUS / len), vec3<f32>(0.0), len < 1e-8);
 
     vert_dst[i].position = pos;
     vert_dst[i]._pad0 = 0.0;
     // Outward-radial normal (vertex of a convex polyhedron points away
-    // from origin). Same as the normalised position for convex shapes.
-    vert_dst[i].normal = pos;
+    // from origin). Length-1 (not scaled) so downstream lighting sees a
+    // unit normal regardless of the position radius.
+    let normal = select(raw / len, vec3<f32>(0.0, 1.0, 0.0), len < 1e-8);
+    vert_dst[i].normal = normal;
     vert_dst[i]._pad1 = 0.0;
 }

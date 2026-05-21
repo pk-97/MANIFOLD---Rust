@@ -2,11 +2,19 @@
 //! vertex + edge sets as `Array<MeshVertex>` + `Array<EdgePair>`.
 //!
 //! Five shapes packed behind one `shape` enum: Tetrahedron, Cube,
-//! Octahedron, Icosahedron, Dodecahedron. Positions are normalised to
-//! the unit sphere; normals point radially outward. Edges carry the
-//! shape's full wireframe topology — feed both outputs through
-//! `node.rotate_3d` + `node.project_3d` + `node.render_lines` (with
-//! the `edges` input wired) to draw the wireframe.
+//! Octahedron, Icosahedron, Dodecahedron. Positions are normalised
+//! to magnitude 0.25 (the curated "wireframe-fits-on-screen" default
+//! matching legacy `generator_math::PROJ_SCALE`); normals stay
+//! length-1 for shading. Edges carry the shape's full wireframe
+//! topology — feed both outputs through `node.rotate_3d` +
+//! `node.project_3d` + `node.render_lines` (with the `edges` input
+//! wired) to draw the wireframe.
+//!
+//! The 0.25 magnitude lives inside this primitive (not as a graph-
+//! side math node or a baked binding-layer multiplier) so downstream
+//! `project_3d.proj_scale` defaults to 1.0 — outer-card Scale binds
+//! to it directly and gives the user "Scale 1.0 = default zoom" UX
+//! without a multiplier node in the graph.
 //!
 //! Clip-trigger mode cycles the shape on each retrigger via the
 //! shared [`ClipTriggerCycle`] uniqueness invariant — same defense
@@ -185,7 +193,7 @@ fn edges_for_shape(shape: u32) -> &'static [EdgePair] {
 crate::primitive! {
     name: WireframeShape,
     type_id: "node.wireframe_shape",
-    purpose: "Emit one of five wireframe shapes (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as a paired Array<MeshVertex> + Array<EdgePair>. Vertices are normalised to the unit sphere; edges carry the full wireframe topology. Pipe both outputs through node.rotate_3d → node.project_3d → node.render_lines (with the `edges` input wired) to draw the wireframe. Clip-trigger mode cycles the shape on each retrigger via the shared ClipTriggerCycle uniqueness invariant.",
+    purpose: "Emit one of five wireframe shapes (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as a paired Array<MeshVertex> + Array<EdgePair>. Vertices are normalised to magnitude 0.25 (the curated screen-friendly wireframe default); edges carry the full wireframe topology. Pipe both outputs through node.rotate_3d → node.project_3d → node.render_lines (with the `edges` input wired) to draw the wireframe. Clip-trigger mode cycles the shape on each retrigger via the shared ClipTriggerCycle uniqueness invariant.",
     inputs: {
         // Wire `system.generator_input.trigger_count` here to enable
         // clip-trigger shape cycling. Port-shadows the `trigger_count`

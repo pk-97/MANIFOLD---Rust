@@ -130,7 +130,7 @@
         "target": { "kind": "handleNode", "handle": "render", "param": "vert_size" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "scale_mul", "param": "a" },
+        "target": { "kind": "handleNode", "handle": "project", "param": "proj_scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
@@ -165,32 +165,24 @@
       }
     },
     {
-      "id": 4, "typeId": "node.math", "handle": "scale_mul",
-      "params": {
-        "a":  { "type": "Float", "value": 1.0 },
-        "b":  { "type": "Float", "value": 0.25 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
-    },
-    {
-      "id": 5, "typeId": "node.wireframe_shape", "handle": "shape",
+      "id": 4, "typeId": "node.wireframe_shape", "handle": "shape",
       "params": {
         "shape":         { "type": "Enum",  "value": 0 },
         "clip_trigger":  { "type": "Bool",  "value": false },
         "trigger_count": { "type": "Float", "value": 0.0 }
       }
     },
-    { "id": 6, "typeId": "node.rotate_3d", "handle": "rotate" },
+    { "id": 5, "typeId": "node.rotate_3d", "handle": "rotate" },
     {
-      "id": 7, "typeId": "node.project_3d", "handle": "project",
+      "id": 6, "typeId": "node.project_3d", "handle": "project",
       "params": {
         "mode":       { "type": "Enum",  "value": 0 },
-        "proj_scale": { "type": "Float", "value": 0.25 },
+        "proj_scale": { "type": "Float", "value": 1.0 },
         "proj_dist":  { "type": "Float", "value": 3.0 }
       }
     },
     {
-      "id": 8, "typeId": "node.render_lines", "handle": "render",
+      "id": 7, "typeId": "node.render_lines", "handle": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.003 },
         "closed_loop":       { "type": "Bool",  "value": false },
@@ -206,27 +198,26 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 9, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },
     { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
     { "fromNode": 0, "fromPort": "time", "toNode": 3, "toPort": "a" },
 
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 5, "toPort": "trigger_count" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "trigger_count" },
 
-    { "fromNode": 5, "fromPort": "vertices", "toNode": 6, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "vertices", "toNode": 5, "toPort": "in" },
 
-    { "fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "angle_x" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "angle_y" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "angle_z" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "angle_x" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "angle_y" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "angle_z" },
 
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 7, "toPort": "proj_scale" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" },
 
-    { "fromNode": 7, "fromPort": "out",   "toNode": 8, "toPort": "points" },
-    { "fromNode": 5, "fromPort": "edges", "toNode": 8, "toPort": "edges"  },
+    { "fromNode": 6, "fromPort": "out",   "toNode": 7, "toPort": "points" },
+    { "fromNode": 4, "fromPort": "edges", "toNode": 7, "toPort": "edges"  },
 
-    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+    { "fromNode": 7, "fromPort": "color", "toNode": 8, "toPort": "in" }
   ]
 }

@@ -24,7 +24,11 @@ The trap: decomposing for its own sake. A generator that is one shader doing one
 
 The win condition: the legacy Rust generator gets deleted, the JSON preset is the only path, and the primitives that fell out are useful in *other* graphs too.
 
-**Time budgeting**: the first decomposition that uses a new primitive family (Plasma → curated procedural texture; Lissajous → curve sources; WireframeZoo → 3D wireframe pipeline) pays a one-time tax to build out that family — typically 3-5 primitive extensions plus the JSON preset. Subsequent decompositions in the same family are far cheaper because the primitives already exist. Tesseract / Duocylinder will inherit the entire 3D wireframe pipeline from WireframeZoo's decomposition; they'll likely be JSON-only changes plus one or two 4D primitive additions. Don't budget the second decomposition like the first.
+**Time budgeting**: the first decomposition that uses a new primitive family (Plasma → curated procedural texture; Lissajous → curve sources; WireframeZoo → 3D wireframe pipeline) pays a one-time *inherent* tax — building the new primitives that didn't exist (`wireframe_shape`, `EdgePair`, the `edges` input on `render_lines`). That's an investment, not waste — those primitives become the vocabulary the next generator in the family reuses.
+
+What's *not* part of that tax is extending adjacent primitives for port-shadow — that work shouldn't exist. New primitives should ship port-shadow on every numeric param by default (see §6.2). The reason WireframeZoo needed `rotate_3d` and `project_3d` extended was that they were authored before this convention was established. Future primitives should be authored to this convention so the only first-time cost is the genuinely new functionality.
+
+Subsequent decompositions in the same family are far cheaper. Tesseract / Duocylinder will inherit the entire 3D wireframe pipeline from WireframeZoo; they'll likely be JSON-only changes plus one or two 4D primitive additions. Don't budget the second decomposition like the first.
 
 ## 2. The mental model
 
@@ -159,7 +163,9 @@ This is a hard rule and lives in [feedback_collapse_to_primitives](../.claude/pr
 
 When a decomposition needs new behaviour and an existing primitive is close to it, extend the existing one. Add an optional input port, a mode enum, an output port. The bar to clear: the extension must be **simple** (one or two additive changes, not a rewrite) and **contained** (doesn't pollute the existing primitive's surface with concepts that have nothing to do with its core job). Both Plasma's `clip_trigger` cycling and Lissajous's port-shadowable inputs were added this way.
 
-**Expect adjacent extensions to cascade.** A single generator decomposition usually grows port-shadow on 2-3 adjacent primitives, not just the producer. WireframeZoo needed: `wireframe_shape` (the new family primitive), `rotate_3d` (port-shadow `angle_x/y/z`, previously static-only), `project_3d` (port-shadow `proj_scale/proj_dist`, previously static-only), `render_lines` (optional `edges` input). Plan for this in the inventory step (§3 step 3) — every time-varying value the legacy generator computed needs a wirable port on the consumer primitive.
+**Expect adjacent extensions to cascade — but they're avoidable for *new* primitives.** WireframeZoo needed `rotate_3d` and `project_3d` extended mid-decomposition because their numeric params were static-only. If those primitives had been authored with port-shadow on every `Float` / `Int` param from day one, no extension would have been needed. **Authoring rule for new primitives: every numeric scalar param ships as a port-shadowed optional input by default.** The only params that should stay non-port-shadowable are mode selectors (`Enum`, `Bool` operation flags) where wiring doesn't make sense.
+
+Plan for cascading extensions in the inventory step (§3 step 3) when decomposing against existing primitives — every time-varying value the legacy generator computed needs a wirable port on the consumer primitive — but treat the need to extend an adjacent primitive as a *fix for a primitive that should have shipped port-shadow originally*, not as inherent decomposition cost.
 
 Why extend over build:
 
@@ -182,15 +188,19 @@ WireframeZoo demonstrates the extend pattern: instead of a new `render_wireframe
 
 Bad middle ground: a family primitive with three barely-related variants, or a single-purpose primitive that grows a `mode` enum to cover its second use case. Both should be split or merged accordingly.
 
-### 6.4 Watch for hidden constants in the legacy code
+### 6.4 Constants belong inside primitives, not in graph nodes
 
-Legacy Rust generators almost always have a handful of inline numeric constants that don't live in any visible param. WireframeZoo had `proj_scale = 0.25 * outer_scale` — that 0.25 was a screen-fit factor never exposed to the user but load-bearing for the visual size. To preserve UX with the new graph, the constant has to live somewhere — either:
+Legacy Rust generators almost always have a handful of inline numeric constants that don't live in any visible param. WireframeZoo had `proj_scale = 0.25 * outer_scale` — that 0.25 was a screen-fit factor never exposed to the user but load-bearing for the visual size. **Static constants like this belong inside a primitive, never as a `math` node in the graph.** Math nodes are for *dynamic* arithmetic — `time × rate`, `audio_level × gain`, signals that change frame-to-frame. Putting `static × static` in a math node turns a constant into a node, growing the graph for no reason.
 
-- As a default on the consumer primitive (clean when the constant is genuinely a sensible default — `project_3d.proj_scale = 0.25` is one).
-- As a math node in the graph (clean when the constant is part of an arithmetic chain the user shouldn't see — `outer_scale × 0.25` became a `math(Multiply)` node).
-- Baked into the upstream primitive's output (clean when the constant is intrinsic to that primitive — e.g. `generate_lissajous` bakes `PROJ_SCALE = 0.25` into its sample positions).
+The codebase even has explicit precedent: the old `FloatTransform` / `FloatScaled` `ParamConvert` variant was *deliberately removed* (see `crates/manifold-core/src/effects.rs` — "their curation moved into the primitives"). Don't look for it; it doesn't exist by design.
 
-The trap is missing a hidden constant and shipping a preset that's visually wrong by a multiplier. Read the legacy generator's `render()` end-to-end and circle every bare numeric literal before authoring the JSON.
+Where the constant should live, in priority order:
+
+1. **As a primitive default param.** Cleanest when the constant is a sensible default for that primitive's job — `project_3d.proj_scale = 0.25` was already this until our outer-card binding overrode it. If the outer-card slider doesn't need to override it, leave it as the inline default and don't bind.
+2. **Baked into the upstream primitive's output.** Cleanest when the constant is intrinsic to what the primitive *produces*. WireframeZoo's 0.25 lives inside `wireframe_shape`: vertices come out at magnitude 0.25 already, so `project_3d.proj_scale = 1.0` (the user-facing "1.0 = default zoom") works directly. The 0.25 lives where it semantically belongs — inside the primitive responsible for screen-friendly vertex magnitudes.
+3. **As an extra param on the consumer primitive.** Use this when (1) and (2) don't fit. Slightly less clean because it adds a param to a primitive that's specifically for one preset's UX.
+
+The trap: missing a hidden constant and shipping a preset that's visually wrong by a multiplier. Or noticing the multiplier and reaching for a math node instead of pushing it into a primitive. Read the legacy generator's `render()` end-to-end, circle every bare numeric literal, and for each one decide which of the three homes above it belongs in — *before* authoring the JSON.
 
 ### 6.5 Outer-card params are the user surface
 
