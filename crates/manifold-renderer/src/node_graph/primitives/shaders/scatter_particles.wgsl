@@ -8,12 +8,21 @@
 // The accumulator is `array<atomic<u32>>` indexed by `y * width + x`.
 // A separate pass (node.resolve_accumulator) converts the u32 grid
 // into a float texture by dividing by FIXED_POINT_SCALE (4096.0).
+//
+// `boundary` selects the out-of-bounds policy:
+//   0 = Wrap    — toroidal wrap (`pos % width`); seamless tiling.
+//   1 = Discard — drop the particle; no edge-seam artifact for
+//                 perspective-projected sims (StrangeAttractor).
 
 struct ScatterUniforms {
     active_count: u32,
     width: u32,
     height: u32,
     scaled_energy: u32,
+    boundary: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 struct Particle {
@@ -48,12 +57,25 @@ fn splat_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Nearest texel + toroidal wrap.
-    let coord = vec2<u32>(
-        u32(p.position.x * f32(params.width))  % params.width,
-        u32(p.position.y * f32(params.height)) % params.height,
-    );
-
-    let idx = coord.y * params.width + coord.x;
-    atomicAdd(&accum[idx], params.scaled_energy);
+    if params.boundary == 1u {
+        // Discard mode: skip out-of-bounds particles entirely.
+        if p.position.x < 0.0 || p.position.x >= 1.0 ||
+           p.position.y < 0.0 || p.position.y >= 1.0 {
+            return;
+        }
+        let coord = vec2<u32>(
+            u32(p.position.x * f32(params.width)),
+            u32(p.position.y * f32(params.height)),
+        );
+        let idx = coord.y * params.width + coord.x;
+        atomicAdd(&accum[idx], params.scaled_energy);
+    } else {
+        // Wrap mode: nearest texel + toroidal wrap.
+        let coord = vec2<u32>(
+            u32(p.position.x * f32(params.width))  % params.width,
+            u32(p.position.y * f32(params.height)) % params.height,
+        );
+        let idx = coord.y * params.width + coord.x;
+        atomicAdd(&accum[idx], params.scaled_energy);
+    }
 }
