@@ -36,9 +36,12 @@ use crate::node_graph::primitive::Primitive;
 pub const POLYGON_MIN_SIDES: u32 = 3;
 
 /// Largest N supported. Sets the array buffer capacities for `outline`
-/// and `edges`; at N = 32 a polygon visually approximates a circle to
-/// the edge-pixel detection limit of an HD output.
-pub const POLYGON_MAX_SIDES: u32 = 32;
+/// and `edges`; at N = 64 a polygon visually approximates a circle to
+/// the edge-pixel detection limit of an HD output even at large radii
+/// (a half-screen circle has segments ≤ 1.5% of viewport width, well
+/// below per-pixel resolvability). Used by ConcentricTunnel's Circle
+/// variant for facet-free smooth rings.
+pub const POLYGON_MAX_SIDES: u32 = 64;
 
 /// Triangle list capacity for the fan-triangulated `mesh` output.
 /// Three MeshVertex entries per triangle, one triangle per side

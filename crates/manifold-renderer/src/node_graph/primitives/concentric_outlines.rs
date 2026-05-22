@@ -3,10 +3,15 @@
 //!
 //! Takes one polygon's outline + edge topology and emits `ring_count`
 //! concentric copies at scales driven by an `expansion` scalar.
-//! Ring `i` scale = `(frac(expansion) + i + 0.5) * ring_spacing`, so
-//! as `expansion` grows over time the whole stack drifts outward and
-//! periodically a new ring emerges at the centre — the visual of a
-//! shape "tunnel" expanding from origin.
+//! Ring `i` scale = `(frac(expansion) + i) * ring_spacing`, so as
+//! `expansion` grows over time the whole stack drifts outward and a
+//! new ring emerges at the centre (radius 0) every integer crossing
+//! of expansion. Innermost slot ranges [0, ring_spacing); outermost
+//! ranges [(K-1)*spacing, K*spacing). Pick `ring_count` large enough
+//! that K*spacing exceeds the visible viewport's corner distance
+//! (≈0.707 in centred [-0.5, 0.5] coords) so the outermost slot is
+//! always off-screen — that's where the slot-cycle wrap happens, and
+//! making the wrap invisible is what keeps the animation smooth.
 //!
 //! Use case: the decomposition target for the legacy ConcentricTunnel
 //! generator. Wire `node.polygon_shape → node.concentric_outlines →
@@ -33,10 +38,16 @@ use crate::node_graph::primitive::Primitive;
 /// off-screen at any plausible `ring_spacing`.
 pub const CONCENTRIC_MAX_RING_COUNT: u32 = 32;
 
+/// Stack-allocated scratch size per ring iteration in `run()`. Must be
+/// at least as large as the upstream producer's outline / edges
+/// capacity. Sized to handle `polygon_shape`'s 64-vertex output with
+/// margin; bump if a wider producer ships.
+const CONCENTRIC_INLINE_SCRATCH: usize = 128;
+
 crate::primitive! {
     name: ConcentricOutlines,
     type_id: "node.concentric_outlines",
-    purpose: "Stack `ring_count` scaled copies of a polygon outline into one Array<LinePoint> + Array<EdgePair> pair, with ring `i` at scale `(frac(expansion) + i + 0.5) * ring_spacing`. Drives the concentric-rings tunnel look from a single polygon source: wire node.polygon_shape's outline + edges in, drive `expansion` from `beat / beats_per_ring` (or any time-varying scalar), and feed the outputs into node.render_lines. As expansion grows past each integer step, the stack drifts outward and a new ring emerges at the centre.",
+    purpose: "Stack `ring_count` scaled copies of a polygon outline into one Array<LinePoint> + Array<EdgePair> pair, with ring `i` at scale `(frac(expansion) + i) * ring_spacing`. Drives the concentric-rings tunnel look from a single polygon source: wire node.polygon_shape's outline + edges in, drive `expansion` from `beat / beats_per_ring` (or any time-varying scalar), and feed the outputs into node.render_lines. As expansion grows past each integer step the stack drifts outward and a new ring emerges from the centre (slot 0 starts at radius 0).",
     inputs: {
         outline: Array(LinePoint) required,
         edges: Array(EdgePair) required,
@@ -64,7 +75,11 @@ crate::primitive! {
             name: "ring_count",
             label: "Ring Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(8),
+            // 16 covers the visible viewport at ring_spacing ≥ 0.05
+            // (16 * 0.05 = 0.8 > viewport-corner 0.707), so the outermost
+            // slot's cycle-wrap stays off-screen. Bump higher if a preset
+            // dials ring_spacing below 0.05.
+            default: ParamValue::Int(16),
             range: Some((1.0, CONCENTRIC_MAX_RING_COUNT as f32)),
             enum_values: &[],
         },
@@ -72,16 +87,15 @@ crate::primitive! {
             name: "ring_spacing",
             label: "Ring Spacing",
             ty: ParamType::Float,
-            // 0.12 puts ~4 rings inside the [-0.5, 0.5] viewport at
-            // ring_count=8 with expansion=0 — leaves the outer half
-            // off-screen so the "drifting outward" motion has somewhere
-            // to drift to. Tune per preset.
+            // 0.12 puts ~6 rings inside the visible viewport at
+            // ring_count=16; outer half stays off-screen so the
+            // slot-cycle wrap is invisible.
             default: ParamValue::Float(0.12),
             range: Some((0.001, 1.0)),
             enum_values: &[],
         },
     ],
-    composition_notes: "Output buffer sizes scale with `ring_count` × the upstream Array capacities (e.g. polygon_shape's 32-vertex outline × 8 rings = 256 LinePoints output). Each ring offset is `(frac(expansion) + i + 0.5) * ring_spacing`; rings appear at radii in the producer's coordinate space and feed through node.render_lines's aspect-correction + centre-offset on the way to the framebuffer. Edges from the input are copied per ring with vertex indices shifted by ring_index × input_capacity, so each ring is a self-contained closed loop. Sentinel edges (EdgePair::SENTINEL) in the input stay as sentinels in every output ring — polygon_shape's inactive-side padding never resolves to a drawn line.",
+    composition_notes: "Output buffer sizes scale with `ring_count` × the upstream Array capacities (e.g. polygon_shape's 64-vertex outline × 16 rings = 1024 LinePoints output). Each ring offset is `(frac(expansion) + i) * ring_spacing`; slot 0 ranges from radius 0 to `ring_spacing` (rings emerge from the centre and grow out), slot K-1 ranges from `(K-1)*spacing` to `K*spacing`. Edges from the input are copied per ring with vertex indices shifted by ring_index × input_capacity, so each ring is a self-contained closed loop. Sentinel edges (EdgePair::SENTINEL) in the input stay as sentinels in every output ring — polygon_shape's inactive-side padding never resolves to a drawn line. Pick `ring_count` so K*spacing > 0.707 (viewport corner) and the slot-cycle wrap stays off-screen.",
     examples: [],
     picker: { label: "Concentric Outlines", category: Atom },
 }
@@ -182,9 +196,10 @@ impl Primitive for ConcentricOutlines {
         };
 
         // ── Scratch + ring scales ──
-        // Frac of expansion drives the slot-cycle. Adding 0.5 centres
-        // the first ring at half-spacing from origin (matches the
-        // legacy ConcentricTunnel's half-offset rings).
+        // Frac of expansion drives the slot-cycle. Slot 0 emerges from
+        // the centre (radius 0 at frac=0) and grows to one ring_spacing
+        // out as frac → 1, then wraps back to 0 as the next ring
+        // emerges. Higher slots cycle through their respective bands.
         let frac_expansion = expansion - expansion.floor();
 
         // Output is at most CONCENTRIC_MAX_RING_COUNT × input capacity
@@ -203,7 +218,7 @@ impl Primitive for ConcentricOutlines {
         // scratch buffer needed because each ring's contribution is
         // a contiguous run in the output buffer).
         for i in 0..ring_count {
-            let scale = (frac_expansion + i as f32 + 0.5) * ring_spacing;
+            let scale = (frac_expansion + i as f32) * ring_spacing;
             let ring_outline_offset = (i as usize) * (in_outline_cap as usize);
             let ring_edges_offset = (i as usize) * (in_edges_cap as usize);
 
@@ -217,11 +232,12 @@ impl Primitive for ConcentricOutlines {
             // allocating a Vec per call.
             let outline_chunk = (outline_write_count - ring_outline_offset)
                 .min(in_outline_cap as usize);
-            let mut outline_scratch = [LinePoint { xy: [0.0, 0.0] }; 64];
+            let mut outline_scratch = [LinePoint { xy: [0.0, 0.0] }; CONCENTRIC_INLINE_SCRATCH];
             assert!(
                 outline_chunk <= outline_scratch.len(),
-                "concentric_outlines: input outline capacity {} exceeds inline scratch size 64; bump CONCENTRIC_INLINE_SCRATCH if a producer is wider",
+                "concentric_outlines: input outline capacity {} exceeds inline scratch size {}; bump CONCENTRIC_INLINE_SCRATCH if a producer is wider",
                 in_outline_cap,
+                CONCENTRIC_INLINE_SCRATCH,
             );
             for j in 0..outline_chunk {
                 let p = in_outline[j].xy;
@@ -236,11 +252,12 @@ impl Primitive for ConcentricOutlines {
             } else {
                 (edges_write_count - ring_edges_offset).min(in_edges_cap as usize)
             };
-            let mut edges_scratch = [EdgePair::SENTINEL; 64];
+            let mut edges_scratch = [EdgePair::SENTINEL; CONCENTRIC_INLINE_SCRATCH];
             assert!(
                 edges_chunk <= edges_scratch.len(),
-                "concentric_outlines: input edges capacity {} exceeds inline scratch size 64",
+                "concentric_outlines: input edges capacity {} exceeds inline scratch size {}",
                 in_edges_cap,
+                CONCENTRIC_INLINE_SCRATCH,
             );
             for j in 0..edges_chunk {
                 let e = in_edges[j];
@@ -510,10 +527,11 @@ mod gpu_tests {
     #[test]
     fn ring_scales_match_expansion_formula() {
         // Triangle (n=3), size=1.0, ring_count=4, ring_spacing=0.1,
-        // expansion=0 → ring i should scale by (0.5 + i) * 0.1 =
-        // 0.05, 0.15, 0.25, 0.35.
+        // expansion=0 → ring i should scale by `i * 0.1` =
+        // 0.0, 0.1, 0.2, 0.3 (slot 0 is collapsed at the origin —
+        // a new ring just emerged).
         let (outline, _) = run_chain(3, 1.0, 4, 0.1, 0.0);
-        let expected_scales = [0.05_f32, 0.15, 0.25, 0.35];
+        let expected_scales = [0.0_f32, 0.1, 0.2, 0.3];
         for (i, &expected_scale) in expected_scales.iter().enumerate() {
             // Vertex 0 of polygon_shape sits at (size, 0) → (1.0, 0).
             // After scaling by expected_scale: (expected_scale, 0).
@@ -531,22 +549,19 @@ mod gpu_tests {
 
     #[test]
     fn edge_indices_shift_by_ring_offset() {
-        // Triangle (n=3): edges per ring are [(0,1), (1,2), (2,0)].
-        // Ring 0: (0, 1), (1, 2), (2, 0)
-        // Ring 1: (32, 33), (33, 34), (34, 32)
-        // Ring 2: (64, 65), (65, 66), (66, 64)
+        // Triangle (n=3): each ring has 3 active edges in a closed loop
+        // (0→1, 1→2, 2→0). After ring-stacking, edge indices are
+        // offset by ring_index × POLYGON_MAX_SIDES (the producer's
+        // outline capacity, which is the offset stride for indices).
         let (_, edges) = run_chain(3, 1.0, 3, 0.1, 0.0);
-        let expected: &[&[(u32, u32)]] = &[
-            &[(0, 1), (1, 2), (2, 0)],
-            &[(32, 33), (33, 34), (34, 32)],
-            &[(64, 65), (65, 66), (66, 64)],
-        ];
-        for (ring, ring_expected) in expected.iter().enumerate() {
-            let base = ring * (POLYGON_MAX_SIDES as usize);
-            for (i, &(a, b)) in ring_expected.iter().enumerate() {
+        let stride = POLYGON_MAX_SIDES;
+        let triangle_edges: &[(u32, u32)] = &[(0, 1), (1, 2), (2, 0)];
+        for ring in 0..3u32 {
+            let base = (ring * stride) as usize;
+            for (i, &(a, b)) in triangle_edges.iter().enumerate() {
                 let e = edges[base + i];
-                assert_eq!(e.a, a, "ring {ring} edge {i}.a");
-                assert_eq!(e.b, b, "ring {ring} edge {i}.b");
+                assert_eq!(e.a, a + ring * stride, "ring {ring} edge {i}.a");
+                assert_eq!(e.b, b + ring * stride, "ring {ring} edge {i}.b");
             }
         }
     }
@@ -576,10 +591,10 @@ mod gpu_tests {
     #[test]
     fn expansion_frac_offsets_ring_scale() {
         // expansion = 0.5, ring_count = 4, ring_spacing = 0.1
-        // Ring i scale = (0.5 + 0.5 + i) * 0.1 = (1 + i) * 0.1 →
-        // 0.1, 0.2, 0.3, 0.4.
+        // Ring i scale = (0.5 + i) * 0.1 →
+        // 0.05, 0.15, 0.25, 0.35 (slot 0 mid-emergence).
         let (outline, _) = run_chain(4, 1.0, 4, 0.1, 0.5);
-        let expected_scales = [0.1_f32, 0.2, 0.3, 0.4];
+        let expected_scales = [0.05_f32, 0.15, 0.25, 0.35];
         for (i, &expected_scale) in expected_scales.iter().enumerate() {
             let v0 = outline[i * (POLYGON_MAX_SIDES as usize)];
             assert!(
