@@ -717,18 +717,18 @@ fn param_type_name(ty: crate::node_graph::parameters::ParamType) -> &'static str
 /// was removed). Everything else is variant-for-variant.
 fn param_value_matches_type(v: &ParamValue, ty: crate::node_graph::parameters::ParamType) -> bool {
     use crate::node_graph::parameters::ParamType;
-    match (ty, v) {
-        (ParamType::Float, ParamValue::Float(_)) => true,
-        (ParamType::Int, ParamValue::Float(_)) => true,
-        (ParamType::Bool, ParamValue::Bool(_)) => true,
-        (ParamType::Vec2, ParamValue::Vec2(_)) => true,
-        (ParamType::Vec3, ParamValue::Vec3(_)) => true,
-        (ParamType::Vec4, ParamValue::Vec4(_)) => true,
-        (ParamType::Color, ParamValue::Color(_)) => true,
-        (ParamType::Enum, ParamValue::Enum(_)) => true,
-        (ParamType::Table, ParamValue::Table(_)) => true,
-        _ => false,
-    }
+    matches!(
+        (ty, v),
+        (ParamType::Float, ParamValue::Float(_))
+            | (ParamType::Int, ParamValue::Float(_))
+            | (ParamType::Bool, ParamValue::Bool(_))
+            | (ParamType::Vec2, ParamValue::Vec2(_))
+            | (ParamType::Vec3, ParamValue::Vec3(_))
+            | (ParamType::Vec4, ParamValue::Vec4(_))
+            | (ParamType::Color, ParamValue::Color(_))
+            | (ParamType::Enum, ParamValue::Enum(_))
+            | (ParamType::Table, ParamValue::Table(_))
+    )
 }
 
 /// Resolve a port name on a node by matching against the declared
