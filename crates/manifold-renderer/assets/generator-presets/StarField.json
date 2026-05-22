@@ -1,0 +1,154 @@
+{
+  "version": 2,
+  "name": "Star Field",
+  "description": "Star Field — cinematic 3D parallax star field with four depth-staggered layers, spectral colouring, aspect-corrected core+halo gaussians, and multi-frequency twinkle. Decomposed from the legacy `StarFieldGenerator` Rust struct into a single curated `node.star_field_2d` primitive that exposes nine outer-card sliders bound directly to its params plus a side-channel `Array<CurvePoint>` output (`stars`) carrying per-star screen NDC positions for downstream composition (constellation lines, particle seeding, audio-reactive modulation).\n\nThe two outputs are independent: wire `out` for the classic generator look, wire `stars` (when sentinel-filtering downstream primitives exist) to drive other graph nodes from the same hash + camera-drift state used by the texture.",
+  "presetMetadata": {
+    "id": "StarField",
+    "displayName": "Star Field",
+    "category": "Procedural",
+    "oscPrefix": "starField",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "density",
+        "name": "Density",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "density"
+      },
+      {
+        "id": "brightness",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.7,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "brightness"
+      },
+      {
+        "id": "depth",
+        "name": "Depth",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "depth"
+      },
+      {
+        "id": "drift_speed",
+        "name": "Drift Speed",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "driftSpeed"
+      },
+      {
+        "id": "drift_x",
+        "name": "Drift X",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "driftX"
+      },
+      {
+        "id": "drift_y",
+        "name": "Drift Y",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "driftY"
+      },
+      {
+        "id": "twinkle",
+        "name": "Twinkle",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "twinkle"
+      },
+      {
+        "id": "warmth",
+        "name": "Warmth",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "warmth"
+      },
+      {
+        "id": "glow",
+        "name": "Glow",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "glow"
+      }
+    ],
+    "bindings": [
+      { "id": "density",     "label": "Density",     "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "density" },
+        "convert": { "type": "Float" } },
+      { "id": "brightness",  "label": "Brightness",  "defaultValue": 0.7,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "brightness" },
+        "convert": { "type": "Float" } },
+      { "id": "depth",       "label": "Depth",       "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "depth" },
+        "convert": { "type": "Float" } },
+      { "id": "drift_speed", "label": "Drift Speed", "defaultValue": 0.15,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "drift_speed" },
+        "convert": { "type": "Float" } },
+      { "id": "drift_x",     "label": "Drift X",     "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "drift_x" },
+        "convert": { "type": "Float" } },
+      { "id": "drift_y",     "label": "Drift Y",     "defaultValue": 0.1,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "drift_y" },
+        "convert": { "type": "Float" } },
+      { "id": "twinkle",     "label": "Twinkle",     "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "twinkle" },
+        "convert": { "type": "Float" } },
+      { "id": "warmth",      "label": "Warmth",      "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "warmth" },
+        "convert": { "type": "Float" } },
+      { "id": "glow",        "label": "Glow",        "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "stars", "param": "glow" },
+        "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "node.star_field_2d",     "handle": "stars" },
+    { "id": 2, "typeId": "system.final_output",    "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "time",   "toNode": 1, "toPort": "time"   },
+    { "fromNode": 0, "fromPort": "aspect", "toNode": 1, "toPort": "aspect" },
+    { "fromNode": 1, "fromPort": "out",    "toNode": 2, "toPort": "in"     }
+  ]
+}

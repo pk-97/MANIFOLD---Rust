@@ -20,7 +20,6 @@ pub mod oscilloscope_xy;
 pub mod particle_text;
 pub mod registration;
 pub mod registry;
-pub mod star_field;
 pub mod stateful_base;
 pub mod strange_attractor;
 pub mod text;

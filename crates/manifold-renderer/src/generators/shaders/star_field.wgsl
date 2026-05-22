@@ -1,5 +1,12 @@
 // Star Field — Cinematic 3D parallax star field
 //
+// **PARITY-TEST REFERENCE ONLY.** The legacy `StarFieldGenerator`
+// Rust struct was deleted when StarField migrated to a JSON preset
+// + `node.star_field_2d` primitive. This shader is preserved as
+// the bit-exact reference the new primitive's `gpu_tests` module
+// asserts against — do not change unless you understand the
+// invariant.
+//
 // Adapted from BlackHole's star_layer() with:
 //   - Virtual camera (pan/tilt via drift)
 //   - 4 depth layers on separate spheres for parallax
