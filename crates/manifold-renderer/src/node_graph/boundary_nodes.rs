@@ -39,7 +39,7 @@ pub const FINAL_OUTPUT_TYPE_ID: &str = "system.final_output";
 /// Stable type ID for [`GeneratorInput`].
 pub const GENERATOR_INPUT_TYPE_ID: &str = "system.generator_input";
 
-const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 5] = [
+const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 7] = [
     NodePort {
         name: "time",
         ty: PortType::Scalar(ScalarType::F32),
@@ -66,6 +66,18 @@ const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 5] = [
     },
     NodePort {
         name: "anim_progress",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: "output_width",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: "output_height",
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -180,7 +192,7 @@ inventory::submit! {
     }
 }
 
-const GENERATOR_INPUT_PARAMS: [ParamDef; 5] = [
+const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
     ParamDef {
         name: "time",
         label: "Time (s)",
@@ -218,6 +230,22 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 5] = [
         label: "Anim Progress",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(0.0),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "output_width",
+        label: "Output Width",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(1920.0),
+        range: None,
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "output_height",
+        label: "Output Height",
+        ty: crate::node_graph::parameters::ParamType::Float,
+        default: ParamValue::Float(1080.0),
         range: None,
         enum_values: &[],
     },
@@ -280,6 +308,8 @@ impl EffectNode for GeneratorInput {
         let aspect = read_f(ctx, "aspect", 1.0);
         let trigger_count = read_f(ctx, "trigger_count", 0.0);
         let anim_progress = read_f(ctx, "anim_progress", 0.0);
+        let output_width = read_f(ctx, "output_width", 1920.0);
+        let output_height = read_f(ctx, "output_height", 1080.0);
         ctx.outputs.set_scalar("time", ParamValue::Float(time));
         ctx.outputs.set_scalar("beat", ParamValue::Float(beat));
         ctx.outputs.set_scalar("aspect", ParamValue::Float(aspect));
@@ -287,6 +317,10 @@ impl EffectNode for GeneratorInput {
             .set_scalar("trigger_count", ParamValue::Float(trigger_count));
         ctx.outputs
             .set_scalar("anim_progress", ParamValue::Float(anim_progress));
+        ctx.outputs
+            .set_scalar("output_width", ParamValue::Float(output_width));
+        ctx.outputs
+            .set_scalar("output_height", ParamValue::Float(output_height));
     }
 }
 
@@ -362,15 +396,23 @@ mod tests {
     }
 
     #[test]
-    fn generator_input_declares_five_scalar_outputs() {
+    fn generator_input_declares_seven_scalar_outputs() {
         let g = GeneratorInput::new();
         assert_eq!(g.inputs().len(), 0);
         let outs = g.outputs();
-        assert_eq!(outs.len(), 5);
+        assert_eq!(outs.len(), 7);
         let names: Vec<&str> = outs.iter().map(|p| p.name).collect();
         assert_eq!(
             names,
-            vec!["time", "beat", "aspect", "trigger_count", "anim_progress"]
+            vec![
+                "time",
+                "beat",
+                "aspect",
+                "trigger_count",
+                "anim_progress",
+                "output_width",
+                "output_height",
+            ]
         );
         for out in outs {
             assert_eq!(out.ty, PortType::Scalar(ScalarType::F32));
@@ -392,12 +434,20 @@ mod tests {
     }
 
     #[test]
-    fn generator_input_declares_five_float_params() {
+    fn generator_input_declares_seven_float_params() {
         let g = GeneratorInput::new();
         let names: Vec<&str> = g.parameters().iter().map(|p| p.name).collect();
         assert_eq!(
             names,
-            vec!["time", "beat", "aspect", "trigger_count", "anim_progress"]
+            vec![
+                "time",
+                "beat",
+                "aspect",
+                "trigger_count",
+                "anim_progress",
+                "output_width",
+                "output_height",
+            ]
         );
         for p in g.parameters() {
             assert!(matches!(p.default, ParamValue::Float(_)));

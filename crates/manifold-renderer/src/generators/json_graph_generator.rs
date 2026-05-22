@@ -536,11 +536,12 @@ impl JsonGraphGenerator {
     }
 
     /// Update the `system.generator_input` node's per-frame context by
-    /// setting its five float params (`time`, `beat`, `aspect`,
-    /// `trigger_count`, `anim_progress`). Called by the host once per
-    /// frame before [`Self::execute_frame`]. Uses the standard
-    /// `Graph::set_param` path — no downcasting, no special-case
-    /// plumbing.
+    /// setting its float params (`time`, `beat`, `aspect`,
+    /// `trigger_count`, `anim_progress`, `output_width`,
+    /// `output_height`). Called by the host once per frame before
+    /// [`Self::execute_frame`]. Uses the standard `Graph::set_param`
+    /// path — no downcasting, no special-case plumbing.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_frame_context(
         &mut self,
         time: f32,
@@ -548,6 +549,8 @@ impl JsonGraphGenerator {
         aspect: f32,
         trigger_count: f32,
         anim_progress: f32,
+        output_width: f32,
+        output_height: f32,
     ) {
         let id = self.generator_input_id;
         let _ = self.graph.set_param(id, "time", ParamValue::Float(time));
@@ -562,6 +565,16 @@ impl JsonGraphGenerator {
             id,
             "anim_progress",
             ParamValue::Float(anim_progress),
+        );
+        let _ = self.graph.set_param(
+            id,
+            "output_width",
+            ParamValue::Float(output_width),
+        );
+        let _ = self.graph.set_param(
+            id,
+            "output_height",
+            ParamValue::Float(output_height),
         );
     }
 
@@ -622,6 +635,8 @@ impl Generator for JsonGraphGenerator {
             ctx.aspect,
             ctx.trigger_count as f32,
             ctx.anim_progress,
+            ctx.output_width as f32,
+            ctx.output_height as f32,
         );
 
         // 2. Push the host's outer-card slider values through the
@@ -888,7 +903,7 @@ mod tests {
                 .expect("trivial generator preset must load");
         assert_eq!(preset.type_id().as_str(), "TestPassthrough");
 
-        preset.set_frame_context(1.5, 0.5, 1.78, 4.0, 0.25);
+        preset.set_frame_context(1.5, 0.5, 1.78, 4.0, 0.25, 1920.0, 1080.0);
         preset.execute_frame(frame_time());
     }
 
@@ -989,7 +1004,7 @@ mod tests {
             "branch_a's rgba32float output_format override must reach the plan",
         );
 
-        preset.set_frame_context(0.0, 0.0, 1.78, 1.0, 0.0);
+        preset.set_frame_context(0.0, 0.0, 1.78, 1.0, 0.0, 1920.0, 1080.0);
         preset.execute_frame(frame_time());
     }
 
@@ -1011,11 +1026,11 @@ mod tests {
         )
         .expect("bundled Plasma must load");
         assert_eq!(preset.type_id().as_str(), "Plasma");
-        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0);
+        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
         preset.execute_frame(frame_time());
         // Advance time and execute again — phase should propagate
         // through the wired Math chains without the graph panicking.
-        preset.set_frame_context(0.5, 0.25, 1.78, 0.0, 0.5);
+        preset.set_frame_context(0.5, 0.25, 1.78, 0.0, 0.5, 1920.0, 1080.0);
         preset.execute_frame(frame_time());
     }
 
@@ -1119,7 +1134,7 @@ mod tests {
         )
         .expect("bundled TrivialPassthrough must load");
         assert_eq!(preset.type_id().as_str(), "TrivialPassthrough");
-        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0);
+        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
         preset.execute_frame(frame_time());
     }
 

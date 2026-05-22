@@ -104,6 +104,7 @@ mod seed_particles;
 mod separable_gaussian;
 mod simplex_noise_2d;
 mod affine_scalar;
+mod canvas_area_scale;
 mod centered_uv;
 mod plasma_pattern_2d;
 mod rotate_2d;
@@ -250,6 +251,7 @@ pub use separable_gaussian::{
 };
 pub use simplex_noise_2d::SimplexNoise2D;
 pub use affine_scalar::AffineScalar;
+pub use canvas_area_scale::CanvasAreaScale;
 pub use centered_uv::CenteredUv;
 pub use plasma_pattern_2d::{PLASMA_PATTERNS, PLASMA_PATTERN_COUNT, PlasmaPattern2D};
 pub use rotate_2d::Rotate2D;
