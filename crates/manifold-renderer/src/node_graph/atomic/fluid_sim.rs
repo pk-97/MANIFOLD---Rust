@@ -110,7 +110,7 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         name: "jacobi_iterations",
         label: "Pressure Iterations",
         ty: ParamType::Int,
-        default: ParamValue::Int(20),
+        default: ParamValue::Float(20.0),
         range: Some((1.0, 60.0)),
         enum_values: &[],
     },

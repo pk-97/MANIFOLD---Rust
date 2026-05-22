@@ -376,7 +376,6 @@ fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
 fn param_default_to_f32(value: &ParamValue) -> f32 {
     match value {
         ParamValue::Float(f) => *f,
-        ParamValue::Int(i) => *i as f32,
         ParamValue::Bool(b) => {
             if *b {
                 1.0

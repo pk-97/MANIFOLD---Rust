@@ -583,7 +583,7 @@ impl JsonGraphGenerator {
                 .unwrap_or(binding.default);
             let pv = match binding.convert {
                 ParamConvert::Float => ParamValue::Float(v),
-                ParamConvert::IntRound => ParamValue::Int(v.round() as i32),
+                ParamConvert::IntRound => ParamValue::Float(v.round()),
                 ParamConvert::BoolThreshold => ParamValue::Bool(v > 0.5),
                 ParamConvert::EnumRound => ParamValue::Enum(v.round().max(0.0) as u32),
             };

@@ -41,7 +41,7 @@ crate::primitive! {
             name: "width",
             label: "Width",
             ty: ParamType::Int,
-            default: ParamValue::Int(960),
+            default: ParamValue::Float(960.0),
             range: Some((16.0, 4096.0)),
             enum_values: &[],
         },
@@ -49,7 +49,7 @@ crate::primitive! {
             name: "height",
             label: "Height",
             ty: ParamType::Int,
-            default: ParamValue::Int(540),
+            default: ParamValue::Float(540.0),
             range: Some((16.0, 4096.0)),
             enum_values: &[],
         },
@@ -70,11 +70,11 @@ crate::primitive! {
 impl Primitive for ResolveAccumulator {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let width = match ctx.params.get("width") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 960,
         };
         let height = match ctx.params.get("height") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 540,
         };
         let inv_scale = match ctx.params.get("fixed_point_scale") {
@@ -137,10 +137,7 @@ mod tests {
     #[test]
     fn resolve_accumulator_declares_array_in_and_texture_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let u32_layout = ArrayType {
-            item_size: 4,
-            item_align: 4,
-        };
+        let u32_layout = ArrayType::of_known::<u32>();
 
         assert_eq!(ResolveAccumulator::TYPE_ID, "node.resolve_accumulator");
         assert_eq!(ResolveAccumulator::INPUTS.len(), 1);

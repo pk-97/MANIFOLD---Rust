@@ -1,9 +1,9 @@
 //! `node.project_3d` — project an `Array<MeshVertex>` (3D positions)
-//! to an `Array<LinePoint>` (2D pre-aspect curve space) via either
+//! to an `Array<CurvePoint>` (2D pre-aspect curve space) via either
 //! orthographic or perspective projection.
 //!
 //! **Output is centred at the origin**, matching the convention of
-//! every other `Array<LinePoint>` producer. `node.render_lines`
+//! every other `Array<CurvePoint>` producer. `node.render_lines`
 //! applies the center offset + aspect correction itself; no
 //! producer should pre-shift to (0.5, 0.5).
 //!
@@ -14,7 +14,7 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::{LinePoint, MeshVertex};
+use crate::generators::mesh_common::{CurvePoint, MeshVertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -37,7 +37,7 @@ struct Project3DUniforms {
 crate::primitive! {
     name: Project3D,
     type_id: "node.project_3d",
-    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<LinePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.render_lines applies the center offset itself, so the convention matches every other Array<LinePoint> producer (generate_lissajous, etc.). For WireframeZoo decomposition: WireframeShape → Rotate3D → Project3D → render_lines.",
+    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.render_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo decomposition: WireframeShape → Rotate3D → Project3D → render_lines.",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: control-rate wires take precedence over
@@ -48,7 +48,7 @@ crate::primitive! {
         proj_dist: ScalarF32 optional,
     },
     outputs: {
-        out: Array(LinePoint),
+        out: Array(CurvePoint),
     },
     params: [
         ParamDef {
@@ -83,7 +83,7 @@ crate::primitive! {
 
 impl Primitive for Project3D {
     /// Output `out` is sized to match input `in` — one projected
-    /// `LinePoint` per input vertex.
+    /// `CurvePoint` per input vertex.
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -113,7 +113,7 @@ impl Primitive for Project3D {
         };
 
         let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
-        let point_size = std::mem::size_of::<LinePoint>() as u64;
+        let point_size = std::mem::size_of::<CurvePoint>() as u64;
         let in_count = (in_buf.size / vertex_size) as u32;
         let out_capacity = (out_buf.size / point_size) as u32;
         let active_count = in_count.min(out_capacity);
@@ -174,14 +174,8 @@ mod tests {
     #[test]
     fn project_3d_declares_mesh_in_and_linepoint_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
-        let point_layout = ArrayType {
-            item_size: std::mem::size_of::<LinePoint>() as u32,
-            item_align: std::mem::align_of::<LinePoint>() as u32,
-        };
+        let mesh_layout = ArrayType::of_known::<MeshVertex>();
+        let point_layout = ArrayType::of_known::<CurvePoint>();
         assert_eq!(Project3D::TYPE_ID, "node.project_3d");
         assert_eq!(Project3D::INPUTS.len(), 3);
         assert_eq!(Project3D::INPUTS[0].name, "in");

@@ -62,7 +62,7 @@ crate::primitive! {
             name: "octaves",
             label: "Octaves",
             ty: ParamType::Int,
-            default: ParamValue::Int(4),
+            default: ParamValue::Float(4.0),
             range: Some((1.0, 8.0)),
             enum_values: &[],
         },
@@ -103,7 +103,7 @@ impl Primitive for Fbm2D {
             _ => 0.0,
         };
         let octaves = match ctx.params.get("octaves") {
-            Some(ParamValue::Int(i)) => *i,
+            Some(ParamValue::Float(f)) => f.round() as i32,
             _ => 4,
         };
         let lacunarity = match ctx.params.get("lacunarity") {

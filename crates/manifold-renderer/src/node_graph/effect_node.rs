@@ -452,10 +452,8 @@ pub trait EffectNode: Send {
         if !is_array_output {
             return None;
         }
-        match params.get("max_capacity") {
-            Some(ParamValue::Int(n)) => Some((*n).max(1) as u32),
-            Some(ParamValue::Float(f)) => Some(f.round().max(1.0) as u32),
-            _ => None,
-        }
+        params
+            .get("max_capacity")
+            .and_then(|v| v.as_u32_clamped(1))
     }
 }

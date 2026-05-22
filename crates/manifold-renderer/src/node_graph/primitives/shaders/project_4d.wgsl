@@ -1,10 +1,16 @@
-// node.project_4d — project Array<Vec4Vertex> → Array<LinePoint>
+// node.project_4d — project Array<Vec4Vertex> → Array<CurvePoint>
 // via two-stage perspective (4D → 3D → 2D). Matches
 // generator_math::project_4d bit-for-bit.
 //
 // Stage 1: f = proj_dist / (proj_dist - w); p3 = xyz * f
 // Stage 2: s = proj_dist / (proj_dist + p3z); px = p3x * s * PROJ_SCALE
-// Output is in [0, 1] screen space, centered at (0.5, 0.5).
+//
+// Output is in **origin-centered pre-aspect curve space** — the
+// CurvePoint convention shared with project_3d / generate_lissajous
+// / every other Array<CurvePoint> producer. node.render_lines
+// applies the aspect correction and the `+0.5` screen-shift in its
+// vertex shader; pre-shifting here would double-apply the offset
+// and the wireframe would cluster near the top-right of the output.
 
 struct Project4DUniforms {
     active_count: u32,
@@ -21,13 +27,13 @@ struct Vec4Vertex {
     position: vec4<f32>,
 };
 
-struct LinePoint {
+struct CurvePoint {
     xy: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Project4DUniforms;
 @group(0) @binding(1) var<storage, read> verts: array<Vec4Vertex>;
-@group(0) @binding(2) var<storage, read_write> points: array<LinePoint>;
+@group(0) @binding(2) var<storage, read_write> points: array<CurvePoint>;
 
 @compute @workgroup_size(64, 1, 1)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -36,7 +42,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     if i >= u.active_count {
-        points[i].xy = vec2<f32>(0.5, 0.5);
+        // Inactive slots collapse to origin — render_lines treats
+        // these as zero-length segments / degenerate dots that
+        // contribute nothing.
+        points[i].xy = vec2<f32>(0.0, 0.0);
         return;
     }
 
@@ -51,5 +60,5 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let px = p3.x * s * u.proj_scale;
     let py = p3.y * s * u.proj_scale;
 
-    points[i].xy = vec2<f32>(0.5 + px, 0.5 + py);
+    points[i].xy = vec2<f32>(px, py);
 }

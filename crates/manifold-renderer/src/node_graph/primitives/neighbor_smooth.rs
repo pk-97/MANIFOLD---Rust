@@ -37,7 +37,7 @@ crate::primitive! {
             name: "grid_size",
             label: "Grid Size",
             ty: ParamType::Int,
-            default: ParamValue::Int(400),
+            default: ParamValue::Float(400.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -74,7 +74,7 @@ impl Primitive for NeighborSmooth {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let grid_size = match ctx.params.get("grid_size") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 400,
         };
         let center_weight = match ctx.params.get("center_weight") {
@@ -144,10 +144,7 @@ mod tests {
     #[test]
     fn neighbor_smooth_declares_instance_array_in_and_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<InstanceTransform>() as u32,
-            item_align: std::mem::align_of::<InstanceTransform>() as u32,
-        };
+        let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(NeighborSmooth::TYPE_ID, "node.neighbor_smooth");
         assert_eq!(NeighborSmooth::INPUTS.len(), 1);
         assert_eq!(NeighborSmooth::INPUTS[0].name, "in");

@@ -1,4 +1,4 @@
-// node.generate_lissajous — emit an Array<LinePoint> sampled from
+// node.generate_lissajous — emit an Array<CurvePoint> sampled from
 // the Lissajous curve `x(t) = sin(freq_x * t + phase)`, `y(t) =
 // sin(freq_y * t)` at `vertex_count` points evenly spaced over
 // `t ∈ [0, 2π]`. Output is in pre-aspect curve space centered at
@@ -23,7 +23,7 @@ struct LissajousUniforms {
     scale: f32,
 };
 
-struct LinePoint {
+struct CurvePoint {
     xy: vec2<f32>,
 };
 
@@ -35,7 +35,7 @@ const TWO_PI: f32 = 6.28318530717958647692;
 const PROJ_SCALE: f32 = 0.25;
 
 @group(0) @binding(0) var<uniform> params: LissajousUniforms;
-@group(0) @binding(1) var<storage, read_write> points: array<LinePoint>;
+@group(0) @binding(1) var<storage, read_write> points: array<CurvePoint>;
 
 @compute @workgroup_size(64, 1, 1)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {

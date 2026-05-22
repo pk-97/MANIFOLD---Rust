@@ -47,7 +47,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(65_536),
+            default: ParamValue::Float(65_536.0),
             range: Some((1.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -55,7 +55,7 @@ crate::primitive! {
             name: "active_count",
             label: "Active Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(64),
+            default: ParamValue::Float(64.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -71,7 +71,7 @@ crate::primitive! {
             name: "seed",
             label: "Seed",
             ty: ParamType::Int,
-            default: ParamValue::Int(0),
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -140,7 +140,7 @@ crate::primitive! {
 impl Primitive for GenerateInstanceTransforms {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 64,
         };
         let layout = match ctx.params.get("layout") {
@@ -148,7 +148,7 @@ impl Primitive for GenerateInstanceTransforms {
             _ => 0,
         };
         let seed = match ctx.params.get("seed") {
-            Some(ParamValue::Int(n)) => (*n) as u32,
+            Some(ParamValue::Float(n)) => n.round() as u32,
             _ => 0,
         };
         let extent_x = match ctx.params.get("extent_x") {
@@ -239,10 +239,7 @@ mod tests {
     #[test]
     fn generate_instance_transforms_declares_zero_inputs_and_instance_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<InstanceTransform>() as u32,
-            item_align: std::mem::align_of::<InstanceTransform>() as u32,
-        };
+        let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(
             GenerateInstanceTransforms::TYPE_ID,
             "node.generate_instance_transforms"

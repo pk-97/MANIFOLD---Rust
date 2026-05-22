@@ -51,7 +51,7 @@ crate::primitive! {
             name: "vol_res",
             label: "Volume Resolution",
             ty: ParamType::Int,
-            default: ParamValue::Int(128),
+            default: ParamValue::Float(128.0),
             range: Some((16.0, 512.0)),
             enum_values: &[],
         },
@@ -59,7 +59,7 @@ crate::primitive! {
             name: "vol_depth",
             label: "Volume Depth",
             ty: ParamType::Int,
-            default: ParamValue::Int(128),
+            default: ParamValue::Float(128.0),
             range: Some((16.0, 512.0)),
             enum_values: &[],
         },
@@ -112,11 +112,11 @@ crate::primitive! {
 impl Primitive for FluidGradientCurl3D {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let vol_res = match ctx.params.get("vol_res") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
         let vol_depth = match ctx.params.get("vol_depth") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
         let curl_strength = match ctx.params.get("curl_strength") {

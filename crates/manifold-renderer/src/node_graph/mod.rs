@@ -24,7 +24,7 @@ mod palette;
 mod param_binding;
 mod parameters;
 mod persistence;
-mod ports;
+pub mod ports;
 pub mod primitive;
 pub mod primitives;
 mod snapshot;
@@ -63,7 +63,10 @@ pub use persistence::{
     EffectGraphDefExt, GRAPH_DOCUMENT_VERSION, GraphDocument, LoadError, NodeConstructor,
     NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,
 };
-pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+pub use ports::{
+    ArrayType, ItemKind, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    ScalarType,
+};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
     GraphSnapshot, NodeSnapshot, OuterParamRouting, OuterParamSource, ParamSnapshot,

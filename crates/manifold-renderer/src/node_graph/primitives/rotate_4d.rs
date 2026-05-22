@@ -159,10 +159,7 @@ mod tests {
     #[test]
     fn rotate_4d_declares_vec4_in_and_three_optional_angle_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<Vec4Vertex>() as u32,
-            item_align: std::mem::align_of::<Vec4Vertex>() as u32,
-        };
+        let layout = ArrayType::of_known::<Vec4Vertex>();
         assert_eq!(Rotate4D::TYPE_ID, "node.rotate_4d");
         assert_eq!(Rotate4D::INPUTS.len(), 4);
         assert_eq!(Rotate4D::INPUTS[0].name, "in");

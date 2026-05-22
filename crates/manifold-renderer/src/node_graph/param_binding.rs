@@ -153,9 +153,13 @@ pub use manifold_core::effects::ParamConvert;
 /// `manifold-core` (the data-model layer can't depend on the
 /// renderer).
 pub fn convert_param_value(convert: ParamConvert, value: f32) -> ParamValue {
+    // `IntRound` rounds to a whole number but stores as `Float`. There used
+    // to be a distinct `ParamValue::Int` variant; collapsing it eliminated
+    // a class of silent fall-through bugs where readers only matched on
+    // `Float` and silently defaulted any `Int`-typed param.
     match convert {
         ParamConvert::Float => ParamValue::Float(value),
-        ParamConvert::IntRound => ParamValue::Int(value.round() as i32),
+        ParamConvert::IntRound => ParamValue::Float(value.round()),
         ParamConvert::BoolThreshold => ParamValue::Bool(value > 0.5),
         ParamConvert::EnumRound => {
             let v = value.round().max(0.0) as u32;
@@ -654,12 +658,12 @@ mod tests {
     fn int_round_uses_half_away_from_zero() {
         // f32::round is half-away-from-zero, NOT banker's rounding.
         // Document the actual behavior so it's expected.
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.0), ParamValue::Int(0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.4), ParamValue::Int(0));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.5), ParamValue::Int(1));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.6), ParamValue::Int(1));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, -0.5), ParamValue::Int(-1));
-        assert_eq!(convert_param_value(ParamConvert::IntRound, 2.5), ParamValue::Int(3));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.0), ParamValue::Float(0.0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.4), ParamValue::Float(0.0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.5), ParamValue::Float(1.0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.6), ParamValue::Float(1.0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, -0.5), ParamValue::Float(-1.0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 2.5), ParamValue::Float(3.0));
     }
 
     #[test]

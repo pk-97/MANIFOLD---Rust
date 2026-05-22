@@ -177,11 +177,9 @@ pub trait Primitive: PrimitiveSpec {
         if !is_array_output {
             return None;
         }
-        match params.get("max_capacity") {
-            Some(crate::node_graph::parameters::ParamValue::Int(n)) => Some((*n).max(1) as u32),
-            Some(crate::node_graph::parameters::ParamValue::Float(f)) => Some((*f).round().max(1.0) as u32),
-            _ => None,
-        }
+        params
+            .get("max_capacity")
+            .and_then(|v| v.as_u32_clamped(1))
     }
 }
 
@@ -501,7 +499,7 @@ macro_rules! __primitive_port_type {
     };
     (Array, $T:ty) => {
         $crate::node_graph::ports::PortType::Array(
-            $crate::node_graph::ports::ArrayType::of::<$T>()
+            $crate::node_graph::ports::ArrayType::of_known::<$T>()
         )
     };
 }
@@ -631,11 +629,21 @@ mod tests {
     // 16 bytes / 4-byte aligned — keeps the size/align numbers simple
     // for the assertions below without forcing the test to depend on
     // the production `Particle` layout (which lives in `generators/`).
+    //
+    // Tagged `ItemKind::Anonymous` because no convention is asserted
+    // for this purely-structural smoke test — the registry sweep
+    // (`every_conventional_array_port_declares_a_kind`) carves out
+    // the `node.__smoke_test_*` type-IDs for the same reason.
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
     struct ArraySmokeItem {
         pub pos: [f32; 2],
         pub vel: [f32; 2],
+    }
+
+    impl crate::node_graph::ports::KnownItem for ArraySmokeItem {
+        const ITEM_KIND: crate::node_graph::ports::ItemKind =
+            crate::node_graph::ports::ItemKind::Anonymous;
     }
 
     crate::primitive! {
@@ -680,10 +688,7 @@ mod tests {
     fn macro_array_ports_expand_with_item_layout() {
         use crate::node_graph::ports::{ArrayType, PortType};
 
-        let expected = ArrayType {
-            item_size: std::mem::size_of::<ArraySmokeItem>() as u32,
-            item_align: std::mem::align_of::<ArraySmokeItem>() as u32,
-        };
+        let expected = ArrayType::of_known::<ArraySmokeItem>();
 
         assert_eq!(SmokeTestArrayPorts::INPUTS.len(), 2);
         assert_eq!(SmokeTestArrayPorts::INPUTS[0].name, "items_in");

@@ -51,7 +51,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(1_048_576),
+            default: ParamValue::Float(1_048_576.0),
             range: Some((1024.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -59,7 +59,7 @@ crate::primitive! {
             name: "active_count",
             label: "Active Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(100_000),
+            default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -67,7 +67,7 @@ crate::primitive! {
             name: "seed_offset",
             label: "Seed",
             ty: ParamType::Int,
-            default: ParamValue::Int(0),
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -80,11 +80,11 @@ crate::primitive! {
 impl Primitive for SeedParticles {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 100_000,
         };
         let seed_offset = match ctx.params.get("seed_offset") {
-            Some(ParamValue::Int(n)) => (*n) as u32,
+            Some(ParamValue::Float(n)) => n.round() as u32,
             _ => 0,
         };
 
@@ -145,10 +145,7 @@ mod tests {
     fn seed_particles_declares_zero_inputs_and_one_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
 
-        let particle_layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
+        let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(SeedParticles::TYPE_ID, "node.seed_particles");
         assert!(SeedParticles::INPUTS.is_empty());
@@ -170,10 +167,10 @@ mod tests {
             .find(|p| p.name == "max_capacity")
             .unwrap();
         assert!(matches!(max_cap.ty, ParamType::Int));
-        if let ParamValue::Int(default) = max_cap.default {
-            assert_eq!(default, 1_048_576, "default capacity is 1M");
+        if let ParamValue::Float(default) = max_cap.default {
+            assert_eq!(default as u32, 1_048_576, "default capacity is 1M");
         } else {
-            panic!("max_capacity default should be Int");
+            panic!("max_capacity default should be Float (Int presentation hint)");
         }
     }
 

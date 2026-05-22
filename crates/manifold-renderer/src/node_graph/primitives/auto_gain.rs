@@ -213,7 +213,6 @@ pub(super) fn build_effect_instance(
         };
         let value = match ctx.params.get(*name) {
             Some(ParamValue::Float(f)) => *f,
-            Some(ParamValue::Int(i)) => *i as f32,
             Some(ParamValue::Enum(e)) => *e as f32,
             Some(ParamValue::Bool(b)) => {
                 if *b {

@@ -162,9 +162,6 @@ impl Primitive for Lfo {
             _ => {
                 let rate_idx = match ctx.params.get("rate") {
                     Some(ParamValue::Enum(v)) => (*v as usize).min(NOTE_RATE_VALUES.len() - 1),
-                    Some(ParamValue::Int(i)) => {
-                        ((*i).max(0) as usize).min(NOTE_RATE_VALUES.len() - 1)
-                    }
                     Some(ParamValue::Float(f)) => {
                         (f.round().max(0.0) as usize).min(NOTE_RATE_VALUES.len() - 1)
                     }

@@ -305,10 +305,7 @@ mod tests {
     #[test]
     fn render_3d_mesh_declares_array_mesh_in_and_texture_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let mesh_layout = ArrayType::of_known::<MeshVertex>();
 
         assert_eq!(Render3DMesh::TYPE_ID, "node.render_3d_mesh");
         assert_eq!(Render3DMesh::INPUTS.len(), 1);

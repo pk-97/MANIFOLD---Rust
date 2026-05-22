@@ -45,7 +45,7 @@ crate::primitive! {
             name: "active_count",
             label: "Active Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(100_000),
+            default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -90,7 +90,7 @@ impl Primitive for IntegrateParticles {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 100_000,
         };
         let speed = match ctx.inputs.scalar("speed") {
@@ -182,10 +182,7 @@ mod tests {
     #[test]
     fn integrate_particles_declares_array_in_texture_in_array_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let particle_layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
+        let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(IntegrateParticles::TYPE_ID, "node.integrate_particles");
         assert_eq!(IntegrateParticles::INPUTS.len(), 3);

@@ -148,10 +148,7 @@ mod tests {
     fn array_feedback_declares_one_array_input_and_one_array_output() {
         use crate::node_graph::ports::{ArrayType, PortKind, PortType};
 
-        let particle_layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
+        let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(ArrayFeedback::TYPE_ID, "node.array_feedback");
         assert_eq!(ArrayFeedback::INPUTS.len(), 1);

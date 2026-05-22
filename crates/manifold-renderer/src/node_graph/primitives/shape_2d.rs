@@ -129,14 +129,12 @@ impl Primitive for Shape2D {
         let fill_mode = match ctx.params.get("fill_mode") {
             Some(ParamValue::Enum(v)) => (*v).min(2),
             Some(ParamValue::Float(f)) => (f.round().clamp(0.0, 2.0)) as u32,
-            Some(ParamValue::Int(i)) => (*i).clamp(0, 2) as u32,
             _ => 1,
         };
 
         let clip_trigger = match ctx.params.get("clip_trigger") {
             Some(ParamValue::Bool(b)) => *b,
             Some(ParamValue::Float(f)) => *f > 0.5,
-            Some(ParamValue::Int(i)) => *i != 0,
             _ => false,
         };
 

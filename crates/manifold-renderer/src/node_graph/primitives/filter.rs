@@ -318,7 +318,7 @@ const MIP_CHAIN_PARAMS: [ParamDef; 1] = [ParamDef {
     name: "levels",
     label: "Levels",
     ty: ParamType::Int,
-    default: ParamValue::Int(4),
+    default: ParamValue::Float(4.0),
     range: Some((1.0, 8.0)),
     enum_values: &[],
 }];

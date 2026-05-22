@@ -270,7 +270,7 @@ impl Primitive for WireframeShape {
         // Static shape param (used when clip_trigger=false).
         let static_shape = match ctx.params.get("shape") {
             Some(ParamValue::Enum(n)) => *n,
-            Some(ParamValue::Int(i)) => (*i).max(0) as u32,
+            Some(ParamValue::Float(i)) => i.round().max(0_f32) as u32,
             _ => 0,
         };
 
@@ -280,7 +280,6 @@ impl Primitive for WireframeShape {
         let clip_trigger = match ctx.params.get("clip_trigger") {
             Some(ParamValue::Bool(b)) => *b,
             Some(ParamValue::Float(f)) => *f > 0.5,
-            Some(ParamValue::Int(i)) => *i != 0,
             _ => false,
         };
 
@@ -382,14 +381,8 @@ mod tests {
     #[test]
     fn wireframe_shape_declares_trigger_count_input_and_two_array_outputs() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let vert_layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
-        let edge_layout = ArrayType {
-            item_size: std::mem::size_of::<EdgePair>() as u32,
-            item_align: std::mem::align_of::<EdgePair>() as u32,
-        };
+        let vert_layout = ArrayType::of_known::<MeshVertex>();
+        let edge_layout = ArrayType::of_known::<EdgePair>();
         assert_eq!(WireframeShape::TYPE_ID, "node.wireframe_shape");
         assert_eq!(WireframeShape::INPUTS.len(), 1);
         assert_eq!(WireframeShape::INPUTS[0].name, "trigger_count");

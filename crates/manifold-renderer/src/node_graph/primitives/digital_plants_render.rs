@@ -64,7 +64,7 @@ crate::primitive! {
             name: "instance_count",
             label: "Instance Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(160_000),
+            default: ParamValue::Float(160_000.0),
             range: Some((1.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -176,7 +176,7 @@ impl DigitalPlantsRender {
 impl Primitive for DigitalPlantsRender {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let instance_count = match ctx.params.get("instance_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 160_000,
         };
         let camera_distance = match ctx.params.get("camera_distance") {
@@ -418,10 +418,7 @@ mod tests {
     #[test]
     fn digital_plants_render_declares_instance_in_and_color_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<InstanceTransform>() as u32,
-            item_align: std::mem::align_of::<InstanceTransform>() as u32,
-        };
+        let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(DigitalPlantsRender::TYPE_ID, "node.digital_plants_render");
         assert_eq!(DigitalPlantsRender::INPUTS.len(), 1);
         assert_eq!(DigitalPlantsRender::INPUTS[0].name, "instances");

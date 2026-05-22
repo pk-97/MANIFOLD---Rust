@@ -65,7 +65,7 @@ crate::primitive! {
             name: "particle_count",
             label: "Particle Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(500_000),
+            default: ParamValue::Float(500_000.0),
             range: Some((1024.0, 8_000_000.0)),
             enum_values: &[],
         },
@@ -171,7 +171,7 @@ impl Primitive for IntegrateParticlesAttractor {
             _ => 0,
         };
         let particle_count = match ctx.params.get("particle_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 500_000,
         };
         let chaos = match ctx.params.get("chaos") {
@@ -290,10 +290,7 @@ mod tests {
     #[test]
     fn integrate_attractor_declares_particle_in_and_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
+        let layout = ArrayType::of_known::<Particle>();
         assert_eq!(
             IntegrateParticlesAttractor::TYPE_ID,
             "node.integrate_particles_attractor"

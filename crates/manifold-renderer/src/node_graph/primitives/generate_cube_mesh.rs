@@ -41,7 +41,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(36),
+            default: ParamValue::Float(36.0),
             range: Some((36.0, 4096.0)),
             enum_values: &[],
         },
@@ -119,10 +119,7 @@ mod tests {
     #[test]
     fn generate_cube_mesh_declares_zero_inputs_and_mesh_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(GenerateCubeMesh::TYPE_ID, "node.generate_cube_mesh");
         assert!(GenerateCubeMesh::INPUTS.is_empty());
         assert_eq!(GenerateCubeMesh::OUTPUTS.len(), 1);
@@ -140,8 +137,8 @@ mod tests {
             .find(|p| p.name == "max_capacity")
             .unwrap();
         match cap.default {
-            ParamValue::Int(n) => assert_eq!(n as u32, CUBE_VERTEX_COUNT),
-            _ => panic!("expected Int"),
+            ParamValue::Float(n) => assert_eq!(n as u32, CUBE_VERTEX_COUNT),
+            _ => panic!("expected Float (Int presentation hint)"),
         }
     }
 

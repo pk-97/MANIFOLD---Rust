@@ -46,7 +46,7 @@ crate::primitive! {
             name: "vol_res",
             label: "Volume Resolution",
             ty: ParamType::Int,
-            default: ParamValue::Int(128),
+            default: ParamValue::Float(128.0),
             range: Some((16.0, 512.0)),
             enum_values: &[],
         },
@@ -54,7 +54,7 @@ crate::primitive! {
             name: "vol_depth",
             label: "Volume Depth",
             ty: ParamType::Int,
-            default: ParamValue::Int(128),
+            default: ParamValue::Float(128.0),
             range: Some((16.0, 512.0)),
             enum_values: &[],
         },
@@ -67,11 +67,11 @@ crate::primitive! {
 impl Primitive for Resolve3DAccumulator {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let vol_res = match ctx.params.get("vol_res") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
         let vol_depth = match ctx.params.get("vol_depth") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
 
@@ -136,10 +136,7 @@ mod tests {
     #[test]
     fn resolve_3d_declares_array_in_and_texture_3d_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let u32_layout = ArrayType {
-            item_size: 4,
-            item_align: 4,
-        };
+        let u32_layout = ArrayType::of_known::<u32>();
         assert_eq!(Resolve3DAccumulator::TYPE_ID, "node.resolve_3d_accumulator");
         assert_eq!(Resolve3DAccumulator::INPUTS.len(), 1);
         assert_eq!(Resolve3DAccumulator::INPUTS[0].name, "accum");

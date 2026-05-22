@@ -173,14 +173,8 @@ mod tests {
     #[test]
     fn declares_zero_inputs_and_vec4_plus_edge_array_outputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let vec4_layout = ArrayType {
-            item_size: std::mem::size_of::<Vec4Vertex>() as u32,
-            item_align: std::mem::align_of::<Vec4Vertex>() as u32,
-        };
-        let edge_layout = ArrayType {
-            item_size: std::mem::size_of::<EdgePair>() as u32,
-            item_align: std::mem::align_of::<EdgePair>() as u32,
-        };
+        let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
+        let edge_layout = ArrayType::of_known::<EdgePair>();
         assert_eq!(
             GenerateTesseractVertices::TYPE_ID,
             "node.generate_tesseract_vertices"

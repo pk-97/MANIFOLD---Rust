@@ -11,8 +11,8 @@
 /// `Array` is the storage-buffer wire type used by particle, mesh, line, and
 /// audio primitives — the underlying `MTLBuffer` carries `count` items of a
 /// fixed-layout struct, accessed by index. Connection validation matches on
-/// `(item_size, item_align)`; the shader owns the per-byte interpretation.
-/// See `docs/BUFFER_PORT_PLAN.md`.
+/// `(item_size, item_align, item_kind)`; the shader owns the per-byte
+/// interpretation. See `docs/BUFFER_PORT_PLAN.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortType {
     Texture2D,
@@ -31,27 +31,130 @@ pub enum ScalarType {
     Color,
 }
 
+/// Semantic tag carried on every [`ArrayType`] wire.
+///
+/// Wire validation requires producer and consumer to agree on `ItemKind` in
+/// addition to `(item_size, item_align)`. Two buffers can be byte-identical but
+/// carry different conventions — the canonical case is `CurvePoint` (2D point
+/// in origin-centered pre-aspect curve space, the contract `node.render_lines`
+/// expects) vs. a hypothetical `ScreenPoint` (2D point already shifted into
+/// `[0, 1]` screen space). Both are 8 bytes of `vec2<f32>`; both would have
+/// connected silently under the old size/align-only check. With `ItemKind` on
+/// the wire they don't.
+///
+/// New variants ship one at a time as new conventions enter the primitive
+/// library. Anonymous is the deliberate opt-out for genuinely untyped raw
+/// buffers (escape-hatch nodes, ad-hoc scratch) — it matches only other
+/// Anonymous wires of the same size/align. The `every_array_port_declares_a_kind`
+/// CI sweep test in `crate::node_graph::primitive` walks the registry and
+/// refuses any conventional Array port that lands as Anonymous, so the opt-out
+/// stays deliberate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ItemKind {
+    /// Raw byte buffer with no declared semantic. Matches only other
+    /// Anonymous wires of the same size/align. Use when the buffer is
+    /// scratch state local to a single primitive or its escape-hatch
+    /// WGSL nodes — anything that flows between curated primitives
+    /// should carry a real kind.
+    Anonymous,
+    /// 2D point in origin-centered pre-aspect curve space. The contract
+    /// every line-renderer (`node.render_lines`) consumes; produced by
+    /// `generate_lissajous`, `project_3d`, `project_4d`,
+    /// `concentric_outlines`, `polygon_shape`. Origin is the visual
+    /// centre; aspect correction + screen offset live in the consumer.
+    CurvePoint,
+    /// 3D mesh vertex with surface normal. 32 bytes. Produced by
+    /// `generate_grid_mesh` / `generate_cube_mesh` / `wireframe_shape`;
+    /// consumed by the `node.render_3d_mesh` family and `project_3d`.
+    MeshVertex,
+    /// 4D vertex in homogeneous hypercube space, before 4D rotation
+    /// and projection-to-3D. Produced by
+    /// `generate_tesseract_vertices` / `generate_duocylinder_vertices`;
+    /// consumed by `rotate_4d` / `project_4d`.
+    Vec4Vertex,
+    /// Explicit `(a, b)` edge between two vertices in a sibling
+    /// `Array<CurvePoint>` or `Array<MeshVertex>` buffer. The topology
+    /// wire that lets line-renderers draw arbitrary wireframes.
+    EdgePair,
+    /// Per-instance transform for instanced mesh rendering. 32 bytes.
+    /// Produced by `generate_instance_transforms`; consumed by
+    /// `render_instanced_3d_mesh`, `digital_plants_render`,
+    /// `neighbor_smooth`.
+    InstanceTransform,
+    /// Particle struct (position + velocity + life + color, 64 bytes)
+    /// flowing through every node in the particle-sim chain.
+    Particle,
+    /// Detected blob (bounding box) emitted by the FFI blob detector
+    /// and consumed by overlay-render primitives.
+    Blob,
+    /// Raw `u32` slot — scatter / accumulator buffers and grid
+    /// indices. Distinct from `Anonymous` because the convention
+    /// "one u32 per cell" is real and shared across the
+    /// `scatter_*` / `resolve_*` family.
+    U32Slot,
+}
+
+/// Compile-time descriptor for an item type that flows through an
+/// [`ArrayType`] wire. Every canonical item struct in the primitive
+/// library implements this; the `Array(T)` syntax in the
+/// [`primitive!`](crate::primitive) macro requires it.
+///
+/// Two implementations of `KnownItem` with the same `ITEM_KIND` are
+/// declared interchangeable; the wire validator checks the kind in
+/// addition to size/align. Adding a new conventional item type means
+/// (a) adding a variant to [`ItemKind`], (b) implementing this trait
+/// for the struct, and (c) consumers / producers picking up the new
+/// kind via `Array(NewType)` in their `primitive!` declaration.
+pub trait KnownItem: bytemuck::Pod {
+    const ITEM_KIND: ItemKind;
+}
+
+impl KnownItem for u32 {
+    const ITEM_KIND: ItemKind = ItemKind::U32Slot;
+}
+
 /// Layout descriptor for [`PortType::Array`] wires.
 ///
-/// Two `Array` ports can connect iff their `(item_size, item_align)` pairs
-/// match. The shader on either side owns the per-byte interpretation —
-/// canonical struct layouts live in
+/// Two `Array` ports can connect iff their `(item_size, item_align,
+/// item_kind)` triples match. The shader on either side owns the
+/// per-byte interpretation — canonical struct layouts live in
 /// [`crate::generators::compute_common`](../generators/compute_common/index.html)
-/// (`Particle`, etc.) with `#[repr(C)]` and `bytemuck::Pod`. The `primitive!`
-/// macro provides `Array<Particle>` syntactic sugar that expands to
-/// `ArrayType { item_size: size_of::<Particle>(), item_align: align_of::<Particle>() }`.
+/// (`Particle`) and [`crate::generators::mesh_common`](../generators/mesh_common/index.html)
+/// (`CurvePoint`, `MeshVertex`, `EdgePair`, …) with `#[repr(C)]` and
+/// `bytemuck::Pod` and a [`KnownItem`] impl. The `primitive!` macro
+/// provides `Array<Particle>` syntactic sugar that expands to
+/// `ArrayType::of_known::<Particle>()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ArrayType {
     pub item_size: u32,
     pub item_align: u32,
+    pub item_kind: ItemKind,
 }
 
 impl ArrayType {
-    /// Construct an `ArrayType` from a struct's compile-time layout.
+    /// Construct an `ArrayType` from a struct's compile-time layout,
+    /// carrying [`ItemKind::Anonymous`]. Use [`ArrayType::of_known`]
+    /// instead whenever the item has a declared convention — the
+    /// macro does this automatically for every `Array(T)` declaration.
     pub const fn of<T: bytemuck::Pod>() -> Self {
         Self {
             item_size: std::mem::size_of::<T>() as u32,
             item_align: std::mem::align_of::<T>() as u32,
+            item_kind: ItemKind::Anonymous,
+        }
+    }
+
+    /// Construct an `ArrayType` from a struct's compile-time layout,
+    /// tagging it with the struct's declared [`ItemKind`]. The
+    /// `primitive!` macro emits this for every `Array(T)` port so
+    /// authors don't pick the kind manually — picking the wrong kind
+    /// would either fail to compile (no `KnownItem` impl) or fail
+    /// wire validation downstream.
+    pub const fn of_known<T: KnownItem>() -> Self {
+        Self {
+            item_size: std::mem::size_of::<T>() as u32,
+            item_align: std::mem::align_of::<T>() as u32,
+            item_kind: T::ITEM_KIND,
         }
     }
 }

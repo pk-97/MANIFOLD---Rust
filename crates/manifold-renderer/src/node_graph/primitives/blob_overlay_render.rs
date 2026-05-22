@@ -66,7 +66,7 @@ crate::primitive! {
             name: "blob_count",
             label: "Blob Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(32),
+            default: ParamValue::Float(32.0),
             range: Some((0.0, 32.0)),
             enum_values: &[],
         },
@@ -91,7 +91,7 @@ impl Primitive for BlobOverlayRender {
             _ => 0.003,
         };
         let blob_count = match ctx.params.get("blob_count") {
-            Some(ParamValue::Int(i)) => (*i).max(0) as u32,
+            Some(ParamValue::Float(i)) => i.round().max(0_f32) as u32,
             _ => 32,
         };
 
@@ -167,10 +167,7 @@ mod tests {
     #[test]
     fn blob_overlay_render_declares_two_inputs_and_one_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let blob_layout = ArrayType {
-            item_size: std::mem::size_of::<Blob>() as u32,
-            item_align: std::mem::align_of::<Blob>() as u32,
-        };
+        let blob_layout = ArrayType::of_known::<Blob>();
         assert_eq!(BlobOverlayRender::TYPE_ID, "node.blob_overlay_render");
         assert_eq!(BlobOverlayRender::INPUTS.len(), 2);
         assert_eq!(BlobOverlayRender::INPUTS[0].name, "in");

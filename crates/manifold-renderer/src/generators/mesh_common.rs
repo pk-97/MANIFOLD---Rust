@@ -8,6 +8,14 @@
 //! and WGSL shaders with matching layouts. Sizes are asserted at
 //! compile time — if these break, the matching WGSL struct
 //! definitions need updating.
+//!
+//! Every struct here implements
+//! [`KnownItem`](crate::node_graph::ports::KnownItem) so the
+//! `primitive!` macro's `Array(T)` declaration carries the
+//! coordinate / convention tag on the wire — see
+//! [`ItemKind`](crate::node_graph::ports::ItemKind).
+
+use crate::node_graph::ports::{ItemKind, KnownItem};
 
 /// A 3D mesh vertex with surface normal. Used by
 /// `node.generate_grid_mesh` and consumed by `node.render_3d_mesh`.
@@ -25,6 +33,10 @@ pub struct MeshVertex {
 
 const _: () = assert!(std::mem::size_of::<MeshVertex>() == 32);
 
+impl KnownItem for MeshVertex {
+    const ITEM_KIND: ItemKind = ItemKind::MeshVertex;
+}
+
 /// A 4D vertex in homogeneous hypercube space, before 4D rotation
 /// and projection-to-3D. Used by Tesseract / Duocylinder /
 /// WireframeZoo. 16 bytes.
@@ -35,6 +47,10 @@ pub struct Vec4Vertex {
 }
 
 const _: () = assert!(std::mem::size_of::<Vec4Vertex>() == 16);
+
+impl KnownItem for Vec4Vertex {
+    const ITEM_KIND: ItemKind = ItemKind::Vec4Vertex;
+}
 
 /// Per-instance transform for instanced mesh rendering. Matches
 /// the existing `generators::mesh_pipeline::MeshInstance` layout
@@ -52,21 +68,42 @@ pub struct InstanceTransform {
 
 const _: () = assert!(std::mem::size_of::<InstanceTransform>() == 32);
 
-/// A 2D screen-space line point — the canonical item type for the
-/// line family of primitives (Lissajous curves, oscilloscope traces,
-/// audio waveforms). 8 bytes.
+impl KnownItem for InstanceTransform {
+    const ITEM_KIND: ItemKind = ItemKind::InstanceTransform;
+}
+
+/// A 2D point in **origin-centered pre-aspect curve space** — the
+/// canonical wire type between every curve / wireframe producer
+/// (`generate_lissajous`, `project_3d`, `project_4d`,
+/// `polygon_shape`, `concentric_outlines`) and `node.render_lines`.
+/// 8 bytes.
 ///
-/// Coordinates are in [0, 1] screen space (aspect-corrected by the
-/// renderer). Out-of-range values are clamped at render time.
+/// Coordinates are centred at the origin: a value of `(0.0, 0.0)`
+/// renders at the visual centre of the output texture. The
+/// consumer (`node.render_lines`) applies aspect correction and
+/// the `+0.5` screen shift in its vertex shader. **Do not pre-shift
+/// in the producer** — that would double-apply the offset and the
+/// drawing would cluster near the top-right of the output.
+///
+/// This contract is enforced by the
+/// [`KnownItem`](crate::node_graph::ports::KnownItem) impl: any
+/// producer whose `Array(CurvePoint)` output wires into
+/// `Array(CurvePoint)` declares this convention; the wire validator
+/// refuses to connect a `CurvePoint` output to a port expecting
+/// any other [`ItemKind`](crate::node_graph::ports::ItemKind).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LinePoint {
+pub struct CurvePoint {
     pub xy: [f32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<LinePoint>() == 8);
+const _: () = assert!(std::mem::size_of::<CurvePoint>() == 8);
 
-/// An explicit edge between two vertices in an `Array<LinePoint>` or
+impl KnownItem for CurvePoint {
+    const ITEM_KIND: ItemKind = ItemKind::CurvePoint;
+}
+
+/// An explicit edge between two vertices in an `Array<CurvePoint>` or
 /// `Array<MeshVertex>` buffer, identified by their indices. Used by
 /// wireframe-shape producers (Platonic solids, Tesseract, Duocylinder,
 /// any future user-imported wireframe mesh) to tell `node.render_lines`
@@ -95,6 +132,10 @@ impl EdgePair {
 
 const _: () = assert!(std::mem::size_of::<EdgePair>() == 8);
 
+impl KnownItem for EdgePair {
+    const ITEM_KIND: ItemKind = ItemKind::EdgePair;
+}
+
 /// A detected blob (bounding box) emitted by the FFI blob detector
 /// and consumed by overlay-render primitives. 16 bytes.
 ///
@@ -111,3 +152,7 @@ pub struct Blob {
 }
 
 const _: () = assert!(std::mem::size_of::<Blob>() == 16);
+
+impl KnownItem for Blob {
+    const ITEM_KIND: ItemKind = ItemKind::Blob;
+}

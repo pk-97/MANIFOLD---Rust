@@ -1,4 +1,4 @@
-//! `node.generate_lissajous` — emit an `Array<LinePoint>` sampled
+//! `node.generate_lissajous` — emit an `Array<CurvePoint>` sampled
 //! from a Lissajous curve.
 //!
 //! The producer half of the line-shape decomposition: Lissajous as
@@ -21,7 +21,7 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::LinePoint;
+use crate::generators::mesh_common::CurvePoint;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -42,14 +42,14 @@ struct LissajousUniforms {
 crate::primitive! {
     name: GenerateLissajous,
     type_id: "node.generate_lissajous",
-    purpose: "Sample a Lissajous curve `(sin(freq_x*t + phase), sin(freq_y*t))` into an Array<LinePoint>. Output is in pre-aspect curve space centred at the origin; pair with node.render_lines to draw. Always blends between the floor/ceil integer ratios so non-integer freq_x / freq_y morph smoothly between closed shapes instead of producing non-closing scribbles. `freq_x`, `freq_y`, and `phase` are port-shadows-param: wire an LFO / oscillator / time ramp into the matching input port to drive the curve, or set the param inline.",
+    purpose: "Sample a Lissajous curve `(sin(freq_x*t + phase), sin(freq_y*t))` into an Array<CurvePoint>. Output is in pre-aspect curve space centred at the origin; pair with node.render_lines to draw. Always blends between the floor/ceil integer ratios so non-integer freq_x / freq_y morph smoothly between closed shapes instead of producing non-closing scribbles. `freq_x`, `freq_y`, and `phase` are port-shadows-param: wire an LFO / oscillator / time ramp into the matching input port to drive the curve, or set the param inline.",
     inputs: {
         freq_x: ScalarF32 optional,
         freq_y: ScalarF32 optional,
         phase: ScalarF32 optional,
     },
     outputs: {
-        points: Array(LinePoint),
+        points: Array(CurvePoint),
     },
     params: [
         ParamDef {
@@ -88,12 +88,12 @@ crate::primitive! {
             name: "max_capacity",
             label: "Vertex Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((16.0, 4096.0)),
             enum_values: &[],
         },
     ],
-    composition_notes: "max_capacity = how many samples along [0, 2π] AND the size the chain build pre-allocates for the output Array<LinePoint>. 256 matches the legacy LissajousGenerator; higher = smoother integer-interp blend. The name `max_capacity` is the canonical chain-build convention — the JsonGraphGenerator walks this param to size the GpuBuffer for the `points` output. `scale` multiplies the curve before pre-aspect mapping — at scale=1.0 the curve fills the inner 50% of the screen (matches legacy generator_math::PROJ_SCALE).",
+    composition_notes: "max_capacity = how many samples along [0, 2π] AND the size the chain build pre-allocates for the output Array<CurvePoint>. 256 matches the legacy LissajousGenerator; higher = smoother integer-interp blend. The name `max_capacity` is the canonical chain-build convention — the JsonGraphGenerator walks this param to size the GpuBuffer for the `points` output. `scale` multiplies the curve before pre-aspect mapping — at scale=1.0 the curve fills the inner 50% of the screen (matches legacy generator_math::PROJ_SCALE).",
     examples: [],
     picker: { label: "Generate Lissajous", category: Atom },
 }
@@ -113,7 +113,6 @@ impl Primitive for GenerateLissajous {
             _ => 1.0,
         };
         let vertex_count = match ctx.params.get("max_capacity") {
-            Some(ParamValue::Int(n)) => (*n).max(4) as u32,
             Some(ParamValue::Float(f)) => f.round().max(4.0) as u32,
             _ => 256,
         };
@@ -126,13 +125,13 @@ impl Primitive for GenerateLissajous {
             // downstream renderer sees an empty buffer. Flag it.
             log::warn!(
                 "node.generate_lissajous: no GpuBuffer bound to output port `points` — \
-                 the chain build did not pre-allocate this Array<LinePoint>, so the curve \
+                 the chain build did not pre-allocate this Array<CurvePoint>, so the curve \
                  generator is a no-op this frame. Check JsonGraphGenerator's Array \
                  pre-allocation pass and confirm `max_capacity` is on the producer node.",
             );
             return;
         };
-        let item_size = std::mem::size_of::<LinePoint>() as u64;
+        let item_size = std::mem::size_of::<CurvePoint>() as u64;
         let capacity = (out_buf.size / item_size) as u32;
         let active_count = vertex_count.min(capacity);
 
@@ -234,10 +233,7 @@ mod tests {
         let input_names: Vec<&str> = GenerateLissajous::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(input_names, vec!["freq_x", "freq_y", "phase"]);
 
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<LinePoint>() as u32,
-            item_align: std::mem::align_of::<LinePoint>() as u32,
-        };
+        let layout = ArrayType::of_known::<CurvePoint>();
         assert_eq!(GenerateLissajous::OUTPUTS.len(), 1);
         assert_eq!(GenerateLissajous::OUTPUTS[0].name, "points");
         assert_eq!(GenerateLissajous::OUTPUTS[0].ty, PortType::Array(layout));

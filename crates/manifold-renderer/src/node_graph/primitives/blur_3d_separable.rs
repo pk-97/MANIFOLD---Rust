@@ -59,7 +59,7 @@ crate::primitive! {
             name: "vol_res",
             label: "Volume Resolution",
             ty: ParamType::Int,
-            default: ParamValue::Int(128),
+            default: ParamValue::Float(128.0),
             range: Some((16.0, 512.0)),
             enum_values: &[],
         },
@@ -91,7 +91,7 @@ impl Primitive for Blur3DSeparable {
             _ => 0,
         };
         let vol_res = match ctx.params.get("vol_res") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
         let radius = match ctx.params.get("radius") {

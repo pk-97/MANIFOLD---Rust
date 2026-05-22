@@ -840,9 +840,13 @@ impl GraphEditorPanel {
         if matches!(drag.kind, GraphEditorParamKind::Int) {
             new_v = new_v.round();
         }
+        // Numeric storage is `Float`-only now (Int collapsed). The `Int`
+        // presentation hint still drives the rounding above; we just emit
+        // the rounded value as a Float scalar.
         let serialized = match drag.kind {
-            GraphEditorParamKind::Float => SerializedParamValue::Float { value: new_v },
-            GraphEditorParamKind::Int => SerializedParamValue::Int { value: new_v as i32 },
+            GraphEditorParamKind::Float | GraphEditorParamKind::Int => {
+                SerializedParamValue::Float { value: new_v }
+            }
             _ => return Vec::new(),
         };
         // Look up the param name via the row table. The row layout

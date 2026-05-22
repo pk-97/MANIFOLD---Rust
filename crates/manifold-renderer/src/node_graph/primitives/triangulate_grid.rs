@@ -41,7 +41,7 @@ crate::primitive! {
             name: "src_cols",
             label: "Source Columns",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -49,7 +49,7 @@ crate::primitive! {
             name: "src_rows",
             label: "Source Rows",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -72,7 +72,7 @@ impl Primitive for TriangulateGrid {
             return None;
         }
         let read_dim = |name| match params.get(name) {
-            Some(ParamValue::Int(n)) => Some((*n).max(2) as u32),
+            Some(ParamValue::Float(n)) => Some(n.round().max(2_f32) as u32),
             _ => None,
         };
         let cols = read_dim("src_cols")?;
@@ -82,11 +82,11 @@ impl Primitive for TriangulateGrid {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let src_cols = match ctx.params.get("src_cols") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
         let src_rows = match ctx.params.get("src_rows") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
 
@@ -151,10 +151,7 @@ mod tests {
     #[test]
     fn triangulate_grid_declares_mesh_array_in_and_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(TriangulateGrid::TYPE_ID, "node.triangulate_grid");
         assert_eq!(TriangulateGrid::INPUTS.len(), 1);
         assert_eq!(TriangulateGrid::INPUTS[0].ty, PortType::Array(layout));

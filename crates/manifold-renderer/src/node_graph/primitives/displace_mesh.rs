@@ -49,7 +49,7 @@ crate::primitive! {
             name: "cols",
             label: "Columns",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -57,7 +57,7 @@ crate::primitive! {
             name: "rows",
             label: "Rows",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -101,11 +101,11 @@ impl Primitive for DisplaceMesh {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let cols = match ctx.params.get("cols") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
         let rows = match ctx.params.get("rows") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
         let displacement = match ctx.params.get("displacement") {
@@ -196,10 +196,7 @@ mod tests {
     #[test]
     fn displace_mesh_declares_mesh_and_height_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(DisplaceMesh::TYPE_ID, "node.displace_mesh");
         assert_eq!(DisplaceMesh::INPUTS.len(), 2);
         assert_eq!(DisplaceMesh::INPUTS[0].name, "in");

@@ -1,5 +1,5 @@
 //! `node.render_lines` — render-pass primitive that draws an
-//! `Array<LinePoint>` as anti-aliased capsule line segments with
+//! `Array<CurvePoint>` as anti-aliased capsule line segments with
 //! 4× MSAA and additive blending.
 //!
 //! Input positions are in **pre-aspect curve space** centred at
@@ -28,7 +28,7 @@
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use crate::generators::mesh_common::{EdgePair, LinePoint};
+use crate::generators::mesh_common::{EdgePair, CurvePoint};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -77,9 +77,9 @@ pub struct EdgeInstance {
 crate::primitive! {
     name: RenderLines,
     type_id: "node.render_lines",
-    purpose: "Draw an Array<LinePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.generate_lissajous or other curve-source primitives upstream.",
+    purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.generate_lissajous or other curve-source primitives upstream.",
     inputs: {
-        points: Array(LinePoint) required,
+        points: Array(CurvePoint) required,
         // Optional explicit edge topology. When wired, each non-sentinel
         // EdgePair `(a, b)` in the buffer becomes one rendered line
         // segment from `points[a]` to `points[b]`. When absent, the
@@ -535,7 +535,7 @@ impl Primitive for RenderLines {
         let Some(points) = ctx.inputs.array("points") else {
             log::warn!(
                 "node.render_lines: no GpuBuffer bound to input port `points` — \
-                 nothing to draw this frame. The producing Array<LinePoint> node \
+                 nothing to draw this frame. The producing Array<CurvePoint> node \
                  was either skipped or its output buffer wasn't pre-allocated.",
             );
             return;
@@ -552,7 +552,7 @@ impl Primitive for RenderLines {
         if width == 0 || height == 0 {
             return;
         }
-        let item_size = std::mem::size_of::<LinePoint>() as u64;
+        let item_size = std::mem::size_of::<CurvePoint>() as u64;
         let num_points = (points.size / item_size) as u32;
         if num_points < 2 {
             let gpu = ctx.gpu_encoder();
@@ -703,14 +703,8 @@ mod tests {
     #[test]
     fn declares_linepoint_input_optional_edges_and_texture_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let points_layout = ArrayType {
-            item_size: std::mem::size_of::<LinePoint>() as u32,
-            item_align: std::mem::align_of::<LinePoint>() as u32,
-        };
-        let edges_layout = ArrayType {
-            item_size: std::mem::size_of::<EdgePair>() as u32,
-            item_align: std::mem::align_of::<EdgePair>() as u32,
-        };
+        let points_layout = ArrayType::of_known::<CurvePoint>();
+        let edges_layout = ArrayType::of_known::<EdgePair>();
 
         assert_eq!(RenderLines::TYPE_ID, "node.render_lines");
         assert_eq!(RenderLines::INPUTS.len(), 2);

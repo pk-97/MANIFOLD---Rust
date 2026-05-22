@@ -160,10 +160,7 @@ mod tests {
     #[test]
     fn rotate_3d_declares_mesh_in_and_three_optional_angle_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(Rotate3D::TYPE_ID, "node.rotate_3d");
         assert_eq!(Rotate3D::INPUTS.len(), 4);
         assert_eq!(Rotate3D::INPUTS[0].name, "in");

@@ -352,7 +352,7 @@ mod tests {
                 let ok = matches!(
                     (def.ty, def.default),
                     (ParamType::Float, ParamValue::Float(_))
-                        | (ParamType::Int, ParamValue::Int(_))
+                        | (ParamType::Int, ParamValue::Float(_))
                         | (ParamType::Bool, ParamValue::Bool(_))
                         | (ParamType::Vec2, ParamValue::Vec2(_))
                         | (ParamType::Vec3, ParamValue::Vec3(_))
@@ -367,6 +367,61 @@ mod tests {
                     def.name,
                     def.default,
                     def.ty,
+                );
+            }
+        }
+    }
+
+    /// Regression test for the `scalar_or_param` Int fall-through bug.
+    ///
+    /// Before the `ParamValue::Int` → `Float` storage collapse, an
+    /// `Int`-typed param wired into a primitive via JSON preset
+    /// (`{"type":"Int","value":N}`) would deserialize to
+    /// `ParamValue::Int(N)` and silently fall through every reader that
+    /// only matched on `Float` — the slider moved, the visual didn't.
+    ///
+    /// The new contract: an `Int`-typed param's default lives in
+    /// `ParamValue::Float`, *and* the value can be set via
+    /// `ParamValue::Float(n as f32)` and read back via the standard
+    /// scalar-coercion helpers without losing the value. This test
+    /// asserts the contract at the primitive-registry level so any
+    /// future primitive that declares `ty: ParamType::Int` is forced
+    /// onto the safe path.
+    #[test]
+    fn int_typed_params_use_float_storage_and_coerce_cleanly() {
+        use crate::node_graph::parameters::ParamValue;
+        for p in all_primitives() {
+            for def in p.parameters() {
+                if def.ty != ParamType::Int {
+                    continue;
+                }
+                // Default storage must be Float.
+                let ParamValue::Float(default_f) = def.default else {
+                    panic!(
+                        "{} param `{}`: Int-typed param must store its default \
+                         in ParamValue::Float (collapsed numeric storage); got {:?}",
+                        p.type_id().as_str(),
+                        def.name,
+                        def.default,
+                    );
+                };
+                // Float storage must round-trip cleanly through the
+                // scalar coercion helper — this is the helper that
+                // `scalar_or_param` and every primitive read site
+                // funnels through.
+                let coerced = def.default.as_scalar().unwrap_or_else(|| {
+                    panic!(
+                        "{} param `{}`: Float-stored Int default did not \
+                         coerce via as_scalar()",
+                        p.type_id().as_str(),
+                        def.name,
+                    )
+                });
+                assert_eq!(
+                    coerced, default_f,
+                    "{} param `{}`: as_scalar() must return the stored f32",
+                    p.type_id().as_str(),
+                    def.name,
                 );
             }
         }
@@ -511,6 +566,84 @@ mod tests {
         assert!(
             violations.is_empty(),
             "Array-output capacity invariant violations:\n  {}",
+            violations.join("\n  "),
+        );
+    }
+
+    /// Every shipping primitive's Array ports must carry a declared
+    /// [`ItemKind`](super::super::ports::ItemKind). The kind tag is
+    /// what makes wire validation refuse to connect byte-identical
+    /// buffers whose conventions don't match — `CurvePoint` (origin-
+    /// centered 2D) vs `EdgePair` (two u32 indices) are both 8/4 and
+    /// would have connected silently under a pure size/align check.
+    /// With the kind tag they don't.
+    ///
+    /// `ItemKind::Anonymous` is the deliberate opt-out for genuinely
+    /// untyped buffers (raw bytes between WGSL escape-hatch nodes,
+    /// scratch state). It's allowed for `node.wgsl_compute_*` type-IDs
+    /// and the `node.__smoke_test_*` test fixtures — anywhere else it
+    /// is a CI failure pointing at a missing
+    /// [`KnownItem`](super::super::ports::KnownItem) impl on the item
+    /// struct.
+    ///
+    /// Walks the live [`super::super::PrimitiveRegistry`] so new
+    /// primitives are picked up automatically — no central list to
+    /// maintain. This is the structural fence against the recurring
+    /// coordinate-space contract bug (Tesseract / Duocylinder
+    /// spawning in the top-right because a producer used the wrong
+    /// convention) — see `crates/manifold-renderer/src/node_graph/ports.rs`
+    /// for the `ItemKind` rationale.
+    #[test]
+    fn every_conventional_array_port_declares_a_kind() {
+        use super::super::PrimitiveRegistry;
+        use super::super::ports::{ItemKind, PortType};
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut violations: Vec<String> = Vec::new();
+        for type_id in registry.known_type_ids() {
+            // Carve-outs:
+            //   - `node.wgsl_compute_*` — escape-hatch primitives whose
+            //     wire shape is whatever the user's WGSL declares.
+            //   - `node.__smoke_test_*` — macro-system test fixtures
+            //     that exist purely to exercise authoring scaffolding.
+            //   - `system.*` — boundary nodes (source, final_output,
+            //     generator_input) whose wires are texture/scalar, not
+            //     Array, but the carve-out is cheap defensive depth.
+            if type_id.starts_with("node.wgsl_compute_")
+                || type_id.starts_with("node.__smoke_test_")
+                || type_id.starts_with("system.")
+            {
+                continue;
+            }
+
+            let Some(node) = registry.construct(type_id) else {
+                continue;
+            };
+
+            let mut check_port = |kind_label: &str, port_name: &str, ty: &PortType| {
+                if let PortType::Array(layout) = ty
+                    && layout.item_kind == ItemKind::Anonymous
+                {
+                    violations.push(format!(
+                        "{type_id}: {kind_label} `{port_name}` is Array<…> \
+                         but its ItemKind is Anonymous. Add a `KnownItem` \
+                         impl on the item struct (or, if the buffer is \
+                         genuinely untyped scratch, extend this test's \
+                         carve-out list).",
+                    ));
+                }
+            };
+
+            for port in node.inputs() {
+                check_port("input", port.name, &port.ty);
+            }
+            for port in node.outputs() {
+                check_port("output", port.name, &port.ty);
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "Array-port ItemKind invariant violations:\n  {}",
             violations.join("\n  "),
         );
     }

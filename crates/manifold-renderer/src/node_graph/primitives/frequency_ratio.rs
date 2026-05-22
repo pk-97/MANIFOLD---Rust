@@ -52,7 +52,7 @@ crate::primitive! {
             name: "index",
             label: "Index",
             ty: ParamType::Int,
-            default: ParamValue::Int(0),
+            default: ParamValue::Float(0.0),
             range: Some((0.0, (FREQUENCY_RATIO_TABLE.len() - 1) as f32)),
             enum_values: &[],
         },
@@ -74,7 +74,6 @@ impl Primitive for FrequencyRatio {
         let raw_index = match ctx.inputs.scalar("index") {
             Some(ParamValue::Float(f)) => f,
             _ => match ctx.params.get("index") {
-                Some(ParamValue::Int(i)) => *i as f32,
                 Some(ParamValue::Float(f)) => *f,
                 Some(ParamValue::Enum(v)) => *v as f32,
                 _ => 0.0,
@@ -165,7 +164,7 @@ mod tests {
             type_id: EffectNodeType::new("test.cap_b"),
             seen: seen_b.clone(),
         }));
-        g.set_param(ratio, "index", ParamValue::Int(index)).unwrap();
+        g.set_param(ratio, "index", ParamValue::Float(index as f32)).unwrap();
         g.connect((ratio, "a"), (sink_a, "in")).unwrap();
         g.connect((ratio, "b"), (sink_b, "in")).unwrap();
         let plan = compile(&g).unwrap();
@@ -263,7 +262,7 @@ mod tests {
         let v = g.add_node(Box::new(Value::new()));
         g.set_param(v, "value", ParamValue::Float(2.0)).unwrap();
         let ratio = g.add_node(Box::new(FrequencyRatio::new()));
-        g.set_param(ratio, "index", ParamValue::Int(7)).unwrap(); // would be 5:8 if param wins
+        g.set_param(ratio, "index", ParamValue::Float(7.0)).unwrap(); // would be 5:8 if param wins
         let sink_a = g.add_node(Box::new(Capture {
             type_id: EffectNodeType::new("test.cap_a"),
             seen: seen_a.clone(),

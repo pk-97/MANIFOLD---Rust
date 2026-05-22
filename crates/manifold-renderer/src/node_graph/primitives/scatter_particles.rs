@@ -43,7 +43,7 @@ crate::primitive! {
             name: "active_count",
             label: "Active Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(100_000),
+            default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -51,7 +51,7 @@ crate::primitive! {
             name: "width",
             label: "Accumulator Width",
             ty: ParamType::Int,
-            default: ParamValue::Int(960),
+            default: ParamValue::Float(960.0),
             range: Some((16.0, 4096.0)),
             enum_values: &[],
         },
@@ -59,7 +59,7 @@ crate::primitive! {
             name: "height",
             label: "Accumulator Height",
             ty: ParamType::Int,
-            default: ParamValue::Int(540),
+            default: ParamValue::Float(540.0),
             range: Some((16.0, 4096.0)),
             enum_values: &[],
         },
@@ -67,7 +67,7 @@ crate::primitive! {
             name: "scaled_energy",
             label: "Energy per Particle",
             ty: ParamType::Int,
-            default: ParamValue::Int(4096),
+            default: ParamValue::Float(4096.0),
             range: Some((1.0, 65536.0)),
             enum_values: &[],
         },
@@ -94,7 +94,6 @@ impl Primitive for ScatterParticles {
             return None;
         }
         let read_dim = |name| match params.get(name) {
-            Some(ParamValue::Int(n)) => Some((*n).max(1) as u32),
             Some(ParamValue::Float(f)) => Some(f.round().max(1.0) as u32),
             _ => None,
         };
@@ -103,19 +102,19 @@ impl Primitive for ScatterParticles {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 100_000,
         };
         let width = match ctx.params.get("width") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 960,
         };
         let height = match ctx.params.get("height") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 540,
         };
         let scaled_energy = match ctx.params.get("scaled_energy") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 4096,
         };
 
@@ -211,14 +210,8 @@ mod tests {
     #[test]
     fn scatter_particles_declares_array_in_and_array_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let particle_layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
-        let u32_layout = ArrayType {
-            item_size: 4,
-            item_align: 4,
-        };
+        let particle_layout = ArrayType::of_known::<Particle>();
+        let u32_layout = ArrayType::of_known::<u32>();
 
         assert_eq!(ScatterParticles::TYPE_ID, "node.scatter_particles");
         assert_eq!(ScatterParticles::INPUTS.len(), 1);

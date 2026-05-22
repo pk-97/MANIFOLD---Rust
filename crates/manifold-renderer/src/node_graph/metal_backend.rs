@@ -634,13 +634,11 @@ mod array_buffer_tests {
     }
 
     fn particle_layout() -> ArrayType {
-        // Match the canonical Particle layout in generators/compute_common.rs
-        // without depending on it — these numbers exercise a typical
-        // 64-byte / 16-aligned particle struct.
-        ArrayType {
-            item_size: 64,
-            item_align: 16,
-        }
+        // Canonical Particle layout. The kind tag is load-bearing —
+        // pre-bind_array keys its pool on (size, align, kind) so two
+        // ArrayTypes with the same byte layout but different ItemKind
+        // get separate buffers.
+        ArrayType::of_known::<crate::generators::compute_common::Particle>()
     }
 
     #[test]

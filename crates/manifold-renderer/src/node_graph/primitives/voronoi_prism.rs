@@ -38,7 +38,7 @@ crate::primitive! {
             name: "cell_count",
             label: "Cell Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(16),
+            default: ParamValue::Float(16.0),
             range: Some((4.0, 64.0)),
             enum_values: &[],
         },

@@ -140,7 +140,9 @@ pub fn splice_def_into_chain(
                         Some(crate::node_graph::ParamValue::Float(*value))
                     }
                     SerializedParamValue::Int { value } => {
-                        Some(crate::node_graph::ParamValue::Int(*value))
+                        // Back-compat: old saves wrote `Int` for whole-number
+                        // params. In-memory storage is `Float` only — coerce.
+                        Some(crate::node_graph::ParamValue::Float(*value as f32))
                     }
                     SerializedParamValue::Bool { value } => {
                         Some(crate::node_graph::ParamValue::Bool(*value))

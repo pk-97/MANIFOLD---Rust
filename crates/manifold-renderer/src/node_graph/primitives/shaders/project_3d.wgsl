@@ -1,10 +1,10 @@
 // node.project_3d — project Array<MeshVertex> (3D positions) to
-// Array<LinePoint> (2D pre-aspect curve space) via either
+// Array<CurvePoint> (2D pre-aspect curve space) via either
 // orthographic (matches WireframeZoo's XY-scale path) or
 // perspective projection.
 //
 // Output is **centred at the origin** (NOT shifted to (0.5, 0.5)),
-// matching the convention of every other Array<LinePoint> producer
+// matching the convention of every other Array<CurvePoint> producer
 // (generate_lissajous, etc.). The downstream node.render_lines
 // applies the center offset + aspect correction itself.
 //
@@ -29,13 +29,13 @@ struct MeshVertex {
     _pad1: f32,
 };
 
-struct LinePoint {
+struct CurvePoint {
     xy: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Project3DUniforms;
 @group(0) @binding(1) var<storage, read> verts: array<MeshVertex>;
-@group(0) @binding(2) var<storage, read_write> points: array<LinePoint>;
+@group(0) @binding(2) var<storage, read_write> points: array<CurvePoint>;
 
 @compute @workgroup_size(64, 1, 1)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {

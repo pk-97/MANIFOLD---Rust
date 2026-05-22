@@ -27,7 +27,7 @@
 //! a same-frame GPU write wouldn't be visible without a fence).
 
 use crate::generators::clip_trigger::ClipTriggerCycle;
-use crate::generators::mesh_common::{EdgePair, LinePoint, MeshVertex};
+use crate::generators::mesh_common::{EdgePair, CurvePoint, MeshVertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -58,7 +58,7 @@ pub const POLYGON_CYCLE_SIDES: &[u32] = &[3, 4, 5, 6, 8, 12];
 crate::primitive! {
     name: PolygonShape,
     type_id: "node.polygon_shape",
-    purpose: "Generate a regular N-gon as three coordinated outputs: outline (Array<LinePoint>), edge topology (Array<EdgePair>), and a fan-triangulated mesh (Array<MeshVertex>). The geometry source for 2D polygon looks — pair outline + edges with node.render_lines for anti-aliased wireframes, or mesh with node.render_3d_mesh for solid fill. Mesh sits at z = 0 with +z normals so a flat camera renders the polygon as the user expects. Vertex 0 lies at angle `rotation` measured CCW from positive x. Clip-trigger mode cycles N through [3, 4, 5, 6, 8, 12] on each retrigger via ClipTriggerCycle.",
+    purpose: "Generate a regular N-gon as three coordinated outputs: outline (Array<CurvePoint>), edge topology (Array<EdgePair>), and a fan-triangulated mesh (Array<MeshVertex>). The geometry source for 2D polygon looks — pair outline + edges with node.render_lines for anti-aliased wireframes, or mesh with node.render_3d_mesh for solid fill. Mesh sits at z = 0 with +z normals so a flat camera renders the polygon as the user expects. Vertex 0 lies at angle `rotation` measured CCW from positive x. Clip-trigger mode cycles N through [3, 4, 5, 6, 8, 12] on each retrigger via ClipTriggerCycle.",
     inputs: {
         // All scalar params are port-shadowable so a generator graph
         // can drive them from upstream (LFO, easing, trigger_count, …).
@@ -68,7 +68,7 @@ crate::primitive! {
         trigger_count: ScalarF32 optional,
     },
     outputs: {
-        outline: Array(LinePoint),
+        outline: Array(CurvePoint),
         edges: Array(EdgePair),
         mesh: Array(MeshVertex),
     },
@@ -77,7 +77,7 @@ crate::primitive! {
             name: "n_sides",
             label: "Sides",
             ty: ParamType::Int,
-            default: ParamValue::Int(4),
+            default: ParamValue::Float(4.0),
             range: Some((POLYGON_MIN_SIDES as f32, POLYGON_MAX_SIDES as f32)),
             enum_values: &[],
         },
@@ -127,7 +127,7 @@ crate::primitive! {
 
 impl Primitive for PolygonShape {
     /// Output capacities:
-    /// - `outline`: POLYGON_MAX_SIDES (32) — one LinePoint per vertex.
+    /// - `outline`: POLYGON_MAX_SIDES (32) — one CurvePoint per vertex.
     /// - `edges`:   POLYGON_MAX_SIDES (32) — one EdgePair per side
     ///   (closed loop).
     /// - `mesh`:    POLYGON_MAX_MESH_VERTS (96) — three MeshVertex per
@@ -160,7 +160,6 @@ impl Primitive for PolygonShape {
         let clip_trigger = match ctx.params.get("clip_trigger") {
             Some(ParamValue::Bool(b)) => *b,
             Some(ParamValue::Float(f)) => *f > 0.5,
-            Some(ParamValue::Int(i)) => *i != 0,
             _ => false,
         };
 
@@ -187,7 +186,7 @@ impl Primitive for PolygonShape {
         let Some(outline_dst) = ctx.outputs.array("outline") else {
             log::warn!(
                 "node.polygon_shape: no GpuBuffer bound to output port `outline` — \
-                 the chain build did not pre-allocate the Array<LinePoint> output.",
+                 the chain build did not pre-allocate the Array<CurvePoint> output.",
             );
             return;
         };
@@ -206,7 +205,7 @@ impl Primitive for PolygonShape {
             return;
         };
 
-        let outline_cap = (outline_dst.size / std::mem::size_of::<LinePoint>() as u64) as u32;
+        let outline_cap = (outline_dst.size / std::mem::size_of::<CurvePoint>() as u64) as u32;
         let edges_cap = (edges_dst.size / std::mem::size_of::<EdgePair>() as u64) as u32;
         let mesh_cap = (mesh_dst.size / std::mem::size_of::<MeshVertex>() as u64) as u32;
         if outline_cap == 0 || edges_cap == 0 || mesh_cap == 0 {
@@ -218,7 +217,7 @@ impl Primitive for PolygonShape {
         // so we never overflow. Padding the tail with zeros (outline /
         // mesh) and SENTINELs (edges) makes the buffers safe for
         // partial consumption by downstream primitives.
-        let mut outline_scratch = [LinePoint { xy: [0.0, 0.0] }; POLYGON_MAX_SIDES as usize];
+        let mut outline_scratch = [CurvePoint { xy: [0.0, 0.0] }; POLYGON_MAX_SIDES as usize];
         let mut edges_scratch = [EdgePair::SENTINEL; POLYGON_MAX_SIDES as usize];
         let mut mesh_scratch = [MeshVertex {
             position: [0.0, 0.0, 0.0],
@@ -231,10 +230,10 @@ impl Primitive for PolygonShape {
         let n_f32 = n as f32;
         let angle_step = std::f32::consts::TAU / n_f32;
 
-        // Outline: N LinePoints around the circumscribed circle.
+        // Outline: N CurvePoints around the circumscribed circle.
         for i in 0..n_usize {
             let theta = rotation + (i as f32) * angle_step;
-            outline_scratch[i] = LinePoint {
+            outline_scratch[i] = CurvePoint {
                 xy: [size * theta.cos(), size * theta.sin()],
             };
         }
@@ -314,18 +313,9 @@ mod tests {
         }
         let outs = PolygonShape::OUTPUTS;
         assert_eq!(outs.len(), 3);
-        let outline_layout = ArrayType {
-            item_size: std::mem::size_of::<LinePoint>() as u32,
-            item_align: std::mem::align_of::<LinePoint>() as u32,
-        };
-        let edges_layout = ArrayType {
-            item_size: std::mem::size_of::<EdgePair>() as u32,
-            item_align: std::mem::align_of::<EdgePair>() as u32,
-        };
-        let mesh_layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let outline_layout = ArrayType::of_known::<CurvePoint>();
+        let edges_layout = ArrayType::of_known::<EdgePair>();
+        let mesh_layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(outs[0].name, "outline");
         assert_eq!(outs[0].ty, PortType::Array(outline_layout));
         assert_eq!(outs[1].name, "edges");
@@ -425,7 +415,7 @@ mod gpu_tests {
     use super::*;
 
     fn run_polygon_shape_cpu(n: u32, size: f32, rotation: f32)
-    -> (Vec<LinePoint>, Vec<EdgePair>, Vec<MeshVertex>) {
+    -> (Vec<CurvePoint>, Vec<EdgePair>, Vec<MeshVertex>) {
         // Drive `run()` against in-process shared buffers via a small
         // standalone harness. This sidesteps the graph executor — the
         // primitive's logic is pure CPU; we only need to verify it
@@ -548,8 +538,8 @@ impl PolygonShape {
         n: u32,
         size: f32,
         rotation: f32,
-    ) -> (Vec<LinePoint>, Vec<EdgePair>, Vec<MeshVertex>) {
-        let mut outline = vec![LinePoint { xy: [0.0, 0.0] }; POLYGON_MAX_SIDES as usize];
+    ) -> (Vec<CurvePoint>, Vec<EdgePair>, Vec<MeshVertex>) {
+        let mut outline = vec![CurvePoint { xy: [0.0, 0.0] }; POLYGON_MAX_SIDES as usize];
         let mut edges = vec![EdgePair::SENTINEL; POLYGON_MAX_SIDES as usize];
         let mut mesh = vec![
             MeshVertex {
@@ -567,7 +557,7 @@ impl PolygonShape {
 
         for i in 0..n_usize {
             let theta = rotation + (i as f32) * angle_step;
-            outline[i] = LinePoint {
+            outline[i] = CurvePoint {
                 xy: [size * theta.cos(), size * theta.sin()],
             };
         }

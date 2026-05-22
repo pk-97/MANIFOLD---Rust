@@ -83,7 +83,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(32),
+            default: ParamValue::Float(32.0),
             range: Some((1.0, 32.0)),
             enum_values: &[],
         },
@@ -107,7 +107,7 @@ crate::primitive! {
             name: "analysis_max_dim",
             label: "Analysis Max Dim",
             ty: ParamType::Int,
-            default: ParamValue::Int(360),
+            default: ParamValue::Float(360.0),
             range: Some((64.0, 1024.0)),
             enum_values: &[],
         },
@@ -115,7 +115,7 @@ crate::primitive! {
             name: "update_interval",
             label: "Update Interval (frames)",
             ty: ParamType::Int,
-            default: ParamValue::Int(2),
+            default: ParamValue::Float(2.0),
             range: Some((1.0, 30.0)),
             enum_values: &[],
         },
@@ -215,11 +215,11 @@ impl Primitive for BlobDetectFfi {
             _ => 0.5,
         };
         let analysis_max_dim = match ctx.params.get("analysis_max_dim") {
-            Some(ParamValue::Int(i)) => (*i).max(64) as u32,
+            Some(ParamValue::Float(i)) => i.round().max(64_f32) as u32,
             _ => 360,
         };
         let update_interval = match ctx.params.get("update_interval") {
-            Some(ParamValue::Int(i)) => (*i).max(1) as i64,
+            Some(ParamValue::Float(i)) => i.round().max(1_f32) as i64,
             _ => 2,
         };
 
@@ -341,10 +341,7 @@ mod tests {
     #[test]
     fn blob_detect_ffi_declares_texture_in_and_array_blob_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let blob_layout = ArrayType {
-            item_size: std::mem::size_of::<Blob>() as u32,
-            item_align: std::mem::align_of::<Blob>() as u32,
-        };
+        let blob_layout = ArrayType::of_known::<Blob>();
 
         assert_eq!(BlobDetectFfi::TYPE_ID, "node.blob_detect_ffi");
         assert_eq!(BlobDetectFfi::INPUTS.len(), 1);

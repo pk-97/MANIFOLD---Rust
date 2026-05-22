@@ -27,7 +27,7 @@
 //! never resolve to a drawn line. Inactive outline vertices stay at
 //! origin, scaled to origin, harmless.
 
-use crate::generators::mesh_common::{EdgePair, LinePoint};
+use crate::generators::mesh_common::{EdgePair, CurvePoint};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -47,9 +47,9 @@ const CONCENTRIC_INLINE_SCRATCH: usize = 128;
 crate::primitive! {
     name: ConcentricOutlines,
     type_id: "node.concentric_outlines",
-    purpose: "Stack `ring_count` scaled copies of a polygon outline into one Array<LinePoint> + Array<EdgePair> pair, with ring `i` at scale `(frac(expansion) + i) * ring_spacing`. Drives the concentric-rings tunnel look from a single polygon source: wire node.polygon_shape's outline + edges in, drive `expansion` from `beat / beats_per_ring` (or any time-varying scalar), and feed the outputs into node.render_lines. As expansion grows past each integer step the stack drifts outward and a new ring emerges from the centre (slot 0 starts at radius 0).",
+    purpose: "Stack `ring_count` scaled copies of a polygon outline into one Array<CurvePoint> + Array<EdgePair> pair, with ring `i` at scale `(frac(expansion) + i) * ring_spacing`. Drives the concentric-rings tunnel look from a single polygon source: wire node.polygon_shape's outline + edges in, drive `expansion` from `beat / beats_per_ring` (or any time-varying scalar), and feed the outputs into node.render_lines. As expansion grows past each integer step the stack drifts outward and a new ring emerges from the centre (slot 0 starts at radius 0).",
     inputs: {
-        outline: Array(LinePoint) required,
+        outline: Array(CurvePoint) required,
         edges: Array(EdgePair) required,
         // Port-shadows-param: wire beat / time / LFO to animate the
         // tunnel. Param is the static fallback.
@@ -59,7 +59,7 @@ crate::primitive! {
         ring_spacing: ScalarF32 optional,
     },
     outputs: {
-        outline: Array(LinePoint),
+        outline: Array(CurvePoint),
         edges: Array(EdgePair),
     },
     params: [
@@ -79,7 +79,7 @@ crate::primitive! {
             // (16 * 0.05 = 0.8 > viewport-corner 0.707), so the outermost
             // slot's cycle-wrap stays off-screen. Bump higher if a preset
             // dials ring_spacing below 0.05.
-            default: ParamValue::Int(16),
+            default: ParamValue::Float(16.0),
             range: Some((1.0, CONCENTRIC_MAX_RING_COUNT as f32)),
             enum_values: &[],
         },
@@ -95,7 +95,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output buffer sizes scale with `ring_count` × the upstream Array capacities (e.g. polygon_shape's 64-vertex outline × 16 rings = 1024 LinePoints output). Each ring offset is `(frac(expansion) + i) * ring_spacing`; slot 0 ranges from radius 0 to `ring_spacing` (rings emerge from the centre and grow out), slot K-1 ranges from `(K-1)*spacing` to `K*spacing`. Edges from the input are copied per ring with vertex indices shifted by ring_index × input_capacity, so each ring is a self-contained closed loop. Sentinel edges (EdgePair::SENTINEL) in the input stay as sentinels in every output ring — polygon_shape's inactive-side padding never resolves to a drawn line. Pick `ring_count` so K*spacing > 0.707 (viewport corner) and the slot-cycle wrap stays off-screen.",
+    composition_notes: "Output buffer sizes scale with `ring_count` × the upstream Array capacities (e.g. polygon_shape's 64-vertex outline × 16 rings = 1024 CurvePoints output). Each ring offset is `(frac(expansion) + i) * ring_spacing`; slot 0 ranges from radius 0 to `ring_spacing` (rings emerge from the centre and grow out), slot K-1 ranges from `(K-1)*spacing` to `K*spacing`. Edges from the input are copied per ring with vertex indices shifted by ring_index × input_capacity, so each ring is a self-contained closed loop. Sentinel edges (EdgePair::SENTINEL) in the input stay as sentinels in every output ring — polygon_shape's inactive-side padding never resolves to a drawn line. Pick `ring_count` so K*spacing > 0.707 (viewport corner) and the slot-cycle wrap stays off-screen.",
     examples: [],
     picker: { label: "Concentric Outlines", category: Atom },
 }
@@ -111,7 +111,7 @@ impl Primitive for ConcentricOutlines {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         let ring_count = match params.get("ring_count") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 8,
         }
         .min(CONCENTRIC_MAX_RING_COUNT);
@@ -133,7 +133,7 @@ impl Primitive for ConcentricOutlines {
         let expansion = ctx.scalar_or_param("expansion", 0.0);
 
         let ring_count = match ctx.params.get("ring_count") {
-            Some(ParamValue::Int(n)) => (*n).max(1) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 8,
         }
         .min(CONCENTRIC_MAX_RING_COUNT);
@@ -150,7 +150,7 @@ impl Primitive for ConcentricOutlines {
         let Some(outline_out) = ctx.outputs.array("outline") else {
             log::warn!(
                 "node.concentric_outlines: no GpuBuffer bound to output port `outline` — \
-                 the chain build did not pre-allocate the Array<LinePoint> output."
+                 the chain build did not pre-allocate the Array<CurvePoint> output."
             );
             return;
         };
@@ -163,10 +163,10 @@ impl Primitive for ConcentricOutlines {
         };
 
         let in_outline_cap =
-            (outline_in.size / std::mem::size_of::<LinePoint>() as u64) as u32;
+            (outline_in.size / std::mem::size_of::<CurvePoint>() as u64) as u32;
         let in_edges_cap = (edges_in.size / std::mem::size_of::<EdgePair>() as u64) as u32;
         let out_outline_cap =
-            (outline_out.size / std::mem::size_of::<LinePoint>() as u64) as u32;
+            (outline_out.size / std::mem::size_of::<CurvePoint>() as u64) as u32;
         let out_edges_cap = (edges_out.size / std::mem::size_of::<EdgePair>() as u64) as u32;
         if in_outline_cap == 0 || in_edges_cap == 0 || out_outline_cap == 0 || out_edges_cap == 0
         {
@@ -185,9 +185,9 @@ impl Primitive for ConcentricOutlines {
         let edges_in_ptr = edges_in
             .mapped_ptr()
             .expect("concentric_outlines: edges input must be shared-memory");
-        let in_outline: &[LinePoint] = unsafe {
+        let in_outline: &[CurvePoint] = unsafe {
             std::slice::from_raw_parts(
-                outline_in_ptr as *const LinePoint,
+                outline_in_ptr as *const CurvePoint,
                 in_outline_cap as usize,
             )
         };
@@ -232,7 +232,7 @@ impl Primitive for ConcentricOutlines {
             // allocating a Vec per call.
             let outline_chunk = (outline_write_count - ring_outline_offset)
                 .min(in_outline_cap as usize);
-            let mut outline_scratch = [LinePoint { xy: [0.0, 0.0] }; CONCENTRIC_INLINE_SCRATCH];
+            let mut outline_scratch = [CurvePoint { xy: [0.0, 0.0] }; CONCENTRIC_INLINE_SCRATCH];
             assert!(
                 outline_chunk <= outline_scratch.len(),
                 "concentric_outlines: input outline capacity {} exceeds inline scratch size {}; bump CONCENTRIC_INLINE_SCRATCH if a producer is wider",
@@ -241,7 +241,7 @@ impl Primitive for ConcentricOutlines {
             );
             for j in 0..outline_chunk {
                 let p = in_outline[j].xy;
-                outline_scratch[j] = LinePoint {
+                outline_scratch[j] = CurvePoint {
                     xy: [p[0] * scale, p[1] * scale],
                 };
             }
@@ -277,7 +277,7 @@ impl Primitive for ConcentricOutlines {
             // the content thread).
             unsafe {
                 outline_out.write(
-                    (ring_outline_offset as u64) * std::mem::size_of::<LinePoint>() as u64,
+                    (ring_outline_offset as u64) * std::mem::size_of::<CurvePoint>() as u64,
                     bytemuck::cast_slice(&outline_scratch[..outline_chunk]),
                 );
                 if edges_chunk > 0 {
@@ -300,14 +300,8 @@ mod tests {
 
     #[test]
     fn declares_two_array_inputs_two_scalar_inputs_and_two_array_outputs() {
-        let line_layout = ArrayType {
-            item_size: std::mem::size_of::<LinePoint>() as u32,
-            item_align: std::mem::align_of::<LinePoint>() as u32,
-        };
-        let edge_layout = ArrayType {
-            item_size: std::mem::size_of::<EdgePair>() as u32,
-            item_align: std::mem::align_of::<EdgePair>() as u32,
-        };
+        let line_layout = ArrayType::of_known::<CurvePoint>();
+        let edge_layout = ArrayType::of_known::<EdgePair>();
 
         assert_eq!(ConcentricOutlines::TYPE_ID, "node.concentric_outlines");
         let ins = ConcentricOutlines::INPUTS;
@@ -352,7 +346,7 @@ mod tests {
 
         // Custom ring_count = 4
         let mut custom = ParamValues::default();
-        custom.insert("ring_count", ParamValue::Int(4));
+        custom.insert("ring_count", ParamValue::Float(4.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "outline", &custom, &inputs),
             Some(32 * 4)
@@ -360,7 +354,7 @@ mod tests {
 
         // Clamped to CONCENTRIC_MAX_RING_COUNT
         let mut huge = ParamValues::default();
-        huge.insert("ring_count", ParamValue::Int(128));
+        huge.insert("ring_count", ParamValue::Float(128.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "outline", &huge, &inputs),
             Some(32 * CONCENTRIC_MAX_RING_COUNT)
@@ -385,7 +379,7 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::generators::mesh_common::{EdgePair, LinePoint};
+    use crate::generators::mesh_common::{EdgePair, CurvePoint};
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::{
@@ -427,7 +421,7 @@ mod gpu_tests {
         ring_count: i32,
         ring_spacing: f32,
         expansion: f32,
-    ) -> (Vec<LinePoint>, Vec<EdgePair>) {
+    ) -> (Vec<CurvePoint>, Vec<EdgePair>) {
         use crate::node_graph::primitives::polygon_shape::POLYGON_MAX_MESH_VERTS;
         use crate::generators::mesh_common::MeshVertex;
 
@@ -447,7 +441,7 @@ mod gpu_tests {
         g.set_param(poly, "rotation", ParamValue::Float(0.0)).unwrap();
 
         let stack = g.add_node(Box::new(ConcentricOutlines::new()));
-        g.set_param(stack, "ring_count", ParamValue::Int(ring_count)).unwrap();
+        g.set_param(stack, "ring_count", ParamValue::Float(ring_count as f32)).unwrap();
         g.set_param(stack, "ring_spacing", ParamValue::Float(ring_spacing))
             .unwrap();
         g.set_param(stack, "expansion", ParamValue::Float(expansion))
@@ -469,7 +463,7 @@ mod gpu_tests {
         // pre-bind every Array resource explicitly so polygon_shape
         // has somewhere to write before concentric_outlines reads.
         let poly_outline_buf = device.create_buffer_shared(
-            (POLYGON_MAX_SIDES as u64) * std::mem::size_of::<LinePoint>() as u64,
+            (POLYGON_MAX_SIDES as u64) * std::mem::size_of::<CurvePoint>() as u64,
         );
         let poly_edges_buf = device.create_buffer_shared(
             (POLYGON_MAX_SIDES as u64) * std::mem::size_of::<EdgePair>() as u64,
@@ -480,7 +474,7 @@ mod gpu_tests {
 
         let outline_bytes = (POLYGON_MAX_SIDES as u64)
             * (ring_count as u64)
-            * std::mem::size_of::<LinePoint>() as u64;
+            * std::mem::size_of::<CurvePoint>() as u64;
         let edges_bytes = (POLYGON_MAX_SIDES as u64)
             * (ring_count as u64)
             * std::mem::size_of::<EdgePair>() as u64;
@@ -519,7 +513,7 @@ mod gpu_tests {
         let e_slice = unsafe {
             std::slice::from_raw_parts(e_ptr as *const u8, edges_bytes as usize)
         };
-        let o: Vec<LinePoint> = bytemuck::cast_slice::<u8, LinePoint>(o_slice).to_vec();
+        let o: Vec<CurvePoint> = bytemuck::cast_slice::<u8, CurvePoint>(o_slice).to_vec();
         let e: Vec<EdgePair> = bytemuck::cast_slice::<u8, EdgePair>(e_slice).to_vec();
         (o, e)
     }

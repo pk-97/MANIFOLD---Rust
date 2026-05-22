@@ -58,7 +58,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(1_048_576),
+            default: ParamValue::Float(1_048_576.0),
             range: Some((1024.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -66,7 +66,7 @@ crate::primitive! {
             name: "active_count",
             label: "Active Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(100_000),
+            default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -74,7 +74,7 @@ crate::primitive! {
             name: "visible_count",
             label: "Visible Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(100_000),
+            default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -90,7 +90,7 @@ crate::primitive! {
             name: "trigger_count",
             label: "Trigger Seed",
             ty: ParamType::Int,
-            default: ParamValue::Int(0),
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -103,11 +103,11 @@ crate::primitive! {
 impl Primitive for FluidSeed {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 100_000,
         };
         let visible_count = match ctx.params.get("visible_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 100_000,
         };
         let pattern_index = match ctx.params.get("pattern") {
@@ -115,7 +115,7 @@ impl Primitive for FluidSeed {
             _ => 0,
         };
         let trigger_count = match ctx.params.get("trigger_count") {
-            Some(ParamValue::Int(n)) => (*n) as u32,
+            Some(ParamValue::Float(n)) => n.round() as u32,
             _ => 0,
         };
 
@@ -171,10 +171,7 @@ mod tests {
     #[test]
     fn fluid_seed_declares_zero_inputs_and_particle_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let particle_layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
+        let particle_layout = ArrayType::of_known::<Particle>();
         assert_eq!(FluidSeed::TYPE_ID, "node.fluid_seed");
         assert!(FluidSeed::INPUTS.is_empty());
         assert_eq!(FluidSeed::OUTPUTS.len(), 1);

@@ -47,7 +47,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(1_048_576),
+            default: ParamValue::Float(1_048_576.0),
             range: Some((1024.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -55,7 +55,7 @@ crate::primitive! {
             name: "active_count",
             label: "Active Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(100_000),
+            default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -79,7 +79,7 @@ crate::primitive! {
             name: "frame_seed",
             label: "Frame Seed",
             ty: ParamType::Int,
-            default: ParamValue::Int(0),
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -92,7 +92,7 @@ crate::primitive! {
 impl Primitive for SeedParticlesFromTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 100_000,
         };
         let output_width = match ctx.params.get("output_width") {
@@ -104,7 +104,7 @@ impl Primitive for SeedParticlesFromTexture {
             _ => 1080.0,
         };
         let frame_seed = match ctx.params.get("frame_seed") {
-            Some(ParamValue::Int(n)) => (*n) as u32,
+            Some(ParamValue::Float(n)) => n.round() as u32,
             _ => 0,
         };
 
@@ -170,10 +170,7 @@ mod tests {
     #[test]
     fn seed_from_texture_declares_mask_in_and_particle_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let particle_layout = ArrayType {
-            item_size: std::mem::size_of::<Particle>() as u32,
-            item_align: std::mem::align_of::<Particle>() as u32,
-        };
+        let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(
             SeedParticlesFromTexture::TYPE_ID,

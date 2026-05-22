@@ -75,7 +75,7 @@ crate::primitive! {
             name: "analysis_max_dim",
             label: "Analysis Max Dim",
             ty: ParamType::Int,
-            default: ParamValue::Int(360),
+            default: ParamValue::Float(360.0),
             range: Some((64.0, 1024.0)),
             enum_values: &[],
         },
@@ -83,7 +83,7 @@ crate::primitive! {
             name: "update_interval",
             label: "Update Interval (frames)",
             ty: ParamType::Int,
-            default: ParamValue::Int(2),
+            default: ParamValue::Float(2.0),
             range: Some((1.0, 30.0)),
             enum_values: &[],
         },
@@ -186,11 +186,11 @@ impl DepthEstimateMidas {
 impl Primitive for DepthEstimateMidas {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let analysis_max_dim = match ctx.params.get("analysis_max_dim") {
-            Some(ParamValue::Int(i)) => (*i).max(64) as u32,
+            Some(ParamValue::Float(i)) => i.round().max(64_f32) as u32,
             _ => 360,
         };
         let update_interval = match ctx.params.get("update_interval") {
-            Some(ParamValue::Int(i)) => (*i).max(1) as i64,
+            Some(ParamValue::Float(i)) => i.round().max(1_f32) as i64,
             _ => 2,
         };
 

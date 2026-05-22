@@ -46,7 +46,7 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Int(2_097_152),
+            default: ParamValue::Float(2_097_152.0),
             range: Some((1024.0, 16_000_000.0)),
             enum_values: &[],
         },
@@ -54,7 +54,7 @@ crate::primitive! {
             name: "resolution_x",
             label: "Resolution X",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -62,7 +62,7 @@ crate::primitive! {
             name: "resolution_y",
             label: "Resolution Y",
             ty: ParamType::Int,
-            default: ParamValue::Int(256),
+            default: ParamValue::Float(256.0),
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
@@ -91,11 +91,11 @@ crate::primitive! {
 impl Primitive for GenerateGridMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let resolution_x = match ctx.params.get("resolution_x") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
         let resolution_y = match ctx.params.get("resolution_y") {
-            Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
         let size_x = match ctx.params.get("size_x") {
@@ -163,10 +163,7 @@ mod tests {
     #[test]
     fn generate_grid_mesh_declares_zero_inputs_and_one_mesh_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_vertex_layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
+        let mesh_vertex_layout = ArrayType::of_known::<MeshVertex>();
 
         assert_eq!(GenerateGridMesh::TYPE_ID, "node.generate_grid_mesh");
         assert!(GenerateGridMesh::INPUTS.is_empty());

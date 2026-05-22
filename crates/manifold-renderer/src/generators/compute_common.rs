@@ -22,6 +22,11 @@ pub struct Particle {
 // If these fail, you've changed a field without updating the WGSL counterpart (or vice versa).
 const _: () = assert!(std::mem::size_of::<Particle>() == 64);
 
+impl crate::node_graph::ports::KnownItem for Particle {
+    const ITEM_KIND: crate::node_graph::ports::ItemKind =
+        crate::node_graph::ports::ItemKind::Particle;
+}
+
 /// Fixed-point scale factor for atomic scatter operations.
 /// Energy values are multiplied by this before atomicAdd, divided after resolve.
 pub const FIXED_POINT_SCALE: f32 = 4096.0;

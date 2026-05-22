@@ -169,7 +169,6 @@ impl Primitive for PlasmaPattern2D {
         let clip_trigger = match ctx.params.get("clip_trigger") {
             Some(ParamValue::Bool(b)) => *b,
             Some(ParamValue::Float(f)) => *f > 0.5,
-            Some(ParamValue::Int(i)) => *i != 0,
             _ => false,
         };
 

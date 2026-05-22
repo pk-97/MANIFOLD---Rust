@@ -372,15 +372,12 @@ mod tests {
 
     #[test]
     fn connects_array_ports_when_item_layout_matches() {
-        // Two Array ports declared with the same item_size/item_align
+        // Two Array ports declared with the same (size, align, kind)
         // connect cleanly. The wire validator compares PortType via
-        // derived Eq, so equivalent ArrayType descriptors match
+        // derived Eq — equivalent ArrayType descriptors match
         // regardless of the macro-side type-name origin.
         use crate::node_graph::ports::ArrayType;
-        let layout = ArrayType {
-            item_size: 64,
-            item_align: 16,
-        };
+        let layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
         let mut g = Graph::new();
         let a = g.add_node(Box::new(TestNode::new(
             "producer",
@@ -408,26 +405,63 @@ mod tests {
             vec![],
             vec![output(
                 "out",
-                PortType::Array(ArrayType {
-                    item_size: 64,
-                    item_align: 16,
-                }),
+                PortType::Array(ArrayType::of_known::<
+                    crate::generators::compute_common::Particle,
+                >()),
             )],
         )));
         let b = g.add_node(Box::new(TestNode::new(
             "vertex_consumer",
             vec![input(
                 "in",
-                PortType::Array(ArrayType {
-                    item_size: 32,
-                    item_align: 8,
-                }),
+                PortType::Array(ArrayType::of_known::<
+                    crate::generators::mesh_common::MeshVertex,
+                >()),
                 true,
             )],
             vec![],
         )));
         let r = g.connect((a, "out"), (b, "in"));
         assert!(matches!(r, Err(GraphError::PortTypeMismatch { .. })));
+    }
+
+    /// Regression for the recurring "coordinate-space contract" bug
+    /// class. Two `Array` ports with byte-identical layouts but
+    /// different [`ItemKind`](crate::node_graph::ports::ItemKind)
+    /// tags MUST NOT connect — that's the whole point of carrying
+    /// the kind on the wire. `CurvePoint` (origin-centered 2D, what
+    /// `render_lines` consumes) and `EdgePair` (two u32 indices)
+    /// are both 8 bytes / 4-aligned, so under a pure size/align
+    /// check they would connect silently. The kind tag forces the
+    /// validator to refuse the wire.
+    #[test]
+    fn rejects_array_ports_with_matching_layout_but_mismatched_kind() {
+        use crate::generators::mesh_common::{CurvePoint, EdgePair};
+        use crate::node_graph::ports::ArrayType;
+        // Sanity: same byte layout, different kinds.
+        let curve = ArrayType::of_known::<CurvePoint>();
+        let edge = ArrayType::of_known::<EdgePair>();
+        assert_eq!((curve.item_size, curve.item_align), (8, 4));
+        assert_eq!((edge.item_size, edge.item_align), (8, 4));
+        assert_ne!(curve, edge, "kinds must distinguish the ArrayTypes");
+
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "curve_producer",
+            vec![],
+            vec![output("out", PortType::Array(curve))],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "edge_consumer",
+            vec![input("in", PortType::Array(edge), true)],
+            vec![],
+        )));
+        let r = g.connect((a, "out"), (b, "in"));
+        assert!(
+            matches!(r, Err(GraphError::PortTypeMismatch { .. })),
+            "wiring CurvePoint into an EdgePair port must fail \
+             validation — byte layouts match but the kinds don't",
+        );
     }
 
     #[test]

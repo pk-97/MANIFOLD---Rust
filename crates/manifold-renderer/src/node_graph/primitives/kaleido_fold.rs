@@ -36,7 +36,7 @@ crate::primitive! {
             name: "segments",
             label: "Segments",
             ty: ParamType::Int,
-            default: ParamValue::Int(6),
+            default: ParamValue::Float(6.0),
             range: Some((2.0, 16.0)),
             enum_values: &[],
         },

@@ -47,7 +47,7 @@ crate::primitive! {
             name: "grid_size",
             label: "Grid Size",
             ty: ParamType::Int,
-            default: ParamValue::Int(300),
+            default: ParamValue::Float(300.0),
             range: Some((4.0, 1000.0)),
             enum_values: &[],
         },
@@ -163,7 +163,7 @@ impl MetallicGlassRender {
 impl Primitive for MetallicGlassRender {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let grid_size = match ctx.params.get("grid_size") {
-            Some(ParamValue::Int(n)) => (*n).max(4) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(4_f32) as u32,
             _ => 300,
         };
         let metallic = match ctx.params.get("metallic") {

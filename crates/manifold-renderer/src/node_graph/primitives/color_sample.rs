@@ -60,7 +60,7 @@ crate::primitive! {
             // radii average a (2r+1)² window — drop high-frequency
             // noise so a "region brightness" wire reflects the eye's
             // perception, not whatever lone texel lives at the UV.
-            default: ParamValue::Int(0),
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 64.0)),
             enum_values: &[],
         },
@@ -108,7 +108,6 @@ impl Primitive for ColorSample {
             _ => [0.5, 0.5],
         };
         let radius_px = match ctx.params.get("radius_px") {
-            Some(ParamValue::Int(v)) => (*v).clamp(0, 64) as f32,
             Some(ParamValue::Float(v)) => v.clamp(0.0, 64.0).round(),
             _ => 0.0,
         };

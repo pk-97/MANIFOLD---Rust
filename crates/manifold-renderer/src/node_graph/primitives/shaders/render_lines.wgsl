@@ -1,5 +1,5 @@
 // node.render_lines — instanced capsule renderer for an
-// Array<LinePoint>. One instance per edge or dot; the vertex
+// Array<CurvePoint>. One instance per edge or dot; the vertex
 // shader expands 6 vertices into a screen-space quad. The fragment
 // shader evaluates a capsule SDF with fwidth() AA.
 //
@@ -34,7 +34,7 @@ struct LineUniforms {
     _pad: f32,
 };
 
-struct LinePoint {
+struct CurvePoint {
     xy: vec2<f32>,
 };
 
@@ -46,7 +46,7 @@ struct EdgeInstance {
 };
 
 @group(0) @binding(0) var<uniform> u: LineUniforms;
-@group(0) @binding(1) var<storage, read> points: array<LinePoint>;
+@group(0) @binding(1) var<storage, read> points: array<CurvePoint>;
 @group(0) @binding(2) var<storage, read> edges: array<EdgeInstance>;
 
 struct VsOut {

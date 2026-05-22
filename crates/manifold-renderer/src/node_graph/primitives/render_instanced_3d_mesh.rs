@@ -41,7 +41,7 @@ crate::primitive! {
             name: "instance_count",
             label: "Instance Count",
             ty: ParamType::Int,
-            default: ParamValue::Int(64),
+            default: ParamValue::Float(64.0),
             range: Some((1.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -164,7 +164,7 @@ impl RenderInstanced3DMesh {
 impl Primitive for RenderInstanced3DMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let instance_count = match ctx.params.get("instance_count") {
-            Some(ParamValue::Int(n)) => (*n).max(0) as u32,
+            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 64,
         };
         let camera_distance = match ctx.params.get("camera_distance") {
@@ -319,14 +319,8 @@ mod tests {
     #[test]
     fn render_instanced_declares_mesh_and_instance_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType {
-            item_size: std::mem::size_of::<MeshVertex>() as u32,
-            item_align: std::mem::align_of::<MeshVertex>() as u32,
-        };
-        let instance_layout = ArrayType {
-            item_size: std::mem::size_of::<InstanceTransform>() as u32,
-            item_align: std::mem::align_of::<InstanceTransform>() as u32,
-        };
+        let mesh_layout = ArrayType::of_known::<MeshVertex>();
+        let instance_layout = ArrayType::of_known::<InstanceTransform>();
 
         assert_eq!(
             RenderInstanced3DMesh::TYPE_ID,

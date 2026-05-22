@@ -59,9 +59,11 @@ pub use manifold_core::effect_graph_def::{
 
 impl From<ParamValue> for SerializedParamValue {
     fn from(v: ParamValue) -> Self {
+        // Always emit `Float` for numerics — `Int` lives in the schema for
+        // back-compat reads only (see the reverse impl). New saves are
+        // type-collapsed; readers should expect `Float` everywhere.
         match v {
             ParamValue::Float(value) => Self::Float { value },
-            ParamValue::Int(value) => Self::Int { value },
             ParamValue::Bool(value) => Self::Bool { value },
             ParamValue::Vec2(value) => Self::Vec2 { value },
             ParamValue::Vec3(value) => Self::Vec3 { value },
@@ -74,9 +76,13 @@ impl From<ParamValue> for SerializedParamValue {
 
 impl From<SerializedParamValue> for ParamValue {
     fn from(v: SerializedParamValue) -> Self {
+        // `Int` is preserved in the wire schema for back-compat with
+        // existing saved projects and bundled-preset JSON. Coerce to
+        // `Float` on read — in-memory storage no longer has a separate
+        // integer variant. Precision is lossless for our param ranges.
         match v {
             SerializedParamValue::Float { value } => Self::Float(value),
-            SerializedParamValue::Int { value } => Self::Int(value),
+            SerializedParamValue::Int { value } => Self::Float(value as f32),
             SerializedParamValue::Bool { value } => Self::Bool(value),
             SerializedParamValue::Vec2 { value } => Self::Vec2(value),
             SerializedParamValue::Vec3 { value } => Self::Vec3(value),
@@ -657,7 +663,6 @@ impl EffectGraphDefExt for EffectGraphDef {
 fn param_type_label(v: &ParamValue) -> &'static str {
     match v {
         ParamValue::Float(_) => "Float",
-        ParamValue::Int(_) => "Int",
         ParamValue::Bool(_) => "Bool",
         ParamValue::Vec2(_) => "Vec2",
         ParamValue::Vec3(_) => "Vec3",
@@ -1224,7 +1229,7 @@ mod tests {
     fn serialized_param_value_round_trips_every_variant() {
         let cases = [
             ParamValue::Float(0.5),
-            ParamValue::Int(7),
+            ParamValue::Float(7.0),
             ParamValue::Bool(true),
             ParamValue::Vec2([1.0, 2.0]),
             ParamValue::Vec3([1.0, 2.0, 3.0]),

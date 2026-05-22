@@ -54,7 +54,7 @@ crate::primitive! {
             name: "grid_size",
             label: "Grid Size",
             ty: ParamType::Int,
-            default: ParamValue::Int(24),
+            default: ParamValue::Float(24.0),
             range: Some((4.0, DUOCYLINDER_MAX_GRID_SIZE as f32),),
             enum_values: &[],
         },
@@ -72,7 +72,7 @@ crate::primitive! {
 /// `run` (frame time) so the buffer sizes match the dispatch.
 fn read_grid_size(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
     match params.get("grid_size") {
-        Some(ParamValue::Int(n)) => (*n).max(2) as u32,
+        Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
         _ => DUOCYLINDER_DEFAULT_GRID_SIZE,
     }
     .min(DUOCYLINDER_MAX_GRID_SIZE)
@@ -200,14 +200,8 @@ mod tests {
     #[test]
     fn declares_zero_inputs_and_vec4_plus_edge_array_outputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
-        let vec4_layout = ArrayType {
-            item_size: std::mem::size_of::<Vec4Vertex>() as u32,
-            item_align: std::mem::align_of::<Vec4Vertex>() as u32,
-        };
-        let edge_layout = ArrayType {
-            item_size: std::mem::size_of::<EdgePair>() as u32,
-            item_align: std::mem::align_of::<EdgePair>() as u32,
-        };
+        let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
+        let edge_layout = ArrayType::of_known::<EdgePair>();
         assert_eq!(
             GenerateDuocylinderVertices::TYPE_ID,
             "node.generate_duocylinder_vertices"
@@ -244,7 +238,7 @@ mod tests {
 
         // Custom grid_size = 16 → 256 verts, 512 edges
         let mut custom = ParamValues::default();
-        custom.insert("grid_size", ParamValue::Int(16));
+        custom.insert("grid_size", ParamValue::Float(16.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "vertices", &custom, &[]),
             Some(16 * 16)
@@ -256,7 +250,7 @@ mod tests {
 
         // Clamped to DUOCYLINDER_MAX_GRID_SIZE
         let mut huge = ParamValues::default();
-        huge.insert("grid_size", ParamValue::Int(128));
+        huge.insert("grid_size", ParamValue::Float(128.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "vertices", &huge, &[]),
             Some(DUOCYLINDER_MAX_GRID_SIZE * DUOCYLINDER_MAX_GRID_SIZE)
