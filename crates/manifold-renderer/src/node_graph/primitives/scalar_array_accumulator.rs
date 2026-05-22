@@ -9,13 +9,11 @@
 //! `nested_cubes_geometry.target_angles` to get the "+90° per trigger"
 //! behaviour without snapping to a preset.
 //!
-//! Per-instance offsets aren't carried — the accumulator starts at
-//! all-zeros and every element advances by the same `increment` on
-//! each trigger. This is a deliberate simplification of the legacy
-//! NestedCubes generator which started at `(0, 90, 180, 270, 360)`
-//! to look mid-animation at frame 0; the decomposed primitive starts
-//! at all-zeros (perfectly aligned cubes) and spreads on the first
-//! trigger. Functionally identical from frame 1 onwards.
+//! Initial state is configurable via the `initial` Table param —
+//! first frame copies row 0 of `initial` into the accumulator,
+//! defaulting to zeros if the param is left at its sentinel. NestedCubes
+//! sets it to `[[0, 90, 180, 270, 360]]` so envelope mode starts with
+//! the legacy initial spread.
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -49,13 +47,25 @@ crate::primitive! {
             range: Some((1.0, 64.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "initial",
+            label: "Initial",
+            ty: ParamType::Table,
+            // Sentinel — see ParamValue::Table docs. Real tables come
+            // from JSON; an unset sentinel resolves to all-zeros at run
+            // time.
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
     ],
-    composition_notes: "Trigger detection mirrors legacy NestedCubes: a fresh `trigger_count > last_seen` event adds `increment` to every accumulator element. `increment` is port-shadows-param so it can be modulated. Output capacity comes from the `capacity` param at chain-build time. Accumulator state is fresh on rebuild (per the graph-editor-is-authoring-not-perform rule); same trigger_count across rebuild won't double-add.",
+    composition_notes: "Trigger detection mirrors legacy NestedCubes: a fresh `trigger_count > last_seen` event adds `increment` to every accumulator element. `increment` is port-shadows-param so it can be modulated. Output capacity comes from the `capacity` param at chain-build time. `initial` is an optional 1×N (or larger) Table param; the first frame copies its row 0 into the accumulator so the starting pose isn't forced to zeros. Accumulator state is fresh on rebuild (per the graph-editor-is-authoring-not-perform rule); same trigger_count across rebuild won't double-add.",
     examples: [],
     picker: { label: "Scalar Array Accumulator", category: Driver },
     extra_fields: {
         accumulator: Vec<f32> = Vec::new(),
         last_trigger_count: Option<u32> = None,
+        initialized: bool = false,
     },
 }
 
@@ -90,8 +100,23 @@ impl Primitive for ScalarArrayAccumulator {
             return;
         }
         // Lazy init / resize the accumulator to match output capacity.
-        if self.accumulator.len() != capacity {
+        // First-frame fill comes from the `initial` Table param if set;
+        // otherwise zeros. Resize-on-capacity-change preserves the
+        // already-written prefix (in case downstream sees a larger
+        // capacity after rebuild).
+        if !self.initialized || self.accumulator.len() != capacity {
+            let seed: Vec<f32> = match ctx.params.get("initial") {
+                Some(ParamValue::Table(t)) => t
+                    .row(0)
+                    .map(|r| r.to_vec())
+                    .unwrap_or_else(|| vec![0.0; capacity]),
+                _ => vec![0.0; capacity],
+            };
             self.accumulator.resize(capacity, 0.0);
+            for (i, v) in self.accumulator.iter_mut().enumerate() {
+                *v = seed.get(i).copied().unwrap_or(0.0);
+            }
+            self.initialized = true;
         }
 
         let increment = ctx
@@ -128,6 +153,7 @@ impl Primitive for ScalarArrayAccumulator {
     fn clear_state(&mut self) {
         self.accumulator.clear();
         self.last_trigger_count = None;
+        self.initialized = false;
     }
 }
 
@@ -156,11 +182,13 @@ mod tests {
     }
 
     #[test]
-    fn declares_increment_and_capacity_params() {
+    fn declares_increment_capacity_and_initial_params() {
         let params = ScalarArrayAccumulator::PARAMS;
-        assert_eq!(params.len(), 2);
+        assert_eq!(params.len(), 3);
         assert_eq!(params[0].name, "increment");
         assert_eq!(params[1].name, "capacity");
+        assert_eq!(params[2].name, "initial");
+        assert_eq!(params[2].ty, ParamType::Table);
     }
 
     #[test]

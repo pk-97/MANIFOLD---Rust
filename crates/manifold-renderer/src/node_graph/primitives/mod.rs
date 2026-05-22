@@ -118,6 +118,7 @@ mod strobe;
 mod temporal;
 mod tone_map;
 mod triangulate_grid;
+mod trigger_gate;
 mod uv;
 mod uv_displace_by_flow;
 mod uv_field;
@@ -265,6 +266,7 @@ pub use strobe::{
 pub use temporal::{FEEDBACK_MODES, FEEDBACK_TYPE_ID, Feedback};
 pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
 pub use triangulate_grid::TriangulateGrid;
+pub use trigger_gate::TriggerGate;
 pub use uv::{
     SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
     TRANSFORM_TYPE_ID, Transform,

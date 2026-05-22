@@ -204,6 +204,7 @@ mod tests {
                 "Peak",
                 "Scalar Array Accumulator",
                 "Smoothing",
+                "Trigger Gate",
                 "Value",
             ],
         );
