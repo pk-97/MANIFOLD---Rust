@@ -37,7 +37,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. Unwired data inputs (in_N) default to 0.0. No GPU dispatch.",
+    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. Unwired data inputs (in_N) default to 0.0. No GPU dispatch. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert; the unwired-selected-slot case is a graph-editor authoring concern (separate work).",
     examples: [],
     picker: { label: "Mux (scalar)", category: Atom },
 }

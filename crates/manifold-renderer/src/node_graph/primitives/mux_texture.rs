@@ -65,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. If the selected in_N isn't wired, falls back to in_0; if that's also unwired, the output frame is undefined (previous frame's contents persist via the pool). All upstream sub-graphs still execute every frame — a future planner pass can prune unselected branches when the selector is statically known.",
+    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. If the selected in_N isn't wired the primitive falls back to in_0; if every in_N is unwired the output is cleared to opaque black so the gap is visually obvious instead of leaving sticky pool contents on the texture. All upstream sub-graphs still execute every frame — a future planner pass can prune unselected branches when the selector is statically known. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert; the unwired-selected-slot case is a graph-editor authoring concern (separate work).",
     examples: [],
     picker: { label: "Mux (texture)", category: Atom },
 }
@@ -92,18 +92,21 @@ impl Primitive for MuxTexture {
             .inputs
             .texture_2d(port_names[raw_idx])
             .or_else(|| ctx.inputs.texture_2d("in_0"));
-        let Some(source) = source else {
-            // No wired inputs at all — leave the output slot whatever
-            // the pool handed back (caller's problem). Logging once
-            // per node per session would help diagnose, but skip for
-            // now to avoid noise from intentional "no input" graphs.
-            return;
-        };
 
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
         };
         let (w, h) = (out.width, out.height);
+
+        // Every in_N unwired: clear the output to opaque black so the
+        // gap is visually obvious. Pre-fix this path silently left the
+        // pool's last frame on the texture — looked like a stuck
+        // render to the user.
+        let Some(source) = source else {
+            let gpu = ctx.gpu_encoder();
+            gpu.clear_texture(out, 0.0, 0.0, 0.0, 1.0);
+            return;
+        };
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {

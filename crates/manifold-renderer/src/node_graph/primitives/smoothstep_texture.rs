@@ -6,6 +6,14 @@
 //! edges. The Hermite polynomial `3t² - 2t³` clamps anything outside
 //! `[low, high]` to a hard 0 or 1 and gives a smooth transition between
 //! them — same behaviour as the tail of `plasma_classic`.
+//!
+//! Both edges are always live. There used to be a `Mode = Range |
+//! Bipolar` enum where Bipolar silently ignored `low` and pinned the
+//! band to `(-high, high)` — that violated the "every declared param
+//! must affect output under every reachable state" rule in §7 of
+//! `docs/DECOMPOSING_GENERATORS.md`. The bipolar shortcut is now a
+//! graph-level pattern: wire `node.math(operation=Negate) → low` if
+//! you want a symmetric-around-zero curve from a single `high` slider.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -18,21 +26,19 @@ use crate::node_graph::primitive::Primitive;
 struct SmoothstepUniforms {
     low: f32,
     high: f32,
-    mode: u32,
     _pad0: f32,
+    _pad1: f32,
 }
-
-pub const SMOOTHSTEP_MODES: &[&str] = &["Range", "Bipolar"];
 
 crate::primitive! {
     name: SmoothstepTexture,
     type_id: "node.smoothstep_texture",
-    purpose: "Per-pixel smoothstep contrast curve on RGB, alpha pass-through. Mode=Range uses (low, high); Mode=Bipolar uses (-high, high) so a single `high` slider gives a symmetric curve around 0 (the canonical signed-field → [0,1] remap used by Plasma's contrast curve and similar sum-of-sines patterns).",
+    purpose: "Per-pixel smoothstep contrast curve on RGB, alpha pass-through. Maps the input through `smoothstep(low, high, x)` per channel — anything below `low` clamps to 0, anything above `high` clamps to 1, and the Hermite polynomial smoothes the transition between them. Both edges are always live; for a symmetric-around-zero curve, wire `node.math(operation=Negate) → low` to mirror `high` into the low edge.",
     inputs: {
         in: Texture2D required,
         // Port-shadows-param for the two band edges so generator
         // graphs can derive contrast from outer-card sliders without
-        // a Value-node middleman. `low` is ignored in Bipolar mode.
+        // a Value-node middleman.
         low: ScalarF32 optional,
         high: ScalarF32 optional,
     },
@@ -56,16 +62,8 @@ crate::primitive! {
             range: Some((-8.0, 8.0)),
             enum_values: &[],
         },
-        ParamDef {
-            name: "mode",
-            label: "Mode",
-            ty: ParamType::Enum,
-            default: ParamValue::Enum(0), // Range
-            range: Some((0.0, (SMOOTHSTEP_MODES.len() - 1) as f32)),
-            enum_values: SMOOTHSTEP_MODES,
-        },
     ],
-    composition_notes: "Defaults (low=0, high=1, mode=Range) are identity for inputs already in [0, 1]. For Plasma-style symmetric-around-zero curves use mode=Bipolar and drive `high` from the edge value (low is ignored). `mode=Range` with low=-high gives the same result without the bipolar shortcut.",
+    composition_notes: "Defaults (low=0, high=1) are identity for inputs already in [0, 1]. For Plasma-style symmetric-around-zero curves wire `node.math(operation=Negate, in=high) → low` so a single `high` slider drives both edges. `low > high` produces an inverted curve (smoothstep flips signs internally).",
     examples: [],
     picker: { label: "Smoothstep", category: Atom },
 }
@@ -74,11 +72,6 @@ impl Primitive for SmoothstepTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let low = ctx.scalar_or_param("low", 0.0);
         let high = ctx.scalar_or_param("high", 1.0);
-        let mode = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(v)) => (*v).min((SMOOTHSTEP_MODES.len() - 1) as u32),
-            Some(ParamValue::Float(f)) => (f.round() as u32).min((SMOOTHSTEP_MODES.len() - 1) as u32),
-            _ => 0,
-        };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -103,8 +96,8 @@ impl Primitive for SmoothstepTexture {
         let uniforms = SmoothstepUniforms {
             low,
             high,
-            mode,
             _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -154,6 +147,18 @@ mod tests {
         assert!(!ins[2].required);
         assert_eq!(ins[2].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(SmoothstepTexture::OUTPUTS.len(), 1);
+    }
+
+    #[test]
+    fn smoothstep_texture_has_no_mode_param_so_no_state_can_disable_low_or_high() {
+        // Regression: the old Mode = Range | Bipolar enum gated `low`
+        // off in Bipolar — a documented dead-param state. The fix was
+        // to delete the mode and let users compose bipolar via a
+        // negate math node. If a future commit reintroduces a mode
+        // here, that's a §7 invariant violation; this test pins the
+        // shape.
+        let names: Vec<&str> = SmoothstepTexture::PARAMS.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["low", "high"]);
     }
 
     #[test]
