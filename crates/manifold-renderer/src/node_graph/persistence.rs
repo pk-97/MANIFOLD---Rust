@@ -70,6 +70,9 @@ impl From<ParamValue> for SerializedParamValue {
             ParamValue::Vec4(value) => Self::Vec4 { value },
             ParamValue::Color(value) => Self::Color { value },
             ParamValue::Enum(value) => Self::Enum { value },
+            ParamValue::Table(t) => Self::Table {
+                rows: t.rows().to_vec(),
+            },
         }
     }
 }
@@ -89,6 +92,16 @@ impl From<SerializedParamValue> for ParamValue {
             SerializedParamValue::Vec4 { value } => Self::Vec4(value),
             SerializedParamValue::Color { value } => Self::Color(value),
             SerializedParamValue::Enum { value } => Self::Enum(value),
+            SerializedParamValue::Table { rows } => {
+                // Dimensionally-invalid tables fall back to a sentinel
+                // 1×1 zero table — the load path already logs invalid
+                // params; we don't want to crash a partially-valid graph.
+                let data = crate::node_graph::parameters::TableData::new(rows)
+                    .unwrap_or_else(|| {
+                        crate::node_graph::parameters::TableData::new(vec![vec![0.0]]).unwrap()
+                    });
+                Self::Table(std::sync::Arc::new(data))
+            }
         }
     }
 }
@@ -397,7 +410,11 @@ impl EffectGraphDefExt for EffectGraphDef {
             .map(|inst| {
                 let mut params = BTreeMap::new();
                 for def in inst.node.parameters() {
-                    let value = inst.params.get(def.name).copied().unwrap_or(def.default);
+                    let value = inst
+                        .params
+                        .get(def.name)
+                        .cloned()
+                        .unwrap_or_else(|| def.default.clone());
                     params.insert(def.name.to_string(), value.into());
                 }
                 // Walk outputs and serialize any node-declared format
@@ -514,7 +531,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                         param: key.clone(),
                     });
                 };
-                let pv: ParamValue = (*value).into();
+                let pv: ParamValue = value.clone().into();
                 let got = param_type_label(&pv);
                 if got != expected {
                     return Err(LoadError::ParamTypeMismatch {
@@ -669,6 +686,7 @@ fn param_type_label(v: &ParamValue) -> &'static str {
         ParamValue::Vec4(_) => "Vec4",
         ParamValue::Color(_) => "Color",
         ParamValue::Enum(_) => "Enum",
+        ParamValue::Table(_) => "Table",
     }
 }
 
@@ -789,11 +807,11 @@ mod tests {
         let inst = g2.get_node(thresh2).unwrap();
         // Param value survives.
         assert_eq!(
-            inst.params.get("level").copied().unwrap(),
+            inst.params.get("level").cloned().unwrap(),
             ParamValue::Float(0.8)
         );
         assert_eq!(
-            inst.params.get("softness").copied().unwrap(),
+            inst.params.get("softness").cloned().unwrap(),
             ParamValue::Float(0.05)
         );
 
@@ -1227,7 +1245,12 @@ mod tests {
 
     #[test]
     fn serialized_param_value_round_trips_every_variant() {
-        let cases = [
+        let table = crate::node_graph::parameters::TableData::new(vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+        ])
+        .unwrap();
+        let cases: Vec<ParamValue> = vec![
             ParamValue::Float(0.5),
             ParamValue::Float(7.0),
             ParamValue::Bool(true),
@@ -1236,9 +1259,10 @@ mod tests {
             ParamValue::Vec4([1.0, 2.0, 3.0, 4.0]),
             ParamValue::Color([0.1, 0.2, 0.3, 1.0]),
             ParamValue::Enum(3),
+            ParamValue::Table(std::sync::Arc::new(table)),
         ];
         for v in cases {
-            let s: SerializedParamValue = v.into();
+            let s: SerializedParamValue = v.clone().into();
             let json = serde_json::to_string(&s).unwrap();
             let back: SerializedParamValue = serde_json::from_str(&json).unwrap();
             let v2: ParamValue = back.into();

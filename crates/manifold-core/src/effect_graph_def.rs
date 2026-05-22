@@ -150,7 +150,7 @@ pub struct EffectGraphWire {
 ///
 /// Conversions to/from the renderer's `ParamValue` live in
 /// `manifold_renderer::node_graph::persistence`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
 pub enum SerializedParamValue {
     Float { value: f32 },
@@ -161,6 +161,10 @@ pub enum SerializedParamValue {
     Vec4 { value: [f32; 4] },
     Color { value: [f32; 4] },
     Enum { value: u32 },
+    /// Read-only N×M `f32` table. JSON shape:
+    /// `{"type":"Table","rows":[[1.0, 2.0], [3.0, 4.0]]}`. All rows
+    /// must have the same length; rejected on load otherwise.
+    Table { rows: Vec<Vec<f32>> },
 }
 
 impl EffectGraphDef {

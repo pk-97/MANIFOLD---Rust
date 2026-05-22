@@ -25,6 +25,17 @@
 //! *presentation* hint — it tells the editor to render a whole-number
 //! stepper, format without decimals, and round-on-drag — but storage
 //! doesn't need to redundantly enforce the constraint.
+//!
+//! ## Tables — preset N×M data, JSON-authored only
+//!
+//! [`ParamValue::Table`] carries fixed-shape preset data (rows × cols of
+//! `f32`) — e.g. a pose table indexed by clip trigger. Tables are read-only
+//! after deserialize and are wrapped in an `Arc` so cloning is one atomic
+//! increment regardless of size. The editor surfaces a read-only summary
+//! ("Table N×M"); editing happens in JSON until a second consumer
+//! materializes and earns a proper grid widget.
+
+use std::sync::Arc;
 
 /// Type of a parameter knob on an [`EffectNode`](crate::node_graph::EffectNode).
 ///
@@ -43,6 +54,56 @@ pub enum ParamType {
     Color,
     /// Index into the parameter definition's `enum_values` list.
     Enum,
+    /// Read-only N×M `f32` table — set in JSON, surfaced as a readonly
+    /// summary in the editor. See module docs.
+    Table,
+}
+
+/// Read-only N×M `f32` table.
+///
+/// All rows have the same length, enforced by [`TableData::new`]. Cloning
+/// the wrapping `Arc<TableData>` is O(1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableData {
+    rows: Vec<Vec<f32>>,
+    cols: usize,
+}
+
+impl TableData {
+    /// Build a table. Returns `None` if rows are dimensionally inconsistent
+    /// or empty.
+    pub fn new(rows: Vec<Vec<f32>>) -> Option<Self> {
+        if rows.is_empty() {
+            return None;
+        }
+        let cols = rows[0].len();
+        if cols == 0 || !rows.iter().all(|r| r.len() == cols) {
+            return None;
+        }
+        Some(Self { rows, cols })
+    }
+
+    #[inline]
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    #[inline]
+    pub fn col_count(&self) -> usize {
+        self.cols
+    }
+
+    /// Borrow row `i`. Returns `None` if out of bounds.
+    #[inline]
+    pub fn row(&self, i: usize) -> Option<&[f32]> {
+        self.rows.get(i).map(|r| r.as_slice())
+    }
+
+    /// Borrow the full row slice for iteration.
+    #[inline]
+    pub fn rows(&self) -> &[Vec<f32>] {
+        &self.rows
+    }
 }
 
 /// Runtime value of one parameter.
@@ -52,7 +113,11 @@ pub enum ParamType {
 /// [`ParamValue::as_u32_clamped`] when reading; they're the single
 /// point of truth for coercion and shield primitives from the "did
 /// this come in as Int or Float" question that no longer exists.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// `Table` carries `Arc<TableData>` so cloning is O(1) regardless of
+/// table size. The variant is non-`Copy`, which propagates to
+/// `ParamValue` itself.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParamValue {
     Float(f32),
     Bool(bool),
@@ -61,6 +126,7 @@ pub enum ParamValue {
     Vec4([f32; 4]),
     Color([f32; 4]),
     Enum(u32),
+    Table(Arc<TableData>),
 }
 
 impl ParamValue {
@@ -96,6 +162,15 @@ impl ParamValue {
         self.as_scalar()
             .map(|f| f.round().max(min as f32) as u32)
     }
+
+    /// Borrow as a table. Returns `None` for non-Table variants.
+    #[inline]
+    pub fn as_table(&self) -> Option<&TableData> {
+        match self {
+            ParamValue::Table(t) => Some(t),
+            _ => None,
+        }
+    }
 }
 
 /// Static description of one parameter on an
@@ -117,4 +192,51 @@ pub struct ParamDef {
 
     /// Discrete options for `ParamType::Enum`. Empty for non-Enum types.
     pub enum_values: &'static [&'static str],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_data_rejects_empty_or_ragged_rows() {
+        assert!(TableData::new(vec![]).is_none(), "empty rejected");
+        assert!(TableData::new(vec![vec![]]).is_none(), "zero-cols rejected");
+        assert!(
+            TableData::new(vec![vec![1.0, 2.0], vec![3.0]]).is_none(),
+            "ragged rejected"
+        );
+    }
+
+    #[test]
+    fn table_data_round_trips_rows_and_cols() {
+        let t = TableData::new(vec![vec![0.0, 90.0, 180.0], vec![45.0, 135.0, 225.0]]).unwrap();
+        assert_eq!(t.row_count(), 2);
+        assert_eq!(t.col_count(), 3);
+        assert_eq!(t.row(0), Some(&[0.0, 90.0, 180.0][..]));
+        assert_eq!(t.row(1), Some(&[45.0, 135.0, 225.0][..]));
+        assert_eq!(t.row(2), None);
+    }
+
+    #[test]
+    fn param_value_table_accessor_returns_only_for_table_variant() {
+        let t = Arc::new(TableData::new(vec![vec![1.0]]).unwrap());
+        assert!(ParamValue::Table(t.clone()).as_table().is_some());
+        assert!(ParamValue::Float(0.5).as_table().is_none());
+        assert!(ParamValue::Bool(true).as_table().is_none());
+        assert!(ParamValue::Enum(0).as_table().is_none());
+    }
+
+    #[test]
+    fn param_value_table_clone_shares_arc() {
+        let t = Arc::new(TableData::new(vec![vec![1.0, 2.0]]).unwrap());
+        let a = ParamValue::Table(Arc::clone(&t));
+        let b = a.clone();
+        // Both Param values point at the same underlying data — cheap clone.
+        if let (ParamValue::Table(ta), ParamValue::Table(tb)) = (&a, &b) {
+            assert!(Arc::ptr_eq(ta, tb), "clone must share Arc");
+        } else {
+            panic!("expected Table variants");
+        }
+    }
 }

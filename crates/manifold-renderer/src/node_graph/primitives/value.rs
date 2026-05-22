@@ -120,7 +120,7 @@ mod tests {
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
 
-        let observed = *seen.lock().unwrap();
+        let observed = seen.lock().unwrap().clone();
         assert!(
             matches!(observed, Some(ParamValue::Float(f)) if (f - 0.42).abs() < 1e-6),
             "expected ScalarSink to see 0.42 through Value→sink wire, got {observed:?}"

@@ -240,7 +240,7 @@ impl Backend for MockBackend {
     }
 
     fn scalar(&self, slot: Slot) -> Option<ParamValue> {
-        self.scalars.get(&slot).copied()
+        self.scalars.get(&slot).cloned()
     }
 
     fn set_scalar(&mut self, slot: Slot, value: ParamValue) {

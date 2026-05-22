@@ -1138,7 +1138,7 @@ mod binding_seed_tests {
         let radius = blur
             .params
             .get("radius")
-            .copied()
+            .cloned()
             .expect("Blur primitive exposes `radius` param");
 
         assert_eq!(
@@ -1398,7 +1398,7 @@ mod user_binding_tests {
         let rotation = cg
             .graph
             .get_node(*xform_id)
-            .and_then(|n| n.params.get("rotation").copied())
+            .and_then(|n| n.params.get("rotation").cloned())
             .expect("Transform exposes a `rotation` param");
 
         assert_eq!(
@@ -1459,7 +1459,7 @@ mod user_binding_tests {
         let rotation = cg
             .graph
             .get_node(*xform_id)
-            .and_then(|n| n.params.get("rotation").copied())
+            .and_then(|n| n.params.get("rotation").cloned())
             .expect("Transform exposes a `rotation` param");
         assert_eq!(
             rotation,

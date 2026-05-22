@@ -577,7 +577,7 @@ impl Command for SetGraphNodeParamCommand {
     fn execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
         let param_name = self.param_name.clone();
-        let new_value = self.new_value;
+        let new_value = self.new_value.clone();
         let prev_already_captured = self.previous_value.is_some();
         // Closure return: `Option<SerializedParamValue>` — None if the
         // key didn't exist before the insert, Some(prev) if it did.

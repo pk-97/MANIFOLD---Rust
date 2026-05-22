@@ -266,7 +266,7 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_at_beats(beats));
-        let v = *seen.lock().unwrap();
+        let v = seen.lock().unwrap().clone();
         match v {
             Some(ParamValue::Float(f)) => f,
             _ => panic!("LFO did not emit a Float value: {v:?}"),
@@ -315,7 +315,7 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_at(beats, seconds));
-        match *seen.lock().unwrap() {
+        match seen.lock().unwrap().clone() {
             Some(ParamValue::Float(f)) => f,
             v => panic!("LFO did not emit a Float: {v:?}"),
         }

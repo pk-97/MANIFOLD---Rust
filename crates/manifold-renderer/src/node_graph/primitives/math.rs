@@ -193,7 +193,7 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
-        match *seen.lock().unwrap() {
+        match seen.lock().unwrap().clone() {
             Some(ParamValue::Float(f)) => f,
             v => panic!("Math did not emit a Float: {v:?}"),
         }

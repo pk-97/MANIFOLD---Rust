@@ -170,11 +170,11 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
-        let a = match *seen_a.lock().unwrap() {
+        let a = match seen_a.lock().unwrap().clone() {
             Some(ParamValue::Float(f)) => f,
             v => panic!("a port did not emit a Float: {v:?}"),
         };
-        let b = match *seen_b.lock().unwrap() {
+        let b = match seen_b.lock().unwrap().clone() {
             Some(ParamValue::Float(f)) => f,
             v => panic!("b port did not emit a Float: {v:?}"),
         };
@@ -273,7 +273,7 @@ mod tests {
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
         // Row 2 (a=2.0) wins because the wire takes priority.
-        let a = match *seen_a.lock().unwrap() {
+        let a = match seen_a.lock().unwrap().clone() {
             Some(ParamValue::Float(f)) => f,
             v => panic!("a did not emit a Float: {v:?}"),
         };

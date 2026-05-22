@@ -349,10 +349,15 @@ mod tests {
     fn parameter_defaults_match_declared_types() {
         // Catches typos like `default: ParamValue::Float(...)` on a
         // `ty: ParamType::Vec3` parameter.
+        //
+        // `ParamType::Table` is allowed to declare a `Float(_)` sentinel
+        // default — Tables can't live in static-const `ParamValue` (Arc
+        // isn't const-constructible), so primitives that take a Table
+        // param ship a placeholder that's overridden by the JSON preset.
         for p in all_primitives() {
             for def in p.parameters() {
                 let ok = matches!(
-                    (def.ty, def.default),
+                    (def.ty, &def.default),
                     (ParamType::Float, ParamValue::Float(_))
                         | (ParamType::Int, ParamValue::Float(_))
                         | (ParamType::Bool, ParamValue::Bool(_))
@@ -361,6 +366,8 @@ mod tests {
                         | (ParamType::Vec4, ParamValue::Vec4(_))
                         | (ParamType::Color, ParamValue::Color(_))
                         | (ParamType::Enum, ParamValue::Enum(_))
+                        | (ParamType::Table, ParamValue::Float(_))
+                        | (ParamType::Table, ParamValue::Table(_))
                 );
                 assert!(
                     ok,
@@ -536,7 +543,7 @@ mod tests {
             // Synthesize a default-param bag matching `parameters()`.
             let mut params: AHashMap<&'static str, ParamValue> = AHashMap::default();
             for def in node.parameters() {
-                params.insert(def.name, def.default);
+                params.insert(def.name, def.default.clone());
             }
             // Pretend every Array input was bound at a large but finite
             // capacity. Same-as-input transforms should resolve against

@@ -137,6 +137,10 @@ pub struct ParamSnapshot {
     /// `ToggleNodeParamExposeCommand`. Works the same for Effect-
     /// hosted and Generator-hosted graphs (no fork on target type).
     pub exposed: bool,
+    /// Free-form summary text for non-numeric params (currently only
+    /// `Table` — rendered as `"6×5"` in the inspector). `None` for
+    /// numeric params, which render `current_value` instead.
+    pub summary: Option<String>,
 }
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
@@ -243,8 +247,14 @@ impl GraphSnapshot {
                         let current = inst
                             .params
                             .get(pd.name)
-                            .copied()
-                            .unwrap_or(pd.default);
+                            .cloned()
+                            .unwrap_or_else(|| pd.default.clone());
+                        let summary = match &current {
+                            ParamValue::Table(t) => {
+                                Some(format!("{}×{}", t.row_count(), t.col_count()))
+                            }
+                            _ => None,
+                        };
                         ParamSnapshot {
                             name: pd.name.to_string(),
                             label: pd.label.to_string(),
@@ -263,6 +273,7 @@ impl GraphSnapshot {
                                 None
                             },
                             exposed: inst.exposed_params.contains(pd.name),
+                            summary,
                         }
                     })
                     .collect();
@@ -384,9 +395,11 @@ fn param_default_to_f32(value: &ParamValue) -> f32 {
             }
         }
         ParamValue::Enum(u) => *u as f32,
-        ParamValue::Vec2(_) | ParamValue::Vec3(_) | ParamValue::Vec4(_) | ParamValue::Color(_) => {
-            0.0
-        }
+        ParamValue::Vec2(_)
+        | ParamValue::Vec3(_)
+        | ParamValue::Vec4(_)
+        | ParamValue::Color(_)
+        | ParamValue::Table(_) => 0.0,
     }
 }
 

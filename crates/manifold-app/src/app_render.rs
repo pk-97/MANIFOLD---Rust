@@ -679,7 +679,7 @@ impl Application {
                             eid.clone(),
                             *node_id,
                             param_name.clone(),
-                            *new_value,
+                            new_value.clone(),
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
@@ -2204,6 +2204,7 @@ fn build_graph_editor_view(
             current_value: p.current_value,
             range: p.range,
             enum_labels: p.enum_labels.clone(),
+            summary: p.summary.clone(),
         })
         .collect();
     Some(GraphEditorNodeView {

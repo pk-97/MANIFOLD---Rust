@@ -73,6 +73,10 @@ pub struct GraphEditorParam {
     /// Enum option labels indexed by enum value, for rendering
     /// "FoldX" instead of `6`. `None` for non-enum params.
     pub enum_labels: Option<Vec<String>>,
+    /// Free-form summary for non-numeric params (currently only
+    /// `Table` — rendered as `"6×5"` in the inspector). `None` for
+    /// numeric params, which render `current_value` instead.
+    pub summary: Option<String>,
 }
 
 /// UI-facing view of the currently-selected node, decoupled from the
@@ -917,8 +921,12 @@ fn value_cell_click_to_param(
 
 /// Format the current value of an inner-node parameter for display
 /// in the right sidebar. Enums resolve to their label (e.g., "FoldX"),
-/// bools to "true"/"false", and numerics to a short fixed-point form.
+/// bools to "true"/"false", numerics to a short fixed-point form, and
+/// `summary`-bearing params (Tables) render their summary string.
 fn format_inner_param_value(p: &GraphEditorParam) -> String {
+    if let Some(summary) = &p.summary {
+        return summary.clone();
+    }
     match p.kind {
         GraphEditorParamKind::Enum => p
             .enum_labels
@@ -986,6 +994,7 @@ mod tests {
                     current_value: 0.0,
                     range: Some((-1.0, 1.0)),
                     enum_labels: None,
+                    summary: None,
                 },
                 GraphEditorParam {
                     name: "scale".to_string(),
@@ -995,6 +1004,7 @@ mod tests {
                     current_value: 1.0,
                     range: Some((0.0, 4.0)),
                     enum_labels: None,
+                    summary: None,
                 },
                 GraphEditorParam {
                     name: "color".to_string(),
@@ -1004,6 +1014,7 @@ mod tests {
                     current_value: 0.0,
                     range: None,
                     enum_labels: None,
+                    summary: None,
                 },
             ],
         }
@@ -1260,6 +1271,7 @@ mod tests {
                     current_value: 1.0,
                     range: Some((0.0, 4.0)),
                     enum_labels: None,
+                    summary: None,
                 },
                 GraphEditorParam {
                     name: "enabled".to_string(),
@@ -1269,6 +1281,7 @@ mod tests {
                     current_value: 0.0,
                     range: None,
                     enum_labels: None,
+                    summary: None,
                 },
                 GraphEditorParam {
                     name: "mode".to_string(),
@@ -1282,6 +1295,7 @@ mod tests {
                         "FoldY".into(),
                         "FoldBoth".into(),
                     ]),
+                    summary: None,
                 },
             ],
         }

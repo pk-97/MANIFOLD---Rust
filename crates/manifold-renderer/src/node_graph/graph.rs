@@ -34,7 +34,7 @@ impl NodeInstance {
     fn new(id: NodeInstanceId, node: Box<dyn EffectNode>) -> Self {
         let mut params = AHashMap::default();
         for def in node.parameters() {
-            params.insert(def.name, def.default);
+            params.insert(def.name, def.default.clone());
         }
         Self {
             id,

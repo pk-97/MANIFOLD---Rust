@@ -157,6 +157,11 @@ pub fn splice_def_into_chain(
                     | SerializedParamValue::Vec3 { .. }
                     | SerializedParamValue::Vec4 { .. }
                     | SerializedParamValue::Color { .. } => None,
+                    SerializedParamValue::Table { rows } => {
+                        crate::node_graph::parameters::TableData::new(rows.clone()).map(|t| {
+                            crate::node_graph::ParamValue::Table(std::sync::Arc::new(t))
+                        })
+                    }
                 };
                 if let Some(pv) = pv
                     && let Some(static_name) = resolve_param_name(graph, chain_id, param_name)
