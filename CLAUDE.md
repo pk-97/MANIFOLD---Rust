@@ -96,7 +96,8 @@ No per-frame allocations on hot paths (engine tick, sync, rendering). Use pre-al
 
 - Search with `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries (signatures, impl blocks, macro invocations). For symbol-level questions on Rust code — "where is this defined", "what calls this", "what implements this trait" — prefer the LSP tool (`goToDefinition`, `findReferences`, `incomingCalls`, `goToImplementation`) over `rg`; it catches trait dispatch and qualified paths that text search misses.
 - Runtime bugs (callbacks, event ordering, timing): add `println!`/`eprintln!`, reproduce, read logs. Static analysis is for compile errors only.
-- Pre-commit: `cargo clippy --workspace -- -D warnings` && `cargo test --workspace`.
+- Testing scope — default to the narrowest scope that covers what you changed: per-effect parity (`cargo test -p manifold-renderer --test parity <effect>::`), per-primitive gpu_tests (`cargo test -p manifold-renderer --lib <module_path>::`), or per-crate lib (`cargo test -p <crate> --lib`). Full `cargo test --workspace` is reserved for changes whose blast radius exceeds one effect or one primitive — the parity harness, graph runtime, `manifold-gpu`, `manifold-core` effect/generator/param types, shared WGSL headers, `Cargo.lock`, or a completed decomposition (legacy deletion / registry change / adjacent-primitive extension). Pre-push is *not* a trigger by itself — pushes happen on every change here, so "before push" collapses into "always" and defeats the scope rule. The workspace run is GPU-bound and minutes long; the focused runs are seconds. When unsure whether a change is local or infrastructure, treat it as infrastructure and run the full sweep — the cost of running unnecessarily is far less than the cost of missing a regression on the parity-tested path.
+- Linting (`cargo clippy --workspace -- -D warnings`) is cheap; always run it before commit.
 
 ## Agents
 
