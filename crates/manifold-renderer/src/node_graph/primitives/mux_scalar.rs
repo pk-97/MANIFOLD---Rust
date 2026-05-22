@@ -36,8 +36,21 @@ crate::primitive! {
             range: Some((0.0, 7.0)),
             enum_values: &[],
         },
+        // Per-slot inline defaults — port-shadows-param for each input.
+        // When `in_N` is unwired, the matching `in_N` param drives the
+        // value. Default 0.0 keeps the legacy behaviour for slots whose
+        // param isn't set explicitly. Lets a preset author plug in
+        // static constants without spinning up a Value node per slot.
+        ParamDef { name: "in_0", label: "In 0", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_1", label: "In 1", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_2", label: "In 2", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_3", label: "In 3", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_4", label: "In 4", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_5", label: "In 5", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_6", label: "In 6", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
+        ParamDef { name: "in_7", label: "In 7", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1e6, 1e6)), enum_values: &[] },
     ],
-    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. Unwired data inputs (in_N) default to 0.0. No GPU dispatch. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert; the unwired-selected-slot case is a graph-editor authoring concern (separate work).",
+    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. Each `in_N` is also port-shadows-param: wire to override, or set the matching inline `in_N` param for a static constant (avoids a Value-node-per-slot in the JSON). Unwired + unset = 0.0. No GPU dispatch. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert; the unwired-selected-slot case is a graph-editor authoring concern (separate work).",
     examples: [],
     picker: { label: "Mux (scalar)", category: Atom },
 }
@@ -56,10 +69,9 @@ impl Primitive for MuxScalar {
         let port_names = [
             "in_0", "in_1", "in_2", "in_3", "in_4", "in_5", "in_6", "in_7",
         ];
-        let value = match ctx.inputs.scalar(port_names[raw_idx]) {
-            Some(ParamValue::Float(f)) => f,
-            _ => 0.0,
-        };
+        // Port-shadows-param per slot: wire wins, otherwise fall back
+        // to the matching inline `in_N` param (default 0.0).
+        let value = ctx.scalar_or_param(port_names[raw_idx], 0.0);
         ctx.outputs.set_scalar("out", ParamValue::Float(value));
     }
 }

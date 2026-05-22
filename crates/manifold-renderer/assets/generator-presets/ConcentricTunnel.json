@@ -1,0 +1,205 @@
+{
+  "version": 2,
+  "name": "ConcentricTunnel",
+  "description": "Concentric polygon rings expanding outward from the centre — decomposed from the legacy `ConcentricTunnelGenerator` Rust struct into the curated primitive library.\n\n`node.polygon_shape` produces one polygon outline (Circle = 32-gon, Triangle, Square, Pentagon, or Hexagon — the legacy Star variant is removed); `node.concentric_outlines` stacks K scaled copies driven by an `expansion` scalar so the stack drifts outward over time and new rings emerge at the centre; `node.render_lines` draws the stack with the legacy line + dot semantics.\n\nThe legacy clip-trigger split into Shape/Spawn/Both modes is collapsed into a single on/off toggle: when `clip_trigger` is on, both effects happen at once (shapes cycle through polygon_shape's [3, 4, 5, 6, 8, 12] sequence on each retrigger, AND each trigger adds to the expansion so a fresh ring emerges). Legacy `clip_trigger_mode` is dropped — call out in the migration if a project relied on Spawn-only semantics. Legacy outer-card `scale` is renamed to `ring_spacing` with a different scale; old projects will need to retune.",
+  "presetMetadata": {
+    "id": "ConcentricTunnel",
+    "displayName": "Concentric Tunnel",
+    "category": "Procedural",
+    "oscPrefix": "concentricTunnel",
+    "legacyDiscriminant": 5,
+    "available": true,
+    "isLineBased": true,
+    "params": [
+      {
+        "id": "shape",
+        "name": "Shape",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "shape",
+        "valueLabels": ["Circle", "Triangle", "Square", "Pentagon", "Hexagon"]
+      },
+      {
+        "id": "line",
+        "name": "Line",
+        "min": 0.0005,
+        "max": 0.03,
+        "defaultValue": 0.008,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4",
+        "oscSuffix": "line"
+      },
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "rate",
+        "valueLabels": ["1/4", "1/2", "1", "2", "4"]
+      },
+      {
+        "id": "ring_spacing",
+        "name": "Ring Spacing",
+        "min": 0.05,
+        "max": 0.3,
+        "defaultValue": 0.12,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "ringSpacing"
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "F0",
+        "oscSuffix": "clipTrigger"
+      }
+    ],
+    "paramAliases": [
+      { "old": "scale", "new": "ring_spacing" }
+    ],
+    "bindings": [
+      { "id": "shape", "label": "Shape", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mux_n_sides", "param": "selector" },
+        "convert": { "type": "Float" } },
+      { "id": "line", "label": "Line", "defaultValue": 0.008,
+        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "convert": { "type": "Float" } },
+      { "id": "rate", "label": "Rate", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "mux_ring_freq", "param": "selector" },
+        "convert": { "type": "Float" } },
+      { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
+        "target": { "kind": "handleNode", "handle": "stack", "param": "ring_spacing" },
+        "convert": { "type": "Float" } },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
+        "convert": { "type": "BoolThreshold" } },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "spawn_gate", "param": "b" },
+        "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    {
+      "id": 1, "typeId": "node.mux_scalar", "handle": "mux_n_sides",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 32.0 },
+        "in_1":     { "type": "Float", "value": 3.0 },
+        "in_2":     { "type": "Float", "value": 4.0 },
+        "in_3":     { "type": "Float", "value": 5.0 },
+        "in_4":     { "type": "Float", "value": 6.0 }
+      }
+    },
+    {
+      "id": 2, "typeId": "node.mux_scalar", "handle": "mux_ring_freq",
+      "params": {
+        "selector": { "type": "Float", "value": 2.0 },
+        "in_0":     { "type": "Float", "value": 4.0 },
+        "in_1":     { "type": "Float", "value": 2.0 },
+        "in_2":     { "type": "Float", "value": 1.0 },
+        "in_3":     { "type": "Float", "value": 0.5 },
+        "in_4":     { "type": "Float", "value": 0.25 }
+      }
+    },
+    {
+      "id": 3, "typeId": "node.math", "handle": "base_expansion",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 4, "typeId": "node.math", "handle": "spawn_gate",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 5, "typeId": "node.math", "handle": "expansion",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 0 }
+      }
+    },
+    {
+      "id": 6, "typeId": "node.polygon_shape", "handle": "shape",
+      "params": {
+        "n_sides":       { "type": "Int",   "value": 32 },
+        "size":          { "type": "Float", "value": 1.0 },
+        "rotation":      { "type": "Float", "value": 0.0 },
+        "clip_trigger":  { "type": "Bool",  "value": false },
+        "trigger_count": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 7, "typeId": "node.concentric_outlines", "handle": "stack",
+      "params": {
+        "expansion":    { "type": "Float", "value": 0.0 },
+        "ring_count":   { "type": "Int",   "value": 8 },
+        "ring_spacing": { "type": "Float", "value": 0.12 }
+      }
+    },
+    {
+      "id": 8, "typeId": "node.render_lines", "handle": "render",
+      "params": {
+        "edge_thickness":    { "type": "Float", "value": 0.008 },
+        "closed_loop":       { "type": "Bool",  "value": false },
+        "show_verts":        { "type": "Bool",  "value": false },
+        "vert_size":         { "type": "Float", "value": 1.0   },
+        "animate":           { "type": "Bool",  "value": false },
+        "speed":             { "type": "Float", "value": 1.0   },
+        "window":            { "type": "Float", "value": 0.1   },
+        "beat_flash_amount": { "type": "Float", "value": 0.0   },
+        "color_r":           { "type": "Float", "value": 1.0   },
+        "color_g":           { "type": "Float", "value": 1.0   },
+        "color_b":           { "type": "Float", "value": 1.0   },
+        "color_a":           { "type": "Float", "value": 1.0   }
+      }
+    },
+    { "id": 9, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "n_sides" },
+
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 6, "toPort": "trigger_count" },
+
+    { "fromNode": 0, "fromPort": "beat", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out",  "toNode": 3, "toPort": "b" },
+
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "a" },
+
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
+
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "expansion" },
+
+    { "fromNode": 6, "fromPort": "outline", "toNode": 7, "toPort": "outline" },
+    { "fromNode": 6, "fromPort": "edges",   "toNode": 7, "toPort": "edges"   },
+
+    { "fromNode": 7, "fromPort": "outline", "toNode": 8, "toPort": "points" },
+    { "fromNode": 7, "fromPort": "edges",   "toNode": 8, "toPort": "edges"  },
+
+    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+  ]
+}

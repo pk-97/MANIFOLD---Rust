@@ -25,6 +25,7 @@ mod color;
 mod color_grade;
 mod color_sample;
 mod compose;
+mod concentric_outlines;
 mod convolution_2d_9tap;
 mod depth_estimate_midas;
 mod depth_of_field;
@@ -146,6 +147,7 @@ pub use color::{
 pub use color_grade::ColorGrade;
 pub use color_sample::ColorSample;
 pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
+pub use concentric_outlines::{CONCENTRIC_MAX_RING_COUNT, ConcentricOutlines};
 pub use convolution_2d_9tap::Convolution2D9Tap;
 pub use depth_estimate_midas::DepthEstimateMidas;
 pub use depth_of_field::{

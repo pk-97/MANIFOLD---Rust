@@ -40,22 +40,33 @@ inventory::submit! {
 // drift class structurally (no two sources to keep in sync).
 
 // ── Concentric Tunnel ──────────────────────────────────────────────────
+//
+// Migrated to the §11 unified-registry path: canonical schema lives in
+// `assets/generator-presets/ConcentricTunnel.json` (line-rendered
+// concentric polygon rings via polygon_shape + concentric_outlines +
+// render_lines). The legacy SDF-based generator with Star variant and
+// 3-mode clip_trigger split is gone. The new schema has 5 outer-card
+// params (Star removed, clip_trigger_mode dropped, legacy `scale`
+// renamed to `ring_spacing`). The inventory entry below matches the
+// new schema; JSON overrides it at runtime in renderer-linking
+// processes. Saved-project migration: `scale` → `ring_spacing` via
+// the JSON's paramAliases, `clip_trigger_mode` drops silently (the
+// 3 modes are collapsed into a single on/off toggle).
 
 inventory::submit! {
     GeneratorMetadata {
         id: GeneratorTypeId::CONCENTRIC_TUNNEL,
         display_name: "Concentric Tunnel",
-        is_line_based: false,
+        is_line_based: true,
         available: true,
         osc_prefix: "concentricTunnel",
         legacy_discriminant: Some(5),
         params: &[
-            ParamSpec::whole_labels("shape", "Shape", 0.0, 5.0, 0.0, &["Circle","Triangle","Square","Pentagon","Hexagon","Star"], "shape"),
+            ParamSpec::whole_labels("shape", "Shape", 0.0, 4.0, 0.0, &["Circle","Triangle","Square","Pentagon","Hexagon"], "shape"),
             ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.008, "F4", "line"),
-            ParamSpec::whole_labels("rate", "Rate", 0.0, 4.0, 2.0, &["1/4","1/2","1","2","4"], "speed"),
-            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::whole_labels("rate", "Rate", 0.0, 4.0, 2.0, &["1/4","1/2","1","2","4"], "rate"),
+            ParamSpec::continuous("ring_spacing", "Ring Spacing", 0.05, 0.3, 0.12, "F2", "ringSpacing"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
-            ParamSpec::whole_labels("clip_trigger_mode", "Clip Trigger Mode", 0.0, 2.0, 0.0, &["Shape","Spawn","Both"], "clipTriggerMode"),
         ],
         string_params: &[],
     }
