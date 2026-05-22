@@ -676,6 +676,17 @@ impl Layer {
 
     /// Change generator type, clearing params/drivers/envelopes.
     /// Unity Layer.cs lines 554-559.
+    ///
+    /// Also clears any per-layer `generator_graph` override and bumps
+    /// `generator_graph_version`. The override is shape-specific to the
+    /// previous type — leaving it in place caused the renderer's
+    /// per-frame override-version sweep to rebuild the new-type generator
+    /// from the old type's graph, so a Plasma→Lissajous switch would
+    /// keep rendering Plasma (or a Wireframe→BasicShapes switch would
+    /// render wireframe polyhedra with the BasicShapes outer-card values
+    /// jammed into them, producing huge white blobs). Callers that need
+    /// to undo a type change snapshot the old graph alongside the old
+    /// params and restore both together.
     pub fn change_generator_type(&mut self, new_type: GeneratorTypeId) {
         if self.layer_type != LayerType::Generator {
             return;
@@ -684,6 +695,10 @@ impl Layer {
             .gen_params
             .get_or_insert_with(GeneratorParamState::default);
         gp.change_type(new_type.clone());
+        if self.generator_graph.take().is_some() {
+            self.generator_graph_version =
+                self.generator_graph_version.wrapping_add(1);
+        }
     }
 
     /// Restore generator state from snapshot.

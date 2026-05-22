@@ -409,6 +409,14 @@ pub struct ChangeGeneratorTypeCommand {
     old_params: Vec<f32>,
     old_drivers: Option<Vec<ParameterDriver>>,
     old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
+    /// Snapshot of `Layer::generator_graph` captured on first execute.
+    /// `Layer::change_generator_type` clears the per-layer graph
+    /// override (it's shape-specific to the previous type); undo
+    /// reinstates the snapshot so redos that reuse this command don't
+    /// lose the user's graph edits. Set on first execute, replayed on
+    /// every undo.
+    old_graph: Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    captured_old_graph: bool,
 }
 
 impl ChangeGeneratorTypeCommand {
@@ -427,6 +435,8 @@ impl ChangeGeneratorTypeCommand {
             old_params,
             old_drivers,
             old_envelopes,
+            old_graph: None,
+            captured_old_graph: false,
         }
     }
 }
@@ -434,6 +444,10 @@ impl ChangeGeneratorTypeCommand {
 impl Command for ChangeGeneratorTypeCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            if !self.captured_old_graph {
+                self.old_graph = layer.generator_graph.clone();
+                self.captured_old_graph = true;
+            }
             layer.change_generator_type(self.new_type.clone());
         }
     }
@@ -446,6 +460,9 @@ impl Command for ChangeGeneratorTypeCommand {
                 self.old_drivers.clone(),
                 self.old_envelopes.clone(),
             );
+            layer.generator_graph = self.old_graph.clone();
+            layer.generator_graph_version =
+                layer.generator_graph_version.wrapping_add(1);
         }
     }
 
@@ -466,6 +483,14 @@ pub struct PasteGeneratorCommand {
     new_params: Vec<f32>,
     new_drivers: Option<Vec<ParameterDriver>>,
     new_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
+    /// Snapshot of the destination layer's `generator_graph` captured
+    /// on first execute. Paste replaces the layer's generator state
+    /// with the source's; any pre-paste graph override is shape-
+    /// specific to the destination's previous type and would otherwise
+    /// be reused by the renderer's per-frame override-version sweep,
+    /// rendering the old generator with the pasted outer-card values.
+    old_graph: Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    captured_old_graph: bool,
 }
 
 impl PasteGeneratorCommand {
@@ -490,6 +515,8 @@ impl PasteGeneratorCommand {
             new_params,
             new_drivers,
             new_envelopes,
+            old_graph: None,
+            captured_old_graph: false,
         }
     }
 }
@@ -497,12 +524,20 @@ impl PasteGeneratorCommand {
 impl Command for PasteGeneratorCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            if !self.captured_old_graph {
+                self.old_graph = layer.generator_graph.clone();
+                self.captured_old_graph = true;
+            }
             layer.restore_generator_state(
                 self.new_type.clone(),
                 self.new_params.clone(),
                 self.new_drivers.clone(),
                 self.new_envelopes.clone(),
             );
+            if layer.generator_graph.take().is_some() {
+                layer.generator_graph_version =
+                    layer.generator_graph_version.wrapping_add(1);
+            }
         }
     }
 
@@ -514,6 +549,9 @@ impl Command for PasteGeneratorCommand {
                 self.old_drivers.clone(),
                 self.old_envelopes.clone(),
             );
+            layer.generator_graph = self.old_graph.clone();
+            layer.generator_graph_version =
+                layer.generator_graph_version.wrapping_add(1);
         }
     }
 

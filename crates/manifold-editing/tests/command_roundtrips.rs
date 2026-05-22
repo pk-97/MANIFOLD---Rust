@@ -502,6 +502,93 @@ fn change_generator_type_undo_roundtrip() {
     assert_eq!(project.timeline.layers[1].snapshot_gen_params().len(), 3);
 }
 
+/// Regression for the "Lissajous renders as wireframe / BasicShapes
+/// shows a huge white blob after switching from another generator"
+/// bug class. The renderer's per-frame override-version sweep was
+/// rebuilding the new-type generator from the previous type's stale
+/// `Layer::generator_graph` — so a Plasma → Tesseract type swap kept
+/// rendering the Plasma graph, and a Wireframe → BasicShapes swap
+/// rendered wireframe polyhedra with BasicShapes' four outer-card
+/// values jammed into the wireframe bindings (rotate_x_speed=0.015,
+/// line=1.0 → a massive white shape covering the screen).
+///
+/// `Layer::change_generator_type` now clears the per-layer graph
+/// override and bumps `generator_graph_version`, and
+/// `ChangeGeneratorTypeCommand` snapshots the cleared graph so undo
+/// reinstates whatever the user had edited before the type swap.
+#[test]
+fn change_generator_type_clears_and_restores_graph_override() {
+    use manifold_core::effect_graph_def::EffectGraphDef;
+
+    let mut project = make_test_project();
+    // Layer 1 is a generator layer in make_test_project.
+    let gp = project.timeline.layers[1].gen_params_or_init();
+    gp.restore(GeneratorTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
+
+    // Plant a non-empty per-layer graph override + version, simulating
+    // a user who edited the Plasma graph through the editor.
+    let stale_graph = EffectGraphDef {
+        version: 2,
+        name: Some("stale-plasma".into()),
+        description: None,
+        preset_metadata: None,
+        nodes: Vec::new(),
+        wires: Vec::new(),
+    };
+    project.timeline.layers[1].generator_graph = Some(stale_graph.clone());
+    project.timeline.layers[1].generator_graph_version = 7;
+
+    let old_params = project.timeline.layers[1].snapshot_gen_params();
+    let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
+    let old_envelopes = project.timeline.layers[1].snapshot_gen_envelopes();
+    let layer_id = project.timeline.layers[1].layer_id.clone();
+
+    let mut cmd = ChangeGeneratorTypeCommand::new(
+        layer_id,
+        GeneratorTypeId::PLASMA,
+        GeneratorTypeId::TESSERACT,
+        old_params,
+        old_drivers,
+        old_envelopes,
+    );
+
+    cmd.execute(&mut project);
+
+    // After execute: type swapped + graph override cleared + version
+    // bumped so the renderer's per-frame sweep notices and rebuilds
+    // against the new type's bundled JSON instead of the stale graph.
+    assert_eq!(
+        *project.timeline.layers[1].generator_type(),
+        GeneratorTypeId::TESSERACT
+    );
+    assert!(
+        project.timeline.layers[1].generator_graph.is_none(),
+        "stale per-layer graph override must be cleared on type change \
+         (otherwise the renderer keeps drawing the previous generator)",
+    );
+    assert_ne!(
+        project.timeline.layers[1].generator_graph_version, 7,
+        "generator_graph_version must bump on clear so the renderer's \
+         per-frame override-version sweep rebuilds the generator",
+    );
+
+    cmd.undo(&mut project);
+
+    // After undo: original graph + version-bump restored. The exact
+    // version value isn't load-bearing (the renderer compares against
+    // its own cached snapshot), but it must be different from the
+    // post-execute value so the sweep detects the change.
+    assert_eq!(
+        *project.timeline.layers[1].generator_type(),
+        GeneratorTypeId::PLASMA
+    );
+    assert_eq!(
+        project.timeline.layers[1].generator_graph.as_ref().and_then(|g| g.name.as_deref()),
+        Some("stale-plasma"),
+        "undo must restore the pre-change graph override verbatim",
+    );
+}
+
 #[test]
 fn change_master_opacity_undo_roundtrip() {
     let mut project = make_test_project();
