@@ -1,0 +1,153 @@
+{
+  "version": 2,
+  "name": "Nested Cubes",
+  "description": "Nested Cubes — 5-instance gap-face cube field with EMA-smoothed Y-axis rotation, per-face scatter drift, and a per-face envelope-driven kick on every clip trigger. Isometric orthographic camera, two-pass render (solid black fill + white wire edges with depth bias).\n\nDecomposed from the legacy `NestedCubesGenerator` Rust struct into four primitives: `node.scalar_array_accumulator` advances all 5 target rotations by a uniform step on each trigger (envelope mode); `node.cycle_table_row` snaps the 5-tuple to one of 6 preset arrangements on each trigger (pose mode); `node.mux_array` gates which path drives `target_angles` via the `mode` outer-card param; `node.nested_cubes_geometry` does the EMA smoothing, scatter, kick, and dual-pass GPU render.\n\nAcknowledged delta vs legacy: the accumulator starts at all-zeros (cubes perfectly aligned at preset load) where the legacy started at `(0, 90, 180, 270, 360)`. Pose mode bit-matches legacy at preset load because the first table row is exactly the legacy initial spread. Identical behaviour from frame 1 onwards in both modes.",
+  "presetMetadata": {
+    "id": "NestedCubes",
+    "displayName": "Nested Cubes",
+    "category": "Procedural",
+    "oscPrefix": "nestedCubes",
+    "available": true,
+    "params": [
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "speed"
+      },
+      {
+        "id": "filter",
+        "name": "Filter",
+        "min": 0.1,
+        "max": 20.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1",
+        "oscSuffix": "filter"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.25,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "scale"
+      },
+      {
+        "id": "scatter",
+        "name": "Scatter",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "scatter"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "mode"
+      }
+    ],
+    "paramAliases": [
+      { "old": "clip_trigger_mode", "new": "mode" }
+    ],
+    "bindings": [
+      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "step_scale", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "filter", "label": "Filter", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "cubes", "param": "filter" },
+        "convert": { "type": "Float" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "cubes", "param": "scale" },
+        "convert": { "type": "Float" } },
+      { "id": "scatter", "label": "Scatter", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "cubes", "param": "scatter" },
+        "convert": { "type": "Float" } },
+      { "id": "mode", "label": "Mode", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "target_mux", "param": "selector" },
+        "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    {
+      "id": 1, "typeId": "node.math", "handle": "step_scale",
+      "params": {
+        "a":  { "type": "Float", "value": 1.0 },
+        "b":  { "type": "Float", "value": 90.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 2, "typeId": "node.scalar_array_accumulator", "handle": "envelope_acc",
+      "params": {
+        "increment": { "type": "Float", "value": 90.0 },
+        "capacity":  { "type": "Float", "value": 5.0 }
+      }
+    },
+    {
+      "id": 3, "typeId": "node.cycle_table_row", "handle": "pose_cycle",
+      "params": {
+        "table": { "type": "Table", "rows": [
+          [0.0,  90.0, 180.0, 270.0, 360.0],
+          [0.0,  45.0,  90.0, 135.0, 180.0],
+          [0.0,  72.0, 144.0, 216.0, 288.0],
+          [0.0,  30.0, 120.0, 210.0, 300.0],
+          [0.0,  60.0,  60.0, 120.0, 180.0],
+          [0.0,   0.0,  90.0,  90.0, 180.0]
+        ]}
+      }
+    },
+    {
+      "id": 4, "typeId": "node.mux_array", "handle": "target_mux",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 5, "typeId": "node.nested_cubes_geometry", "handle": "cubes",
+      "params": {
+        "filter":     { "type": "Float", "value": 2.0 },
+        "scale":      { "type": "Float", "value": 1.0 },
+        "scatter":    { "type": "Float", "value": 0.0 },
+        "decay_rate": { "type": "Float", "value": 10.0 }
+      }
+    },
+    { "id": 6, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "increment" },
+
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 2, "toPort": "trigger_count" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "trigger_count" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 5, "toPort": "trigger_count" },
+
+    { "fromNode": 0, "fromPort": "time", "toNode": 5, "toPort": "time" },
+
+    { "fromNode": 2, "fromPort": "accumulated", "toNode": 4, "toPort": "in_0" },
+    { "fromNode": 3, "fromPort": "row",         "toNode": 4, "toPort": "in_1" },
+
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "target_angles" },
+
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+  ]
+}

@@ -14,7 +14,6 @@ pub mod mesh_pipeline;
 pub mod metallic_glass;
 pub mod mri_volume;
 pub mod mri_volume_loader;
-pub mod nested_cubes;
 pub mod oily_fluid;
 pub mod oscilloscope_xy;
 pub mod particle_text;

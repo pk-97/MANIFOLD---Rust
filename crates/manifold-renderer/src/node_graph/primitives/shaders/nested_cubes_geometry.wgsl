@@ -1,18 +1,16 @@
-// Nested Cubes — instanced gap-face cubes with EMA-smoothed Y-axis rotation.
+// node.nested_cubes_geometry — instanced gap-face cubes with
+// EMA-smoothed Y-axis rotation + per-face scatter + envelope kick.
 //
-// **PARITY-TEST REFERENCE ONLY.** The legacy `NestedCubesGenerator`
-// Rust struct was deleted when NestedCubes migrated to a JSON preset
-// + `node.nested_cubes_geometry` primitive. The active shader lives
-// at `node_graph/primitives/shaders/nested_cubes_geometry.wgsl`
-// (verbatim copy). This file is retained so a future bit-exact GPU
-// parity test can `include_str!` it alongside the new primitive's
-// shader and verify they remain in sync.
+// Bit-exact port of the legacy generators/shaders/nested_cubes.wgsl —
+// uniform layout, vertex tables, transform composition, and dispatch
+// topology all match the legacy shader so a parity test compares pass
+// for pass.
 //
 // Geometry: 6 unwelded quads scaled 0.5 from their face centers.
 // 5 instances with ramp scaling (1.0 → 2.0) and lagged rotation.
 // Two-pass rendering:
-//   Pass 1 (vs_main): 36 triangle vertices — solid black occluders
-//   Pass 2 (vs_edges): 48 line vertices — white quad outlines
+//   Pass 1 (vs_main):  36 triangle vertices — solid black occluders
+//   Pass 2 (vs_edges): 48 line vertices    — white quad outlines
 //
 // Scatter parameter displaces each face to a random floating position.
 // At scatter=0 faces are in structured cube form, at scatter=1 fully scattered.
