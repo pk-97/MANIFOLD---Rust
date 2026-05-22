@@ -501,10 +501,16 @@ impl EffectGraphDefExt for EffectGraphDef {
             // Find the static param names + types so we can validate
             // overrides against the declared shape and resolve the
             // `&'static str` keys `Graph::set_param` expects.
-            let param_defs: Vec<(&'static str, &'static str)> = boxed
+            //
+            // Validation reads the declared `ParamType`, not the default
+            // value's variant. Table-typed params ship a `Float(0.0)`
+            // sentinel default (Arc isn't const-constructible) — falling
+            // back to the variant would reject every real Table value
+            // at load time.
+            let param_defs: Vec<(&'static str, crate::node_graph::parameters::ParamType)> = boxed
                 .parameters()
                 .iter()
-                .map(|p| (p.name, param_type_label(&p.default)))
+                .map(|p| (p.name, p.ty))
                 .collect();
 
             let runtime_id = if let Some(handle) = node_doc.handle.as_deref() {
@@ -522,7 +528,7 @@ impl EffectGraphDefExt for EffectGraphDef {
 
             // Apply parameter overrides.
             for (key, value) in &node_doc.params {
-                let Some(&(name_static, expected)) =
+                let Some(&(name_static, expected_ty)) =
                     param_defs.iter().find(|(n, _)| *n == key.as_str())
                 else {
                     return Err(LoadError::UnknownParam {
@@ -532,14 +538,13 @@ impl EffectGraphDefExt for EffectGraphDef {
                     });
                 };
                 let pv: ParamValue = value.clone().into();
-                let got = param_type_label(&pv);
-                if got != expected {
+                if !param_value_matches_type(&pv, expected_ty) {
                     return Err(LoadError::ParamTypeMismatch {
                         node_id: node_doc.id,
                         type_id: node_doc.type_id.clone(),
                         param: key.clone(),
-                        expected,
-                        got,
+                        expected: param_type_name(expected_ty),
+                        got: param_type_label(&pv),
                     });
                 }
                 // set_param can only fail with NodeNotFound (we just
@@ -687,6 +692,42 @@ fn param_type_label(v: &ParamValue) -> &'static str {
         ParamValue::Color(_) => "Color",
         ParamValue::Enum(_) => "Enum",
         ParamValue::Table(_) => "Table",
+    }
+}
+
+/// Tag for the declared `ParamType` side of a mismatch error.
+fn param_type_name(ty: crate::node_graph::parameters::ParamType) -> &'static str {
+    use crate::node_graph::parameters::ParamType;
+    match ty {
+        ParamType::Float => "Float",
+        ParamType::Int => "Int",
+        ParamType::Bool => "Bool",
+        ParamType::Vec2 => "Vec2",
+        ParamType::Vec3 => "Vec3",
+        ParamType::Vec4 => "Vec4",
+        ParamType::Color => "Color",
+        ParamType::Enum => "Enum",
+        ParamType::Table => "Table",
+    }
+}
+
+/// Whether an incoming `ParamValue` is a valid override for a declared
+/// [`ParamType`]. The Int collapse means `ParamType::Int` accepts a
+/// `ParamValue::Float` (storage is `Float` only since the Int variant
+/// was removed). Everything else is variant-for-variant.
+fn param_value_matches_type(v: &ParamValue, ty: crate::node_graph::parameters::ParamType) -> bool {
+    use crate::node_graph::parameters::ParamType;
+    match (ty, v) {
+        (ParamType::Float, ParamValue::Float(_)) => true,
+        (ParamType::Int, ParamValue::Float(_)) => true,
+        (ParamType::Bool, ParamValue::Bool(_)) => true,
+        (ParamType::Vec2, ParamValue::Vec2(_)) => true,
+        (ParamType::Vec3, ParamValue::Vec3(_)) => true,
+        (ParamType::Vec4, ParamValue::Vec4(_)) => true,
+        (ParamType::Color, ParamValue::Color(_)) => true,
+        (ParamType::Enum, ParamValue::Enum(_)) => true,
+        (ParamType::Table, ParamValue::Table(_)) => true,
+        _ => false,
     }
 }
 
