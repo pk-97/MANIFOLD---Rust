@@ -33,6 +33,13 @@ crate::primitive! {
     purpose: "Apply 4D rotation (XY, ZW, XW planes) to an Array<Vec4Vertex>. Matches generator_math::rotate_4d bit-for-bit. The transform stage of the 4D wireframe pipeline: producer → Rotate4D → renderer.",
     inputs: {
         in: Array(Vec4Vertex) required,
+        // Port-shadows-param: when a wire is connected, the wired
+        // value wins over the inline `angle_*` param. Lets the graph
+        // drive angles from time / LFO / math nodes without lifting
+        // each angle into a separate Value node. Mirrors rotate_3d.
+        angle_xy: ScalarF32 optional,
+        angle_zw: ScalarF32 optional,
+        angle_xw: ScalarF32 optional,
     },
     outputs: {
         out: Array(Vec4Vertex),
@@ -85,18 +92,9 @@ impl Primitive for Rotate4D {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let angle_xy = match ctx.params.get("angle_xy") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.6,
-        };
-        let angle_zw = match ctx.params.get("angle_zw") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.4,
-        };
-        let angle_xw = match ctx.params.get("angle_xw") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.25,
-        };
+        let angle_xy = ctx.scalar_or_param("angle_xy", 0.6);
+        let angle_zw = ctx.scalar_or_param("angle_zw", 0.4);
+        let angle_xw = ctx.scalar_or_param("angle_xw", 0.25);
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -159,15 +157,22 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn rotate_4d_declares_vec4_in_and_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+    fn rotate_4d_declares_vec4_in_and_three_optional_angle_inputs() {
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let layout = ArrayType {
             item_size: std::mem::size_of::<Vec4Vertex>() as u32,
             item_align: std::mem::align_of::<Vec4Vertex>() as u32,
         };
         assert_eq!(Rotate4D::TYPE_ID, "node.rotate_4d");
-        assert_eq!(Rotate4D::INPUTS.len(), 1);
+        assert_eq!(Rotate4D::INPUTS.len(), 4);
+        assert_eq!(Rotate4D::INPUTS[0].name, "in");
+        assert!(Rotate4D::INPUTS[0].required);
         assert_eq!(Rotate4D::INPUTS[0].ty, PortType::Array(layout));
+        for (i, name) in ["angle_xy", "angle_zw", "angle_xw"].iter().enumerate() {
+            assert_eq!(Rotate4D::INPUTS[i + 1].name, *name);
+            assert!(!Rotate4D::INPUTS[i + 1].required);
+            assert_eq!(Rotate4D::INPUTS[i + 1].ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(Rotate4D::OUTPUTS.len(), 1);
         assert_eq!(Rotate4D::OUTPUTS[0].ty, PortType::Array(layout));
     }

@@ -62,6 +62,17 @@ inventory::submit! {
 }
 
 // ── Tesseract ──────────────────────────────────────────────────────────
+//
+// Migrated to the §11 unified-registry path: canonical schema lives in
+// `assets/generator-presets/Tesseract.json` (with the new general-user
+// param names, `legacyDiscriminant: 4`, and `paramAliases` for legacy
+// `xy/zw/xw/verts/v_size/anim` names). The JSON-loaded preset
+// overrides this inventory entry at runtime in any process that links
+// manifold-renderer; the inventory remains as a fallback so upstream
+// test binaries that don't link the renderer (e.g.,
+// manifold-editing's `command_roundtrips`) still resolve TESSERACT
+// through `generator_definition_registry::get`. Same pattern as
+// Lissajous and WireframeZoo.
 
 inventory::submit! {
     GeneratorMetadata {
@@ -89,6 +100,11 @@ inventory::submit! {
 }
 
 // ── Duocylinder ────────────────────────────────────────────────────────
+//
+// Migrated to the §11 unified-registry path: canonical schema lives in
+// `assets/generator-presets/Duocylinder.json`. Inventory remains as
+// fallback for non-renderer-linking crates. See Tesseract above for
+// the rationale.
 
 inventory::submit! {
     GeneratorMetadata {

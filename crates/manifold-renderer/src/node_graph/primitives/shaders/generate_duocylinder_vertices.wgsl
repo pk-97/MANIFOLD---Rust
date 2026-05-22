@@ -1,14 +1,20 @@
 // node.generate_duocylinder_vertices — emit a parametric 4D torus
-// grid (duocylinder surface) into an Array<Vec4Vertex>.
+// grid (duocylinder surface) scaled to magnitude 0.25 (the curated
+// wireframe-fits-on-screen default matching legacy
+// generator_math::PROJ_SCALE) into an Array<Vec4Vertex>.
 //
 // Parameterised by (u, v) ∈ [0, 2π)² with grid_size steps each, giving
 // grid_size² vertices arranged in (u, v) row-major order: index =
-// iu * grid_size + iv. Coordinates: (cos u, sin u, cos v, sin v).
-// Matches legacy generators/duocylinder.rs CPU code bit-for-bit.
+// iu * grid_size + iv. Coordinates: (cos u, sin u, cos v, sin v)
+// * (0.25 / sqrt(2)).
 //
-// Downstream consumers (rotate_4d → project_4d) handle the rest of
-// the pipeline; edge connectivity (neighbors in u and v) is the
-// consumer's concern.
+// Why bake the scale here: vertices come out at magnitude 0.25 already
+// (every duocylinder point has |v| = sqrt(2) before the bake), so
+// downstream node.project_4d's `proj_scale` defaults to 1.0 — outer-
+// card Scale binds to it directly. Same pattern as
+// node.wireframe_shape and node.generate_tesseract_vertices. Note:
+// 4D perspective is non-linear in w, so this bake does not reproduce
+// the legacy generator's projected pixels bit-exactly.
 
 struct Uniforms {
     grid_size: u32,
@@ -41,5 +47,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let step = TAU / f32(n);
     let uu = f32(iu) * step;
     let vv = f32(iv) * step;
-    dst[idx].pos = vec4<f32>(cos(uu), sin(uu), cos(vv), sin(vv));
+    // 0.25 / sqrt(2) ≈ 0.176776695 — every duocylinder vertex has
+    // 4D magnitude sqrt(2), so this normalises to a 0.25 sphere.
+    let k = 0.176776695;
+    dst[idx].pos = vec4<f32>(cos(uu) * k, sin(uu) * k, cos(vv) * k, sin(vv) * k);
 }
