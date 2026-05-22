@@ -84,9 +84,12 @@ crate::primitive! {
         // EdgePair `(a, b)` in the buffer becomes one rendered line
         // segment from `points[a]` to `points[b]`. When absent, the
         // primitive falls back to the implicit sequential / closed-loop
-        // topology driven by the `closed_loop` param. Animation is
-        // disabled when explicit edges are wired (sequential window-
-        // based fade doesn't apply to topology-driven edges).
+        // topology driven by the `closed_loop` param. `animate` /
+        // `speed` / `window` work in both paths — when `edges` is
+        // wired the scrolling window walks edges in producer
+        // declaration order (matches legacy WireframeZoo / Tesseract /
+        // Duocylinder, all of which left projected_z at zero so the
+        // legacy depth-sort collapsed to identity).
         edges: Array(EdgePair) optional,
     },
     outputs: {
@@ -203,6 +206,11 @@ crate::primitive! {
         cpu_instances: Vec<EdgeInstance> = Vec::new(),
         vert_visible: Vec<bool> = Vec::new(),
         anim_progress: f32 = 0.0,
+        // Filtered edges (sentinels + out-of-range stripped) for the
+        // topology-driven animation path. Reused across frames; sized
+        // to the producer's edge count on each `build_instances_from_edges`
+        // call to keep the animation walk's modular arithmetic stable.
+        valid_edges: Vec<EdgePair> = Vec::new(),
     },
 }
 
@@ -351,44 +359,104 @@ impl RenderLines {
 
     /// Build per-instance edge data from an explicit `Array<EdgePair>`
     /// buffer (the topology-driven path used by wireframe-shape
-    /// generators). Each non-sentinel pair `(a, b)` becomes one
-    /// rendered segment with `alpha = 1`. Animation does not apply
-    /// here (no implicit edge ordering to scroll through); the caller
-    /// is responsible for forcing `animate=false` on this path.
+    /// generators). When `animate=false`, every non-sentinel pair
+    /// `(a, b)` becomes one rendered segment with `alpha = 1`. When
+    /// `animate=true`, the same scrolling window + fade from the
+    /// implicit-strip path walks edges in producer declaration order
+    /// — matches legacy WireframeZoo / Tesseract / Duocylinder, all
+    /// of which left `projected_z` at zero so the depth-sort in the
+    /// legacy pipeline collapsed to declaration order anyway. See
+    /// `crates/manifold-renderer/src/generators/line_pipeline.rs:277`
+    /// for the legacy reference.
     ///
     /// `show_verts=true` appends one degenerate (a==b) dot instance
-    /// per vertex that participates in at least one edge — matches
-    /// the legacy WireframeZoo behaviour where unconnected vertices
-    /// don't show dots.
+    /// per vertex that participates in at least one currently-visible
+    /// edge — matches the legacy behaviour where unconnected (or
+    /// animated-out) vertices don't show dots.
+    #[allow(clippy::too_many_arguments)]
     fn build_instances_from_edges(
         &mut self,
         edges: &[EdgePair],
         num_points: u32,
+        animate: bool,
+        speed: f32,
+        window: f32,
         show_verts: bool,
+        dt: f32,
     ) -> (u32, u32) {
         self.cpu_instances.clear();
         self.vert_visible.clear();
+        // Explicit-edge topology: a vertex is visible iff at least one
+        // currently-drawn edge touches it. Even in the non-animated
+        // path this stays `false` (legacy WireframeZoo behaviour:
+        // isolated vertices don't get dots).
         self.vert_visible.resize(num_points as usize, false);
 
+        // Filter sentinels + out-of-range indices once so the
+        // animation walk can index modulo a contiguous list rather
+        // than re-scanning every frame.
+        self.valid_edges.clear();
         for edge in edges {
-            // Sentinel slot — skip without touching vert_visible.
             if edge.a == u32::MAX {
                 continue;
             }
-            // Out-of-range index would cause the vertex shader to
-            // read garbage; skip with a single warn line per primitive
-            // instance rather than spam every frame.
             if edge.a >= num_points || edge.b >= num_points {
                 continue;
             }
-            self.cpu_instances.push(EdgeInstance {
-                a: edge.a,
-                b: edge.b,
-                alpha_bits: 1.0_f32.to_bits(),
-                _pad: 0,
-            });
-            self.vert_visible[edge.a as usize] = true;
-            self.vert_visible[edge.b as usize] = true;
+            self.valid_edges.push(*edge);
+        }
+
+        let segments_total = self.valid_edges.len() as u32;
+        if segments_total == 0 {
+            return (0, 0);
+        }
+
+        if animate {
+            // Same phase advance as `build_instances`: legacy formula
+            //   anim_progress += speed * (N/100) * dt * 60
+            // wrapping at `segments_total`. `window_edges` is the
+            // ceil-rounded count of edges to reveal, with one extra
+            // fading-in at the leading position.
+            self.anim_progress += speed * (segments_total as f32 / 100.0) * dt * 60.0;
+            let total = segments_total as f32;
+            if self.anim_progress >= total {
+                self.anim_progress -= total;
+            }
+            if self.anim_progress < 0.0 {
+                self.anim_progress += total;
+            }
+            let window_edges = ((segments_total as f32 * window).ceil() as usize).max(1);
+            let window_start = self.anim_progress.floor() as usize % segments_total as usize;
+            let fract = self.anim_progress.fract();
+
+            for offset in 0..=window_edges {
+                let sort_pos = (window_start + offset) % segments_total as usize;
+                let smooth_offset = offset as f32 - fract;
+                let fade = (1.0 - smooth_offset / window_edges as f32).clamp(0.0, 1.0);
+                if fade <= 0.0 {
+                    continue;
+                }
+                let edge = self.valid_edges[sort_pos];
+                self.cpu_instances.push(EdgeInstance {
+                    a: edge.a,
+                    b: edge.b,
+                    alpha_bits: fade.to_bits(),
+                    _pad: 0,
+                });
+                self.vert_visible[edge.a as usize] = true;
+                self.vert_visible[edge.b as usize] = true;
+            }
+        } else {
+            for edge in &self.valid_edges {
+                self.cpu_instances.push(EdgeInstance {
+                    a: edge.a,
+                    b: edge.b,
+                    alpha_bits: 1.0_f32.to_bits(),
+                    _pad: 0,
+                });
+                self.vert_visible[edge.a as usize] = true;
+                self.vert_visible[edge.b as usize] = true;
+            }
         }
 
         let num_edges = self.cpu_instances.len() as u32;
@@ -518,7 +586,15 @@ impl Primitive for RenderLines {
                 }
             };
             let _ = edge_count; // sanity: equals edges_slice.len() by construction
-            self.build_instances_from_edges(edges_slice, num_points, show_verts)
+            self.build_instances_from_edges(
+                edges_slice,
+                num_points,
+                animate,
+                speed,
+                window,
+                show_verts,
+                dt,
+            )
         } else {
             self.build_instances(
                 num_points,
@@ -767,7 +843,9 @@ mod tests {
             EdgePair::SENTINEL,
             EdgePair::SENTINEL,
         ];
-        let (n_edges, n_dots) = prim.build_instances_from_edges(&edges, 3, false);
+        let (n_edges, n_dots) = prim.build_instances_from_edges(
+            &edges, 3, /*animate*/ false, 1.0, 0.1, /*show_verts*/ false, 1.0 / 60.0,
+        );
         assert_eq!(n_edges, 3, "three valid pairs, two sentinels");
         assert_eq!(n_dots, 0);
         // All three EdgeInstances must reference valid vertex indices.
@@ -788,7 +866,9 @@ mod tests {
             EdgePair { a: 0, b: 1 },
             EdgePair { a: 5, b: 6 }, // out of range for num_points=3
         ];
-        let (n_edges, _) = prim.build_instances_from_edges(&edges, 3, false);
+        let (n_edges, _) = prim.build_instances_from_edges(
+            &edges, 3, /*animate*/ false, 1.0, 0.1, /*show_verts*/ false, 1.0 / 60.0,
+        );
         assert_eq!(n_edges, 1, "only the in-range pair survives");
     }
 
@@ -804,7 +884,9 @@ mod tests {
             EdgePair { a: 0, b: 1 },
             EdgePair { a: 1, b: 2 },
         ];
-        let (n_edges, n_dots) = prim.build_instances_from_edges(&edges, 4, true);
+        let (n_edges, n_dots) = prim.build_instances_from_edges(
+            &edges, 4, /*animate*/ false, 1.0, 0.1, /*show_verts*/ true, 1.0 / 60.0,
+        );
         assert_eq!(n_edges, 2);
         assert_eq!(n_dots, 3, "three connected vertices, vertex 3 stays hidden");
         // Each dot's a==b.
@@ -836,6 +918,109 @@ mod tests {
                 prim.vert_visible[inst.a as usize],
                 "dot at vertex {} that isn't marked visible",
                 inst.a
+            );
+        }
+    }
+
+    /// Regression for the "Animate / Speed / Window are exposed on
+    /// WireframeZoo's `render_lines` node but do nothing" bug. The
+    /// pre-fix `build_instances_from_edges` ignored animate entirely
+    /// because the topology-driven path was thought to need depth-
+    /// sorted reveal — but the legacy line_pipeline left `projected_z`
+    /// at zero on every wireframe generator (WireframeZoo, Tesseract,
+    /// Duocylinder), so the legacy "depth sort" collapsed to identity
+    /// and the visible animation was input-order reveal all along.
+    ///
+    /// Asserts: with 12 edges, window=0.1 + animate=true emits strictly
+    /// fewer instances than the full 12, AND each emitted instance
+    /// carries a non-default alpha (fade > 0, fade < 1 for at least
+    /// the trailing edge of the window) — both signals that the
+    /// animation walk actually ran.
+    #[test]
+    fn edges_wired_animate_reveals_a_window_not_the_whole_topology() {
+        let mut prim = RenderLines::new();
+        prim.anim_progress = 0.0;
+        // 12 edges forming an icosahedron-shaped topology (just enough
+        // to make a 0.1 window pick out a small subset).
+        let edges: Vec<EdgePair> = (0..12)
+            .map(|i| EdgePair { a: i, b: (i + 1) % 6 })
+            .collect();
+        let (n_edges, n_dots) = prim.build_instances_from_edges(
+            &edges, 6, /*animate*/ true, /*speed*/ 1.0, /*window*/ 0.1,
+            /*show_verts*/ false, 1.0 / 60.0,
+        );
+        assert!(
+            n_edges < 12,
+            "animated edges-wired path must reveal a subset of 12 edges, got {n_edges}",
+        );
+        assert!(n_edges >= 1, "the window always reveals at least one edge");
+        assert_eq!(n_dots, 0, "show_verts=false → no dots");
+
+        // Every instance must reference a valid vertex.
+        for i in 0..n_edges as usize {
+            let inst = prim.cpu_instances[i];
+            assert!(inst.a < 6 && inst.b < 6);
+            let fade = f32::from_bits(inst.alpha_bits);
+            assert!(
+                fade > 0.0 && fade <= 1.0,
+                "fade must be in (0, 1], got {fade} at instance {i}",
+            );
+        }
+    }
+
+    /// `anim_progress` must advance across frames in the edges-wired
+    /// path, otherwise the window scrolls at zero — the visible
+    /// symptom of forgetting to apply the `speed * (N/100) * dt * 60`
+    /// phase update in the topology path.
+    #[test]
+    fn edges_wired_animate_advances_anim_progress_each_frame() {
+        let mut prim = RenderLines::new();
+        prim.anim_progress = 0.0;
+        let edges: Vec<EdgePair> =
+            (0..10).map(|i| EdgePair { a: i, b: (i + 1) % 5 }).collect();
+        let dt = 1.0 / 60.0;
+
+        let _ = prim.build_instances_from_edges(
+            &edges, 5, true, /*speed*/ 2.0, 0.2, false, dt,
+        );
+        let progress_after_one_frame = prim.anim_progress;
+        assert!(
+            progress_after_one_frame > 0.0,
+            "anim_progress must advance on the first animated frame, got {progress_after_one_frame}",
+        );
+
+        let _ = prim.build_instances_from_edges(
+            &edges, 5, true, 2.0, 0.2, false, dt,
+        );
+        let progress_after_two_frames = prim.anim_progress;
+        assert!(
+            progress_after_two_frames > progress_after_one_frame,
+            "anim_progress must keep advancing, got {progress_after_one_frame} then {progress_after_two_frames}",
+        );
+    }
+
+    /// Without animation, the edges-wired path must emit every valid
+    /// edge with alpha=1 (the static-wireframe baseline that legacy
+    /// WireframeZoo defaults to). Guards against an over-eager refactor
+    /// later that always runs the animation walk.
+    #[test]
+    fn edges_wired_static_path_emits_every_valid_edge_full_alpha() {
+        let mut prim = RenderLines::new();
+        let edges = [
+            EdgePair { a: 0, b: 1 },
+            EdgePair { a: 1, b: 2 },
+            EdgePair { a: 2, b: 3 },
+            EdgePair { a: 3, b: 0 },
+        ];
+        let (n_edges, _) = prim.build_instances_from_edges(
+            &edges, 4, /*animate*/ false, 1.0, 0.1, false, 1.0 / 60.0,
+        );
+        assert_eq!(n_edges, 4);
+        for i in 0..4 {
+            assert_eq!(
+                f32::from_bits(prim.cpu_instances[i].alpha_bits),
+                1.0,
+                "static path must use alpha=1 on every edge",
             );
         }
     }
