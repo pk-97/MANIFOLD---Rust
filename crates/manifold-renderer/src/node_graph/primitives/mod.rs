@@ -77,6 +77,7 @@ mod optical_flow_estimate;
 mod peak;
 mod perlin_noise_2d;
 mod polar_field;
+mod polygon_shape;
 mod power_texture;
 mod project_3d;
 mod project_4d;
@@ -180,6 +181,10 @@ pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
 pub use generate_lissajous::GenerateLissajous;
+pub use polygon_shape::{
+    POLYGON_CYCLE_SIDES, POLYGON_MAX_MESH_VERTS, POLYGON_MAX_SIDES, POLYGON_MIN_SIDES,
+    PolygonShape,
+};
 pub use wireframe_shape::{
     WIREFRAME_MAX_EDGES, WIREFRAME_MAX_VERTS, WIREFRAME_SHAPE_COUNT, WIREFRAME_SHAPES,
     WireframeShape,
