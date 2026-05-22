@@ -92,6 +92,11 @@ pub enum ItemKind {
     /// "one u32 per cell" is real and shared across the
     /// `scatter_*` / `resolve_*` family.
     U32Slot,
+    /// Raw `f32` slot — variable-length numeric arrays, e.g. per-
+    /// instance rotation angles emitted by `cycle_table_row` and
+    /// `scalar_array_accumulator`, consumed by primitives that take
+    /// a target-pose buffer (e.g. `nested_cubes_geometry`).
+    F32Slot,
 }
 
 /// Compile-time descriptor for an item type that flows through an
@@ -111,6 +116,10 @@ pub trait KnownItem: bytemuck::Pod {
 
 impl KnownItem for u32 {
     const ITEM_KIND: ItemKind = ItemKind::U32Slot;
+}
+
+impl KnownItem for f32 {
+    const ITEM_KIND: ItemKind = ItemKind::F32Slot;
 }
 
 /// Layout descriptor for [`PortType::Array`] wires.
