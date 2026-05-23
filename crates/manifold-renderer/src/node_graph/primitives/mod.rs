@@ -124,6 +124,7 @@ mod smoothstep_texture;
 mod strobe;
 mod temporal;
 mod tone_map;
+mod torus_wrap_field;
 mod triangulate_grid;
 mod trigger_gate;
 mod uv;
@@ -279,6 +280,7 @@ pub use strobe::{
 };
 pub use temporal::{FEEDBACK_MODES, FEEDBACK_TYPE_ID, Feedback};
 pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
+pub use torus_wrap_field::TorusWrapField;
 pub use triangulate_grid::TriangulateGrid;
 pub use trigger_gate::TriggerGate;
 pub use uv::{
