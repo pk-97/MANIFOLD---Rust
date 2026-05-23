@@ -1,0 +1,234 @@
+{
+  "version": 2,
+  "name": "Oily Fluid",
+  "description": "Oily Fluid — decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) the velocity feedback gets H+V Gaussian blurred to form a smoothed gradient-search field; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90°) and self-advects the blurred velocity by the unblurred, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of 3D simplex noise injection, then carries the result back to the color feedback. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines) selected via `node.mux_texture` and graded by `node.color_grade`.\n\nKnown parity deltas vs legacy (documented per `DECOMPOSING_GENERATORS.md` §9): (1) ~2-frame state delay through `node.feedback` instead of legacy's same-frame ping-pong + swap — visually indistinguishable for the chaotic sim, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted — recover via the outer-card Hue / Saturation, (3) atomic decomposition runs more dispatches than the legacy's fused passes — accept small fp16 drift in iterated state, system is bounded (decay < 1) so errors fade rather than amplify, (4) the optional cs_seed warmup is skipped — sim evolves from black instead of layered noise so the look takes a few seconds to build.",
+  "presetMetadata": {
+    "id": "OilyFluid",
+    "displayName": "Oily Fluid",
+    "category": "Generator",
+    "oscPrefix": "oilyFluid",
+    "legacyDiscriminant": 24,
+    "available": true,
+    "params": [
+      { "id": "speed",     "name": "Speed",            "min": 0.1,   "max": 4.0,    "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "feedback",  "name": "Feedback",         "min": 0.95,  "max": 0.9999, "defaultValue": 0.998, "wholeNumbers": false, "isToggle": false, "formatString": "F4" },
+      { "id": "noise",     "name": "Noise",            "min": 0.0,   "max": 0.02,   "defaultValue": 0.002, "wholeNumbers": false, "isToggle": false, "formatString": "F4" },
+      { "id": "vel_damp",  "name": "Velocity Damp",    "min": 0.85,  "max": 0.999,  "defaultValue": 0.98,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
+      { "id": "curl",      "name": "Curl",             "min": 0.0,   "max": 1.0,    "defaultValue": 0.2,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "relief",    "name": "Relief",           "min": 0.05,  "max": 2.0,    "defaultValue": 0.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "chroma",    "name": "Chroma",           "min": 0.0,   "max": 8.0,    "defaultValue": 2.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "contrast",  "name": "Contrast",         "min": 0.5,   "max": 3.0,    "defaultValue": 1.4,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "hue",       "name": "Hue",              "min": 0.0,   "max": 1.0,    "defaultValue": 0.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "sat",       "name": "Saturation",       "min": 0.0,   "max": 2.0,    "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "bright",    "name": "Brightness",       "min": 0.0,   "max": 2.0,    "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "vel_disp",  "name": "Velocity Displace","min": 0.1,   "max": 10.0,   "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "col_disp",  "name": "Color Displace",   "min": 0.1,   "max": 10.0,   "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "mode",      "name": "Mode",             "min": 0.0,   "max": 4.0,    "defaultValue": 0.0,   "wholeNumbers": true,  "isToggle": false, "valueLabels": ["Oil Slick", "Flow Field", "Height Map", "PBR", "Lines"] }
+    ],
+    "bindings": [
+      { "id": "feedback", "label": "Feedback", "defaultValue": 0.998,
+        "target": { "kind": "handleNode", "handle": "color_retention", "param": "gain" },
+        "convert": { "type": "Float" } },
+      { "id": "noise", "label": "Noise", "defaultValue": 0.002,
+        "target": { "kind": "handleNode", "handle": "noise_inject_gain", "param": "gain" },
+        "convert": { "type": "Float" } },
+      { "id": "vel_damp", "label": "Velocity Damp", "defaultValue": 0.98,
+        "target": { "kind": "handleNode", "handle": "vel_damp_gain", "param": "gain" },
+        "convert": { "type": "Float" } },
+      { "id": "curl", "label": "Curl", "defaultValue": 0.2,
+        "target": { "kind": "handleNode", "handle": "curl_gain", "param": "gain" },
+        "convert": { "type": "Float" } },
+      { "id": "relief", "label": "Relief", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "normal_main", "param": "z_scale" },
+        "convert": { "type": "Float" } },
+      { "id": "chroma", "label": "Chroma", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "oilslick_chroma", "param": "amount" },
+        "convert": { "type": "Float" } },
+      { "id": "contrast", "label": "Contrast", "defaultValue": 1.4,
+        "target": { "kind": "handleNode", "handle": "grade", "param": "contrast" },
+        "convert": { "type": "Float" } },
+      { "id": "hue", "label": "Hue", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "grade", "param": "hue" },
+        "convert": { "type": "Float" } },
+      { "id": "sat", "label": "Saturation", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "grade", "param": "saturation" },
+        "convert": { "type": "Float" } },
+      { "id": "bright", "label": "Brightness", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "grade", "param": "gain" },
+        "convert": { "type": "Float" } },
+      { "id": "vel_disp", "label": "Velocity Displace", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "vel_advect", "param": "dt" },
+        "convert": { "type": "Float" } },
+      { "id": "col_disp", "label": "Color Displace", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "color_advect", "param": "dt" },
+        "convert": { "type": "Float" } },
+      { "id": "mode", "label": "Mode", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mode_mux", "param": "selector" },
+        "convert": { "type": "EnumRound" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
+
+    { "id": 1,  "typeId": "node.feedback", "handle": "feedback_color" },
+    { "id": 2,  "typeId": "node.feedback", "handle": "feedback_velocity" },
+
+    { "id": 3,  "typeId": "node.abs_texture", "handle": "abs_color" },
+    { "id": 4,  "typeId": "node.gradient_central_diff", "handle": "grad_r", "params": { "channel": { "type": "Enum", "value": 0 } } },
+    { "id": 5,  "typeId": "node.gradient_central_diff", "handle": "grad_g", "params": { "channel": { "type": "Enum", "value": 1 } } },
+    { "id": 6,  "typeId": "node.normalize_vec2", "handle": "norm_r" },
+    { "id": 7,  "typeId": "node.normalize_vec2", "handle": "norm_g" },
+    { "id": 8,  "typeId": "node.mix", "handle": "grad_sum",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 9,  "typeId": "node.gain", "handle": "curl_gain", "params": { "gain": { "type": "Float", "value": 0.2 } } },
+    { "id": 10, "typeId": "node.rotate_vec2_90", "handle": "curl_rotate",
+      "params": { "direction": { "type": "Enum", "value": 0 } } },
+
+    { "id": 11, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_h",
+      "params": { "width_sample": { "type": "Float", "value": 1.0 }, "max_radius": { "type": "Float", "value": 32.0 }, "axis": { "type": "Enum", "value": 0 } } },
+    { "id": 12, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_v",
+      "params": { "width_sample": { "type": "Float", "value": 1.0 }, "max_radius": { "type": "Float", "value": 32.0 }, "axis": { "type": "Enum", "value": 1 } } },
+
+    { "id": 13, "typeId": "node.texture_advect", "handle": "vel_advect",
+      "params": { "dt": { "type": "Float", "value": 0.5 }, "boundary": { "type": "Enum", "value": 0 } } },
+    { "id": 14, "typeId": "node.gain", "handle": "vel_damp_gain", "params": { "gain": { "type": "Float", "value": 0.98 } } },
+    { "id": 15, "typeId": "node.mix", "handle": "vel_combine",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+
+    { "id": 16, "typeId": "node.texture_advect", "handle": "color_advect",
+      "params": { "dt": { "type": "Float", "value": 1.0 }, "boundary": { "type": "Enum", "value": 0 } } },
+    { "id": 17, "typeId": "node.gain", "handle": "color_retention", "params": { "gain": { "type": "Float", "value": 0.998 } } },
+
+    { "id": 18, "typeId": "node.simplex_field_2d", "handle": "noise_r",
+      "params": { "scale_x": { "type": "Float", "value": 3.0 }, "scale_y": { "type": "Float", "value": 3.0 }, "offset_x": { "type": "Float", "value": 0.0 }, "offset_y": { "type": "Float", "value": 0.0 }, "z": { "type": "Float", "value": 0.0 }, "output_channel": { "type": "Enum", "value": 0 } } },
+    { "id": 19, "typeId": "node.simplex_field_2d", "handle": "noise_g",
+      "params": { "scale_x": { "type": "Float", "value": 3.0 }, "scale_y": { "type": "Float", "value": 3.0 }, "offset_x": { "type": "Float", "value": 31.7 }, "offset_y": { "type": "Float", "value": 17.3 }, "z": { "type": "Float", "value": 0.0 }, "output_channel": { "type": "Enum", "value": 1 } } },
+    { "id": 20, "typeId": "node.mix", "handle": "noise_combine",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 21, "typeId": "node.gain", "handle": "noise_inject_gain", "params": { "gain": { "type": "Float", "value": 0.002 } } },
+
+    { "id": 22, "typeId": "node.mix", "handle": "color_combine",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+
+    { "id": 23, "typeId": "node.length_vec2", "handle": "heightmap" },
+    { "id": 24, "typeId": "node.heightmap_to_normal", "handle": "normal_main",
+      "params": { "z_scale": { "type": "Float", "value": 0.5 } } },
+
+    { "id": 25, "typeId": "node.chromatic_displace", "handle": "oilslick_chroma",
+      "params": { "amount": { "type": "Float", "value": 2.0 } } },
+    { "id": 26, "typeId": "node.abs_texture", "handle": "oilslick_abs" },
+
+    { "id": 27, "typeId": "node.lic_integrate", "handle": "flow_lic",
+      "params": { "steps": { "type": "Int", "value": 16 }, "dt": { "type": "Float", "value": 2.0 } } },
+
+    { "id": 28, "typeId": "node.heightmap_to_normal", "handle": "normal_flat",
+      "params": { "z_scale": { "type": "Float", "value": 0.1 } } },
+    { "id": 29, "typeId": "node.lambert_directional", "handle": "lambert",
+      "params": { "light_x": { "type": "Float", "value": 0.4 }, "light_y": { "type": "Float", "value": 0.6 }, "light_z": { "type": "Float", "value": 0.7 }, "ambient": { "type": "Float", "value": 0.1 } } },
+
+    { "id": 30, "typeId": "node.matcap_two_tone", "handle": "matcap",
+      "params": {
+        "color_y_low":  { "type": "Color", "value": [0.08, 0.05, 0.22, 1.0] },
+        "color_y_high": { "type": "Color", "value": [0.55, 0.75, 0.95, 1.0] },
+        "color_x_low":  { "type": "Color", "value": [0.25, 0.10, 0.45, 1.0] },
+        "color_x_high": { "type": "Color", "value": [0.15, 0.55, 0.60, 1.0] }
+      } },
+    { "id": 31, "typeId": "node.fresnel_rim", "handle": "fresnel",
+      "params": { "view_x": { "type": "Float", "value": 0.0 }, "view_y": { "type": "Float", "value": 0.0 }, "view_z": { "type": "Float", "value": 1.0 }, "power": { "type": "Float", "value": 3.0 }, "color": { "type": "Color", "value": [0.55, 0.30, 0.85, 1.0] } } },
+    { "id": 32, "typeId": "node.blinn_specular", "handle": "blinn",
+      "params": { "light_x": { "type": "Float", "value": 0.35 }, "light_y": { "type": "Float", "value": 0.55 }, "light_z": { "type": "Float", "value": 0.75 }, "view_x": { "type": "Float", "value": 0.0 }, "view_y": { "type": "Float", "value": 0.0 }, "view_z": { "type": "Float", "value": 1.0 }, "power": { "type": "Float", "value": 48.0 }, "color": { "type": "Color", "value": [1.0, 0.95, 1.0, 1.0] } } },
+    { "id": 33, "typeId": "node.mix", "handle": "pbr_base_rim",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 34, "typeId": "node.mix", "handle": "pbr_plus_spec",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+
+    { "id": 35, "typeId": "node.hash_noise_field_2d", "handle": "lines_ink",
+      "params": { "scale": { "type": "Float", "value": 1024.0 }, "offset_x": { "type": "Float", "value": 4096.0 }, "offset_y": { "type": "Float", "value": 4096.0 } } },
+    { "id": 36, "typeId": "node.lic_integrate", "handle": "lines_lic",
+      "params": { "steps": { "type": "Int", "value": 20 }, "dt": { "type": "Float", "value": 1.5 } } },
+    { "id": 37, "typeId": "node.smoothstep_texture", "handle": "lines_threshold",
+      "params": { "low": { "type": "Float", "value": 0.45 }, "high": { "type": "Float", "value": 0.62 } } },
+
+    { "id": 38, "typeId": "node.mux_texture", "handle": "mode_mux",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 39, "typeId": "node.color_grade", "handle": "grade",
+      "params": {
+        "gain":        { "type": "Float", "value": 1.0 },
+        "saturation":  { "type": "Float", "value": 1.0 },
+        "hue":         { "type": "Float", "value": 0.0 },
+        "contrast":    { "type": "Float", "value": 1.4 }
+      } },
+
+    { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1,  "fromPort": "out", "toNode": 3,  "toPort": "in" },
+    { "fromNode": 3,  "fromPort": "out", "toNode": 4,  "toPort": "in" },
+    { "fromNode": 3,  "fromPort": "out", "toNode": 5,  "toPort": "in" },
+    { "fromNode": 4,  "fromPort": "out", "toNode": 6,  "toPort": "in" },
+    { "fromNode": 5,  "fromPort": "out", "toNode": 7,  "toPort": "in" },
+    { "fromNode": 6,  "fromPort": "out", "toNode": 8,  "toPort": "a" },
+    { "fromNode": 7,  "fromPort": "out", "toNode": 8,  "toPort": "b" },
+    { "fromNode": 8,  "fromPort": "out", "toNode": 9,  "toPort": "in" },
+    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "in" },
+
+    { "fromNode": 2,  "fromPort": "out", "toNode": 11, "toPort": "source" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "source" },
+
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 13, "toPort": "velocity" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 15, "toPort": "b" },
+
+    { "fromNode": 15, "fromPort": "out", "toNode": 2,  "toPort": "in" },
+
+    { "fromNode": 1,  "fromPort": "out", "toNode": 16, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "velocity" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "in" },
+
+    { "fromNode": 18, "fromPort": "out", "toNode": 20, "toPort": "a" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "b" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "in" },
+
+    { "fromNode": 17, "fromPort": "out", "toNode": 22, "toPort": "a" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 22, "toPort": "b" },
+
+    { "fromNode": 22, "fromPort": "out", "toNode": 1,  "toPort": "in" },
+
+    { "fromNode": 1,  "fromPort": "out", "toNode": 23, "toPort": "in" },
+    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "in" },
+
+    { "fromNode": 24, "fromPort": "out", "toNode": 25, "toPort": "in" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 25, "toPort": "velocity" },
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "in" },
+    { "fromNode": 26, "fromPort": "out", "toNode": 38, "toPort": "in_0" },
+
+    { "fromNode": 23, "fromPort": "out", "toNode": 27, "toPort": "source" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 27, "toPort": "velocity" },
+    { "fromNode": 27, "fromPort": "out", "toNode": 38, "toPort": "in_1" },
+
+    { "fromNode": 23, "fromPort": "out", "toNode": 28, "toPort": "in" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 29, "toPort": "normal" },
+    { "fromNode": 29, "fromPort": "out", "toNode": 38, "toPort": "in_2" },
+
+    { "fromNode": 24, "fromPort": "out", "toNode": 30, "toPort": "normal" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 31, "toPort": "normal" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 32, "toPort": "normal" },
+    { "fromNode": 30, "fromPort": "out", "toNode": 33, "toPort": "a" },
+    { "fromNode": 31, "fromPort": "out", "toNode": 33, "toPort": "b" },
+    { "fromNode": 33, "fromPort": "out", "toNode": 34, "toPort": "a" },
+    { "fromNode": 32, "fromPort": "out", "toNode": 34, "toPort": "b" },
+    { "fromNode": 34, "fromPort": "out", "toNode": 38, "toPort": "in_3" },
+
+    { "fromNode": 35, "fromPort": "out", "toNode": 36, "toPort": "source" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 36, "toPort": "velocity" },
+    { "fromNode": 36, "fromPort": "out", "toNode": 37, "toPort": "in" },
+    { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "in_4" },
+
+    { "fromNode": 38, "fromPort": "out", "toNode": 39, "toPort": "in" },
+    { "fromNode": 39, "fromPort": "out", "toNode": 40, "toPort": "in" }
+  ]
+}

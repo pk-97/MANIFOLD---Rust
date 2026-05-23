@@ -168,22 +168,7 @@ fn instance_rotation_jitter_composed_validates() {
     );
 }
 
-/// Validates the composed (particle_common + oily_fluid) source as dispatched
-/// at runtime. Skipped by the standalone sweep because it depends on
-/// particle_common for `simplex_noise_3d` / `wang_hash`.
-#[test]
-fn oily_fluid_composed_validates() {
-    let common = include_str!("../src/generators/shaders/particle_common.wgsl");
-    let oily = include_str!("../src/generators/shaders/oily_fluid.wgsl");
-    let composed = format!("{common}\n{oily}");
-
-    let module = naga::front::wgsl::parse_str(&composed)
-        .unwrap_or_else(|e| panic!("oily_fluid composed parse error: {e}"));
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    );
-    validator
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("oily_fluid composed validation error: {e}"));
-}
+// `oily_fluid` was decomposed into atomic primitives; the all-in-one
+// shader composition no longer exists. The component primitives
+// (simplex_field_2d, gradient_central_diff, texture_advect, etc.) are
+// each validated by the all-WGSL sweep above.
