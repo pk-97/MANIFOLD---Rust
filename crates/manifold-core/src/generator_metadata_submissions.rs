@@ -44,14 +44,13 @@ inventory::submit! {
 // Migrated to the §11 unified-registry path: canonical schema lives in
 // `assets/generator-presets/ConcentricTunnel.json` (line-rendered
 // concentric polygon rings via polygon_shape + concentric_outlines +
-// render_lines). The legacy SDF-based generator with Star variant and
-// 3-mode clip_trigger split is gone. The new schema has 5 outer-card
-// params (Star removed, clip_trigger_mode dropped, legacy `scale`
-// renamed to `ring_spacing`). The inventory entry below matches the
-// new schema; JSON overrides it at runtime in renderer-linking
-// processes. Saved-project migration: `scale` → `ring_spacing` via
-// the JSON's paramAliases, `clip_trigger_mode` drops silently (the
-// 3 modes are collapsed into a single on/off toggle).
+// render_lines). The legacy SDF-based generator with Star variant is
+// gone; the legacy 3-mode clip_trigger split returns as `trigger_mode`
+// (Shape/Spawn/Both) with the master `clip_trigger` toggle layered on
+// top. The inventory entry below matches the JSON; JSON overrides it
+// at runtime in renderer-linking processes. Saved-project migration:
+// `scale` → `ring_spacing` and `clip_trigger_mode` → `trigger_mode`
+// via the JSON's paramAliases.
 
 inventory::submit! {
     GeneratorMetadata {
@@ -67,6 +66,7 @@ inventory::submit! {
             ParamSpec::whole_labels("rate", "Rate", 0.0, 4.0, 2.0, &["1/4","1/2","1","2","4"], "rate"),
             ParamSpec::continuous("ring_spacing", "Ring Spacing", 0.05, 0.3, 0.12, "F2", "ringSpacing"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
+            ParamSpec::whole_labels("trigger_mode", "Trigger Mode", 0.0, 2.0, 2.0, &["Shape","Spawn","Both"], "triggerMode"),
         ],
         string_params: &[],
     }

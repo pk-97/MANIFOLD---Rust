@@ -192,14 +192,15 @@ fn generator_param_count_plasma() {
 // `every_bundled_preset_binding_resolves_to_an_outer_param` sweep.
 #[test]
 fn generator_param_count_concentric_tunnel() {
-    // Post-§11 migration: 5 outer-card params (Circle/Triangle/Square/
-    // Pentagon/Hexagon — Star removed; legacy `scale` renamed to
-    // `ring_spacing`; legacy `clip_trigger_mode` dropped). JSON is at
+    // 6 outer-card params: shape (Circle/Triangle/Square/Pentagon/
+    // Hexagon — Star removed), line, rate, ring_spacing (renamed from
+    // legacy `scale`), clip_trigger, trigger_mode (Shape/Spawn/Both,
+    // restored from the legacy `clip_trigger_mode`). JSON is at
     // `assets/generator-presets/ConcentricTunnel.json`; the inventory
     // entry in manifold-core's generator_metadata_submissions matches.
     assert_eq!(
         generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count,
-        5
+        6
     );
 }
 #[test]

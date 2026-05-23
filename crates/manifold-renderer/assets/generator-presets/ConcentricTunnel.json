@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ConcentricTunnel",
-  "description": "Concentric polygon rings expanding outward from the centre — decomposed from the legacy `ConcentricTunnelGenerator` Rust struct into the curated primitive library.\n\n`node.polygon_shape` produces one polygon outline (Circle = 64-gon, Triangle, Square, Pentagon, or Hexagon — the legacy Star variant is removed); `node.concentric_outlines` stacks K=16 scaled copies driven by an `expansion` scalar so the stack drifts outward over time and new rings emerge from the centre at radius 0; `node.render_lines` draws the stack with the legacy line + dot semantics.\n\nThe legacy clip-trigger split into Shape/Spawn/Both modes is collapsed into a single on/off toggle: when `clip_trigger` is on, both effects happen at once (shapes cycle through polygon_shape's [3, 4, 5, 6, 8, 12] sequence on each retrigger, AND each trigger adds to the expansion so a fresh ring emerges). Legacy `clip_trigger_mode` is dropped — call out in the migration if a project relied on Spawn-only semantics. Legacy outer-card `scale` is renamed to `ring_spacing` with a different scale; old projects will need to retune.\n\nMux inputs are wired through explicit `node.value` constants so the graph editor shows every input that drives the mux selection — the inline-param shortcut on mux_scalar was reverted in favour of visual clarity (matches the Lissajous precedent).",
+  "description": "Concentric polygon rings expanding outward from the centre — decomposed from the legacy `ConcentricTunnelGenerator` Rust struct into the curated primitive library.\n\n`node.polygon_shape` produces one polygon outline (Circle = 64-gon, Triangle, Square, Pentagon, or Hexagon — the legacy Star variant is removed); `node.concentric_outlines` stacks K=16 scaled copies driven by an `expansion` scalar so the stack drifts outward over time and new rings emerge from the centre at radius 0; `node.render_lines` draws the stack with the legacy line + dot semantics.\n\nThe legacy three-state `clip_trigger_mode` is restored as the outer-card `trigger_mode` param. With `clip_trigger` on:\n- **Shape**: each retrigger cycles the polygon through [3, 4, 5, 6, 8, 12]; no new ring spawn.\n- **Spawn**: each retrigger spawns a new ring from the centre; shape stays at the user's `shape` selection.\n- **Both**: both.\n\nShape cycling is done entirely in the graph: `node.clip_trigger_index` (modulus 6) advances on each retrigger; `mux_cycle_sides` maps that index through the [3, 4, 5, 6, 8, 12] table; `mux_final_n_sides` switches between the user-selected `mux_n_sides.out` and the cycled value based on `clip_trigger × mode_shape_enable`. The same `clip_trigger × mode_*_enable` gating pattern feeds `spawn_gate.b` for ring-spawn. `polygon_shape.clip_trigger` is left off — its internal cycle is unused because the mode-gated external cycle replaces it (and only one ClipTriggerCycle is in play, inside `clip_trigger_index`).\n\nMux inputs are wired through explicit `node.value` constants so the graph editor shows every input that drives the mux selection — the inline-param shortcut on mux_scalar was reverted in favour of visual clarity (matches the Lissajous precedent). Legacy outer-card `scale` is renamed to `ring_spacing` with a different scale; old projects will need to retune.",
   "presetMetadata": {
     "id": "ConcentricTunnel",
     "displayName": "Concentric Tunnel",
@@ -67,10 +67,23 @@
         "isToggle": true,
         "formatString": "F0",
         "oscSuffix": "clipTrigger"
+      },
+      {
+        "id": "trigger_mode",
+        "name": "Trigger Mode",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "triggerMode",
+        "valueLabels": ["Shape", "Spawn", "Both"]
       }
     ],
     "paramAliases": [
-      { "old": "scale", "new": "ring_spacing" }
+      { "old": "scale", "new": "ring_spacing" },
+      { "old": "clip_trigger_mode", "new": "trigger_mode" }
     ],
     "bindings": [
       { "id": "shape", "label": "Shape", "defaultValue": 0.0,
@@ -86,10 +99,16 @@
         "target": { "kind": "handleNode", "handle": "stack", "param": "ring_spacing" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
-        "convert": { "type": "BoolThreshold" } },
+        "target": { "kind": "handleNode", "handle": "shape_active", "param": "a" },
+        "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "spawn_gate", "param": "b" },
+        "target": { "kind": "handleNode", "handle": "spawn_active", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "trigger_mode", "label": "Trigger Mode", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "mode_shape_enable", "param": "selector" },
+        "convert": { "type": "Float" } },
+      { "id": "trigger_mode", "label": "Trigger Mode", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "mode_spawn_enable", "param": "selector" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
@@ -179,7 +198,56 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 19, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 19, "typeId": "system.final_output", "handle": "final_output" },
+
+    {
+      "id": 20, "typeId": "node.clip_trigger_index", "handle": "shape_cycle_idx",
+      "params": { "modulus": { "type": "Int", "value": 6 } }
+    },
+    { "id": 21, "typeId": "node.value", "handle": "cycle_n3",  "params": { "value": { "type": "Float", "value": 3.0  } } },
+    { "id": 22, "typeId": "node.value", "handle": "cycle_n4",  "params": { "value": { "type": "Float", "value": 4.0  } } },
+    { "id": 23, "typeId": "node.value", "handle": "cycle_n5",  "params": { "value": { "type": "Float", "value": 5.0  } } },
+    { "id": 24, "typeId": "node.value", "handle": "cycle_n6",  "params": { "value": { "type": "Float", "value": 6.0  } } },
+    { "id": 25, "typeId": "node.value", "handle": "cycle_n8",  "params": { "value": { "type": "Float", "value": 8.0  } } },
+    { "id": 26, "typeId": "node.value", "handle": "cycle_n12", "params": { "value": { "type": "Float", "value": 12.0 } } },
+    {
+      "id": 27, "typeId": "node.mux_scalar", "handle": "mux_cycle_sides",
+      "params": { "selector": { "type": "Float", "value": 0.0 } }
+    },
+
+    { "id": 28, "typeId": "node.value", "handle": "gate_zero", "params": { "value": { "type": "Float", "value": 0.0 } } },
+    { "id": 29, "typeId": "node.value", "handle": "gate_one",  "params": { "value": { "type": "Float", "value": 1.0 } } },
+
+    {
+      "id": 30, "typeId": "node.mux_scalar", "handle": "mode_shape_enable",
+      "params": { "selector": { "type": "Float", "value": 2.0 } }
+    },
+    {
+      "id": 31, "typeId": "node.mux_scalar", "handle": "mode_spawn_enable",
+      "params": { "selector": { "type": "Float", "value": 2.0 } }
+    },
+
+    {
+      "id": 32, "typeId": "node.math", "handle": "shape_active",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 33, "typeId": "node.math", "handle": "spawn_active",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+
+    {
+      "id": 34, "typeId": "node.mux_scalar", "handle": "mux_final_n_sides",
+      "params": { "selector": { "type": "Float", "value": 0.0 } }
+    }
   ],
   "wires": [
     { "fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "in_0" },
@@ -194,14 +262,38 @@
     { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "in_3" },
     { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in_4" },
 
-    { "fromNode": 6, "fromPort": "out", "toNode": 16, "toPort": "n_sides" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 20, "toPort": "trigger_count" },
 
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 16, "toPort": "trigger_count" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 27, "toPort": "in_0" },
+    { "fromNode": 22, "fromPort": "out", "toNode": 27, "toPort": "in_1" },
+    { "fromNode": 23, "fromPort": "out", "toNode": 27, "toPort": "in_2" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 27, "toPort": "in_3" },
+    { "fromNode": 25, "fromPort": "out", "toNode": 27, "toPort": "in_4" },
+    { "fromNode": 26, "fromPort": "out", "toNode": 27, "toPort": "in_5" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 27, "toPort": "selector" },
+
+    { "fromNode": 29, "fromPort": "out", "toNode": 30, "toPort": "in_0" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 30, "toPort": "in_1" },
+    { "fromNode": 29, "fromPort": "out", "toNode": 30, "toPort": "in_2" },
+
+    { "fromNode": 28, "fromPort": "out", "toNode": 31, "toPort": "in_0" },
+    { "fromNode": 29, "fromPort": "out", "toNode": 31, "toPort": "in_1" },
+    { "fromNode": 29, "fromPort": "out", "toNode": 31, "toPort": "in_2" },
+
+    { "fromNode": 30, "fromPort": "out", "toNode": 32, "toPort": "b" },
+    { "fromNode": 31, "fromPort": "out", "toNode": 33, "toPort": "b" },
+
+    { "fromNode": 32, "fromPort": "out", "toNode": 34, "toPort": "selector" },
+    { "fromNode": 6,  "fromPort": "out", "toNode": 34, "toPort": "in_0" },
+    { "fromNode": 27, "fromPort": "out", "toNode": 34, "toPort": "in_1" },
+
+    { "fromNode": 34, "fromPort": "out", "toNode": 16, "toPort": "n_sides" },
 
     { "fromNode": 0,  "fromPort": "beat", "toNode": 13, "toPort": "a" },
     { "fromNode": 12, "fromPort": "out",  "toNode": 13, "toPort": "b" },
 
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 14, "toPort": "a" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 14, "toPort": "a" },
+    { "fromNode": 33, "fromPort": "out",           "toNode": 14, "toPort": "b" },
 
     { "fromNode": 13, "fromPort": "out", "toNode": 15, "toPort": "a" },
     { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b" },
