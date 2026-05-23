@@ -263,6 +263,20 @@ pub struct PresetMetadata {
     /// indices shifted across a refactor).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_aliases: Vec<ValueAliasEntry>,
+    /// Outer-card text-config definitions (folder paths, font names,
+    /// identifiers). Each entry surfaces as a text field on the host
+    /// inspector with an optional Browse button. Distinct from `params`
+    /// because the value isn't modulated — no driver, no LFO, no
+    /// ParamConvert. Per-clip overrides live in `Clip.string_params`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub string_params: Vec<StringParamSpecDef>,
+    /// Routing from each outer-card text-config to one or more
+    /// inner-graph node parameters. Mirrors `bindings` but for String
+    /// values — no convert variant because String → String is a
+    /// pass-through. Address by `id` against `string_params`, not by
+    /// position (the fan-out rule from `bindings` applies here too).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub string_bindings: Vec<StringBindingDef>,
 }
 
 fn default_available() -> bool {
@@ -320,6 +334,35 @@ pub struct BindingDef {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Outer-card text-config declaration. Renders as a text field in the
+/// host inspector with an optional Browse button (set
+/// `is_file_picker: true` for folder/file selection UX).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StringParamSpecDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub default_value: String,
+    /// Hint to the editor: render a "Browse…" button alongside the text
+    /// field that opens a native folder/file picker. The text field is
+    /// always editable; the button is sugar.
+    #[serde(default)]
+    pub is_file_picker: bool,
+}
+
+/// Routing from one outer-card string config to one inner-graph node
+/// parameter. No `convert` field — String → String is a pass-through.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StringBindingDef {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub default_value: String,
+    pub target: BindingTarget,
 }
 
 /// Where a binding's value flows. Mirror of the renderer-side
@@ -528,6 +571,8 @@ mod tests {
             param_aliases: Vec::new(),
             node_aliases: Vec::new(),
             value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
         };
         let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,

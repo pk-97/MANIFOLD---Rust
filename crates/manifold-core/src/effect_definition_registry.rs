@@ -773,6 +773,8 @@ mod tests {
                 param_id: "amount".to_string(),
                 mapping: vec![(0, 1)],
             }],
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
         }
     }
 
@@ -852,6 +854,8 @@ mod tests {
             param_aliases: Vec::new(),
             node_aliases: Vec::new(),
             value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
         };
         let json_def = preset_metadata_to_effect_def(&json_meta);
 

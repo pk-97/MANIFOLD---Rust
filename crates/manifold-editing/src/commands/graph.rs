@@ -1538,6 +1538,8 @@ fn prepare_generator_mirror(
         param_aliases: Vec::new(),
         node_aliases: Vec::new(),
         value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
     });
 
     // Locate an existing binding for (handle, param). A bundled
@@ -2527,6 +2529,8 @@ mod tests {
                 param_aliases: vec![],
                 node_aliases: vec![],
                 value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
@@ -2760,6 +2764,8 @@ mod tests {
                 param_aliases: vec![],
                 node_aliases: vec![],
                 value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
@@ -3138,6 +3144,8 @@ mod tests {
                 param_aliases: vec![],
                 node_aliases: vec![],
                 value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,

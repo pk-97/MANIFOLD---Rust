@@ -123,6 +123,13 @@ pub struct JsonGraphGenerator {
     /// `GeneratorContext::params[i]` into the target node's param.
     /// Empty when the preset declares no bindings.
     bindings: Vec<BindingResolution>,
+    /// String-typed outer-card → inner-node bindings. Each entry routes
+    /// one entry from the host's `clip.string_params` map (looked up by
+    /// the binding's `source_key`) into the target node's String param.
+    /// Falls back to `default` when the host map is empty or doesn't
+    /// contain the key. Empty when the preset declares no
+    /// string-bindings.
+    string_bindings: Vec<StringBindingResolution>,
     /// Per-instance persistent state for stateful primitives in the
     /// graph (Feedback prev-frame textures, ArrayFeedback prev-frame
     /// buffers, EnvelopeFollower smoothed values, etc.). The runtime
@@ -165,6 +172,20 @@ struct BindingResolution {
     source_index: usize,
     default: f32,
     convert: manifold_core::effects::ParamConvert,
+}
+
+/// One resolved String outer-card → inner-node binding. Mirrors
+/// `BindingResolution` but for String values: source is keyed by name
+/// (lookup into the host's `clip.string_params` map), no convert
+/// because String → String is a pass-through.
+struct StringBindingResolution {
+    target_node: NodeInstanceId,
+    target_param: String,
+    /// Key into the host's `clip.string_params` map. The presetMetadata
+    /// `stringBindings` `id` field — same identity as the matching
+    /// `stringParams` entry's `id`.
+    source_key: String,
+    default: String,
 }
 
 impl JsonGraphGenerator {
@@ -255,6 +276,11 @@ impl JsonGraphGenerator {
                     .collect()
             })
             .unwrap_or_default();
+        let string_binding_specs: Vec<manifold_core::effect_graph_def::StringBindingDef> = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| m.string_bindings.clone())
+            .unwrap_or_default();
 
         let graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
@@ -321,7 +347,30 @@ impl JsonGraphGenerator {
             })
             .collect();
 
-        Ok(Self {
+        let string_bindings: Vec<StringBindingResolution> = string_binding_specs
+            .iter()
+            .filter_map(|b| match &b.target {
+                BindingTarget::HandleNode { handle, param } => {
+                    let node_id = *handle_map.get(handle.as_str())?;
+                    Some(StringBindingResolution {
+                        target_node: node_id,
+                        target_param: param.clone(),
+                        source_key: b.id.clone(),
+                        default: b.default_value.clone(),
+                    })
+                }
+                BindingTarget::Composite { .. } => None,
+            })
+            .collect();
+
+        // Apply default values immediately so the inner-node String
+        // params don't sit at their primitive-declared defaults until
+        // the first `set_string_params` call. The host calls
+        // `set_string_params` once per frame, but for code paths that
+        // read inner state before the first frame (parity tests, the
+        // editor inspector, etc.) the binding-default should already
+        // be live.
+        let mut g = Self {
             type_id,
             graph,
             plan,
@@ -332,8 +381,11 @@ impl JsonGraphGenerator {
             final_output_slot: None,
             target_format: None,
             bindings,
+            string_bindings,
             state_store: StateStore::new(),
-        })
+        };
+        g.apply_string_defaults();
+        Ok(g)
     }
 
     /// Parse + compile + wire to a real [`MetalBackend`] for production
@@ -690,6 +742,39 @@ impl JsonGraphGenerator {
         }
     }
 
+    /// Push the host's per-clip string overrides through the preset's
+    /// `stringBindings` to the matching inner-node String params. Keys
+    /// absent from `values` fall back to the binding's declared
+    /// default. No-op if the preset declared no string-bindings.
+    ///
+    /// Called once per frame from `Generator::set_string_params`.
+    pub fn apply_string_params(&mut self, values: Option<&std::collections::BTreeMap<String, String>>) {
+        for binding in &self.string_bindings {
+            let v: String = values
+                .and_then(|m| m.get(binding.source_key.as_str()))
+                .cloned()
+                .unwrap_or_else(|| binding.default.clone());
+            let _ = self.graph.set_param(
+                binding.target_node,
+                &binding.target_param,
+                ParamValue::String(std::sync::Arc::new(v)),
+            );
+        }
+    }
+
+    /// Seed every string binding with its declared default. Called once
+    /// at construction so inner-node String params are populated before
+    /// the host's first `set_string_params` call.
+    fn apply_string_defaults(&mut self) {
+        for binding in &self.string_bindings {
+            let _ = self.graph.set_param(
+                binding.target_node,
+                &binding.target_param,
+                ParamValue::String(std::sync::Arc::new(binding.default.clone())),
+            );
+        }
+    }
+
     /// Run one frame against the configured executor. Mock-backend mode
     /// is fine for unit tests; production use installs a Metal
     /// backend via [`Self::set_executor`] before calling.
@@ -760,6 +845,13 @@ impl Generator for JsonGraphGenerator {
         // that emits anim_progress and pipe its output to the
         // generator's return value.
         ctx.anim_progress
+    }
+
+    fn set_string_params(
+        &mut self,
+        params: Option<&std::collections::BTreeMap<String, String>>,
+    ) {
+        self.apply_string_params(params);
     }
 
     fn reset_state(&mut self, _device: &GpuDevice) {
