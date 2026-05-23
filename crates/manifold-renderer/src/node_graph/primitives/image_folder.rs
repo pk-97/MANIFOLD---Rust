@@ -299,9 +299,9 @@ fn scan_folder(dir: &Path) -> Vec<PathBuf> {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| {
-            p.extension().and_then(|s| s.to_str()).is_some_and(|ext| {
-                IMAGE_EXTENSIONS.iter().any(|allowed| *allowed == ext)
-            })
+            p.extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext))
         })
         .collect();
     paths.sort();
