@@ -90,6 +90,10 @@ struct NodeView {
     pos_graph: (f32, f32),
     inputs: Vec<PortView>,
     outputs: Vec<PortView>,
+    /// Mirrors `NodeSnapshot::breaks_dependency_cycle`. Wires terminating
+    /// here close a feedback loop; `auto_layout` skips them so depth
+    /// propagation doesn't accumulate around the loop.
+    breaks_dependency_cycle: bool,
 }
 
 impl NodeView {
@@ -327,6 +331,7 @@ impl GraphCanvas {
                     .iter()
                     .map(|p| PortView::from_kind(p.name.clone(), p.kind))
                     .collect(),
+                breaks_dependency_cycle: n.breaks_dependency_cycle,
             })
             .collect();
         self.wires = snap
@@ -394,9 +399,14 @@ impl GraphCanvas {
             .map(|(i, nv)| (nv.id, i))
             .collect();
 
-        // Iterative relaxation. With a DAG and small n it converges in
-        // ≤ n passes; we cap at n+1 as a safety net against malformed
-        // input (cycles can't occur — Graph::connect rejects them).
+        // Iterative relaxation. Wires terminating on a cycle-breaking
+        // node (e.g. `node.feedback`) close a per-frame feedback loop —
+        // `Graph::connect` permits them and `topological_sort` ignores
+        // them. The layout must do the same; otherwise depth accumulates
+        // around the loop one column per relaxation pass and consumers
+        // get pushed thousands of pixels off-screen to the right.
+        // With back-edges removed the topology is a DAG, so this
+        // converges in ≤ n passes; we cap at n+1 as a safety net.
         for _ in 0..=n {
             let mut changed = false;
             for w in &self.wires {
@@ -405,6 +415,9 @@ impl GraphCanvas {
                 else {
                     continue;
                 };
+                if self.nodes[to_i].breaks_dependency_cycle {
+                    continue;
+                }
                 let candidate = depth[from_i] + 1;
                 if candidate > depth[to_i] {
                     depth[to_i] = candidate;
@@ -917,11 +930,11 @@ impl GraphCanvas {
             let summary_y = sy + header_h + (SUMMARY_ROW_HEIGHT * self.zoom - summary_size) * 0.5;
             let max_chars =
                 ((NODE_WIDTH * self.zoom - 16.0 * self.zoom) / (summary_size * 0.55)) as usize;
-            let display: std::borrow::Cow<'_, str> = if summary.len() > max_chars && max_chars > 1 {
-                std::borrow::Cow::Owned(format!(
-                    "{}…",
-                    &summary[..summary.len().min(max_chars.saturating_sub(1))]
-                ))
+            let char_count = summary.chars().count();
+            let display: std::borrow::Cow<'_, str> = if char_count > max_chars && max_chars > 1 {
+                let take = max_chars.saturating_sub(1);
+                let truncated: String = summary.chars().take(take).collect();
+                std::borrow::Cow::Owned(format!("{truncated}…"))
             } else {
                 std::borrow::Cow::Borrowed(summary)
             };

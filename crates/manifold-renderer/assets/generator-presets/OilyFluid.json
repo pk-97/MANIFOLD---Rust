@@ -85,10 +85,10 @@
     { "id": 10, "typeId": "node.rotate_vec2_90", "handle": "curl_rotate",
       "params": { "direction": { "type": "Enum", "value": 0 } } },
 
-    { "id": 11, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_h",
-      "params": { "width_sample": { "type": "Float", "value": 1.0 }, "max_radius": { "type": "Float", "value": 32.0 }, "axis": { "type": "Enum", "value": 0 } } },
-    { "id": 12, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_v",
-      "params": { "width_sample": { "type": "Float", "value": 1.0 }, "max_radius": { "type": "Float", "value": 32.0 }, "axis": { "type": "Enum", "value": 1 } } },
+    { "id": 11, "typeId": "node.gaussian_blur", "handle": "blur_h",
+      "params": { "kernel_size": { "type": "Enum", "value": 1 }, "axis": { "type": "Enum", "value": 0 }, "step": { "type": "Float", "value": 1.0 } } },
+    { "id": 12, "typeId": "node.gaussian_blur", "handle": "blur_v",
+      "params": { "kernel_size": { "type": "Enum", "value": 1 }, "axis": { "type": "Enum", "value": 1 }, "step": { "type": "Float", "value": 1.0 } } },
 
     { "id": 13, "typeId": "node.texture_advect", "handle": "vel_advect",
       "params": { "dt": { "type": "Float", "value": 0.5 }, "boundary": { "type": "Enum", "value": 0 } } },
@@ -174,8 +174,8 @@
     { "fromNode": 8,  "fromPort": "out", "toNode": 9,  "toPort": "in" },
     { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "in" },
 
-    { "fromNode": 2,  "fromPort": "out", "toNode": 11, "toPort": "source" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "source" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
 
     { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
     { "fromNode": 2,  "fromPort": "out", "toNode": 13, "toPort": "velocity" },

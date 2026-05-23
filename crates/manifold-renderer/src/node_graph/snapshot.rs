@@ -101,6 +101,12 @@ pub struct NodeSnapshot {
     /// Editor-saved position in graph-space, or `None` when the graph
     /// has never been opened in an editor (V1).
     pub editor_pos: Option<(f32, f32)>,
+    /// Mirrors `EffectNode::breaks_dependency_cycle()`. Wires
+    /// terminating on this node close a per-frame feedback loop and
+    /// the canvas's auto-layout must skip them — otherwise depth
+    /// propagation around the loop pushes consumers off-screen to
+    /// the right (one extra column per relaxation pass × n+1 passes).
+    pub breaks_dependency_cycle: bool,
 }
 
 /// Snapshot of one inner-node parameter, sized for the user-exposed-
@@ -286,6 +292,7 @@ impl GraphSnapshot {
                     outputs,
                     parameters,
                     editor_pos: None,
+                    breaks_dependency_cycle: inst.node.breaks_dependency_cycle(),
                 }
             })
             .collect();
