@@ -159,6 +159,29 @@ pub trait Primitive: PrimitiveSpec {
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
     /// Mirror of
+    /// [`EffectNode::breaks_dependency_cycle`](crate::node_graph::effect_node::EffectNode::breaks_dependency_cycle).
+    /// Mark a 1-frame-delay primitive so the chain compiler treats
+    /// wires INTO it as state captures rather than per-frame
+    /// dependencies. See the EffectNode docstring for the contract and
+    /// implications for execution order. Default: `false`.
+    fn breaks_dependency_cycle(&self) -> bool {
+        false
+    }
+
+    /// Mirror of
+    /// [`EffectNode::requires`](crate::node_graph::effect_node::EffectNode::requires).
+    /// Declare any runtime services this primitive needs (StateStore for
+    /// per-frame persistent state, GpuEncoder for dispatch / texture
+    /// copies). The default `NodeRequires::default()` is correct for
+    /// pure pixel-local primitives; stateful or compute-issuing ones
+    /// must override. The compile/dispatch layer rolls these up per
+    /// plan so `execute_frame_with_gpu` can refuse to run a chain that
+    /// would silently panic deeper down.
+    fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+        crate::node_graph::effect_node::NodeRequires::default()
+    }
+
+    /// Mirror of
     /// [`EffectNode::aliased_array_io`](crate::node_graph::effect_node::EffectNode::aliased_array_io).
     /// Declare `(input_port, output_port)` pairs that share a single
     /// physical buffer. Used by stateful array simulators
@@ -259,6 +282,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
         Primitive::canvas_sized_array_outputs(self)
+    }
+    fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+        Primitive::requires(self)
+    }
+    fn breaks_dependency_cycle(&self) -> bool {
+        Primitive::breaks_dependency_cycle(self)
     }
 }
 

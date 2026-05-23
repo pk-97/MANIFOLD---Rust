@@ -137,6 +137,7 @@ mod uv;
 mod uv_displace_by_flow;
 mod uv_field;
 mod value;
+mod vignette;
 mod voronoi_2d;
 mod voronoi_prism;
 mod wgsl_compute_0in_1tex;
@@ -289,7 +290,7 @@ pub use smoothstep_texture::SmoothstepTexture;
 pub use strobe::{
     NOTE_RATE_LABELS, NOTE_RATE_VALUES, NOTE_RATES as STROBE_NOTE_RATES, Strobe,
 };
-pub use temporal::{FEEDBACK_MODES, FEEDBACK_TYPE_ID, Feedback};
+pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
 pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
 pub use torus_wrap_field::TorusWrapField;
 pub use triangulate_grid::TriangulateGrid;
@@ -301,6 +302,7 @@ pub use uv::{
 pub use uv_displace_by_flow::UvDisplaceByFlow;
 pub use uv_field::UvField;
 pub use value::Value;
+pub use vignette::{VIGNETTE_SHAPES, Vignette};
 pub use voronoi_2d::Voronoi2D;
 pub use voronoi_prism::VoronoiPrism;
 pub use wgsl_compute_0in_1tex::{DEFAULT_WGSL_0IN_1TEX, WgslCompute0In1Tex};

@@ -18,7 +18,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
-use crate::node_graph::execution_plan::ExecutionPlan;
+use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
@@ -39,6 +39,11 @@ pub struct Executor {
     /// nodes can queue scalar writes. Drained back into the backend after
     /// each node's `evaluate` returns.
     scalar_write_scratch: Vec<(Slot, ParamValue)>,
+    /// Persistent resources whose first acquisition has been cleared to
+    /// opaque black. Subsequent frames find them in this set and skip
+    /// the clear — the buffer's contents are now valid producer writes
+    /// carrying state across the frame boundary.
+    initialized_persistent: ahash::AHashSet<ResourceId>,
 }
 
 impl Executor {
@@ -49,6 +54,7 @@ impl Executor {
             input_scratch: Vec::new(),
             output_scratch: Vec::new(),
             scalar_write_scratch: Vec::new(),
+            initialized_persistent: ahash::AHashSet::default(),
         }
     }
 
@@ -162,6 +168,38 @@ impl Executor {
         // borrows (e.g. the chain source slot's per-frame
         // `replace_texture_2d`) are untouched.
         self.backend.clear_skip_aliases();
+
+        // Pre-acquire persistent resources before the step loop.
+        // These are wires that close a per-frame feedback loop through
+        // the StateStore (their consumer node declared
+        // `breaks_dependency_cycle`). The consumer runs at step 0 — its
+        // `slot_for(res_id)` would panic if the resource hadn't been
+        // acquired yet, because the producer that writes the resource
+        // runs LATER in the same frame's step order. Acquiring here is
+        // idempotent on existing bindings, so the first frame allocates
+        // a slot; subsequent frames find the slot already bound from
+        // last frame and carry the producer's prior-frame write into
+        // the consumer's read.
+        //
+        // On a resource's FIRST-EVER acquisition by this executor we
+        // also clear the underlying texture to opaque black, so
+        // first-frame consumers don't read uninitialised pixels. Only
+        // applies when a `GpuEncoder` is available — mock-backend code
+        // paths (used by logic tests) skip this and rely on the test
+        // primitive's tolerance for the mock's zero slots.
+        for &res_id in plan.persistent_resources() {
+            let ty = plan
+                .resource_type(res_id)
+                .expect("persistent resource type known from compile()");
+            let fmt = plan.resource_format(res_id);
+            let slot = self.backend.acquire(res_id, ty, fmt);
+            if self.initialized_persistent.insert(res_id)
+                && let Some(gpu) = gpu.as_deref_mut()
+                && let Some(tex) = self.backend.texture_2d(slot)
+            {
+                gpu.clear_texture(tex, 0.0, 0.0, 0.0, 0.0);
+            }
+        }
 
         for step in plan.steps() {
             // 1. Acquire output slots.

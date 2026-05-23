@@ -642,7 +642,13 @@ pub fn outer_routings_from_bindings(
 mod tests {
     use super::*;
     use crate::node_graph::boundary_nodes::Source;
-    use crate::node_graph::primitives::{FEEDBACK_TYPE_ID, Feedback};
+    // AffineTransform stands in for the legacy stateful-feedback
+    // fixture: it has multiple `Float` params (`scale`, `translate_x`,
+    // `translate_y`, `rotation`) plus port-shadow inputs, which exercise
+    // the static / user / fan-out / cache code paths. `Mix` carries an
+    // `Enum` `mode` param and is the fixture for the `EnumRound`
+    // routing test.
+    use crate::node_graph::primitives::{AffineTransform, FEEDBACK_TYPE_ID, Mix};
 
     // ---- Conversion tests ----
 
@@ -713,7 +719,7 @@ mod tests {
             default_value: 0.5,
             target: ParamTarget::HandleNode {
                 handle: "feedback",
-                param: "amount",
+                param: "scale",
             },
             convert: ParamConvert::Float,
         }
@@ -730,7 +736,7 @@ mod tests {
             default_value: 0.5,
             target: ResolvedTarget::Node {
                 node: feedback,
-                param: "amount",
+                param: "scale",
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
@@ -742,13 +748,13 @@ mod tests {
     fn from_static_resolves_handlenode_to_node() {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let rb = ResolvedBinding::from_static(&static_amount_binding(), &handles_for(feedback), 0)
             .expect("handle present");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
-                assert_eq!(param, "amount");
+                assert_eq!(param, "scale");
             }
             _ => panic!("expected Node target after resolution"),
         }
@@ -761,7 +767,7 @@ mod tests {
         // Missing handle in the splice map → orphan binding, dropped
         // at chain build time.
         let mut g = Graph::new();
-        let _feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let _feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let nope: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0).is_none());
     }
@@ -769,12 +775,12 @@ mod tests {
     #[test]
     fn from_user_resolves_handle_and_pulls_static_param_name() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let core = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
             node_handle: "feedback".to_string(),
-            inner_param: "zoom".to_string(),
+            inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
             default_value: 0.95,
@@ -785,7 +791,7 @@ mod tests {
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
-                assert_eq!(param, "zoom"); // pulled off Feedback's ParamDef list as a &'static str
+                assert_eq!(param, "translate_x"); // pulled off AffineTransform's ParamDef list as a &'static str
             }
             _ => panic!("user bindings always resolve to Node target"),
         }
@@ -795,12 +801,12 @@ mod tests {
     #[test]
     fn from_user_returns_none_for_unknown_handle() {
         let mut g = Graph::new();
-        let _feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let _feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let core = manifold_core::effects::UserParamBinding {
             id: "user.nope".to_string(),
             label: "Nope".to_string(),
             node_handle: "no_such_node".to_string(),
-            inner_param: "zoom".to_string(),
+            inner_param: "translate_x".to_string(),
             min: 0.0,
             max: 1.0,
             default_value: 0.5,
@@ -813,7 +819,7 @@ mod tests {
     #[test]
     fn from_user_returns_none_for_unknown_inner_param() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let core = manifold_core::effects::UserParamBinding {
             id: "user.feedback.bogus.1".to_string(),
             label: "Bogus".to_string(),
@@ -832,17 +838,17 @@ mod tests {
     #[test]
     fn apply_node_target_writes_param_to_graph() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let binding = resolved_feedback_amount(feedback);
         binding.apply(&mut g, None, 0.75).unwrap();
         let inst = g.get_node(feedback).unwrap();
-        assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.75)));
+        assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.75)));
     }
 
     #[test]
     fn apply_node_target_doesnt_need_handle() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let binding = resolved_feedback_amount(feedback);
         // None handle should be fine for Node target.
         assert!(binding.apply(&mut g, None, 0.5).is_ok());
@@ -851,7 +857,7 @@ mod tests {
     #[test]
     fn apply_to_unknown_param_returns_graph_error() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let binding = ResolvedBinding {
             id: Cow::Borrowed("nonexistent"),
             label: Cow::Borrowed("Nonexistent"),
@@ -871,16 +877,16 @@ mod tests {
     #[test]
     fn enum_round_routes_correctly_to_a_real_node() {
         // Verifies the full path: f32 → EnumRound → ParamValue::Enum →
-        // graph.set_param. Using Feedback's mode param (Enum [Screen,
-        // Additive, Max]).
+        // graph.set_param. Using Mix's `mode` param (7-value Enum:
+        // Lerp / Screen / Add / Max / Multiply / Difference / Overlay).
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let mix = g.add_node(Box::new(Mix::new()));
         let binding = ResolvedBinding {
             id: Cow::Borrowed("mode"),
             label: Cow::Borrowed("Mode"),
             default_value: 0.0,
             target: ResolvedTarget::Node {
-                node: feedback,
+                node: mix,
                 param: "mode",
             },
             convert: ParamConvert::EnumRound,
@@ -889,12 +895,12 @@ mod tests {
         };
         binding.apply(&mut g, None, 0.0).unwrap();
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("mode"),
+            g.get_node(mix).unwrap().params.get("mode"),
             Some(&ParamValue::Enum(0))
         );
         binding.apply(&mut g, None, 2.0).unwrap();
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("mode"),
+            g.get_node(mix).unwrap().params.get("mode"),
             Some(&ParamValue::Enum(2))
         );
     }
@@ -906,14 +912,14 @@ mod tests {
         // inner-node param name. Test confirms nothing in the routing
         // code conflates the three.
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let binding = ResolvedBinding {
             id: Cow::Borrowed("blend_strength"),
             label: Cow::Borrowed("Blend Strength"),
             default_value: 0.5,
             target: ResolvedTarget::Node {
                 node: feedback,
-                param: "amount",
+                param: "scale",
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
@@ -921,7 +927,7 @@ mod tests {
         };
         binding.apply(&mut g, None, 0.42).unwrap();
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.42))
         );
         assert!(
@@ -938,7 +944,7 @@ mod tests {
     #[test]
     fn apply_bindings_iterates_with_default_fallback() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![
             resolved_feedback_amount(feedback),
             ResolvedBinding {
@@ -947,7 +953,7 @@ mod tests {
                 default_value: 0.95,
                 target: ResolvedTarget::Node {
                     node: feedback,
-                    param: "zoom",
+                    param: "translate_x",
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
@@ -964,8 +970,8 @@ mod tests {
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
-        assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
-        assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.95)));
+        assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.5)));
+        assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(0.95)));
     }
 
     /// Combined static + user bindings in one slice. Both halves
@@ -974,14 +980,14 @@ mod tests {
     #[test]
     fn apply_bindings_walks_static_then_user_in_one_slice() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
 
         let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
             node_handle: "feedback".to_string(),
-            inner_param: "zoom".to_string(),
+            inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
             default_value: 0.95,
@@ -999,20 +1005,20 @@ mod tests {
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
-        assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
-        assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(1.05)));
+        assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.5)));
+        assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(1.05)));
     }
 
     #[test]
     fn apply_bindings_user_tail_falls_back_to_binding_default() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
             node_handle: "feedback".to_string(),
-            inner_param: "zoom".to_string(),
+            inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
             default_value: 0.97,
@@ -1031,19 +1037,19 @@ mod tests {
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
-        assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.97)));
+        assert_eq!(inst.params.get("translate_x"), Some(&ParamValue::Float(0.97)));
     }
 
     #[test]
     fn binding_value_finds_id_in_either_tier() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
             node_handle: "feedback".to_string(),
-            inner_param: "zoom".to_string(),
+            inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
             default_value: 0.95,
@@ -1072,7 +1078,7 @@ mod tests {
     #[test]
     fn apply_bindings_supports_fan_out_when_two_bindings_share_source_index() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         // Two distinct inner targets, both reading from `values[0]`.
         let bindings = vec![
             ResolvedBinding {
@@ -1081,7 +1087,7 @@ mod tests {
                 default_value: 0.0,
                 target: ResolvedTarget::Node {
                     node: feedback,
-                    param: "amount",
+                    param: "scale",
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
@@ -1093,7 +1099,7 @@ mod tests {
                 default_value: 0.0,
                 target: ResolvedTarget::Node {
                     node: feedback,
-                    param: "zoom",
+                    param: "translate_x",
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
@@ -1110,12 +1116,12 @@ mod tests {
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(
-            inst.params.get("amount"),
+            inst.params.get("scale"),
             Some(&ParamValue::Float(0.42)),
             "first binding (amount) must receive the outer value",
         );
         assert_eq!(
-            inst.params.get("zoom"),
+            inst.params.get("translate_x"),
             Some(&ParamValue::Float(0.42)),
             "second binding (zoom) sharing source_index=0 must ALSO receive \
              the outer value 0.42, NOT the binding's default. Pre-source_index, \
@@ -1130,7 +1136,7 @@ mod tests {
     #[test]
     fn apply_bindings_skips_when_outer_value_unchanged() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let values = [ParamSlot::exposed(0.5)];
         let mut cache = LastAppliedCache::new();
@@ -1139,21 +1145,21 @@ mod tests {
         // → 0.5.
         apply_bindings(&bindings, &mut g, None, &values, &mut cache);
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.5)),
         );
         assert_eq!(cache.entries[0], BindingCacheEntry::Applied(0.5));
 
         // Simulate the inspector editing the inner directly while
         // the outer slot is at rest.
-        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+        g.set_param(feedback, "scale", ParamValue::Float(0.9))
             .unwrap();
 
         // 2nd apply with the same outer value: skip — inner edit
         // must survive.
         apply_bindings(&bindings, &mut g, None, &values, &mut cache);
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.9)),
             "skip-on-unchanged must not overwrite the inner edit",
         );
@@ -1165,7 +1171,7 @@ mod tests {
     #[test]
     fn apply_bindings_writes_when_outer_value_changes() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
 
@@ -1177,7 +1183,7 @@ mod tests {
             &mut cache,
         );
         // Inner edit.
-        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+        g.set_param(feedback, "scale", ParamValue::Float(0.9))
             .unwrap();
         // Outer slot moves: 0.5 → 0.25. Binding writes.
         apply_bindings(
@@ -1188,7 +1194,7 @@ mod tests {
             &mut cache,
         );
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.25)),
             "outer change must overwrite the inner edit",
         );
@@ -1201,7 +1207,7 @@ mod tests {
     #[test]
     fn apply_bindings_keeps_writing_under_continuous_automation() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
 
@@ -1214,7 +1220,7 @@ mod tests {
                 &mut cache,
             );
             assert_eq!(
-                g.get_node(feedback).unwrap().params.get("amount"),
+                g.get_node(feedback).unwrap().params.get("scale"),
                 Some(&ParamValue::Float(*v)),
                 "frame {i}: animated outer must overwrite inner",
             );
@@ -1228,7 +1234,7 @@ mod tests {
     #[test]
     fn seeded_cache_preserves_hydrated_inner_against_outer_default() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         // Default = 0.5 from `resolved_feedback_amount`. Constructor
         // would seed cache to `Applied(0.5)` — simulate that.
@@ -1236,7 +1242,7 @@ mod tests {
         cache.seed_from_bindings(&bindings);
 
         // Pretend hydrate just installed inner amount = 0.9.
-        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+        g.set_param(feedback, "scale", ParamValue::Float(0.9))
             .unwrap();
 
         // First apply with the catalog-default outer (0.5): cache
@@ -1250,7 +1256,7 @@ mod tests {
             &mut cache,
         );
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.9)),
             "seeded cache must not overwrite the hydrated value when outer is at default",
         );
@@ -1259,12 +1265,12 @@ mod tests {
     #[test]
     fn seeded_cache_lets_outer_drag_reclaim_control() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
 
-        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+        g.set_param(feedback, "scale", ParamValue::Float(0.9))
             .unwrap();
 
         // First apply with outer at default — seeded cache matches,
@@ -1286,7 +1292,7 @@ mod tests {
             &mut cache,
         );
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.2)),
             "outer-drag after a seeded-cache skip must reclaim control",
         );
@@ -1300,7 +1306,7 @@ mod tests {
     #[test]
     fn repeated_seed_does_not_block_outer_drag() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
@@ -1314,7 +1320,7 @@ mod tests {
             &mut cache,
         );
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.7)),
         );
 
@@ -1327,7 +1333,7 @@ mod tests {
             &mut cache,
         );
         assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
+            g.get_node(feedback).unwrap().params.get("scale"),
             Some(&ParamValue::Float(0.7)),
             "repeated reseed must not strand the inner at the wrong value",
         );
@@ -1350,9 +1356,9 @@ mod tests {
 
     #[test]
     fn unused_type_id_constant_compiles() {
-        // Suppress unused-import warning for FEEDBACK_TYPE_ID; this
-        // also documents that we chose Feedback as the test fixture
-        // because it's the only stateful primitive currently available.
+        // Suppress unused-import warning for FEEDBACK_TYPE_ID and
+        // document the stable type-id contract — saved graphs reference
+        // this string, so it must not drift.
         assert_eq!(FEEDBACK_TYPE_ID, "node.feedback");
     }
 }

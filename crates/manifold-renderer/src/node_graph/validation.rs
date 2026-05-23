@@ -132,7 +132,16 @@ pub(super) fn validate_connection(
         });
     }
 
-    if would_create_cycle(graph, from.0, to.0) {
+    // State-capture wires (those landing on a node that flags
+    // `breaks_dependency_cycle`) close a per-frame loop through the
+    // StateStore rather than through this frame's dependency graph.
+    // The cycle they "form" in the wire graph is the intended pattern,
+    // not an error. See EffectNode::breaks_dependency_cycle.
+    let to_breaks_cycle = graph
+        .get_node(to.0)
+        .map(|inst| inst.node.breaks_dependency_cycle())
+        .unwrap_or(false);
+    if !to_breaks_cycle && would_create_cycle(graph, from.0, to.0) {
         return Err(GraphError::CycleDetected {
             involves: vec![from.0, to.0],
         });
@@ -230,11 +239,28 @@ pub(crate) fn reachable_from_final_output(graph: &Graph) -> AHashSet<NodeInstanc
 /// Return nodes in evaluation order (dependencies before dependents).
 /// Errors with [`GraphError::CycleDetected`] if the graph contains a cycle.
 pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError> {
+    // Wires that terminate on a `breaks_dependency_cycle` node are
+    // state captures for next frame, not this-frame dependencies —
+    // they don't contribute to in-degree, and the dependency walk
+    // skips them. Result: marked nodes have zero effective in-degree
+    // and run FIRST each frame (emitting their state.prev), while
+    // the rest of the chain runs after, eventually writing to the
+    // wires that the marked nodes will capture on the next frame.
+    let is_state_capture = |to: NodeInstanceId| {
+        graph
+            .get_node(to)
+            .map(|inst| inst.node.breaks_dependency_cycle())
+            .unwrap_or(false)
+    };
+
     let mut in_degree: AHashMap<NodeInstanceId, u32> = AHashMap::default();
     for inst in graph.nodes() {
         in_degree.insert(inst.id, 0);
     }
     for w in graph.wires() {
+        if is_state_capture(w.to.0) {
+            continue;
+        }
         if let Some(d) = in_degree.get_mut(&w.to.0) {
             *d += 1;
         }
@@ -249,6 +275,9 @@ pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError
     while let Some(id) = queue.pop_front() {
         order.push(id);
         for w in graph.wires_from(id) {
+            if is_state_capture(w.to.0) {
+                continue;
+            }
             if let Some(d) = in_degree.get_mut(&w.to.0) {
                 *d -= 1;
                 if *d == 0 {

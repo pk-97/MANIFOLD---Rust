@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "StylizedFeedback",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Zoom/rotate/blend feedback chain built from primitives: feedback (1-frame delay) → affine_transform (zoom/rotate the previous frame) → gain (scale by Amount) → vignette (soft rectangular fade hides the displaced copy's hard edges) → mix (Screen-blend the source over the transformed history). The loop closes through the feedback node's state capture, exposed in the graph editor.",
   "presetMetadata": {
     "id": "StylizedFeedback",
     "displayName": "Stylized Feedback",
@@ -41,21 +41,6 @@
         "isToggle": false,
         "formatString": "F2",
         "oscSuffix": "Rotate"
-      },
-      {
-        "id": "mode",
-        "name": "Mode",
-        "min": 0.0,
-        "max": 2.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "valueLabels": [
-          "Screen",
-          "Additive",
-          "Max"
-        ],
-        "oscSuffix": "Mode"
       }
     ],
     "bindings": [
@@ -65,12 +50,10 @@
         "defaultValue": 0.5,
         "target": {
           "kind": "handleNode",
-          "handle": "feedback",
-          "param": "amount"
+          "handle": "gain",
+          "param": "gain"
         },
-        "convert": {
-          "type": "Float"
-        }
+        "convert": { "type": "Float" }
       },
       {
         "id": "zoom",
@@ -78,12 +61,10 @@
         "defaultValue": 0.95,
         "target": {
           "kind": "handleNode",
-          "handle": "feedback",
-          "param": "zoom"
+          "handle": "affine",
+          "param": "scale"
         },
-        "convert": {
-          "type": "Float"
-        }
+        "convert": { "type": "Float" }
       },
       {
         "id": "rotate",
@@ -91,78 +72,63 @@
         "defaultValue": 0.0,
         "target": {
           "kind": "handleNode",
-          "handle": "feedback",
+          "handle": "affine",
           "param": "rotation"
         },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "mode",
-        "label": "Mode",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "feedback",
-          "param": "mode"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
+        "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    }
+    "skipMode": { "kind": "never" }
   },
   "nodes": [
+    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 1, "typeId": "node.feedback", "handle": "feedback" },
     {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
-    {
-      "id": 1,
-      "typeId": "node.feedback",
-      "handle": "feedback",
+      "id": 2,
+      "typeId": "node.affine_transform",
+      "handle": "affine",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 0
-        },
-        "rotation": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "zoom": {
-          "type": "Float",
-          "value": 0.95
-        }
+        "scale": { "type": "Float", "value": 0.95 },
+        "rotation": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
-  ],
-  "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "source"
+      "id": 3,
+      "typeId": "node.gain",
+      "handle": "gain",
+      "params": {
+        "gain": { "type": "Float", "value": 0.5 }
+      }
     },
     {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+      "id": 4,
+      "typeId": "node.vignette",
+      "handle": "vignette",
+      "params": {
+        "shape": { "type": "Enum", "value": 2 },
+        "size": { "type": "Float", "value": 0.98 },
+        "softness": { "type": "Float", "value": 0.04 },
+        "strength": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.mix",
+      "handle": "mix",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    { "id": 6, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
   ]
 }

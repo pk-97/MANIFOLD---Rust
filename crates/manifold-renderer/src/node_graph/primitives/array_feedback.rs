@@ -53,6 +53,13 @@ struct ArrayFeedbackState {
 impl NodeState for ArrayFeedbackState {}
 
 impl Primitive for ArrayFeedback {
+    /// `in` is a state capture for next frame, not a per-frame
+    /// dependency. Mirrors `temporal::Feedback`'s contract — see the
+    /// `EffectNode::breaks_dependency_cycle` docstring.
+    fn breaks_dependency_cycle(&self) -> bool {
+        true
+    }
+
     /// Output `out` is sized to match the input `in`. The persistent
     /// `prev` buffer in `StateStore` reallocates internally if the
     /// wire's byte length changes.

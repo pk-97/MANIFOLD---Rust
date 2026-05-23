@@ -360,6 +360,39 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Whether the wires INTO this node should be treated as state
+    /// captures rather than per-frame dependencies. When `true`:
+    /// `topological_sort` ignores incoming edges (the node has zero
+    /// in-degree regardless of how many wires terminate on it) and
+    /// `Graph::connect`'s cycle check allows a wire to land on this
+    /// node even if it'd otherwise close a cycle.
+    ///
+    /// The intended use is 1-frame-delay primitives — `node.feedback`,
+    /// `node.array_feedback`, and any future reaction-diffusion / paint
+    /// accumulator / smoke sim that closes its loop through `StateStore`
+    /// rather than through wires. Their input is "what to remember for
+    /// next frame," not "what to compute from this frame," so the
+    /// dependency-graph view of a feedback chain like
+    /// `source → mix → feedback → affine → mix` is a DAG once the
+    /// `mix → feedback` edge is recognised as a state capture.
+    ///
+    /// Topologically, marked nodes run FIRST each frame: they emit
+    /// last frame's captured value (their `out`) before any consumer
+    /// runs, and they capture the wire-buffer value of their `in` —
+    /// which still holds the previous frame's producer write — into
+    /// their state. The effective delay is two frames between a
+    /// downstream producer's write and the marked node's subsequent
+    /// emit (one frame of buffer carry-over, one frame of state
+    /// carry-over) — slightly longer than the old packaged
+    /// `node.feedback` which evolved its blend internally each frame,
+    /// but visually indistinguishable for typical feedback effects
+    /// where evolution is governed by per-frame `amount`/`decay`.
+    ///
+    /// Default: `false`.
+    fn breaks_dependency_cycle(&self) -> bool {
+        false
+    }
+
     /// Reset persistent state (previous-frame textures, accumulators,
     /// density grids, mip pyramids, StateStore entries — anything the
     /// node holds across frames). Default: no-op for stateless nodes.

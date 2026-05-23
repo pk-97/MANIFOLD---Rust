@@ -79,6 +79,17 @@ pub struct ExecutionPlan {
     /// provide (encoder, state store) and panics with a clean
     /// message before evaluating any step.
     requires: NodeRequires,
+    /// Resources whose lifetime spans frame boundaries — wires that
+    /// terminate on a [`breaks_dependency_cycle`](crate::node_graph::effect_node::EffectNode::breaks_dependency_cycle)
+    /// node carry next-frame state through the same physical buffer.
+    /// They are excluded from every step's `free_after` (so the pool
+    /// never recycles their slots), and must be acquired BEFORE step
+    /// 0 each frame — the reading step (the marked node) runs first
+    /// in topo order, and its `backend.slot_for` would otherwise panic
+    /// because the producer that writes the resource runs LATER this
+    /// frame. The executor walks this list and calls `Backend::acquire`
+    /// (idempotent on existing bindings) before the step loop.
+    persistent_resources: Vec<ResourceId>,
 }
 
 impl ExecutionPlan {
@@ -112,6 +123,13 @@ impl ExecutionPlan {
     /// boundary rather than discovering mid-frame via `.expect()`.
     pub fn requires(&self) -> NodeRequires {
         self.requires
+    }
+
+    /// Resources that must be pre-acquired by the executor before
+    /// the first step runs each frame, and never appear in any
+    /// step's `free_after`. See the struct field docstring.
+    pub fn persistent_resources(&self) -> &[ResourceId] {
+        &self.persistent_resources
     }
 }
 
@@ -178,13 +196,27 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // Second pass: build steps, tracking last_reader for each resource.
     // last_reader starts at the producer's step (so unread resources are
     // freed immediately) and gets bumped each time a downstream node reads.
+    //
+    // Wires that terminate on a `breaks_dependency_cycle` node are
+    // STATE CAPTURES, not per-frame reads — the read happens at step 0
+    // (the marked node runs first under the topo-sort exemption) but
+    // semantically picks up the previous frame's producer write that
+    // still occupies the buffer. They must NOT contribute to
+    // `last_reader` (else the resource gets freed before the producer
+    // writes it this frame) and the resource's slot must persist
+    // across frame boundaries. We collect them in `persistent` and
+    // surface them on the plan so the executor pre-acquires them.
     let mut last_reader: AHashMap<ResourceId, usize> = AHashMap::default();
+    let mut persistent: Vec<ResourceId> = Vec::new();
+    let mut persistent_seen: std::collections::HashSet<ResourceId> =
+        std::collections::HashSet::new();
     let mut steps: Vec<ExecutionStep> = Vec::with_capacity(order.len());
 
     for (step_idx, &node_id) in order.iter().enumerate() {
         let inst = graph
             .get_node(node_id)
             .expect("topo order references existing node");
+        let is_state_capture_consumer = inst.node.breaks_dependency_cycle();
 
         let mut step_inputs = Vec::new();
         for input_port in inst.node.inputs() {
@@ -193,7 +225,13 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                     .get(&wire.from)
                     .expect("connect() guarantees the wire's source has a resource");
                 step_inputs.push((input_port.name, res_id));
-                last_reader.insert(res_id, step_idx);
+                if is_state_capture_consumer {
+                    if persistent_seen.insert(res_id) {
+                        persistent.push(res_id);
+                    }
+                } else {
+                    last_reader.insert(res_id, step_idx);
+                }
             }
             // Optional unwired inputs are omitted from the bindings.
         }
@@ -272,7 +310,14 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // step (now reflecting any skip-passthrough extensions) and
     // attach to the corresponding step's free_after list. Sort
     // within each bucket for deterministic iteration order in
-    // tests.
+    // tests. Persistent resources are explicitly skipped — they
+    // were never added to `last_reader` in pass 2, but a producer's
+    // `or_insert` could have planted a default entry for them in the
+    // outputs walk. Drop it before bucketing so the slot survives
+    // across frames.
+    for res_id in &persistent {
+        last_reader.remove(res_id);
+    }
     let mut free_at_step: AHashMap<usize, Vec<ResourceId>> = AHashMap::default();
     for (&res_id, &step_idx) in &last_reader {
         free_at_step.entry(step_idx).or_default().push(res_id);
@@ -292,11 +337,13 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         acc.union(inst.node.requires())
     });
 
+    persistent.sort();
     Ok(ExecutionPlan {
         steps,
         resource_types,
         resource_formats,
         requires,
+        persistent_resources: persistent,
     })
 }
 

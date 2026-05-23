@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "SmearMosh",
-  "description": "Datamosh-style smear with edge-density-driven chromatic shear. The image's own bright regions read live; dark regions blend with a slow-decaying feedback history. In parallel, EdgeDetect → Luminance → Smoothing measures how busy the frame is and drives ChromaticOffset's amount: frames packed with edges get aggressive RGB shear, calm frames pass cleanly. Pixels are genuinely transformed every frame — color shifts, ghost trails, channel separation — not just translated.",
+  "description": "Datamosh-style smear with edge-density-driven chromatic shear. The image's own bright regions read live; dark regions blend with a slow-decaying feedback history. The feedback loop is built from primitives (feedback → gain → vignette → mix) — no transform, just a tight Screen blend back over the source. In parallel, EdgeDetect → Luminance → Smoothing measures how busy the frame is and drives ChromaticOffset's amount: frames packed with edges get aggressive RGB shear, calm frames pass cleanly.",
   "presetMetadata": {
     "id": "SmearMosh",
     "displayName": "Smear Mosh",
@@ -47,8 +47,8 @@
         "defaultValue": 0.6,
         "target": {
           "kind": "handleNode",
-          "handle": "feedback",
-          "param": "amount"
+          "handle": "gain",
+          "param": "gain"
         },
         "convert": { "type": "Float" }
       },
@@ -75,48 +75,51 @@
         "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "smear"
-    }
+    "skipMode": { "kind": "onZero", "paramId": "smear" }
   },
   "nodes": [
+    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 1, "typeId": "node.feedback", "handle": "feedback" },
     {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
-    {
-      "id": 1,
-      "typeId": "node.feedback",
-      "handle": "feedback",
+      "id": 2,
+      "typeId": "node.gain",
+      "handle": "gain",
       "params": {
-        "amount": { "type": "Float", "value": 0.6 },
-        "zoom": { "type": "Float", "value": 1.0 },
-        "rotation": { "type": "Float", "value": 0.0 },
-        "mode": { "type": "Enum", "value": 0 }
+        "gain": { "type": "Float", "value": 0.6 }
       }
     },
     {
-      "id": 2,
+      "id": 3,
+      "typeId": "node.vignette",
+      "handle": "vignette",
+      "params": {
+        "shape": { "type": "Enum", "value": 2 },
+        "size": { "type": "Float", "value": 0.98 },
+        "softness": { "type": "Float", "value": 0.04 },
+        "strength": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.mix",
+      "handle": "mix",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 5,
       "typeId": "node.masked_mix",
       "handle": "masked_mix",
       "params": {
         "amount": { "type": "Float", "value": 1.0 }
       }
     },
+    { "id": 6, "typeId": "node.edge_detect", "handle": "edge_detect" },
+    { "id": 7, "typeId": "node.luminance", "handle": "luminance" },
     {
-      "id": 3,
-      "typeId": "node.edge_detect",
-      "handle": "edge_detect"
-    },
-    {
-      "id": 4,
-      "typeId": "node.luminance",
-      "handle": "luminance"
-    },
-    {
-      "id": 5,
+      "id": 8,
       "typeId": "node.smoothing",
       "handle": "smoothing",
       "params": {
@@ -124,7 +127,7 @@
       }
     },
     {
-      "id": 6,
+      "id": 9,
       "typeId": "node.value",
       "handle": "shear_value",
       "params": {
@@ -132,7 +135,7 @@
       }
     },
     {
-      "id": 7,
+      "id": 10,
       "typeId": "node.math",
       "handle": "math_shear",
       "params": {
@@ -140,7 +143,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 11,
       "typeId": "node.chromatic_aberration",
       "handle": "chromatic",
       "params": {
@@ -151,24 +154,24 @@
         "falloff": { "type": "Float", "value": 0.5 }
       }
     },
-    {
-      "id": 9,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
+    { "id": 12, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "a" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "b" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "mask" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "b" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "amount" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 8, "toPort": "in" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "in" }
+    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "b" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "mask" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "b" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "amount" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" }
   ]
 }
