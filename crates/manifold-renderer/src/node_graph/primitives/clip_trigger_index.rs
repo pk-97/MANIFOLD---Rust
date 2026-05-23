@@ -1,0 +1,88 @@
+//! `node.clip_trigger_index` — emit `trigger_count % modulus` as a
+//! scalar, via the idempotence-safe [`ClipTriggerCycle`] gate.
+//!
+//! The control-rate cycling primitive for graph-level "swap to next
+//! on clip retrigger" UX. The standalone counterpart to Plasma's
+//! internal `clip_trigger_cycle.step(...)` — moved out into the
+//! graph so any consumer (a mux_texture's selector, an Int param on
+//! some downstream primitive) can drive its discrete behaviour off
+//! the same clip-trigger source.
+//!
+//! Pass raw `trigger_count` in — never pre-wrap via `node.math`. The
+//! gate's idempotence detection compares against the last raw value
+//! it saw; pre-wrapping (`trigger_count % N` upstream) breaks the
+//! comparison and reintroduces the 67f8db94 "identical back-to-back
+//! emissions" bug.
+
+use crate::generators::clip_trigger::ClipTriggerCycle;
+use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::primitive::Primitive;
+
+crate::primitive! {
+    name: ClipTriggerIndex,
+    type_id: "node.clip_trigger_index",
+    purpose: "Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. The graph-level counterpart to a primitive's internal clip-trigger cycling (Plasma does this inline). Use as `mux_texture.selector` to swap between N upstream variants on each clip retrigger; pair with `mux_scalar` and a static-axis param to support both manual and trigger-driven modes from one outer-card toggle.",
+    inputs: {
+        trigger_count: ScalarF32 optional,
+    },
+    outputs: {
+        out: ScalarF32,
+    },
+    params: [
+        ParamDef {
+            name: "modulus",
+            label: "Modulus",
+            ty: ParamType::Int,
+            default: ParamValue::Float(3.0),
+            range: Some((1.0, 64.0)),
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "Wire system.generator_input.trigger_count → trigger_count input. Modulus is the cycle length (3 for a tri-state axis swap, 8 for an eight-variant pattern bank). Pass raw trigger_count — never pre-wrap via math.modulo upstream; the gate's idempotence detection compares against the last raw value it saw, so pre-wrapping breaks the cycle (the 67f8db94 bug class). Output is `current_index` as f32 in [0, modulus). State is preserved across frames inside the primitive's extra_fields and resets on generator rebuild — accepted authoring-time trade-off per §10.",
+    examples: [],
+    picker: { label: "Clip Trigger Index", category: Atom },
+    extra_fields: {
+        cycle: ClipTriggerCycle = ClipTriggerCycle::new(),
+    },
+}
+
+impl Primitive for ClipTriggerIndex {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let trigger_count = ctx.scalar_or_param("trigger_count", 0.0);
+        let raw = trigger_count.floor().max(0.0) as u32;
+        let modulus = match ctx.params.get("modulus") {
+            Some(ParamValue::Float(f)) => f.round().max(1.0) as u32,
+            _ => 3,
+        };
+        let idx = self.cycle.step(raw, modulus);
+        ctx.outputs
+            .set_scalar("out", ParamValue::Float(idx as f32));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::EffectNode;
+    use crate::node_graph::primitive::PrimitiveSpec;
+    use crate::node_graph::ports::{PortType, ScalarType};
+
+    #[test]
+    fn clip_trigger_index_declares_trigger_in_and_scalar_out() {
+        assert_eq!(ClipTriggerIndex::TYPE_ID, "node.clip_trigger_index");
+        assert_eq!(ClipTriggerIndex::INPUTS.len(), 1);
+        assert_eq!(ClipTriggerIndex::INPUTS[0].name, "trigger_count");
+        assert!(!ClipTriggerIndex::INPUTS[0].required);
+        assert_eq!(ClipTriggerIndex::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(ClipTriggerIndex::OUTPUTS.len(), 1);
+        assert_eq!(ClipTriggerIndex::OUTPUTS[0].name, "out");
+    }
+
+    #[test]
+    fn primitive_registers() {
+        let prim = ClipTriggerIndex::new();
+        let node: &dyn EffectNode = &prim;
+        assert_eq!(node.type_id().as_str(), "node.clip_trigger_index");
+    }
+}

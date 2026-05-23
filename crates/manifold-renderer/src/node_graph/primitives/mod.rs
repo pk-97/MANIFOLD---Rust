@@ -23,6 +23,7 @@ mod chroma_key;
 mod checkerboard;
 mod chromatic_offset;
 mod clamp_stretch;
+mod clip_trigger_index;
 mod color;
 mod color_grade;
 mod color_sample;
