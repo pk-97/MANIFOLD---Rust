@@ -10,19 +10,18 @@
     "available": true,
     "params": [
       {
-        "id": "slice_axis",
-        "name": "Slice Axis",
+        "id": "folder",
+        "name": "Folder",
         "min": 0.0,
         "max": 2.0,
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
-        "valueLabels": ["Axial", "Sagittal", "Coronal"],
         "formatString": "F0"
       },
       {
-        "id": "slice_pos",
-        "name": "Slice Pos",
+        "id": "position",
+        "name": "Position",
         "min": 0.0,
         "max": 1.0,
         "defaultValue": 0.5,
@@ -81,17 +80,6 @@
         "formatString": "F1"
       },
       {
-        "id": "scan",
-        "name": "Scan",
-        "min": 0.0,
-        "max": 2.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "valueLabels": ["250µm 7T", "300µm HiRes", "Edlow 100µm"],
-        "formatString": "F0"
-      },
-      {
         "id": "clip_trigger",
         "name": "Clip Trigger",
         "min": 0.0,
@@ -102,22 +90,26 @@
         "formatString": "F0"
       }
     ],
+    "paramAliases": [
+      { "old": "slice_axis", "new": "folder" },
+      { "old": "slice_pos",  "new": "position" }
+    ],
     "stringParams": [
       { "id": "axial_folder", "name": "Axial Folder", "defaultValue": "assets/mri-data/volumes/edlow_100um_synthesized/axial", "isFilePicker": true },
       { "id": "sagittal_folder", "name": "Sagittal Folder", "defaultValue": "assets/mri-data/volumes/edlow_100um_synthesized/sagittal", "isFilePicker": true },
       { "id": "coronal_folder", "name": "Coronal Folder", "defaultValue": "assets/mri-data/volumes/edlow_100um_synthesized/coronal", "isFilePicker": true }
     ],
     "bindings": [
-      { "id": "slice_axis", "label": "Slice Axis", "defaultValue": 0.0,
+      { "id": "folder", "label": "Folder", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "axis_manual", "param": "value" },
         "convert": { "type": "Float" } },
-      { "id": "slice_pos", "label": "Slice Pos", "defaultValue": 0.5,
+      { "id": "position", "label": "Position", "defaultValue": 0.5,
         "target": { "kind": "handleNode", "handle": "axial", "param": "position" },
         "convert": { "type": "Float" } },
-      { "id": "slice_pos", "label": "Slice Pos", "defaultValue": 0.5,
+      { "id": "position", "label": "Position", "defaultValue": 0.5,
         "target": { "kind": "handleNode", "handle": "sagittal", "param": "position" },
         "convert": { "type": "Float" } },
-      { "id": "slice_pos", "label": "Slice Pos", "defaultValue": 0.5,
+      { "id": "position", "label": "Position", "defaultValue": 0.5,
         "target": { "kind": "handleNode", "handle": "coronal", "param": "position" },
         "convert": { "type": "Float" } },
       { "id": "center", "label": "Center", "defaultValue": 0.5,
