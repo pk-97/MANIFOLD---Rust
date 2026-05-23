@@ -105,6 +105,7 @@ mod seed_particles_from_texture;
 mod seed_particles;
 mod separable_gaussian;
 mod simplex_noise_2d;
+mod simplex_per_instance;
 mod affine_scalar;
 mod canvas_area_scale;
 mod centered_uv;
@@ -254,6 +255,7 @@ pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
 };
 pub use simplex_noise_2d::SimplexNoise2D;
+pub use simplex_per_instance::SimplexPerInstance;
 pub use affine_scalar::AffineScalar;
 pub use canvas_area_scale::CanvasAreaScale;
 pub use centered_uv::CenteredUv;
