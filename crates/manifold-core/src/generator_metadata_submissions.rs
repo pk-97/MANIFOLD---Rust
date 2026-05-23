@@ -402,6 +402,18 @@ inventory::submit! {
 }
 
 // ── MRI Volume ─────────────────────────────────────────────────────────
+//
+// Numeric params kept at their legacy positions so saved projects'
+// positional `legacy_param_index` resolution keeps mapping into the
+// same names the new JSON preset declares — no paramAliases needed.
+// The `scan` slot stays as an inert legacy marker; the new JSON-graph
+// generator carries no binding for it (one preset = one scan, repoint
+// per clip via the three folder string_params instead).
+//
+// Three folder string_params surface as text fields on the outer card;
+// the JSON preset's `stringBindings` route each into the matching
+// `image_folder` node's `folder` param. Per-clip overrides flow
+// through the existing `Clip.string_params` map.
 
 inventory::submit! {
     GeneratorMetadata {
@@ -422,7 +434,11 @@ inventory::submit! {
             ParamSpec::whole_labels("scan", "Scan", 0.0, 2.0, 0.0, &["250µm 7T", "300µm HiRes", "Edlow 100µm"], "scan"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
-        string_params: &[],
+        string_params: &[
+            ("Axial Folder", "axial_folder", "assets/mri-data/volumes/edlow_100um_synthesized/axial", false),
+            ("Sagittal Folder", "sagittal_folder", "assets/mri-data/volumes/edlow_100um_synthesized/sagittal", false),
+            ("Coronal Folder", "coronal_folder", "assets/mri-data/volumes/edlow_100um_synthesized/coronal", false),
+        ],
     }
 }
 
