@@ -57,6 +57,7 @@ mod generate_lissajous;
 mod wireframe_shape;
 mod generate_tesseract_vertices;
 mod glitch;
+mod grid_uv_field;
 mod halation;
 mod highlight_boost;
 mod infrared;
@@ -203,6 +204,7 @@ pub use generate_tesseract_vertices::{
     GenerateTesseractVertices, TESSERACT_VERTEX_COUNT,
 };
 pub use glitch::Glitch;
+pub use grid_uv_field::GridUvField;
 pub use halation::{HALATION_TYPE_ID, Halation};
 pub use highlight_boost::HighlightBoost;
 pub use infrared::{INFRARED_PALETTES, INFRARED_TYPE_ID, Infrared};

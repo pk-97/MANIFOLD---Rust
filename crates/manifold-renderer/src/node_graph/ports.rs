@@ -97,6 +97,14 @@ pub enum ItemKind {
     /// `scalar_array_accumulator`, consumed by primitives that take
     /// a target-pose buffer (e.g. `nested_cubes_geometry`).
     F32Slot,
+    /// Raw `vec2<f32>` slot — variable-length 2D vector arrays, e.g.
+    /// per-instance UV coordinates emitted by `grid_uv_field`,
+    /// consumed by per-instance noise samplers and topology-wrap
+    /// primitives. Distinct from `CurvePoint` because the convention
+    /// here is "raw 2D data with no declared coordinate space"; if a
+    /// specific space (origin-centered curve, screen, world) becomes
+    /// load-bearing, promote to a named struct + named `ItemKind`.
+    Vec2Slot,
 }
 
 /// Compile-time descriptor for an item type that flows through an
@@ -120,6 +128,10 @@ impl KnownItem for u32 {
 
 impl KnownItem for f32 {
     const ITEM_KIND: ItemKind = ItemKind::F32Slot;
+}
+
+impl KnownItem for [f32; 2] {
+    const ITEM_KIND: ItemKind = ItemKind::Vec2Slot;
 }
 
 /// Layout descriptor for [`PortType::Array`] wires.
