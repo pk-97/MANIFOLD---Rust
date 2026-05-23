@@ -335,6 +335,19 @@ pub trait EffectNode: Send {
         NodeRequires::default()
     }
 
+    /// Declared `(input_port, output_port)` pairs that share a single
+    /// physical buffer. Used by stateful array simulators
+    /// (`integrate_particles`, `integrate_particles_attractor`) where
+    /// the GPU dispatch reads from and writes to the same storage in
+    /// place. The chain builder pre-allocates one buffer per pair —
+    /// sized by the input wire's capacity — and aliases the output's
+    /// slot to the input's, so upstream writes flow through and
+    /// cross-frame state lives in the chain-allocated buffer. Default:
+    /// empty (no aliasing).
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// Reset persistent state (previous-frame textures, accumulators,
     /// density grids, mip pyramids, StateStore entries — anything the
     /// node holds across frames). Default: no-op for stateless nodes.

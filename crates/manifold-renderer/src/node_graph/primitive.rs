@@ -159,6 +159,20 @@ pub trait Primitive: PrimitiveSpec {
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
     /// Mirror of
+    /// [`EffectNode::aliased_array_io`](crate::node_graph::effect_node::EffectNode::aliased_array_io).
+    /// Declare `(input_port, output_port)` pairs that share a single
+    /// physical buffer. Used by stateful array simulators
+    /// (`integrate_particles`, `integrate_particles_attractor`) where
+    /// the dispatch reads from and writes to the same storage in
+    /// place. The chain builder allocates one buffer per pair (sized
+    /// by the input wire's capacity) and aliases the output's slot to
+    /// the input's, so upstream writes flow through and cross-frame
+    /// state lives in the chain-allocated buffer.
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
+    /// Mirror of
     /// [`EffectNode::array_output_capacity`](crate::node_graph::effect_node::EffectNode::array_output_capacity).
     /// Override on transform primitives (capacity inherited from a
     /// named Array input port) and on computed-capacity primitives
@@ -226,6 +240,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         Primitive::array_output_capacity(self, port_name, params, input_capacities)
+    }
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        Primitive::aliased_array_io(self)
     }
 }
 

@@ -72,9 +72,12 @@ crate::primitive! {
 }
 
 impl Primitive for IntegrateParticles {
-    /// Output `out` is sized to match the input `in` — the in-place
-    /// integration writes through the producer's buffer; the chain
-    /// build aliases `in` and `out` to the same slot.
+    /// Output `out` shares the input `in`'s capacity and physical
+    /// buffer (declared via `aliased_array_io()` below). The advection
+    /// kernel updates particle positions in place; downstream
+    /// consumers see the integrated positions through the aliased
+    /// output slot, and cross-frame persistence falls out of the
+    /// chain-allocated buffer being reused each frame.
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -86,6 +89,13 @@ impl Primitive for IntegrateParticles {
         } else {
             None
         }
+    }
+
+    /// `in` and `out` resolve to the same physical buffer at chain
+    /// build. The advection dispatch operates on a single buffer,
+    /// reading positions and writing updated positions in place.
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[("in", "out")]
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

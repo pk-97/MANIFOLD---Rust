@@ -101,7 +101,7 @@ fn attractor_base_dt(atype: u32) -> f32 {
 crate::primitive! {
     name: IntegrateParticlesAttractor,
     type_id: "node.integrate_particles_attractor",
-    purpose: "Integrate an Array<Particle> through one of five strange-attractor ODEs (Lorenz / Rössler / Aizawa / Thomas / Halvorsen) using RK2 sub-stepping with 3D→2D perspective projection. Per-attractor intrinsic constants — domain centre, scale, and base integration timestep — live inside the primitive; the user picks the attractor enum and the math is correct. `dt_multiplier` scales the per-type base dt for live speed control. Every numeric param (chaos, cam_angle, cam_tilt, aspect, diffusion, dt_multiplier, uv_scale, particle_count) is port-shadowed. On `attractor_type` change — or on a state-store reset — the primitive automatically dispatches `cs_seed` so particles land on the new manifold immediately. Pair with `node.array_feedback` upstream to persist particle state across frames, and feed into `node.scatter_particles` (boundary = Discard, because perspective projection puts particles outside [0,1]²) → `node.resolve_accumulator` → `node.reinhard_tone_map` for the full attractor visualisation.",
+    purpose: "Integrate an Array<Particle> through one of five strange-attractor ODEs (Lorenz / Rössler / Aizawa / Thomas / Halvorsen) using RK2 sub-stepping with 3D→2D perspective projection. Per-attractor intrinsic constants — domain centre, scale, and base integration timestep — live inside the primitive; the user picks the attractor enum and the math is correct. `dt_multiplier` scales the per-type base dt for live speed control. Every numeric param is port-shadowed. On `attractor_type` change — or on a state-store reset — the primitive automatically dispatches `cs_seed` so particles land on the new manifold instantly. Declares its `in` and `out` Array ports as aliased: the chain builder routes both port slots to a single physical buffer, so the simulate kernel's in-place writes are visible to downstream consumers and persist across frames. Pair with `node.seed_particles` (seed_mode=OnceOnReset) upstream as the buffer's capacity declaration, and feed into `node.scatter_particles` (boundary = Discard) → `node.resolve_accumulator` → `node.reinhard_tone_map` for the full attractor visualisation.",
     inputs: {
         in: Array(Particle) required,
         chaos: ScalarF32 optional,
@@ -249,9 +249,10 @@ impl IntegrateParticlesAttractor {
 }
 
 impl Primitive for IntegrateParticlesAttractor {
-    /// Output `out` shares the input `in`'s capacity — the simulate
-    /// kernel works in place on the producer's buffer; the chain
-    /// build aliases both slots to the same MTLBuffer.
+    /// Output `out` shares the input `in`'s capacity. Declared
+    /// aliased via `aliased_array_io()` below — the chain builder
+    /// routes both port slots to the same physical buffer so the
+    /// simulate kernel's in-place writes are visible downstream.
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -266,6 +267,15 @@ impl Primitive for IntegrateParticlesAttractor {
         } else {
             None
         }
+    }
+
+    /// `in` and `out` resolve to the same physical buffer at chain
+    /// build. The dispatch operates on a single buffer; the upstream
+    /// producer's data flows through naturally, and cross-frame
+    /// state lives in the chain-allocated buffer (which the runtime
+    /// keeps alive between frames).
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[("in", "out")]
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -683,17 +693,18 @@ mod gpu_tests {
         .unwrap();
         let plan = compile(&g).unwrap();
 
-        // Pre-bind both `in` and `out`. The simulate kernel writes
-        // in-place through `in_buf`; the `out` buffer is unused but
-        // the run() guard early-returns if the runtime hasn't pinned
-        // a buffer for it.
+        // Pre-bind `in` then alias `out` to the same slot — mirrors
+        // what the production chain build does for primitives that
+        // declare `aliased_array_io()`. A single physical buffer
+        // carries the data; integrate writes in place; downstream
+        // consumers (in this test: the readback path itself) see the
+        // result through the aliased output slot.
         let r_in = resource_for(&plan, src, "out", false);
         let r_out = resource_for(&plan, int_node, "out", false);
 
         let particle_bytes =
             (TEST_PARTICLE_COUNT as u64) * std::mem::size_of::<Particle>() as u64;
         let in_buf = device.create_buffer_shared(particle_bytes);
-        let out_buf = device.create_buffer_shared(particle_bytes);
 
         // CPU-write all-zero particles (life = 0 — dead by default).
         // `cs_seed` overwrites every slot with a manifold-seeded
@@ -706,7 +717,7 @@ mod gpu_tests {
 
         let mut backend = MetalBackend::new(&device, 1, 1, format);
         let in_slot = backend.pre_bind_array(r_in, in_buf);
-        let _out_slot = backend.pre_bind_array(r_out, out_buf);
+        backend.alias_array_resource(r_out, in_slot);
 
         let mut native_enc = device.create_encoder("integrate-attractor-test");
         let mut exec = Executor::new(Box::new(backend));

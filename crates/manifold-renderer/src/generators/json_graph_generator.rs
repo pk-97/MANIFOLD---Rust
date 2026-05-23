@@ -460,10 +460,50 @@ impl JsonGraphGenerator {
                 input_capacities.push((*port_name, count));
             }
 
+            // Aliased in/out port pairs declared by this primitive
+            // (typically empty; stateful array simulators —
+            // `integrate_particles`, `integrate_particles_attractor`,
+            // future ping-pong sims — return a pair so the chain
+            // builder routes both port slots to one physical buffer.)
+            let aliased_pairs = node_inst.node.aliased_array_io();
+
             for (port_name, res_id) in &step.outputs {
                 let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
                     continue;
                 };
+
+                // If this output is the right-hand side of an aliased
+                // pair AND the matching input is wired, route the
+                // output's resource id to the input's slot. No new
+                // buffer allocated; the simulator reads + writes the
+                // same storage in place and downstream consumers see
+                // the result.
+                let aliased_input_port = aliased_pairs
+                    .iter()
+                    .find(|(_, out_port)| *out_port == *port_name)
+                    .map(|(in_port, _)| *in_port);
+
+                if let Some(in_port) = aliased_input_port {
+                    let in_res = step
+                        .inputs
+                        .iter()
+                        .find(|(name, _)| *name == in_port)
+                        .map(|(_, id)| *id);
+                    if let Some(in_res) = in_res
+                        && let Some(in_slot) = backend.slot_for(in_res)
+                    {
+                        backend.alias_array_resource(*res_id, in_slot);
+                        continue;
+                    }
+                    log::warn!(
+                        "JsonGraphGenerator: node `{node_type}` declared port \
+                         `{in_port}` → `{port_name}` aliased, but `{in_port}` \
+                         is not wired or has no pre-bound slot. Falling back \
+                         to a fresh allocation; the simulator's in-place \
+                         dispatch will write to the standalone buffer.",
+                    );
+                }
+
                 let Some(capacity) = node_inst.node.array_output_capacity(
                     port_name,
                     &node_inst.params,
@@ -1145,6 +1185,107 @@ mod tests {
                 "Array resource {res:?} has no backing buffer after resize",
             );
         }
+    }
+
+    /// Architectural regression: a stateful array simulator that
+    /// declares `aliased_array_io()` must have its `in` and `out`
+    /// ports resolved to the **same physical slot** by the chain
+    /// build, and downstream consumers' input slots must equal that
+    /// same slot. Pre-fix the chain builder allocated separate
+    /// buffers per wire, so `integrate.in`, `integrate.out`, and
+    /// `scatter.particles` were three different MTLBuffers — every
+    /// downstream consumer saw zero data and the entire Strange
+    /// Attractor pipeline rendered black.
+    ///
+    /// This test pins the fix at the chain-build level: the same
+    /// slot identity is the invariant that lets the buffer-flow
+    /// model carry stateful simulator data correctly.
+    #[test]
+    fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
+        use crate::node_graph::Backend;
+        let device = crate::test_device();
+        let json = include_str!(
+            "../../assets/generator-presets/ComputeStrangeAttractor.json"
+        );
+        let mut g = JsonGraphGenerator::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("ComputeStrangeAttractor preset must load");
+
+        // Find the integrate node, scatter node — the alias contract
+        // is about THIS edge: integrate.in === integrate.out (declared
+        // aliased), and scatter.particles consumes integrate.out.
+        let find_node = |type_id: &str| -> NodeInstanceId {
+            for step in g.plan.steps() {
+                let inst = g.graph.get_node(step.node).expect("step's node");
+                if inst.node.type_id().as_str() == type_id {
+                    return step.node;
+                }
+            }
+            panic!("node `{type_id}` not in compiled plan");
+        };
+        let integrate_node = find_node("node.integrate_particles_attractor");
+        let scatter_node = find_node("node.scatter_particles");
+
+        let resource_for = |node: NodeInstanceId, port: &str, is_input: bool| -> ResourceId {
+            for step in g.plan.steps() {
+                if step.node == node {
+                    let ports = if is_input { &step.inputs } else { &step.outputs };
+                    for &(name, id) in ports {
+                        if name == port {
+                            return id;
+                        }
+                    }
+                }
+            }
+            panic!(
+                "missing {} port `{port}` on node {node:?}",
+                if is_input { "input" } else { "output" }
+            );
+        };
+
+        let integrate_in_res = resource_for(integrate_node, "in", true);
+        let integrate_out_res = resource_for(integrate_node, "out", false);
+        let scatter_in_res = resource_for(scatter_node, "particles", true);
+
+        let metal = g
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("production path constructs a MetalBackend");
+
+        let in_slot = metal
+            .slot_for(integrate_in_res)
+            .expect("integrate.in must be bound after chain build");
+        let out_slot = metal
+            .slot_for(integrate_out_res)
+            .expect("integrate.out must be bound after chain build");
+        let scatter_slot = metal
+            .slot_for(scatter_in_res)
+            .expect("scatter.particles must be bound after chain build");
+
+        assert_eq!(
+            in_slot, out_slot,
+            "aliased_array_io declared `in → out` but the chain builder \
+             allocated separate slots — the simulator's in-place writes \
+             would not be visible downstream",
+        );
+        assert_eq!(
+            out_slot, scatter_slot,
+            "integrate.out and scatter.particles must resolve to the same \
+             slot (they share the wire), proving the aliased buffer flows \
+             through downstream",
+        );
+        assert!(
+            Backend::array_buffer(metal, in_slot).is_some(),
+            "the shared slot must back a real GpuBuffer",
+        );
     }
 
     /// Load the bundled `TrivialPassthrough.json` preset from disk and

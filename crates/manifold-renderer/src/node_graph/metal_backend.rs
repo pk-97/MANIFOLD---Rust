@@ -357,6 +357,22 @@ impl MetalBackend {
         slot
     }
 
+    /// Alias an array `ResourceId` to an already-pre-bound `Slot`. No
+    /// new buffer is allocated; both resources resolve to the same
+    /// physical `GpuBuffer`. Used by the chain builder for primitives
+    /// that declare aliased in/out array ports (see
+    /// [`crate::node_graph::EffectNode::aliased_array_io`]): the
+    /// output's resource id maps to the input's slot so the simulator
+    /// reads and writes the same storage in place.
+    ///
+    /// The aliased resource is pinned — `release()` is a no-op for it,
+    /// since the underlying buffer is owned by the primary
+    /// pre_bind_array call.
+    pub fn alias_array_resource(&mut self, dst: ResourceId, src_slot: Slot) {
+        self.bound.insert(dst, src_slot);
+        self.pinned.insert(dst);
+    }
+
     /// Borrow the `GpuBuffer` bound to an [`PortType::Array`] slot, if
     /// any. Mirrors [`Self::render_target_2d`]. Primitives read this
     /// through the [`Backend::array_buffer`] trait method via the
