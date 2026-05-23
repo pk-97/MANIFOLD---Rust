@@ -467,6 +467,18 @@ impl JsonGraphGenerator {
             // builder routes both port slots to one physical buffer.)
             let aliased_pairs = node_inst.node.aliased_array_io();
 
+            // Canvas-sized outputs: scatter accumulators and any other
+            // primitive whose Array output must align pixel-for-pixel
+            // with the host's canvas (so downstream Texture2D
+            // consumers — pre-allocated at canvas dims by the
+            // backend — don't render into a sub-rectangle when the
+            // host runs at a non-default resolution).
+            let canvas_sized_outputs = node_inst.node.canvas_sized_array_outputs();
+            let (canvas_w, canvas_h) = {
+                use crate::node_graph::Backend;
+                Backend::canvas_dims(backend as &dyn Backend)
+            };
+
             for (port_name, res_id) in &step.outputs {
                 let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
                     continue;
@@ -502,6 +514,30 @@ impl JsonGraphGenerator {
                          to a fresh allocation; the simulator's in-place \
                          dispatch will write to the standalone buffer.",
                     );
+                }
+
+                // Canvas-sized output: allocate width × height cells
+                // from the backend's canvas dims, bypassing
+                // `array_output_capacity`. This makes the buffer
+                // automatically resize on host resolution change (the
+                // chain rebuild on `Generator::resize` re-runs this
+                // pass against the new canvas dims).
+                if canvas_sized_outputs.contains(port_name) {
+                    if canvas_w == 0 || canvas_h == 0 {
+                        log::warn!(
+                            "JsonGraphGenerator: node `{node_type}` port \
+                             `{port_name}` is canvas-sized but the backend's \
+                             canvas dims are 0×0 (mock backend or unconfigured \
+                             — production paths always set non-zero dims). \
+                             Skipping allocation.",
+                        );
+                        continue;
+                    }
+                    let capacity = (canvas_w as u64) * (canvas_h as u64);
+                    let bytes = capacity * layout.item_size as u64;
+                    let buffer = device.create_buffer_shared(bytes);
+                    backend.pre_bind_array(*res_id, buffer);
+                    continue;
                 }
 
                 let Some(capacity) = node_inst.node.array_output_capacity(
@@ -1286,6 +1322,78 @@ mod tests {
             Backend::array_buffer(metal, in_slot).is_some(),
             "the shared slot must back a real GpuBuffer",
         );
+    }
+
+    /// Architectural regression: primitives whose output must align
+    /// with the host canvas (scatter accumulators, future density
+    /// grids) declare `canvas_sized_array_outputs()` and the chain
+    /// builder sizes the buffer from `Backend::canvas_dims()` — not
+    /// from hardcoded JSON params. Pre-fix, scatter's `width`/`height`
+    /// were 1920/1080 in the JSON; at any other host resolution the
+    /// splat coords only filled the top-left quadrant of the
+    /// canvas-sized density texture downstream.
+    ///
+    /// This test loads the bundled Strange Attractor preset at two
+    /// different canvas sizes and asserts the scatter accumulator
+    /// buffer's byte size scales with the canvas, not with the JSON
+    /// param.
+    #[test]
+    fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
+        use crate::node_graph::Backend;
+        let device = crate::test_device();
+        let json = include_str!(
+            "../../assets/generator-presets/ComputeStrangeAttractor.json"
+        );
+
+        let cases = [(1280u32, 720u32), (3840u32, 2160u32)];
+        for (w, h) in cases {
+            let mut g = JsonGraphGenerator::from_json_str_with_device(
+                json,
+                &PrimitiveRegistry::with_builtin(),
+                &device,
+                w,
+                h,
+                GpuTextureFormat::Rgba16Float,
+            )
+            .expect("preset must load");
+
+            let scatter = (|| {
+                for step in g.plan.steps() {
+                    let inst = g.graph.get_node(step.node).expect("step's node");
+                    if inst.node.type_id().as_str() == "node.scatter_particles" {
+                        return step.node;
+                    }
+                }
+                panic!("scatter node missing");
+            })();
+            let accum_res = (|| {
+                for step in g.plan.steps() {
+                    if step.node == scatter {
+                        for &(name, id) in &step.outputs {
+                            if name == "accum" {
+                                return id;
+                            }
+                        }
+                    }
+                }
+                panic!("scatter.accum resource missing");
+            })();
+
+            let metal = g
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<MetalBackend>())
+                .expect("metal backend");
+            let slot = metal.slot_for(accum_res).expect("scatter.accum unbound");
+            let buf = Backend::array_buffer(metal, slot).expect("no backing buffer");
+            let expected = (w as u64) * (h as u64) * 4;
+            assert_eq!(
+                buf.size, expected,
+                "scatter.accum at canvas {w}x{h} should be {expected} bytes, got {}",
+                buf.size,
+            );
+        }
     }
 
     /// Load the bundled `TrivialPassthrough.json` preset from disk and

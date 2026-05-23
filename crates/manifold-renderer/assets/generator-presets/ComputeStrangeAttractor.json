@@ -208,16 +208,12 @@
     { "id": 4, "typeId": "node.scatter_particles", "handle": "scatter",
       "params": {
         "active_count":   { "type": "Float", "value": 500000.0 },
-        "width":          { "type": "Float", "value": 1920.0 },
-        "height":         { "type": "Float", "value": 1080.0 },
         "scaled_energy":  { "type": "Float", "value": 41.0 },
         "boundary":       { "type": "Enum",  "value": 1 }
       } },
 
     { "id": 5, "typeId": "node.resolve_accumulator", "handle": "resolve",
       "params": {
-        "width":             { "type": "Float", "value": 1920.0 },
-        "height":            { "type": "Float", "value": 1080.0 },
         "fixed_point_scale": { "type": "Float", "value": 4096.0 }
       } },
 

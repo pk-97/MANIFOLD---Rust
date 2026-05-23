@@ -567,8 +567,18 @@ mod tests {
                 }
             }
 
+            // Canvas-sized outputs bypass `array_output_capacity` —
+            // the chain builder sizes them from the backend's canvas
+            // dims at allocation time. They're a valid capacity
+            // source even when the method returns None.
+            let canvas_sized: std::collections::HashSet<&str> =
+                node.canvas_sized_array_outputs().iter().copied().collect();
+
             for port in node.outputs() {
                 if !matches!(port.ty, PortType::Array(_)) {
+                    continue;
+                }
+                if canvas_sized.contains(port.name) {
                     continue;
                 }
                 let cap = node.array_output_capacity(port.name, &params, &synthetic_inputs);
@@ -577,8 +587,10 @@ mod tests {
                         "{type_id}: Array output `{}` — \
                          array_output_capacity returned None with default \
                          params and Array inputs bound at 1024. Override \
-                         the method on the primitive, or for producers add \
-                         a `max_capacity` param with an Int/Float default.",
+                         the method on the primitive, declare the port via \
+                         `canvas_sized_array_outputs()` for canvas-matched \
+                         buffers, or for producers add a `max_capacity` \
+                         param with an Int/Float default.",
                         port.name,
                     ));
                 }

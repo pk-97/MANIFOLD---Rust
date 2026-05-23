@@ -173,6 +173,19 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::canvas_sized_array_outputs`](crate::node_graph::effect_node::EffectNode::canvas_sized_array_outputs).
+    /// Output Array port names whose buffer size must equal the
+    /// canvas (`width × height` cells). Used by scatter accumulators
+    /// and any future primitive whose output must align
+    /// pixel-for-pixel with the final frame. The chain builder
+    /// allocates `canvas_w * canvas_h * item_size` bytes — the
+    /// primitive's `array_output_capacity` is bypassed for these
+    /// ports.
+    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Mirror of
     /// [`EffectNode::array_output_capacity`](crate::node_graph::effect_node::EffectNode::array_output_capacity).
     /// Override on transform primitives (capacity inherited from a
     /// named Array input port) and on computed-capacity primitives
@@ -243,6 +256,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
         Primitive::aliased_array_io(self)
+    }
+    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+        Primitive::canvas_sized_array_outputs(self)
     }
 }
 

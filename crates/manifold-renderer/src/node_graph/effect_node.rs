@@ -102,6 +102,14 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// 1` for a layer, `hash(clip_id)` for a clip. Matches the legacy
     /// `EffectContext::owner_key` namespace.
     pub owner_key: OwnerKey,
+    /// Backend canvas dimensions — the host's output texture size this
+    /// frame. Used by primitives that need to size their dispatch to
+    /// fill the full canvas (scatter accumulators, fluid sim grids,
+    /// any "must align pixel-for-pixel with the final frame" output).
+    /// Mirrors `Backend::canvas_dims`; set by the executor before each
+    /// `evaluate` call. `(0, 0)` only for mock backends in unit tests.
+    pub canvas_width: u32,
+    pub canvas_height: u32,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -121,6 +129,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             state: None,
             node_id: NodeInstanceId(0),
             owner_key: 0,
+            canvas_width: 0,
+            canvas_height: 0,
         }
     }
 
@@ -146,7 +156,17 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             state,
             node_id,
             owner_key,
+            canvas_width: 0,
+            canvas_height: 0,
         }
+    }
+
+    /// Set the canvas dimensions on this context. Called by the executor
+    /// before each `evaluate` so primitives can size dispatches to the
+    /// host's actual output texture instead of hardcoded params.
+    pub fn set_canvas_dims(&mut self, width: u32, height: u32) {
+        self.canvas_width = width;
+        self.canvas_height = height;
     }
 
     /// Borrow the [`GpuEncoder`], panicking if absent.
@@ -345,6 +365,18 @@ pub trait EffectNode: Send {
     /// cross-frame state lives in the chain-allocated buffer. Default:
     /// empty (no aliasing).
     fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
+    /// Output Array port names whose buffer size must equal the
+    /// canvas (`width × height` cells). The chain builder, on
+    /// encountering one of these, allocates
+    /// `canvas_w * canvas_h * item_size` bytes from the backend's
+    /// canvas dims — `array_output_capacity` is bypassed for these
+    /// ports. Used by scatter accumulators and any future primitive
+    /// whose output must align pixel-for-pixel with the canvas.
+    /// Default: empty.
+    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
         &[]
     }
 

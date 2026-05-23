@@ -529,6 +529,10 @@ impl Backend for MetalBackend {
         self.bound.get(&id).copied()
     }
 
+    fn canvas_dims(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     fn slot_count(&self) -> u32 {
         self.next_slot
     }

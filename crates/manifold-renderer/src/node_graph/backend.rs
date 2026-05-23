@@ -54,6 +54,17 @@ pub trait Backend: Send {
     /// a baseline pool-size hint for production backends.
     fn slot_count(&self) -> u32;
 
+    /// Canvas dimensions — the output texture size this backend was
+    /// constructed (or resized) against. Used by primitives that need
+    /// to size their dispatch or allocate buffers to match the canvas
+    /// (scatter accumulators, fluid sim grids, density textures —
+    /// anything whose output must align pixel-for-pixel with the final
+    /// frame). Returns `(0, 0)` on mock backends with no allocation
+    /// state; production backends return the host's actual canvas dims.
+    fn canvas_dims(&self) -> (u32, u32) {
+        (0, 0)
+    }
+
     /// Drop all bindings and free pools. Slot count (high-water mark) is
     /// retained so subsequent allocations don't reuse slots across the
     /// boundary.

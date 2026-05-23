@@ -39,7 +39,7 @@ struct ScatterUniforms {
 crate::primitive! {
     name: ScatterParticles,
     type_id: "node.scatter_particles",
-    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized width×height. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width`/`height` stay param-only — the accumulator buffer is allocated to those dims at chain-build time so they can't safely change per frame. Pair with `node.resolve_accumulator` to read the result as a float texture.",
+    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). The accumulator dimensions track the canvas automatically — declared via `canvas_sized_array_outputs()` — so a layer renders correctly at any host resolution without hardcoded width/height params. Pair with `node.resolve_accumulator` to read the result as a float texture.",
     inputs: {
         particles: Array(Particle) required,
         active_count: ScalarF32 optional,
@@ -55,22 +55,6 @@ crate::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
             range: Some((0.0, 16_000_000.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "width",
-            label: "Accumulator Width",
-            ty: ParamType::Int,
-            default: ParamValue::Float(960.0),
-            range: Some((16.0, 4096.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "height",
-            label: "Accumulator Height",
-            ty: ParamType::Int,
-            default: ParamValue::Float(540.0),
-            range: Some((16.0, 4096.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -90,7 +74,7 @@ crate::primitive! {
             enum_values: SCATTER_BOUNDARY_MODES,
         },
     ],
-    composition_notes: "Output accumulator buffer is u32 fixed-point. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. Width × height should match the velocity/density grid resolution used by Integrate. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam.",
+    composition_notes: "Output accumulator buffer is u32 fixed-point sized to the host canvas (width × height u32s) — re-allocated on `Generator::resize` so the splat coords always span the full output texture. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam.",
     examples: [],
     picker: { label: "Scatter Particles", category: Atom },
     extra_fields: {
@@ -99,23 +83,12 @@ crate::primitive! {
 }
 
 impl Primitive for ScatterParticles {
-    /// Accumulator buffer is `width × height` u32 cells. Read both
-    /// params, multiply, return the cell count. The pre-allocator
-    /// multiplies by `item_size` (4) to get bytes.
-    fn array_output_capacity(
-        &self,
-        port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
-        _input_capacities: &[(&str, u32)],
-    ) -> Option<u32> {
-        if port_name != "accum" {
-            return None;
-        }
-        let read_dim = |name| match params.get(name) {
-            Some(ParamValue::Float(f)) => Some(f.round().max(1.0) as u32),
-            _ => None,
-        };
-        Some(read_dim("width")? * read_dim("height")?)
+    /// Accumulator dimensions track the host canvas — declared
+    /// `canvas_sized_array_outputs()` below. The chain builder
+    /// allocates `canvas_w × canvas_h × 4` bytes from the backend's
+    /// canvas dims, bypassing this method for the `accum` port.
+    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+        &["accum"]
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -123,14 +96,12 @@ impl Primitive for ScatterParticles {
             .scalar_or_param("active_count", 100_000.0)
             .round()
             .max(0.0) as u32;
-        let width = match ctx.params.get("width") {
-            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
-            _ => 960,
-        };
-        let height = match ctx.params.get("height") {
-            Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
-            _ => 540,
-        };
+        // Canvas dims from the executor — set on the context before
+        // every evaluate. Matches what `canvas_sized_array_outputs`
+        // told the chain builder to allocate, so the dispatch grid
+        // spans every cell of the accumulator buffer.
+        let width = ctx.canvas_width.max(1);
+        let height = ctx.canvas_height.max(1);
         let scaled_energy = ctx
             .scalar_or_param("scaled_energy", 4096.0)
             .round()
@@ -436,8 +407,6 @@ mod gpu_tests {
             ParamValue::Float(particles.len() as f32),
         )
         .unwrap();
-        g.set_param(scatter, "width", ParamValue::Float(WIDTH as f32)).unwrap();
-        g.set_param(scatter, "height", ParamValue::Float(HEIGHT as f32)).unwrap();
         g.set_param(scatter, "scaled_energy", ParamValue::Float(ENERGY as f32))
             .unwrap();
         g.set_param(scatter, "boundary", ParamValue::Enum(boundary)).unwrap();
@@ -456,7 +425,11 @@ mod gpu_tests {
             in_buf.write(0, bytemuck::cast_slice(particles));
         }
 
-        let mut backend = MetalBackend::new(&device, 1, 1, format);
+        // Backend canvas dims drive scatter's dispatch (width/height
+        // are read from `ctx.canvas_width/height`, not params). 16×1
+        // matches the test's expected accumulator layout — set the
+        // backend to those dims so the executor passes them through.
+        let mut backend = MetalBackend::new(&device, WIDTH, HEIGHT, format);
         let _in_slot = backend.pre_bind_array(r_in, in_buf);
         let accum_slot = backend.pre_bind_array(r_accum, accum_buf);
 
