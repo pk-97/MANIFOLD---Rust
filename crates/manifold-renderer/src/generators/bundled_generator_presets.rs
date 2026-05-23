@@ -166,4 +166,41 @@ mod tests {
             violations.join("\n  - "),
         );
     }
+
+    /// Sweep guard: every bundled preset must chain-build cleanly.
+    /// Parse + binding-resolution pass already cover the schema; this
+    /// catches the deeper failure modes that only the chain builder
+    /// notices — unknown `typeId`, port-type mismatches on wires,
+    /// missing required inputs, capacity-derivation cycles, output-
+    /// slot-sizing failures.
+    ///
+    /// A new preset that lands in `assets/generator-presets/` and
+    /// fails chain build would render black at runtime with just a
+    /// warning in the log. This test catches it at compile time.
+    #[test]
+    fn every_bundled_preset_chain_builds() {
+        use crate::generators::json_graph_generator::JsonGraphGenerator;
+        use crate::node_graph::PrimitiveRegistry;
+        use manifold_gpu::GpuTextureFormat;
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut failures: Vec<String> = Vec::new();
+        for (preset_id, json) in BUNDLED_GENERATOR_PRESETS {
+            if let Err(e) = JsonGraphGenerator::from_json_str_with_device(
+                json,
+                &registry,
+                &device,
+                1920,
+                1080,
+                GpuTextureFormat::Rgba16Float,
+            ) {
+                failures.push(format!("{preset_id}: {e}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "Bundled presets failed chain build:\n  - {}",
+            failures.join("\n  - "),
+        );
+    }
 }

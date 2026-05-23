@@ -1,0 +1,434 @@
+{
+  "version": 2,
+  "name": "DigitalPlants",
+  "description": "DigitalPlants — 400×400 grid of cubes lifted onto a morphing cylinder ↔ torus surface, with simplex-noise stem displacement, FBM petal fracturing, per-instance hash rotation, neighbour smoothing, and cel-shaded cube rendering with PCF shadows. First decomposition of the topology-wrap generator family: the graph wires node.grid_uv_field → per-instance noise/math → cyl + tor wrap fields → lerp_instance_fields → rotation jitter → neighbor_smooth → digital_plants_render. Every legacy compute-shader step is reproduced as a curated primitive — node.simplex_per_instance, node.fbm_per_instance, node.array_math (with ShapePowClip / MirrorRamp / ScaleOffset ops), node.cylinder_wrap_field, node.torus_wrap_field, node.instance_position_jitter, node.instance_rotation_jitter, node.lerp_instance_fields — so the same vocabulary can be reused by future generators (stem fields, ring fields, plant variants).\n\nThe `morph` slider continuously interpolates between cylinder-stem and torus-flower topologies via node.lerp_instance_fields (NOT node.mux_array — selection vs interpolation matters here). `base_radius` is multiplied by (1 - morph) for the cylinder branch so it shrinks toward zero in flower mode, matching legacy. `instance_scale` follows `box_scale * (1 + morph * 3)` so cube size grows with petal density.\n\nCamera params are exposed in DEGREES on the outer card (cam_orbit / cam_tilt / cam_fov) and converted to RADIANS by three node.affine_scalar nodes before reaching node.digital_plants_render. The cam_orbit_rad node adds π/2 to compensate for the orbit convention difference between the legacy compute and the new render primitive (legacy looks down +Z at orbit=0; render primitive looks down +X — adding π/2 rotates back to legacy's view).",
+  "presetMetadata": {
+    "id": "DigitalPlants",
+    "displayName": "Digital Plants",
+    "category": "Procedural",
+    "oscPrefix": "digitalPlants",
+    "available": true,
+    "params": [
+      { "id": "noise_scale", "name": "Noise Scale", "min": 0.1, "max": 5.0, "defaultValue": 1.5, "wholeNumbers": false, "isToggle": false, "formatString": "noiseScale" },
+      { "id": "anim_speed", "name": "Animation Speed", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "animSpeed" },
+      { "id": "morph", "name": "Morph", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "formatString": "morph" },
+      { "id": "base_radius", "name": "Base Radius", "min": 0.1, "max": 2.0, "defaultValue": 0.6, "wholeNumbers": false, "isToggle": false, "formatString": "baseRadius" },
+      { "id": "height", "name": "Height", "min": 0.5, "max": 4.0, "defaultValue": 2.0, "wholeNumbers": false, "isToggle": false, "formatString": "height" },
+      { "id": "taper", "name": "Taper", "min": 0.0, "max": 3.0, "defaultValue": 1.5, "wholeNumbers": false, "isToggle": false, "formatString": "taper" },
+      { "id": "torus_radius", "name": "Torus Radius", "min": 0.5, "max": 3.0, "defaultValue": 1.2, "wholeNumbers": false, "isToggle": false, "formatString": "torusRadius" },
+      { "id": "petal_amp", "name": "Petal Amplitude", "min": 0.0, "max": 80.0, "defaultValue": 60.0, "wholeNumbers": false, "isToggle": false, "formatString": "petalAmp" },
+      { "id": "rot_speed", "name": "Rotation Speed", "min": 0.0, "max": 3.0, "defaultValue": 0.3, "wholeNumbers": false, "isToggle": false, "formatString": "rotSpeed" },
+      { "id": "box_scale", "name": "Box Scale", "min": 0.005, "max": 0.08, "defaultValue": 0.025, "wholeNumbers": false, "isToggle": false, "formatString": "boxScale" },
+      { "id": "cam_dist", "name": "Camera Distance", "min": 0.5, "max": 10.0, "defaultValue": 3.5, "wholeNumbers": false, "isToggle": false, "formatString": "camDist" },
+      { "id": "cam_orbit", "name": "Camera Orbit", "min": -180.0, "max": 180.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "formatString": "camOrbit" },
+      { "id": "cam_tilt", "name": "Camera Tilt", "min": -90.0, "max": 90.0, "defaultValue": 15.0, "wholeNumbers": false, "isToggle": false, "formatString": "camTilt" },
+      { "id": "cam_fov", "name": "Camera FOV", "min": 20.0, "max": 120.0, "defaultValue": 50.0, "wholeNumbers": false, "isToggle": false, "formatString": "camFov" }
+    ],
+    "bindings": [
+      { "id": "noise_scale", "label": "Noise Scale", "defaultValue": 1.5,
+        "target": { "kind": "handleNode", "handle": "stem_freq_calc", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "anim_speed", "label": "Animation Speed", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "anim_z_calc", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "morph", "label": "Morph", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "one_minus_morph", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "morph", "label": "Morph", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "scale_factor_morph", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "morph", "label": "Morph", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "morph_lerp", "param": "t" },
+        "convert": { "type": "Float" } },
+
+      { "id": "base_radius", "label": "Base Radius", "defaultValue": 0.6,
+        "target": { "kind": "handleNode", "handle": "cyl_base_radius", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "base_radius", "label": "Base Radius", "defaultValue": 0.6,
+        "target": { "kind": "handleNode", "handle": "tor_wrap", "param": "base_radius" },
+        "convert": { "type": "Float" } },
+
+      { "id": "height", "label": "Height", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "cyl_wrap", "param": "height_scale" },
+        "convert": { "type": "Float" } },
+
+      { "id": "taper", "label": "Taper", "defaultValue": 1.5,
+        "target": { "kind": "handleNode", "handle": "cyl_wrap", "param": "taper" },
+        "convert": { "type": "Float" } },
+
+      { "id": "torus_radius", "label": "Torus Radius", "defaultValue": 1.2,
+        "target": { "kind": "handleNode", "handle": "tor_wrap", "param": "torus_radius" },
+        "convert": { "type": "Float" } },
+
+      { "id": "petal_amp", "label": "Petal Amplitude", "defaultValue": 60.0,
+        "target": { "kind": "handleNode", "handle": "petal_disp", "param": "scale" },
+        "convert": { "type": "Float" } },
+
+      { "id": "rot_speed", "label": "Rotation Speed", "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "fold_angle_calc", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "box_scale", "label": "Box Scale", "defaultValue": 0.025,
+        "target": { "kind": "handleNode", "handle": "instance_scale_calc", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "cam_dist", "label": "Camera Distance", "defaultValue": 3.5,
+        "target": { "kind": "handleNode", "handle": "dp_render", "param": "camera_distance" },
+        "convert": { "type": "Float" } },
+
+      { "id": "cam_orbit", "label": "Camera Orbit", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "cam_orbit_rad", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "cam_tilt", "label": "Camera Tilt", "defaultValue": 15.0,
+        "target": { "kind": "handleNode", "handle": "cam_tilt_rad", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "cam_fov", "label": "Camera FOV", "defaultValue": 50.0,
+        "target": { "kind": "handleNode", "handle": "cam_fov_rad", "param": "a" },
+        "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "system.final_output",    "handle": "final_output" },
+
+    { "id": 2, "typeId": "node.grid_uv_field", "handle": "uv_field",
+      "params": {
+        "grid_size": { "type": "Float", "value": 400.0 }
+      } },
+
+    { "id": 3, "typeId": "node.array_unpack_vec2", "handle": "uv_unpack" },
+
+    { "id": 4, "typeId": "node.math", "handle": "stem_freq_calc",
+      "params": {
+        "a":  { "type": "Float", "value": 1.5 },
+        "b":  { "type": "Float", "value": 2.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      } },
+
+    { "id": 5, "typeId": "node.simplex_per_instance", "handle": "stem_noise",
+      "params": {
+        "scale":    { "type": "Float", "value": 3.0 },
+        "z":        { "type": "Float", "value": 0.0 },
+        "offset_x": { "type": "Float", "value": 0.0 },
+        "offset_y": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 6, "typeId": "node.array_math", "handle": "stem_shape",
+      "params": {
+        "op":     { "type": "Enum",  "value": 7 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 2.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 7, "typeId": "node.math", "handle": "anim_freq_calc",
+      "params": {
+        "a":  { "type": "Float", "value": 3.0 },
+        "b":  { "type": "Float", "value": 2.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      } },
+
+    { "id": 8, "typeId": "node.math", "handle": "anim_z_calc",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.5 },
+        "op": { "type": "Enum",  "value": 2 }
+      } },
+
+    { "id": 9, "typeId": "node.simplex_per_instance", "handle": "anim_noise",
+      "params": {
+        "scale":    { "type": "Float", "value": 6.0 },
+        "z":        { "type": "Float", "value": 0.0 },
+        "offset_x": { "type": "Float", "value": 0.0 },
+        "offset_y": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 10, "typeId": "node.array_math", "handle": "anim_scaled",
+      "params": {
+        "op":     { "type": "Enum",  "value": 6 },
+        "scale":  { "type": "Float", "value": 0.3 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 11, "typeId": "node.array_math", "handle": "stem_clamped",
+      "params": {
+        "op":     { "type": "Enum",  "value": 9 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 12, "typeId": "node.array_math", "handle": "anim_masked",
+      "params": {
+        "op":     { "type": "Enum",  "value": 2 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 13, "typeId": "node.array_math", "handle": "total_disp",
+      "params": {
+        "op":     { "type": "Enum",  "value": 0 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 14, "typeId": "node.array_math", "handle": "ramp",
+      "params": {
+        "op":     { "type": "Enum",  "value": 8 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 15, "typeId": "node.array_math", "handle": "total_disp_ramped",
+      "params": {
+        "op":     { "type": "Enum",  "value": 2 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 16, "typeId": "node.array_math", "handle": "radius_disp",
+      "params": {
+        "op":     { "type": "Enum",  "value": 6 },
+        "scale":  { "type": "Float", "value": 0.3 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 17, "typeId": "node.affine_scalar", "handle": "one_minus_morph",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": -1.0 },
+        "offset": { "type": "Float", "value": 1.0 }
+      } },
+
+    { "id": 18, "typeId": "node.math", "handle": "cyl_base_radius",
+      "params": {
+        "a":  { "type": "Float", "value": 0.6 },
+        "b":  { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      } },
+
+    { "id": 19, "typeId": "node.affine_scalar", "handle": "scale_factor_morph",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": 3.0 },
+        "offset": { "type": "Float", "value": 1.0 }
+      } },
+
+    { "id": 20, "typeId": "node.math", "handle": "instance_scale_calc",
+      "params": {
+        "a":  { "type": "Float", "value": 0.025 },
+        "b":  { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum",  "value": 2 }
+      } },
+
+    { "id": 21, "typeId": "node.cylinder_wrap_field", "handle": "cyl_wrap",
+      "params": {
+        "base_radius":    { "type": "Float", "value": 0.6 },
+        "height_scale":   { "type": "Float", "value": 2.0 },
+        "taper":          { "type": "Float", "value": 1.5 },
+        "instance_scale": { "type": "Float", "value": 0.025 }
+      } },
+
+    { "id": 22, "typeId": "node.instance_position_jitter", "handle": "cyl_jitter",
+      "params": {
+        "frequency":      { "type": "Float", "value": 20.0 },
+        "amplitude":      { "type": "Float", "value": 0.01 },
+        "time_uvx_drift": { "type": "Float", "value": 0.0 },
+        "z_coord":        { "type": "Float", "value": 0.3 },
+        "axis_seed":      { "type": "Float", "value": 100.0 }
+      } },
+
+    { "id": 23, "typeId": "node.fbm_per_instance", "handle": "petal_noise",
+      "params": {
+        "scale":      { "type": "Float", "value": 2.0 },
+        "z":          { "type": "Float", "value": 0.5 },
+        "offset_x":   { "type": "Float", "value": 0.0 },
+        "offset_y":   { "type": "Float", "value": 0.0 },
+        "octaves":    { "type": "Float", "value": 5.0 },
+        "lacunarity": { "type": "Float", "value": 1.5 },
+        "gain":       { "type": "Float", "value": 0.8 }
+      } },
+
+    { "id": 24, "typeId": "node.array_math", "handle": "petal_disp",
+      "params": {
+        "op":     { "type": "Enum",  "value": 6 },
+        "scale":  { "type": "Float", "value": 60.0 },
+        "offset": { "type": "Float", "value": 0.0 },
+        "exp":    { "type": "Float", "value": 1.0 },
+        "bias":   { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 25, "typeId": "node.math", "handle": "fold_angle_calc",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.3 },
+        "op": { "type": "Enum",  "value": 2 }
+      } },
+
+    { "id": 26, "typeId": "node.torus_wrap_field", "handle": "tor_wrap",
+      "params": {
+        "base_radius":    { "type": "Float", "value": 0.6 },
+        "torus_radius":   { "type": "Float", "value": 1.2 },
+        "fold_angle":     { "type": "Float", "value": 0.0 },
+        "instance_scale": { "type": "Float", "value": 0.025 }
+      } },
+
+    { "id": 27, "typeId": "node.affine_scalar", "handle": "tor_time_uvx",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": 0.2 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 28, "typeId": "node.affine_scalar", "handle": "tor_time_z",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": 0.15 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 29, "typeId": "node.instance_position_jitter", "handle": "tor_jitter",
+      "params": {
+        "frequency":      { "type": "Float", "value": 3.0 },
+        "amplitude":      { "type": "Float", "value": 0.02 },
+        "time_uvx_drift": { "type": "Float", "value": 0.0 },
+        "z_coord":        { "type": "Float", "value": 0.0 },
+        "axis_seed":      { "type": "Float", "value": 50.0 }
+      } },
+
+    { "id": 30, "typeId": "node.lerp_instance_fields", "handle": "morph_lerp",
+      "params": {
+        "t": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 31, "typeId": "node.instance_rotation_jitter", "handle": "rot_jitter",
+      "params": {
+        "amplitude": { "type": "Float", "value": 0.2 }
+      } },
+
+    { "id": 32, "typeId": "node.neighbor_smooth", "handle": "smooth",
+      "params": {
+        "grid_size":     { "type": "Float", "value": 400.0 },
+        "center_weight": { "type": "Float", "value": 0.6 }
+      } },
+
+    { "id": 33, "typeId": "node.affine_scalar", "handle": "cam_orbit_rad",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": 0.01745329252 },
+        "offset": { "type": "Float", "value": 1.57079632679 }
+      } },
+
+    { "id": 34, "typeId": "node.affine_scalar", "handle": "cam_tilt_rad",
+      "params": {
+        "a":      { "type": "Float", "value": 15.0 },
+        "scale":  { "type": "Float", "value": 0.01745329252 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 35, "typeId": "node.affine_scalar", "handle": "cam_fov_rad",
+      "params": {
+        "a":      { "type": "Float", "value": 50.0 },
+        "scale":  { "type": "Float", "value": 0.01745329252 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 36, "typeId": "node.digital_plants_render", "handle": "dp_render",
+      "params": {
+        "instance_count":  { "type": "Float", "value": 160000.0 },
+        "camera_distance": { "type": "Float", "value": 3.5 },
+        "camera_orbit":    { "type": "Float", "value": 1.57079632679 },
+        "camera_tilt":     { "type": "Float", "value": 0.26179938779 },
+        "camera_fov":      { "type": "Float", "value": 0.87266462599 },
+        "light_x":         { "type": "Float", "value": 2.8 },
+        "light_y":         { "type": "Float", "value": 3.0 },
+        "light_z":         { "type": "Float", "value": 2.8 },
+        "light_intensity": { "type": "Float", "value": 2.0 }
+      } }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "time", "toNode": 8,  "toPort": "a" },
+    { "fromNode": 0, "fromPort": "time", "toNode": 25, "toPort": "a" },
+    { "fromNode": 0, "fromPort": "time", "toNode": 27, "toPort": "a" },
+    { "fromNode": 0, "fromPort": "time", "toNode": 28, "toPort": "a" },
+
+    { "fromNode": 2, "fromPort": "uv", "toNode": 3,  "toPort": "in" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 5,  "toPort": "uv" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 9,  "toPort": "uv" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 21, "toPort": "uv" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 22, "toPort": "uv" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 23, "toPort": "uv" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 26, "toPort": "uv" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 29, "toPort": "uv" },
+
+    { "fromNode": 4, "fromPort": "out", "toNode": 5,  "toPort": "scale" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 7,  "toPort": "a" },
+
+    { "fromNode": 7, "fromPort": "out", "toNode": 9,  "toPort": "scale" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9,  "toPort": "z" },
+
+    { "fromNode": 5, "fromPort": "out", "toNode": 6,  "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 11, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 13, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "b" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "b" },
+
+    { "fromNode": 13, "fromPort": "out", "toNode": 15, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "y",   "toNode": 14, "toPort": "a" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "a" },
+
+    { "fromNode": 16, "fromPort": "out", "toNode": 21, "toPort": "radius_disp" },
+
+    { "fromNode": 17, "fromPort": "out", "toNode": 18, "toPort": "b" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 21, "toPort": "base_radius" },
+
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "b" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "instance_scale" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 26, "toPort": "instance_scale" },
+
+    { "fromNode": 21, "fromPort": "instances", "toNode": 22, "toPort": "instances" },
+
+    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "a" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 26, "toPort": "normal_disp" },
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "fold_angle" },
+
+    { "fromNode": 26, "fromPort": "instances", "toNode": 29, "toPort": "instances" },
+    { "fromNode": 27, "fromPort": "out", "toNode": 29, "toPort": "time_uvx_drift" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 29, "toPort": "z_coord" },
+
+    { "fromNode": 22, "fromPort": "instances", "toNode": 30, "toPort": "a" },
+    { "fromNode": 29, "fromPort": "instances", "toNode": 30, "toPort": "b" },
+
+    { "fromNode": 30, "fromPort": "out", "toNode": 31, "toPort": "instances" },
+    { "fromNode": 31, "fromPort": "instances", "toNode": 32, "toPort": "in" },
+    { "fromNode": 32, "fromPort": "out", "toNode": 36, "toPort": "instances" },
+
+    { "fromNode": 33, "fromPort": "out", "toNode": 36, "toPort": "camera_orbit" },
+    { "fromNode": 34, "fromPort": "out", "toNode": 36, "toPort": "camera_tilt" },
+    { "fromNode": 35, "fromPort": "out", "toNode": 36, "toPort": "camera_fov" },
+
+    { "fromNode": 36, "fromPort": "color", "toNode": 1, "toPort": "in" }
+  ]
+}
