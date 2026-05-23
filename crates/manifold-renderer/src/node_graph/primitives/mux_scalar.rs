@@ -42,7 +42,29 @@ crate::primitive! {
     picker: { label: "Mux (scalar)", category: Atom },
 }
 
+const MUX_SCALAR_INPUT_PORT_NAMES: [&str; 8] = [
+    "in_0", "in_1", "in_2", "in_3", "in_4", "in_5", "in_6", "in_7",
+];
+
 impl Primitive for MuxScalar {
+    fn selected_input_branch(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
+        // Same wired-selector rule as MuxTexture — see that primitive's
+        // docstring for the rationale.
+        if wired_inputs.contains(&"selector") {
+            return None;
+        }
+        let selector = match params.get("selector") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let idx = selector.round().clamp(0.0, 7.0) as usize;
+        Some(MUX_SCALAR_INPUT_PORT_NAMES[idx])
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let selector = match ctx.inputs.scalar("selector") {
             Some(ParamValue::Float(f)) => f,
@@ -53,10 +75,7 @@ impl Primitive for MuxScalar {
         };
         let raw_idx = selector.round().clamp(0.0, 7.0) as usize;
 
-        let port_names = [
-            "in_0", "in_1", "in_2", "in_3", "in_4", "in_5", "in_6", "in_7",
-        ];
-        let value = match ctx.inputs.scalar(port_names[raw_idx]) {
+        let value = match ctx.inputs.scalar(MUX_SCALAR_INPUT_PORT_NAMES[raw_idx]) {
             Some(ParamValue::Float(f)) => f,
             _ => 0.0,
         };

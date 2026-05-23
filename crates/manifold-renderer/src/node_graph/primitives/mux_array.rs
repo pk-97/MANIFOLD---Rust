@@ -54,6 +54,24 @@ crate::primitive! {
 }
 
 impl Primitive for MuxArray {
+    fn selected_input_branch(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
+        // Same wired-selector rule as MuxTexture — see that primitive's
+        // docstring for the rationale.
+        if wired_inputs.contains(&"selector") {
+            return None;
+        }
+        let selector = params
+            .get("selector")
+            .and_then(|v| v.as_scalar())
+            .unwrap_or(0.0);
+        let idx = selector.round().clamp(0.0, 7.0) as usize;
+        Some(PORT_NAMES[idx])
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,

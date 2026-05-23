@@ -169,6 +169,20 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
+    /// Mux-family primitives override to return the selected input
+    /// port name (e.g. `"in_2"` for mux selector=2). See the
+    /// EffectNode docstring for the wired-input fallback rule.
+    /// Default: `None` (eager evaluation of all inputs).
+    fn selected_input_branch(
+        &self,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        _wired_inputs: &[&str],
+    ) -> Option<&'static str> {
+        None
+    }
+
+    /// Mirror of
     /// [`EffectNode::requires`](crate::node_graph::effect_node::EffectNode::requires).
     /// Declare any runtime services this primitive needs (StateStore for
     /// per-frame persistent state, GpuEncoder for dispatch / texture
@@ -288,6 +302,13 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn breaks_dependency_cycle(&self) -> bool {
         Primitive::breaks_dependency_cycle(self)
+    }
+    fn selected_input_branch(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<&'static str> {
+        Primitive::selected_input_branch(self, params, wired_inputs)
     }
 }
 

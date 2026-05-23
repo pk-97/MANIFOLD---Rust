@@ -393,6 +393,41 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// If `Some(port_name)`, this node is a branch-selector: only the
+    /// upstream subgraph feeding the named input port needs to run
+    /// this frame. The executor uses this to prune unselected branches
+    /// — `node.mux_texture` returning `Some("in_2")` causes the
+    /// in_0 / in_1 / in_3..7 producer chains to be skipped entirely
+    /// for this frame's dispatch. Default: `None` (no pruning).
+    ///
+    /// `wired_inputs` lists every input port on this node that has a
+    /// wire connected to it (the executor populates it from the plan's
+    /// wire table before calling). Branch selectors whose selector
+    /// input is itself wired — i.e. the selector value depends on a
+    /// runtime-computed scalar that hasn't been resolved by the time
+    /// the live-set is built — should return `None` and let every
+    /// branch run, since we can't predict which one the wire will
+    /// resolve to. Selectors driven by inline param values (the
+    /// dominant live-perform case: outer-card slider → mux param)
+    /// return `Some` to enable the optimisation.
+    ///
+    /// Semantic note: state-bearing nodes (e.g. `node.feedback`,
+    /// accumulators) inside an unselected branch FREEZE — their
+    /// producer doesn't run, so their persistent state isn't updated.
+    /// When the branch becomes selected again, they pick up from the
+    /// last value they wrote. This matches a switch-statement mental
+    /// model where each `case` is its own independent sub-circuit.
+    /// Authors who need state to advance regardless of selection
+    /// should place the state-bearing node OUTSIDE the mux's input
+    /// subgraphs.
+    fn selected_input_branch(
+        &self,
+        _params: &ParamValues,
+        _wired_inputs: &[&str],
+    ) -> Option<&'static str> {
+        None
+    }
+
     /// Reset persistent state (previous-frame textures, accumulators,
     /// density grids, mip pyramids, StateStore entries — anything the
     /// node holds across frames). Default: no-op for stateless nodes.
