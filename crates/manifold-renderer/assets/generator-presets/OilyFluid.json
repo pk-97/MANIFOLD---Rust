@@ -71,8 +71,8 @@
   "nodes": [
     { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
 
-    { "id": 1,  "typeId": "node.feedback", "handle": "feedback_color" },
-    { "id": 2,  "typeId": "node.feedback", "handle": "feedback_velocity" },
+    { "id": 1,  "typeId": "node.feedback", "handle": "feedback_color",    "outputFormats": { "out": "rgba32float" } },
+    { "id": 2,  "typeId": "node.feedback", "handle": "feedback_velocity", "outputFormats": { "out": "rgba32float" } },
 
     { "id": 3,  "typeId": "node.abs_texture", "handle": "abs_color" },
     { "id": 4,  "typeId": "node.gradient_central_diff", "handle": "grad_r", "params": { "channel": { "type": "Enum", "value": 0 } } },

@@ -40,12 +40,15 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: `out` mirrors `in` (no uninitialised pixels).",
+    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: `out` mirrors `in` (no uninitialised pixels). For iterative simulations whose state compounds rounding error frame-to-frame (fluid sims, reaction-diffusion, anything with a decay-and-inject feedback shape), set `outputFormats.out: \"rgba32float\"` in the JSON node entry — the state texture and the persistent slot both upcast, preserving precision across the loop. Default is rgba16float for memory parity with the rest of the chain.",
     examples: ["preset.effect.stylized_feedback", "preset.effect.mandala", "preset.effect.smear_mosh"],
     picker: { label: "Feedback", category: Atom },
+    extra_fields: {
+        output_format_override: Option<GpuTextureFormat> = None,
+    },
 }
 
-const FEEDBACK_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+const FEEDBACK_DEFAULT_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 /// Per-`(NodeInstanceId, OwnerKey)` persistent state — the previous
 /// frame's input. Held by the runtime's `StateStore`.
@@ -58,6 +61,20 @@ struct FeedbackState {
 impl NodeState for FeedbackState {}
 
 impl Primitive for Feedback {
+    fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {
+        if port == "out" {
+            self.output_format_override
+        } else {
+            None
+        }
+    }
+
+    fn set_output_format(&mut self, port: &str, format: GpuTextureFormat) {
+        if port == "out" {
+            self.output_format_override = Some(format);
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -72,6 +89,16 @@ impl Primitive for Feedback {
 
         let node_id = ctx.node_id;
         let owner_key = ctx.owner_key;
+        // Single source of truth for the state-texture format. The
+        // executor's persistent-slot acquisition already honours
+        // `EffectNode::output_format("out")` via the plan's
+        // resource_format table — so `out_tex` is allocated in the
+        // overridden format. `state.prev` MUST match: it's the source
+        // for `out_tex`'s per-frame copy, and any format mismatch
+        // would either quantize on the copy (fp32 → fp16) or violate
+        // the texture-copy size invariant. Reading the override here
+        // keeps the two allocations bit-aligned.
+        let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
 
         let gpu = ctx
             .gpu
@@ -92,9 +119,9 @@ impl Primitive for Feedback {
         };
         if needs_alloc {
             let prev = if let Some(pool) = gpu.pool {
-                RenderTarget::new_pooled(pool, width, height, FEEDBACK_FORMAT, "feedback prev")
+                RenderTarget::new_pooled(pool, width, height, state_format, "feedback prev")
             } else {
-                RenderTarget::new(gpu.device, width, height, FEEDBACK_FORMAT, "feedback prev")
+                RenderTarget::new(gpu.device, width, height, state_format, "feedback prev")
             };
             // Seed prev from `in` so first-frame `out` reads the
             // current input (pass-through). Subsequent frames see the
@@ -233,6 +260,140 @@ mod gpu_tests {
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 7);
+        }
+        native_enc.commit_and_wait_completed();
+    }
+
+    /// `node.feedback`'s format override propagates from the
+    /// per-instance setter all the way through to the compiled plan's
+    /// `resource_format` table — so the executor's persistent-slot
+    /// acquisition allocates in the requested format and the
+    /// state-prev allocation matches. Locks the fp32-state contract
+    /// that iterative simulations (oily fluid, future reaction-
+    /// diffusion / SPH primitives) rely on for cross-frame precision.
+    #[test]
+    fn feedback_output_format_override_propagates_to_plan_and_state() {
+        use crate::node_graph::EffectNode;
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let fb = g.add_node(Box::new(Feedback::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((src, "out"), (fb, "in")).unwrap();
+        g.connect((fb, "out"), (out, "in")).unwrap();
+
+        // Default: no override → output_format("out") = None → planner
+        // records None → backend acquires in its constructor default.
+        let plan_default = compile(&g).unwrap();
+        let fb_out = output_resource(&plan_default, fb, "out");
+        assert_eq!(plan_default.resource_format(fb_out), None);
+
+        // Apply the override via the public Graph setter (same path
+        // EffectGraphDef::into_graph uses when loading a JSON node
+        // with `outputFormats: { "out": "rgba32float" }`).
+        g.set_output_format(fb, "out", GpuTextureFormat::Rgba32Float)
+            .unwrap();
+
+        // Re-query through the trait surface — proves the setter
+        // wrote to the per-instance override, not just a local copy.
+        let inst = g.get_node(fb).unwrap();
+        let node: &dyn EffectNode = inst.node.as_ref();
+        assert_eq!(node.output_format("out"), Some(GpuTextureFormat::Rgba32Float));
+        // Sibling ports unaffected.
+        assert_eq!(node.output_format("nonexistent"), None);
+
+        // Recompile picks up the new format and threads it onto
+        // feedback.out's resource. The executor's step loop reads
+        // this via `plan.resource_format` when acquiring the output
+        // slot (execution.rs:211), so downstream consumers of
+        // feedback.out see the fp32 storage. Note: feedback.out itself
+        // is NOT in `persistent_resources` — persistent resources are
+        // the wires whose CONSUMER is a cycle-breaker (state-capture
+        // sources). Feedback's `out` is acquired fresh each frame; the
+        // cross-frame data lives in the StateStore-owned `state.prev`
+        // and (for graphs that close a loop through feedback) in the
+        // persistent slot for the wire entering feedback.in.
+        let plan = compile(&g).unwrap();
+        let fb_out = output_resource(&plan, fb, "out");
+        assert_eq!(
+            plan.resource_format(fb_out),
+            Some(GpuTextureFormat::Rgba32Float),
+            "fp32 override must reach plan.resource_format so the executor's \
+             backend.acquire allocates feedback.out's slot at the requested precision",
+        );
+    }
+
+    /// First-frame allocation of the StateStore-owned `state.prev`
+    /// texture honours the format override. Without the override read
+    /// in `run()`, `state.prev` would stay rgba16float while the
+    /// executor-allocated `out_tex` upcasts to rgba32float — and the
+    /// per-frame `copy_texture_to_texture(state.prev → out_tex)`
+    /// would silently quantize / mismatch.
+    #[test]
+    fn feedback_run_allocates_state_prev_in_overridden_format() {
+        let device = crate::test_device();
+        let (w, h) = (4u32, 4u32);
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let fb = g.add_node(Box::new(Feedback::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((src, "out"), (fb, "in")).unwrap();
+        g.connect((fb, "out"), (out, "in")).unwrap();
+        g.set_output_format(fb, "out", GpuTextureFormat::Rgba32Float)
+            .unwrap();
+        let plan = compile(&g).unwrap();
+
+        // Seed the source slot.
+        let source_res = output_resource(&plan, src, "out");
+        let source_target =
+            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "fp32-feedback-src");
+        let mut native_enc = device.create_encoder("fp32-feedback");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(&source_target.texture, 0.25, 0.5, 0.75, 1.0);
+        }
+
+        // Build the backend at rgba16float (the chain default). The
+        // backend slot pool keys on (PortType, GpuTextureFormat), so
+        // the feedback persistent slot opens in a separate fp32 bucket
+        // without colliding with regular 16f slots.
+        let mut backend =
+            MetalBackend::new(&device, w, h, GpuTextureFormat::Rgba16Float);
+        backend.pre_bind_texture_2d(source_res, source_target);
+
+        let mut exec = Executor::new(Box::new(backend));
+        let mut store = StateStore::new();
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            // First frame: allocates state.prev. If `run()` didn't
+            // read the override the copy on the next frame would
+            // either crash (format mismatch) or silently quantize.
+            exec.execute_frame_with_state(
+                &mut g,
+                &plan,
+                frame_time(),
+                &mut gpu,
+                &mut store,
+                /* owner_key = */ 11,
+            );
+        }
+        native_enc.commit_and_wait_completed();
+
+        // Second frame would fault inside `copy_texture_to_texture`
+        // if state.prev and out_tex disagreed on format. Surviving the
+        // round-trip is the assertion.
+        let mut native_enc = device.create_encoder("fp32-feedback-2");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_state(
+                &mut g,
+                &plan,
+                frame_time(),
+                &mut gpu,
+                &mut store,
+                11,
+            );
         }
         native_enc.commit_and_wait_completed();
     }
