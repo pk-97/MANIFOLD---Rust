@@ -32,7 +32,13 @@ const PARTIAL_SHADERS: &[&str] = &[
     "particle_common.wgsl",
     "oily_fluid.wgsl",
     "noise_common.wgsl",
-    "digital_plants_compute.wgsl",
+    // Per-instance noise / jitter primitives prepend noise_common
+    // at pipeline-creation time; each has a dedicated composed
+    // validator below.
+    "simplex_per_instance.wgsl",
+    "fbm_per_instance.wgsl",
+    "instance_position_jitter.wgsl",
+    "instance_rotation_jitter.wgsl",
 ];
 
 fn is_partial(path: &std::path::Path) -> bool {
@@ -106,24 +112,60 @@ fn all_wgsl_shaders_validate() {
     eprintln!("Validated {validated} shaders, skipped {skipped} partials");
 }
 
-/// Validates the composed (noise_common + digital_plants_compute) source as
-/// dispatched at runtime. Skipped by the standalone sweep because it depends on
-/// noise_common for `simplex3d` / `fbm` / `hash_u32`.
-#[test]
-fn digital_plants_compute_composed_validates() {
+/// Composed-source validators for shaders that prepend noise_common.wgsl
+/// at pipeline-creation time (simplex3d / fbm / hash_u32 live there).
+fn validate_composed_with_noise_common(label: &str, main_src: &str) {
     let noise = include_str!("../src/generators/shaders/noise_common.wgsl");
-    let compute = include_str!("../src/generators/shaders/digital_plants_compute.wgsl");
-    let composed = format!("{noise}\n{compute}");
-
+    let composed = format!("{noise}\n{main_src}");
     let module = naga::front::wgsl::parse_str(&composed)
-        .unwrap_or_else(|e| panic!("digital_plants_compute composed parse error: {e}"));
+        .unwrap_or_else(|e| panic!("{label} composed parse error: {e}"));
     let mut validator = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     );
     validator
         .validate(&module)
-        .unwrap_or_else(|e| panic!("digital_plants_compute composed validation error: {e}"));
+        .unwrap_or_else(|e| panic!("{label} composed validation error: {e}"));
+}
+
+#[test]
+fn simplex_per_instance_composed_validates() {
+    validate_composed_with_noise_common(
+        "simplex_per_instance",
+        include_str!(
+            "../src/node_graph/primitives/shaders/simplex_per_instance.wgsl"
+        ),
+    );
+}
+
+#[test]
+fn fbm_per_instance_composed_validates() {
+    validate_composed_with_noise_common(
+        "fbm_per_instance",
+        include_str!(
+            "../src/node_graph/primitives/shaders/fbm_per_instance.wgsl"
+        ),
+    );
+}
+
+#[test]
+fn instance_position_jitter_composed_validates() {
+    validate_composed_with_noise_common(
+        "instance_position_jitter",
+        include_str!(
+            "../src/node_graph/primitives/shaders/instance_position_jitter.wgsl"
+        ),
+    );
+}
+
+#[test]
+fn instance_rotation_jitter_composed_validates() {
+    validate_composed_with_noise_common(
+        "instance_rotation_jitter",
+        include_str!(
+            "../src/node_graph/primitives/shaders/instance_rotation_jitter.wgsl"
+        ),
+    );
 }
 
 /// Validates the composed (particle_common + oily_fluid) source as dispatched

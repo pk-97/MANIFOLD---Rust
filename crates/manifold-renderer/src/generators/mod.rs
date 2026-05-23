@@ -2,7 +2,6 @@ pub mod black_hole;
 pub mod bundled_generator_presets;
 pub mod clip_trigger;
 pub mod compute_common;
-pub mod digital_plants;
 pub mod fluid_sim_core;
 pub mod fluid_simulation;
 pub mod fluid_simulation_3d;
