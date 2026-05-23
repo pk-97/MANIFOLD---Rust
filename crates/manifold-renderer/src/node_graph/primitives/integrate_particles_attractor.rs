@@ -2,7 +2,7 @@
 //! particles through one of five strange-attractor formulas
 //! (Lorenz / Rössler / Aizawa / Thomas / Halvorsen).
 //!
-//! Wraps `generators/shaders/strange_attractor_simulate.wgsl` via
+//! Wraps `shaders/integrate_particles_attractor.wgsl` via
 //! `include_str!`. Two pipelines share the WGSL source:
 //!   - `cs_simulate` — per-frame, 8 RK2 sub-steps + 3D→2D projection.
 //!   - `cs_seed` — init pass; hash-based seed near attractor centre,
@@ -112,6 +112,10 @@ crate::primitive! {
         dt_multiplier: ScalarF32 optional,
         uv_scale: ScalarF32 optional,
         particle_count: ScalarF32 optional,
+        // Clip-trigger cycling: wire `system.generator_input.trigger_count`
+        // here to cycle `attractor_type` on each retrigger when
+        // `clip_trigger=true`. Ignored when clip_trigger is false.
+        trigger_count: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
@@ -189,12 +193,21 @@ crate::primitive! {
             range: Some((0.1, 4.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "clip_trigger",
+            label: "Clip Trigger",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
-    composition_notes: "Authoring shape: `node.seed_particles → node.array_feedback → node.integrate_particles_attractor → node.scatter_particles (boundary=Discard) → node.resolve_accumulator → tone-map`. `dt_multiplier` is the live-performance speed knob — multiplies the per-type base dt (Lorenz 0.003, Rössler/Aizawa 0.008, Thomas 0.03, Halvorsen 0.004). For clip-trigger-driven attractor cycling, wire `system.generator_input.trigger_count` through a ClipTriggerCycle-aware path (see `node.wireframe_shape` for the pattern) into `attractor_type` — auto-seed handles the rest. The first frame after any state-store reset (layer resume, seek, project load) dispatches `cs_seed` so particles land on the manifold instantly.",
+    composition_notes: "Authoring shape: `node.seed_particles → node.array_feedback → node.integrate_particles_attractor → node.scatter_particles (boundary=Discard) → node.resolve_accumulator → tone-map`. `dt_multiplier` is the live-performance speed knob — multiplies the per-type base dt (Lorenz 0.003, Rössler/Aizawa 0.008, Thomas 0.03, Halvorsen 0.004). When `clip_trigger=true`, `attractor_type` is replaced by `trigger_count % 5` through the shared ClipTriggerCycle uniqueness invariant — two adjacent retriggers never land on the same attractor. Wire `system.generator_input.trigger_count` to the `trigger_count` input port to drive cycling. Auto-seed handles the manifold transition: on every type change — including clip-trigger steps — and on the first frame after any state-store reset (layer resume, seek, project load), `cs_seed` dispatches so particles land on the new manifold instantly.",
     examples: [],
     picker: { label: "Integrate Particles Attractor", category: Atom },
     extra_fields: {
         seed_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
     },
 }
 
@@ -214,7 +227,7 @@ impl IntegrateParticlesAttractor {
     ) -> &manifold_gpu::GpuComputePipeline {
         self.pipeline.get_or_insert_with(|| {
             device.create_compute_pipeline(
-                include_str!("../../generators/shaders/strange_attractor_simulate.wgsl"),
+                include_str!("shaders/integrate_particles_attractor.wgsl"),
                 "cs_simulate",
                 "node.integrate_particles_attractor.simulate",
             )
@@ -227,7 +240,7 @@ impl IntegrateParticlesAttractor {
     ) -> &manifold_gpu::GpuComputePipeline {
         self.seed_pipeline.get_or_insert_with(|| {
             device.create_compute_pipeline(
-                include_str!("../../generators/shaders/strange_attractor_simulate.wgsl"),
+                include_str!("shaders/integrate_particles_attractor.wgsl"),
                 "cs_seed",
                 "node.integrate_particles_attractor.seed",
             )
@@ -256,9 +269,20 @@ impl Primitive for IntegrateParticlesAttractor {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let attractor_type = match ctx.params.get("attractor_type") {
-            Some(ParamValue::Enum(n)) => (*n).min(ATTRACTOR_COUNT - 1),
-            _ => 0,
+        let clip_trigger = matches!(ctx.params.get("clip_trigger"), Some(ParamValue::Bool(true)));
+        let attractor_type = if clip_trigger {
+            // Cycle on retrigger via the shared ClipTriggerCycle
+            // uniqueness invariant. Pass raw `trigger_count` — the
+            // cycle wraps internally; pre-wrapping defeats the
+            // idempotence detection (see the 67f8db94 bug class).
+            let trigger_count = ctx.scalar_or_param("trigger_count", 0.0);
+            let raw = trigger_count.floor().max(0.0) as u32;
+            self.clip_trigger_cycle.step(raw, ATTRACTOR_COUNT)
+        } else {
+            match ctx.params.get("attractor_type") {
+                Some(ParamValue::Enum(n)) => (*n).min(ATTRACTOR_COUNT - 1),
+                _ => 0,
+            }
         };
         let particle_count_request = ctx.scalar_or_param("particle_count", 500_000.0);
         let particle_count_request = particle_count_request.round().max(0.0) as u32;

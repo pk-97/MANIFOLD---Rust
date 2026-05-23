@@ -28,6 +28,19 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::state_store::NodeState;
+
+/// `seed_mode` enum labels.
+/// `EveryFrame` (0): rewrite the buffer each frame — the legacy
+///   behaviour, suited to "spawning rain" advection pipelines where
+///   the integrator only deflects per-frame and never accumulates
+///   state.
+/// `OnceOnReset` (1): seed once after a state-store reset (project
+///   load, layer resume, seek). Subsequent frames are no-ops, so the
+///   buffer persists whatever downstream simulators (integrate,
+///   attractor, scatter) write into it. Required for any sim that
+///   wants particle state to evolve across frames.
+pub const SEED_MODES: &[&str] = &["EveryFrame", "OnceOnReset"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -41,8 +54,10 @@ struct SeedUniforms {
 crate::primitive! {
     name: SeedParticles,
     type_id: "node.seed_particles",
-    purpose: "Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). `active_count` particles initialise alive at Wang-hash uniform positions in [0,1]²; the remaining capacity sits dead at center. Pair with `node.array_feedback` to make the seeded set persist across frames, or wire directly into `node.simulate_particles` to advect on the fly.",
-    inputs: {},
+    purpose: "Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). `active_count` particles initialise alive at Wang-hash uniform positions in [0,1]²; the remaining capacity sits dead at center. `seed_mode` picks when the seed kernel fires: EveryFrame (legacy — overwrite each tick; suited to advection 'rain' effects where the integrator never accumulates state) or OnceOnReset (seed once after a state-store reset; the buffer persists whatever the downstream sim writes into it — required for any sim where particle state must evolve across frames, e.g. StrangeAttractor + FluidSim2D).",
+    inputs: {
+        active_count: ScalarF32 optional,
+    },
     outputs: {
         particles: Array(Particle),
     },
@@ -71,20 +86,42 @@ crate::primitive! {
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "seed_mode",
+            label: "Seed Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // EveryFrame — legacy default
+            range: None,
+            enum_values: SEED_MODES,
+        },
     ],
-    composition_notes: "max_capacity is read by the chain build at allocation time and triggers a rebuild when changed — set it once when authoring the preset. active_count is a free slider; changing it just writes a uniform.",
+    composition_notes: "max_capacity is read by the chain build at allocation time and triggers a rebuild when changed — set it once when authoring the preset. active_count is a free slider (port-shadowed). Pick `seed_mode = OnceOnReset` for any pipeline where the buffer must persist across frames so the downstream simulator can accumulate state; pick `EveryFrame` for advection-style effects where each frame starts from a fresh random scatter.",
     examples: [],
     picker: { label: "Seed Particles", category: Atom },
 }
 
+/// Persistent state for `seed_mode = OnceOnReset` — tracks whether
+/// we've already seeded this (node, owner). Cleared by the runtime
+/// on any StateStore reset (layer resume, seek, project load) so the
+/// next frame re-seeds.
+struct SeedParticlesState {
+    has_seeded: bool,
+}
+
+impl NodeState for SeedParticlesState {}
+
 impl Primitive for SeedParticles {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 100_000,
-        };
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
         let seed_offset = match ctx.params.get("seed_offset") {
             Some(ParamValue::Float(n)) => n.round() as u32,
+            _ => 0,
+        };
+        let seed_mode = match ctx.params.get("seed_mode") {
+            Some(ParamValue::Enum(n)) => *n,
             _ => 0,
         };
 
@@ -95,7 +132,32 @@ impl Primitive for SeedParticles {
         let capacity = (out_buf.size / particle_size) as u32;
         let active_count = active_count.min(capacity);
 
-        let gpu = ctx.gpu_encoder();
+        let node_id = ctx.node_id;
+        let owner_key = ctx.owner_key;
+
+        // Split-borrow `gpu` and `state` directly so we can both
+        // dispatch and update state in one pass (mirror of array_feedback).
+        let gpu = ctx
+            .gpu
+            .as_deref_mut()
+            .expect("SeedParticles::run requires a GpuEncoder");
+        let mut state = ctx.state.as_deref_mut();
+
+        // OnceOnReset: skip the dispatch if we've already seeded this
+        // (node, owner). State is cleared by the runtime on any
+        // StateStore reset, so the next frame re-seeds.
+        if seed_mode == 1 {
+            let already_seeded = match state.as_deref_mut() {
+                Some(store) => store
+                    .get::<SeedParticlesState>(node_id, owner_key)
+                    .is_some_and(|s| s.has_seeded),
+                None => false,
+            };
+            if already_seeded {
+                return;
+            }
+        }
+
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/seed_particles.wgsl"),
@@ -127,6 +189,17 @@ impl Primitive for SeedParticles {
             [capacity.div_ceil(256), 1, 1],
             "node.seed_particles",
         );
+
+        // Record that we seeded so OnceOnReset skips subsequent frames.
+        if seed_mode == 1
+            && let Some(store) = state
+        {
+            store.insert(
+                node_id,
+                owner_key,
+                SeedParticlesState { has_seeded: true },
+            );
+        }
     }
 }
 
@@ -142,13 +215,21 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn seed_particles_declares_zero_inputs_and_one_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+    fn seed_particles_declares_active_count_port_shadow_and_one_array_output() {
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(SeedParticles::TYPE_ID, "node.seed_particles");
-        assert!(SeedParticles::INPUTS.is_empty());
+        // Port-shadow on active_count so a math chain (e.g.
+        // count_m × 1_000_000) can drive the count at runtime.
+        let active_in = SeedParticles::INPUTS
+            .iter()
+            .find(|p| p.name == "active_count")
+            .expect("active_count port-shadow input must exist");
+        assert_eq!(active_in.ty, PortType::Scalar(ScalarType::F32));
+        assert!(!active_in.required);
+
         assert_eq!(SeedParticles::OUTPUTS.len(), 1);
         assert_eq!(SeedParticles::OUTPUTS[0].name, "particles");
         assert_eq!(
@@ -158,9 +239,12 @@ mod tests {
     }
 
     #[test]
-    fn seed_particles_has_max_capacity_active_count_and_seed_params() {
+    fn seed_particles_has_full_param_surface_including_seed_mode() {
         let names: Vec<&str> = SeedParticles::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["max_capacity", "active_count", "seed_offset"]);
+        assert_eq!(
+            names,
+            vec!["max_capacity", "active_count", "seed_offset", "seed_mode"],
+        );
 
         let max_cap = SeedParticles::PARAMS
             .iter()
@@ -172,6 +256,17 @@ mod tests {
         } else {
             panic!("max_capacity default should be Float (Int presentation hint)");
         }
+
+        let mode = SeedParticles::PARAMS
+            .iter()
+            .find(|p| p.name == "seed_mode")
+            .unwrap();
+        assert_eq!(mode.ty, ParamType::Enum);
+        // Default is EveryFrame (0) for backward compat with legacy
+        // advection presets — only the new attractor / fluid sims need
+        // OnceOnReset.
+        assert!(matches!(mode.default, ParamValue::Enum(0)));
+        assert_eq!(mode.enum_values, &["EveryFrame", "OnceOnReset"]);
     }
 
     #[test]

@@ -194,6 +194,7 @@ mod tests {
             &[
                 "Affine Scalar",
                 "BeatGate",
+                "Canvas Area Scale",
                 "ColorSample",
                 "Cycle Table Row",
                 "Envelope Follower (A/R)",

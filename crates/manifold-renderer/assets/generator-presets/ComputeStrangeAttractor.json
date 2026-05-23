@@ -1,0 +1,319 @@
+{
+  "version": 2,
+  "name": "ComputeStrangeAttractor",
+  "description": "Strange Attractor — particles integrate through one of five chaotic ODEs (Lorenz / Rössler / Aizawa / Thomas / Halvorsen), scatter into an atomic density accumulator (boundary = Discard for projected-from-3D), resolve to a density texture, then tone-map for display. First decomposition of the particle generator family — the topology (seed[OnceOnReset] → integrate → scatter → resolve → reinhard → transform → invert) is the template for every future particle gen (FluidSim2D, BlackHole, ParticleText) layered on the same primitive vocabulary.\n\nBrightness compensates for canvas size via `node.canvas_area_scale` × 3.0 → reinhard.intensity, so the perceived brightness stays constant across output resolutions. Splat energy normalises by particle count so doubling the count doesn't double the brightness — it just adds density. Camera angle = time × speed × 0.25 derives from two `node.affine_scalar` nodes, exposed as a small wire chain so an author can swap in an LFO or a Color Compass driver if they want non-linear sweep.",
+  "presetMetadata": {
+    "id": "ComputeStrangeAttractor",
+    "displayName": "Strange Attractor",
+    "category": "Procedural",
+    "oscPrefix": "strangeAttractor",
+    "available": true,
+    "params": [
+      {
+        "id": "type",
+        "name": "Attractor Type",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "type"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 3.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "chaos",
+        "name": "Chaos",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.1,
+        "max": 5.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.25,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "clipTrigger"
+      },
+      {
+        "id": "count_m",
+        "name": "Particle Count",
+        "min": 0.1,
+        "max": 2.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "diffusion",
+        "name": "Diffusion",
+        "min": 0.0,
+        "max": 0.05,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "tilt",
+        "name": "Tilt",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "size",
+        "name": "Size",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 3.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "invert",
+        "name": "Invert",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "formatString": "invert"
+      }
+    ],
+    "paramAliases": [
+      { "old": "snap", "new": "clip_trigger" }
+    ],
+    "bindings": [
+      { "id": "type", "label": "Attractor Type", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "attractor_type" },
+        "convert": { "type": "EnumRound" } },
+
+      { "id": "contrast", "label": "Contrast", "defaultValue": 3.5,
+        "target": { "kind": "handleNode", "handle": "tone_map", "param": "contrast" },
+        "convert": { "type": "Float" } },
+
+      { "id": "chaos", "label": "Chaos", "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "chaos" },
+        "convert": { "type": "Float" } },
+
+      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "dt_multiplier" },
+        "convert": { "type": "Float" } },
+      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "cam_angle_a", "param": "scale" },
+        "convert": { "type": "Float" } },
+
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "display_zoom", "param": "scale" },
+        "convert": { "type": "Float" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "uv_scale" },
+        "convert": { "type": "Float" } },
+
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "clip_trigger" },
+        "convert": { "type": "BoolThreshold" } },
+
+      { "id": "count_m", "label": "Particle Count", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "particle_count_calc", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "count_m", "label": "Particle Count", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "size_per_countm", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "diffusion", "label": "Diffusion", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "diffusion" },
+        "convert": { "type": "Float" } },
+
+      { "id": "tilt", "label": "Tilt", "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "integrate", "param": "cam_tilt" },
+        "convert": { "type": "Float" } },
+
+      { "id": "size", "label": "Size", "defaultValue": 3.0,
+        "target": { "kind": "handleNode", "handle": "size_per_countm", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "invert", "label": "Invert", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "display_invert", "param": "intensity" },
+        "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "system.final_output",    "handle": "final_output" },
+
+    { "id": 2, "typeId": "node.seed_particles", "handle": "seed",
+      "params": {
+        "max_capacity": { "type": "Float", "value": 2000000.0 },
+        "active_count": { "type": "Float", "value": 500000.0 },
+        "seed_offset":  { "type": "Float", "value": 0.0 },
+        "seed_mode":    { "type": "Enum",  "value": 1 }
+      } },
+
+    { "id": 3, "typeId": "node.integrate_particles_attractor", "handle": "integrate",
+      "params": {
+        "attractor_type": { "type": "Enum",  "value": 0 },
+        "particle_count": { "type": "Float", "value": 500000.0 },
+        "chaos":          { "type": "Float", "value": 0.3 },
+        "cam_angle":      { "type": "Float", "value": 0.0 },
+        "cam_tilt":       { "type": "Float", "value": 0.3 },
+        "aspect":         { "type": "Float", "value": 1.777 },
+        "diffusion":      { "type": "Float", "value": 0.0 },
+        "dt_multiplier":  { "type": "Float", "value": 1.0 },
+        "uv_scale":       { "type": "Float", "value": 1.0 },
+        "clip_trigger":   { "type": "Bool",  "value": false }
+      } },
+
+    { "id": 4, "typeId": "node.scatter_particles", "handle": "scatter",
+      "params": {
+        "active_count":   { "type": "Float", "value": 500000.0 },
+        "width":          { "type": "Float", "value": 1920.0 },
+        "height":         { "type": "Float", "value": 1080.0 },
+        "scaled_energy":  { "type": "Float", "value": 41.0 },
+        "boundary":       { "type": "Enum",  "value": 1 }
+      } },
+
+    { "id": 5, "typeId": "node.resolve_accumulator", "handle": "resolve",
+      "params": {
+        "width":             { "type": "Float", "value": 1920.0 },
+        "height":            { "type": "Float", "value": 1080.0 },
+        "fixed_point_scale": { "type": "Float", "value": 4096.0 }
+      } },
+
+    { "id": 6, "typeId": "node.reinhard_tone_map", "handle": "tone_map",
+      "params": {
+        "intensity": { "type": "Float", "value": 3.0 },
+        "contrast":  { "type": "Float", "value": 3.5 }
+      } },
+
+    { "id": 7, "typeId": "node.affine_transform", "handle": "display_zoom",
+      "params": {
+        "translate_x": { "type": "Float", "value": 0.0 },
+        "translate_y": { "type": "Float", "value": 0.0 },
+        "scale":       { "type": "Float", "value": 1.0 },
+        "rotation":    { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 8, "typeId": "node.invert", "handle": "display_invert",
+      "params": {
+        "intensity": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 10, "typeId": "node.affine_scalar", "handle": "cam_angle_a",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+    { "id": 11, "typeId": "node.affine_scalar", "handle": "cam_angle_b",
+      "params": {
+        "a":      { "type": "Float", "value": 0.0 },
+        "scale":  { "type": "Float", "value": 0.25 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 12, "typeId": "node.affine_scalar", "handle": "particle_count_calc",
+      "params": {
+        "a":      { "type": "Float", "value": 0.5 },
+        "scale":  { "type": "Float", "value": 1000000.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 13, "typeId": "node.math", "handle": "size_per_countm",
+      "params": {
+        "a":  { "type": "Float", "value": 3.0 },
+        "b":  { "type": "Float", "value": 0.5 },
+        "op": { "type": "Enum",  "value": 3 }
+      } },
+
+    { "id": 14, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc",
+      "params": {
+        "a":      { "type": "Float", "value": 1.0 },
+        "scale":  { "type": "Float", "value": 6.8266667 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 15, "typeId": "node.canvas_area_scale", "handle": "area_scale",
+      "params": {
+        "width":          { "type": "Float", "value": 1920.0 },
+        "height":         { "type": "Float", "value": 1080.0 },
+        "reference_area": { "type": "Float", "value": 2073600.0 }
+      } },
+
+    { "id": 16, "typeId": "node.affine_scalar", "handle": "intensity_calc",
+      "params": {
+        "a":      { "type": "Float", "value": 1.0 },
+        "scale":  { "type": "Float", "value": 3.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      } }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "time",          "toNode": 10, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out",          "toNode": 11, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out",          "toNode": 3,  "toPort": "cam_angle" },
+
+    { "fromNode": 0, "fromPort": "aspect",        "toNode": 3,  "toPort": "aspect" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3,  "toPort": "trigger_count" },
+
+    { "fromNode": 12, "fromPort": "out",          "toNode": 2,  "toPort": "active_count" },
+    { "fromNode": 12, "fromPort": "out",          "toNode": 3,  "toPort": "particle_count" },
+    { "fromNode": 12, "fromPort": "out",          "toNode": 4,  "toPort": "active_count" },
+
+    { "fromNode": 13, "fromPort": "out",          "toNode": 14, "toPort": "a" },
+    { "fromNode": 14, "fromPort": "out",          "toNode": 4,  "toPort": "scaled_energy" },
+
+    { "fromNode": 0, "fromPort": "output_width",  "toNode": 15, "toPort": "width" },
+    { "fromNode": 0, "fromPort": "output_height", "toNode": 15, "toPort": "height" },
+    { "fromNode": 15, "fromPort": "out",          "toNode": 16, "toPort": "a" },
+    { "fromNode": 16, "fromPort": "out",          "toNode": 6,  "toPort": "intensity" },
+
+    { "fromNode": 2,  "fromPort": "particles",    "toNode": 3,  "toPort": "in" },
+    { "fromNode": 3,  "fromPort": "out",          "toNode": 4,  "toPort": "particles" },
+    { "fromNode": 4,  "fromPort": "accum",        "toNode": 5,  "toPort": "accum" },
+    { "fromNode": 5,  "fromPort": "density",     "toNode": 6,  "toPort": "in" },
+    { "fromNode": 6,  "fromPort": "out",          "toNode": 7,  "toPort": "in" },
+    { "fromNode": 7,  "fromPort": "out",          "toNode": 8,  "toPort": "in" },
+    { "fromNode": 8,  "fromPort": "out",          "toNode": 1,  "toPort": "in" }
+  ]
+}

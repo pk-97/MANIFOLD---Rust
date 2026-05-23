@@ -26,9 +26,11 @@ struct ReinhardUniforms {
 crate::primitive! {
     name: ReinhardToneMap,
     type_id: "node.reinhard_tone_map",
-    purpose: "Extended Reinhard tone mapping for HDR display: per-channel curve x*(1+x/9)/(1+x) with intensity + contrast pre-multipliers. Matches the FluidSim display path bit-for-bit. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
+    purpose: "Extended Reinhard tone mapping for HDR display: per-channel curve x*(1+x/9)/(1+x) with intensity + contrast pre-multipliers. Matches the FluidSim display path bit-for-bit. Both pre-multipliers are port-shadows-param — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
     inputs: {
         in: Texture2D required,
+        intensity: ScalarF32 optional,
+        contrast: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -51,21 +53,15 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "intensity scales the pre-tonemap signal; contrast is a second multiplier. White-point fixed at 3.0 (the FluidSim default). Output alpha = source alpha. For HDR pipelines that need parameterised white-point or alternate curves, swap in `node.tone_map`.",
+    composition_notes: "intensity scales the pre-tonemap signal; contrast is a second multiplier. Both port-shadowed for runtime modulation (canvas-area brightness comp, audio-driven dynamics). White-point fixed at 3.0 (the FluidSim default). Output alpha = source alpha. For HDR pipelines that need parameterised white-point or alternate curves, swap in `node.tone_map`.",
     examples: [],
     picker: { label: "Reinhard Tone Map", category: Atom },
 }
 
 impl Primitive for ReinhardToneMap {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let intensity = match ctx.params.get("intensity") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let contrast = match ctx.params.get("contrast") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let intensity = ctx.scalar_or_param("intensity", 1.0);
+        let contrast = ctx.scalar_or_param("contrast", 1.0);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
@@ -131,13 +127,28 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn reinhard_declares_texture_in_and_out() {
-        use crate::node_graph::ports::PortType;
+    fn reinhard_declares_texture_in_and_out_plus_port_shadowed_scalars() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(ReinhardToneMap::TYPE_ID, "node.reinhard_tone_map");
-        assert_eq!(ReinhardToneMap::INPUTS.len(), 1);
-        assert_eq!(ReinhardToneMap::INPUTS[0].name, "in");
-        assert_eq!(ReinhardToneMap::INPUTS[0].ty, PortType::Texture2D);
-        assert!(ReinhardToneMap::INPUTS[0].required);
+        let in_port = ReinhardToneMap::INPUTS
+            .iter()
+            .find(|p| p.name == "in")
+            .unwrap();
+        assert_eq!(in_port.ty, PortType::Texture2D);
+        assert!(in_port.required);
+
+        // Port-shadows-param: intensity + contrast as optional scalar
+        // inputs so a math chain (canvas_area_scale, audio-driven) can
+        // drive them at runtime.
+        for name in ["intensity", "contrast"] {
+            let port = ReinhardToneMap::INPUTS
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("missing port-shadow input `{name}`"));
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+            assert!(!port.required);
+        }
+
         assert_eq!(ReinhardToneMap::OUTPUTS.len(), 1);
         assert_eq!(ReinhardToneMap::OUTPUTS[0].name, "out");
         assert_eq!(ReinhardToneMap::OUTPUTS[0].ty, PortType::Texture2D);

@@ -1008,6 +1008,33 @@ mod tests {
         preset.execute_frame(frame_time());
     }
 
+    /// Load the bundled `ComputeStrangeAttractor.json` preset from
+    /// disk and execute it. First decomposition of the particle
+    /// generator family — wires the full pipeline (seed[OnceOnReset]
+    /// → integrate_attractor → scatter[Discard] → resolve →
+    /// reinhard) plus the canvas-area-scale brightness compensation
+    /// chain. If the schema is malformed or any binding's target
+    /// inner-node param can't be resolved this fails immediately
+    /// instead of running with silent stale defaults.
+    #[test]
+    fn bundled_strange_attractor_loads_and_executes() {
+        let json = include_str!(
+            "../../assets/generator-presets/ComputeStrangeAttractor.json"
+        );
+        let mut preset = JsonGraphGenerator::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("bundled ComputeStrangeAttractor must load");
+        assert_eq!(preset.type_id().as_str(), "ComputeStrangeAttractor");
+        // Two frames so the seed[OnceOnReset] no-op path is hit and
+        // the auto-seed-on-type-match path in integrate runs second.
+        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
+        preset.execute_frame(frame_time());
+        preset.set_frame_context(0.016, 0.01, 1.78, 0.0, 0.0, 1920.0, 1080.0);
+        preset.execute_frame(frame_time());
+    }
+
     /// Load the bundled `Plasma.json` preset from disk and execute it.
     /// This is the JSON Plasma that supersedes the legacy Rust factory
     /// — a non-trivial graph (~75 nodes) exercising the procedural-math

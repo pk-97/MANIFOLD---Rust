@@ -603,3 +603,6 @@ inventory::submit! {
 inventory::submit! {
     GeneratorAliasMetadata { id: GeneratorTypeId::PARTICLE_TEXT, aliases: SNAP_AND_MODE_ALIASES }
 }
+inventory::submit! {
+    GeneratorAliasMetadata { id: GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR, aliases: SNAP_ALIASES }
+}

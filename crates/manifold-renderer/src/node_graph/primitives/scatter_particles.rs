@@ -39,9 +39,11 @@ struct ScatterUniforms {
 crate::primitive! {
     name: ScatterParticles,
     type_id: "node.scatter_particles",
-    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized width×height. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). Pair with `node.resolve_accumulator` to read the result as a float texture.",
+    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized width×height. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width`/`height` stay param-only — the accumulator buffer is allocated to those dims at chain-build time so they can't safely change per frame. Pair with `node.resolve_accumulator` to read the result as a float texture.",
     inputs: {
         particles: Array(Particle) required,
+        active_count: ScalarF32 optional,
+        scaled_energy: ScalarF32 optional,
     },
     outputs: {
         accum: Array(u32),
@@ -117,10 +119,10 @@ impl Primitive for ScatterParticles {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 100_000,
-        };
+        let active_count = ctx
+            .scalar_or_param("active_count", 100_000.0)
+            .round()
+            .max(0.0) as u32;
         let width = match ctx.params.get("width") {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 960,
@@ -129,10 +131,10 @@ impl Primitive for ScatterParticles {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 540,
         };
-        let scaled_energy = match ctx.params.get("scaled_energy") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 4096,
-        };
+        let scaled_energy = ctx
+            .scalar_or_param("scaled_energy", 4096.0)
+            .round()
+            .max(0.0) as u32;
         let boundary = match ctx.params.get("boundary") {
             Some(ParamValue::Enum(n)) => *n,
             _ => 0,
@@ -233,17 +235,30 @@ mod tests {
 
     #[test]
     fn scatter_particles_declares_array_in_and_array_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let particle_layout = ArrayType::of_known::<Particle>();
         let u32_layout = ArrayType::of_known::<u32>();
 
         assert_eq!(ScatterParticles::TYPE_ID, "node.scatter_particles");
-        assert_eq!(ScatterParticles::INPUTS.len(), 1);
-        assert_eq!(ScatterParticles::INPUTS[0].name, "particles");
-        assert_eq!(
-            ScatterParticles::INPUTS[0].ty,
-            PortType::Array(particle_layout)
-        );
+
+        let particles_in = ScatterParticles::INPUTS
+            .iter()
+            .find(|p| p.name == "particles")
+            .expect("particles input");
+        assert_eq!(particles_in.ty, PortType::Array(particle_layout));
+        assert!(particles_in.required);
+
+        // Port-shadow inputs: active_count and scaled_energy. width
+        // and height stay param-only because the accumulator buffer
+        // is built to those dims and can't safely resize per-frame.
+        for name in ["active_count", "scaled_energy"] {
+            let port = ScatterParticles::INPUTS
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("missing port-shadow input `{name}`"));
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+            assert!(!port.required);
+        }
 
         assert_eq!(ScatterParticles::OUTPUTS.len(), 1);
         assert_eq!(ScatterParticles::OUTPUTS[0].name, "accum");

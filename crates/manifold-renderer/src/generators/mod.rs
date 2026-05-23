@@ -20,5 +20,4 @@ pub mod particle_text;
 pub mod registration;
 pub mod registry;
 pub mod stateful_base;
-pub mod strange_attractor;
 pub mod text;
