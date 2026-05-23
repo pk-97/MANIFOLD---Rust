@@ -221,13 +221,22 @@ impl Executor {
                     self.scalar_write_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
-                        let (canvas_width, canvas_height) = backend_ref.canvas_dims();
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
                             &mut self.scalar_write_scratch,
                         );
+                        // Canvas dims are no longer hung off the
+                        // context as a side-channel. Primitives that
+                        // need them (`scatter_particles` and friends)
+                        // declare `width`/`height` as required scalar
+                        // input ports and the JSON preset wires them
+                        // from `system.generator_input.output_width /
+                        // output_height` — the value is visible in the
+                        // graph editor and the chain validator catches
+                        // missing wires at preset-load instead of at
+                        // runtime via a sub-rect render bug.
                         let mut ctx = EffectNodeContext::with_state(
                             time,
                             &inst.params,
@@ -238,7 +247,6 @@ impl Executor {
                             step.node,
                             owner_key,
                         );
-                        ctx.set_canvas_dims(canvas_width, canvas_height);
                         inst.node.evaluate(&mut ctx);
                     }
                     // Drain scalar writes back into the backend so

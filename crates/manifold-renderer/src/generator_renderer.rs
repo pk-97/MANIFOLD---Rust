@@ -199,23 +199,14 @@ impl GeneratorRenderer {
                 .get(&layer_id)
                 .map(|ls| ls.trigger_count)
                 .unwrap_or(0);
-            if let Some(generator) =
-                self.registry
-                    .create_with_override(self.device(), &gen_type, override_def)
-            {
-                self.layer_generators.insert(
-                    layer_id.clone(),
-                    LayerGeneratorState {
-                        generator,
-                        generator_type: gen_type.clone(),
-                        trigger_count: preserved_trigger_count,
-                        override_version: current_override_version,
-                        layer_string_defaults: std::collections::BTreeMap::new(),
-                        merged_string_params: std::collections::BTreeMap::new(),
-                        string_params_dirty: true,
-                    },
-                );
-            } else {
+            if !self.install_layer_generator(
+                layer_id.clone(),
+                gen_type.clone(),
+                override_def,
+                current_override_version,
+                preserved_trigger_count,
+                std::collections::BTreeMap::new(),
+            ) {
                 return false;
             }
         }
@@ -342,23 +333,14 @@ impl GeneratorRenderer {
                 .unwrap_or(0);
             let gen_type = layer.generator_type().clone();
             let override_def = layer.generator_graph.as_ref();
-            if let Some(generator) =
-                self.registry
-                    .create_with_override(self.device(), &gen_type, override_def)
-            {
-                self.layer_generators.insert(
-                    layer_id.clone(),
-                    LayerGeneratorState {
-                        generator,
-                        generator_type: gen_type,
-                        trigger_count: preserved_trigger_count,
-                        override_version: current_override_version,
-                        layer_string_defaults: std::collections::BTreeMap::new(),
-                        merged_string_params: std::collections::BTreeMap::new(),
-                        string_params_dirty: true,
-                    },
-                );
-            }
+            self.install_layer_generator(
+                layer_id.clone(),
+                gen_type,
+                override_def,
+                current_override_version,
+                preserved_trigger_count,
+                std::collections::BTreeMap::new(),
+            );
         }
 
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
@@ -554,36 +536,100 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
+            // Preserve layer_string_defaults across type changes.
+            let old_defaults = self
+                .layer_generators
+                .get(layer_id)
+                .map(|ls| ls.layer_string_defaults.clone())
+                .unwrap_or_default();
             // Type swap discards the per-layer override — the layer
             // hasn't been re-edited against the new type yet, so the
             // override would refer to the old graph shape. The next
             // `acquire_clip` will re-snapshot the (possibly cleared)
             // override and rebuild if a user edits against the new
             // type. Pass `None` here.
-            if let Some(generator) =
-                self.registry
-                    .create_with_override(self.device(), &new_type, None)
-            {
-                // Preserve layer_string_defaults across type changes
-                let old_defaults = self
-                    .layer_generators
-                    .get(layer_id)
-                    .map(|ls| ls.layer_string_defaults.clone())
-                    .unwrap_or_default();
-                self.layer_generators.insert(
-                    layer_id.clone(),
-                    LayerGeneratorState {
-                        generator,
-                        generator_type: new_type.clone(),
-                        trigger_count: old_trigger_count,
-                        override_version: None,
-                        layer_string_defaults: old_defaults,
-                        merged_string_params: std::collections::BTreeMap::new(),
-                        string_params_dirty: true,
-                    },
-                );
+            self.install_layer_generator(
+                layer_id.clone(),
+                new_type.clone(),
+                None,
+                None,
+                old_trigger_count,
+                old_defaults,
+            );
+        }
+    }
+
+    /// Single funnel for "a new `Generator` instance now owns rendering
+    /// for `layer_id`." Every rebuild path — first-clip acquire, per-frame
+    /// override-version sweep, user-driven generator type swap — routes
+    /// through here so two invariants hold by construction:
+    ///
+    /// 1. The new generator is built at the host's *current* canvas
+    ///    dimensions (`self.width` × `self.height`), so the JSON chain
+    ///    builder's `canvas_sized_array_outputs` pre-allocation (scatter
+    ///    accumulators, density grids, future ping-pong sims) lands at
+    ///    the right pixel count on the very first frame. Before this
+    ///    centralization, sites called the registry directly with
+    ///    hardcoded 1920×1080, never followed up with `resize()`, and
+    ///    the splat buffer stayed sized for a sub-rect of the real
+    ///    canvas — the "Strange Attractor renders in the top-left
+    ///    quadrant after generator swap" bug.
+    ///
+    /// 2. Every `ActiveClip` for this layer is marked `needs_clear`,
+    ///    so the canvas-sized output texture is wiped to opaque black
+    ///    before the new generator writes to it. Without this the
+    ///    previous generator's last frame stays visible wherever the
+    ///    new generator doesn't write (e.g. a particle generator with
+    ///    sparse splats leaves the previous shape generator's bright
+    ///    rectangles bleeding through — the second half of the same
+    ///    visual bug).
+    ///
+    /// Returns `true` on successful install. Returns `false` only if
+    /// the registry rejected the construction (unknown type / preset
+    /// failed to load); in that case the existing entry (if any) is
+    /// left untouched so the previous generator keeps rendering.
+    fn install_layer_generator(
+        &mut self,
+        layer_id: LayerId,
+        gen_type: GeneratorTypeId,
+        override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+        override_version: Option<u32>,
+        trigger_count: u32,
+        layer_string_defaults: std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        let Some(generator) = self.registry.create_with_override(
+            self.device(),
+            &gen_type,
+            override_def,
+            self.width,
+            self.height,
+        ) else {
+            return false;
+        };
+        self.layer_generators.insert(
+            layer_id.clone(),
+            LayerGeneratorState {
+                generator,
+                generator_type: gen_type,
+                trigger_count,
+                override_version,
+                layer_string_defaults,
+                merged_string_params: std::collections::BTreeMap::new(),
+                string_params_dirty: true,
+            },
+        );
+        // Mark every active clip on this layer for a clear before the
+        // first render against the freshly installed generator. The
+        // canvas-sized render target may still hold the previous
+        // generator's last frame; without this, a sparse new generator
+        // (particles, wireframes) leaves the old generator's pixels
+        // visible wherever the new one doesn't write.
+        for active in self.active_clips.values_mut() {
+            if active.layer_id == layer_id {
+                active.needs_clear = true;
             }
         }
+        true
     }
 
     /// Number of active clips.
@@ -747,5 +793,189 @@ impl ClipRenderer for GeneratorRenderer {
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generators::json_graph_generator::JsonGraphGenerator;
+    use crate::render_target::RenderTarget;
+    use manifold_gpu::GpuTextureFormat;
+
+    /// Architectural regression: a generator type swap mid-clip must
+    /// re-build the per-layer `Generator` against the host's *current*
+    /// canvas dimensions AND mark every active clip on that layer for
+    /// a render-target clear before the new generator's first frame.
+    ///
+    /// Pre-fix, `update_active_types_for_layer` and the per-frame
+    /// override-version sweep called the registry directly with
+    /// hardcoded 1920×1080 and never touched `ActiveClip::needs_clear`.
+    /// Two visible failure modes:
+    /// 1. At any host resolution other than 1920×1080, the new
+    ///    generator's `canvas_sized_array_outputs` (scatter
+    ///    accumulators, density grids) allocated at 1920×1080 and the
+    ///    dispatch sized from `Backend::canvas_dims()` mapped splats
+    ///    into a sub-rect of the real canvas — Strange Attractor
+    ///    rendered into the top-left quadrant only.
+    /// 2. The canvas-sized output texture still held the previous
+    ///    generator's last frame; wherever the new generator didn't
+    ///    write (sparse particle splats, narrow wireframes), the old
+    ///    generator's pixels stayed visible — the user-reported
+    ///    "leaves an artifact of the previous generator" bug.
+    ///
+    /// Both invariants now hold by construction because
+    /// `install_layer_generator` is the only path that mutates
+    /// `layer_generators`, and it (a) passes `self.width/height` into
+    /// `GeneratorRegistry::create_with_override` (which takes canvas
+    /// dims as required arguments — no silent default), and (b)
+    /// dirties every `active_clips` entry for the affected layer.
+    ///
+    /// This test exercises the *swap* path (the one that was
+    /// fundamentally broken) at a non-default host resolution.
+    #[test]
+    fn generator_type_swap_marks_active_clips_for_clear_at_host_canvas_dims() {
+        let device = crate::test_device();
+        let host_w: u32 = 1280;
+        let host_h: u32 = 720;
+
+        let mut renderer = GeneratorRenderer::new(
+            &device,
+            host_w,
+            host_h,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+
+        let layer_id = LayerId::new("layer-under-test");
+        let other_layer = LayerId::new("other-layer");
+        let trivial = GeneratorTypeId::new("TrivialPassthrough");
+        let strange = GeneratorTypeId::new("ComputeStrangeAttractor");
+
+        // Seed a `LayerGeneratorState` for the starting type via the
+        // same funnel any production path would use. (Any JSON preset
+        // works; the test doesn't render it, it just exists so the
+        // swap path has something to replace.)
+        assert!(
+            renderer.install_layer_generator(
+                layer_id.clone(),
+                trivial.clone(),
+                None,
+                None,
+                0,
+                std::collections::BTreeMap::new(),
+            ),
+            "seed install of TrivialPassthrough must succeed",
+        );
+
+        // Two active clips on the layer at non-default canvas dims.
+        // Manually populated so the test doesn't depend on the
+        // `start_clip` plumbing — the invariant under test is that
+        // `install_layer_generator` reaches every active clip on the
+        // layer regardless of how it got there.
+        for tag in ["clip-a", "clip-b"] {
+            let rt = RenderTarget::new(
+                &device,
+                host_w,
+                host_h,
+                GpuTextureFormat::Rgba16Float,
+                "test RT",
+            );
+            renderer.active_clips.insert(
+                ClipId::new(tag),
+                ActiveClip {
+                    render_target: rt,
+                    generator_type: trivial.clone(),
+                    layer_id: layer_id.clone(),
+                    layer_index: 0,
+                    clip_index: 0,
+                    anim_progress: 0.0,
+                    // Pretend the first frame already cleared the
+                    // flag. The swap must re-dirty both clips.
+                    needs_clear: false,
+                },
+            );
+        }
+        // One clip on a *different* layer that must NOT be touched
+        // by the swap. Catches the "iterate every active clip"
+        // footgun (over-clearing other layers).
+        let other_rt = RenderTarget::new(
+            &device,
+            host_w,
+            host_h,
+            GpuTextureFormat::Rgba16Float,
+            "other RT",
+        );
+        renderer.active_clips.insert(
+            ClipId::new("clip-other"),
+            ActiveClip {
+                render_target: other_rt,
+                generator_type: trivial.clone(),
+                layer_id: other_layer.clone(),
+                layer_index: 1,
+                clip_index: 0,
+                anim_progress: 0.0,
+                needs_clear: false,
+            },
+        );
+
+        // === The swap ===
+        renderer.update_active_types_for_layer(&layer_id, strange.clone());
+
+        // Invariant 1: the rebuild used host canvas dims, not a
+        // hardcoded default. If a future regression silently drops
+        // the dims again, this assertion fails before any visual bug
+        // can ship.
+        {
+            let layer_state = renderer
+                .layer_generators
+                .get_mut(&layer_id)
+                .expect("layer state must exist after swap");
+            assert_eq!(
+                layer_state.generator_type, strange,
+                "swap must install the new generator type",
+            );
+            let json_gen = layer_state
+                .generator
+                .as_any()
+                .downcast_ref::<JsonGraphGenerator>()
+                .expect(
+                    "ComputeStrangeAttractor must be a JSON-backed generator for this regression \
+                     — if it has moved back to a Rust factory, update this assertion",
+                );
+            assert_eq!(
+                json_gen.backend_for_test().canvas_dims(),
+                (host_w, host_h),
+                "post-swap generator's backend must report host canvas dims, \
+                 not the registry's pre-fix hardcoded default",
+            );
+        }
+
+        // Invariant 2: every active clip on the swapped layer is
+        // dirty; the unrelated layer's clip is untouched.
+        let clip_a = renderer
+            .active_clips
+            .get("clip-a")
+            .expect("clip-a must remain active after swap");
+        assert!(
+            clip_a.needs_clear,
+            "clip-a on the swapped layer must be marked for clear",
+        );
+        let clip_b = renderer
+            .active_clips
+            .get("clip-b")
+            .expect("clip-b must remain active after swap");
+        assert!(
+            clip_b.needs_clear,
+            "clip-b on the swapped layer must be marked for clear",
+        );
+        let clip_other = renderer
+            .active_clips
+            .get("clip-other")
+            .expect("clip-other must remain active");
+        assert!(
+            !clip_other.needs_clear,
+            "swap on layer-under-test must not touch clips on other layers",
+        );
     }
 }

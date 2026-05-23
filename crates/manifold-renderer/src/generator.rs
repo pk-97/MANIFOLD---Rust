@@ -1,6 +1,7 @@
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
+use std::any::Any;
 use std::collections::BTreeMap;
 
 /// GPU-aware generator processor. Each instance owns its manifold-gpu pipeline(s)
@@ -36,4 +37,16 @@ pub trait Generator: Send {
     /// Called once per frame before `render()`. Only generators that need string
     /// data override this; all others inherit the no-op default.
     fn set_string_params(&mut self, _params: Option<&BTreeMap<String, String>>) {}
+
+    /// Downcast hook. Default impl is sufficient for any concrete
+    /// generator that implements `Generator` directly. Mirrors the
+    /// `ClipRenderer::as_any` pattern — used by regression tests that
+    /// need to introspect a specific generator implementation's
+    /// internal state (e.g. confirm a `JsonGraphGenerator`'s backend
+    /// reports the expected canvas dims after a host-driven rebuild).
+    fn as_any(&self) -> &dyn Any {
+        unimplemented!(
+            "Generator::as_any must be overridden by the concrete type to enable downcasting"
+        )
+    }
 }

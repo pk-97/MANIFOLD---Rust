@@ -73,14 +73,28 @@ impl GeneratorRegistry {
         log::info!("Generator pipeline pre-warm complete");
     }
 
-    /// Create a new generator instance for the given type. JSON
-    /// presets are consulted first; falls back to Rust factories.
+    /// Create a new generator instance for the given type at the
+    /// host's current canvas resolution. JSON presets are consulted
+    /// first; falls back to Rust factories.
+    ///
+    /// `width`/`height` are the live canvas dims — passed straight
+    /// into the JSON chain build so `canvas_sized_array_outputs`
+    /// (scatter accumulators, density grids) allocate at the right
+    /// pixel count on the very first construction. Callers must
+    /// always pass the real canvas size; there is intentionally no
+    /// fallback default — a hardcoded 1920×1080 here was the source
+    /// of the "Strange Attractor renders in the top-left quadrant
+    /// after generator swap" bug (the swap path constructed at the
+    /// default and never called `resize`, leaving the splat buffer
+    /// sized for a sub-rect of the real canvas).
     pub fn create(
         &self,
         device: &GpuDevice,
         gen_type: &manifold_core::GeneratorTypeId,
+        width: u32,
+        height: u32,
     ) -> Option<Box<dyn Generator>> {
-        self.create_with_override(device, gen_type, None)
+        self.create_with_override(device, gen_type, None, width, height)
     }
 
     /// Same as [`Self::create`] but routes a per-layer
@@ -103,6 +117,8 @@ impl GeneratorRegistry {
         device: &GpuDevice,
         gen_type: &manifold_core::GeneratorTypeId,
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+        width: u32,
+        height: u32,
     ) -> Option<Box<dyn Generator>> {
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -123,8 +139,8 @@ impl GeneratorRegistry {
                 grafted,
                 &registry,
                 device,
-                1920,
-                1080,
+                width,
+                height,
                 self.target_format,
             ) {
                 Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
@@ -144,11 +160,8 @@ impl GeneratorRegistry {
                 json,
                 &registry,
                 device,
-                // Initial size — resize() comes later. Pick a sane
-                // non-tiny default so first-frame allocations don't
-                // hit zero-sized texture warnings.
-                1920,
-                1080,
+                width,
+                height,
                 self.target_format,
             ) {
                 Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
@@ -163,7 +176,12 @@ impl GeneratorRegistry {
             }
         }
 
-        // Rust factory fallback.
+        // Rust factory fallback. Rust generators allocate their
+        // internal resources lazily on first `resize()` (called by
+        // `GeneratorRenderer::resize_gpu`), so the canvas dims aren't
+        // needed at construction here — they only matter for the
+        // JSON chain-build's canvas-sized array pre-allocation
+        // handled above.
         for factory in inventory::iter::<super::registration::GeneratorFactory> {
             if factory.id == *gen_type {
                 return Some((factory.create)(device));

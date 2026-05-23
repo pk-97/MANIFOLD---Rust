@@ -39,9 +39,11 @@ struct ScatterUniforms {
 crate::primitive! {
     name: ScatterParticles,
     type_id: "node.scatter_particles",
-    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). The accumulator dimensions track the canvas automatically — declared via `canvas_sized_array_outputs()` — so a layer renders correctly at any host resolution without hardcoded width/height params. Pair with `node.resolve_accumulator` to read the result as a float texture.",
+    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_accumulator` to read the result as a float texture.",
     inputs: {
         particles: Array(Particle) required,
+        width: ScalarF32 required,
+        height: ScalarF32 required,
         active_count: ScalarF32 optional,
         scaled_energy: ScalarF32 optional,
     },
@@ -96,12 +98,20 @@ impl Primitive for ScatterParticles {
             .scalar_or_param("active_count", 100_000.0)
             .round()
             .max(0.0) as u32;
-        // Canvas dims from the executor — set on the context before
-        // every evaluate. Matches what `canvas_sized_array_outputs`
-        // told the chain builder to allocate, so the dispatch grid
-        // spans every cell of the accumulator buffer.
-        let width = ctx.canvas_width.max(1);
-        let height = ctx.canvas_height.max(1);
+        // Canvas dims arrive as wired scalar inputs — convention is
+        // `system.generator_input.output_width / output_height`. Both
+        // ports are declared `required` above, so the chain validator
+        // rejects any preset that omits them; the fallback to 1.0
+        // only fires if a value source unexpectedly emits no value
+        // (1×1 dispatch — no allocation, no panic).
+        let read_scalar = |name: &str| -> f32 {
+            match ctx.inputs.scalar(name) {
+                Some(crate::node_graph::parameters::ParamValue::Float(f)) => f,
+                _ => 1.0,
+            }
+        };
+        let width = read_scalar("width").round().max(1.0) as u32;
+        let height = read_scalar("height").round().max(1.0) as u32;
         let scaled_energy = ctx
             .scalar_or_param("scaled_energy", 4096.0)
             .round()
@@ -219,9 +229,7 @@ mod tests {
         assert_eq!(particles_in.ty, PortType::Array(particle_layout));
         assert!(particles_in.required);
 
-        // Port-shadow inputs: active_count and scaled_energy. width
-        // and height stay param-only because the accumulator buffer
-        // is built to those dims and can't safely resize per-frame.
+        // Port-shadow inputs: active_count and scaled_energy.
         for name in ["active_count", "scaled_energy"] {
             let port = ScatterParticles::INPUTS
                 .iter()
@@ -229,6 +237,23 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing port-shadow input `{name}`"));
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
             assert!(!port.required);
+        }
+
+        // Required canvas-dim inputs — convention is to wire them
+        // from `system.generator_input.output_width / output_height`.
+        // Declared `required` so the chain validator rejects any
+        // preset that forgets the wire (the architectural defense
+        // against the "Strange Attractor renders in the top-left
+        // quadrant after swap" bug class — pre-fix the dispatch dims
+        // came from a hidden `ctx.canvas_width/height` side-channel
+        // that no preset could *see*).
+        for name in ["width", "height"] {
+            let port = ScatterParticles::INPUTS
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("missing required input `{name}`"));
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+            assert!(port.required, "canvas-dim input `{name}` must be required");
         }
 
         assert_eq!(ScatterParticles::OUTPUTS.len(), 1);
@@ -289,6 +314,7 @@ mod gpu_tests {
     };
 
     use super::ScatterParticles;
+    use crate::node_graph::primitives::value::Value;
 
     /// Test-only source for `Array<Particle>`. CPU-write the input
     /// buffer via `mapped_ptr`, then pre-bind it as this node's `out`
@@ -400,6 +426,17 @@ mod gpu_tests {
         let mut g = Graph::new();
         let src = g.add_node(Box::new(ParticleSource::new()));
         let scatter = g.add_node(Box::new(ScatterParticles::new()));
+        // Canvas dims arrive on wires now — feed the test's 16×1
+        // grid from two `node.value` sources. In production the same
+        // ports get driven from `system.generator_input.output_width
+        // / output_height`; here we substitute constants since there
+        // is no host frame context.
+        let v_w = g.add_node(Box::new(Value::new()));
+        let v_h = g.add_node(Box::new(Value::new()));
+        g.set_param(v_w, "value", ParamValue::Float(WIDTH as f32)).unwrap();
+        g.set_param(v_h, "value", ParamValue::Float(HEIGHT as f32)).unwrap();
+        g.connect((v_w, "out"), (scatter, "width")).unwrap();
+        g.connect((v_h, "out"), (scatter, "height")).unwrap();
         g.connect((src, "out"), (scatter, "particles")).unwrap();
         g.set_param(
             scatter,
@@ -425,10 +462,11 @@ mod gpu_tests {
             in_buf.write(0, bytemuck::cast_slice(particles));
         }
 
-        // Backend canvas dims drive scatter's dispatch (width/height
-        // are read from `ctx.canvas_width/height`, not params). 16×1
-        // matches the test's expected accumulator layout — set the
-        // backend to those dims so the executor passes them through.
+        // Backend canvas dims size the auto-allocated accumulator
+        // buffer (declared `canvas_sized_array_outputs`). Dispatch
+        // dims come from the wired `width` / `height` value sources
+        // above — both must agree with WIDTH × HEIGHT for the test
+        // to operate on a buffer of the expected layout.
         let mut backend = MetalBackend::new(&device, WIDTH, HEIGHT, format);
         let _in_slot = backend.pre_bind_array(r_in, in_buf);
         let accum_slot = backend.pre_bind_array(r_accum, accum_buf);

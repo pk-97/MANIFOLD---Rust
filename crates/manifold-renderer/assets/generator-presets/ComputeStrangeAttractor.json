@@ -301,6 +301,8 @@
 
     { "fromNode": 0, "fromPort": "output_width",  "toNode": 15, "toPort": "width" },
     { "fromNode": 0, "fromPort": "output_height", "toNode": 15, "toPort": "height" },
+    { "fromNode": 0, "fromPort": "output_width",  "toNode": 4,  "toPort": "width" },
+    { "fromNode": 0, "fromPort": "output_height", "toNode": 4,  "toPort": "height" },
     { "fromNode": 15, "fromPort": "out",          "toNode": 16, "toPort": "a" },
     { "fromNode": 16, "fromPort": "out",          "toNode": 6,  "toPort": "intensity" },
 

@@ -577,6 +577,14 @@ impl JsonGraphGenerator {
         &self.type_id
     }
 
+    /// Test-only handle to the executor's backend. Used by
+    /// `generator_renderer`'s regression tests to assert post-rebuild
+    /// canvas dims match the host. Not on the hot path.
+    #[cfg(test)]
+    pub(crate) fn backend_for_test(&self) -> &dyn crate::node_graph::Backend {
+        self.executor.backend()
+    }
+
     /// Replace the internal executor — used when the host wires a real
     /// `MetalBackend` (the default executor uses `MockBackend` which is
     /// fine for tests but won't allocate real GPU textures).
@@ -774,6 +782,10 @@ impl Generator for JsonGraphGenerator {
             inst.node.clear_state();
         }
         self.state_store.cleanup_all();
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
     fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
