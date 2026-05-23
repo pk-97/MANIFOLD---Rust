@@ -55,6 +55,15 @@ crate::primitive! {
     purpose: "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.generate_instance_transforms (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
     inputs: {
         instances: Array(InstanceTransform) required,
+        instance_count: ScalarF32 optional,
+        camera_distance: ScalarF32 optional,
+        camera_orbit: ScalarF32 optional,
+        camera_tilt: ScalarF32 optional,
+        camera_fov: ScalarF32 optional,
+        light_x: ScalarF32 optional,
+        light_y: ScalarF32 optional,
+        light_z: ScalarF32 optional,
+        light_intensity: ScalarF32 optional,
     },
     outputs: {
         color: Texture2D,
@@ -175,42 +184,15 @@ impl DigitalPlantsRender {
 
 impl Primitive for DigitalPlantsRender {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let instance_count = match ctx.params.get("instance_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 160_000,
-        };
-        let camera_distance = match ctx.params.get("camera_distance") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 15.0,
-        };
-        let camera_orbit = match ctx.params.get("camera_orbit") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.7,
-        };
-        let camera_tilt = match ctx.params.get("camera_tilt") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.4,
-        };
-        let camera_fov = match ctx.params.get("camera_fov") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.9,
-        };
-        let light_x = match ctx.params.get("light_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 8.0,
-        };
-        let light_y = match ctx.params.get("light_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 20.0,
-        };
-        let light_z = match ctx.params.get("light_z") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 8.0,
-        };
-        let light_intensity = match ctx.params.get("light_intensity") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let instance_count = ctx.scalar_or_param("instance_count", 160_000.0).round().max(0.0) as u32;
+        let camera_distance = ctx.scalar_or_param("camera_distance", 15.0);
+        let camera_orbit = ctx.scalar_or_param("camera_orbit", 0.7);
+        let camera_tilt = ctx.scalar_or_param("camera_tilt", 0.4);
+        let camera_fov = ctx.scalar_or_param("camera_fov", 0.9);
+        let light_x = ctx.scalar_or_param("light_x", 8.0);
+        let light_y = ctx.scalar_or_param("light_y", 20.0);
+        let light_z = ctx.scalar_or_param("light_z", 8.0);
+        let light_intensity = ctx.scalar_or_param("light_intensity", 1.0);
 
         let Some(instances) = ctx.inputs.array("instances") else {
             return;
@@ -417,15 +399,41 @@ mod tests {
 
     #[test]
     fn digital_plants_render_declares_instance_in_and_color_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(DigitalPlantsRender::TYPE_ID, "node.digital_plants_render");
-        assert_eq!(DigitalPlantsRender::INPUTS.len(), 1);
-        assert_eq!(DigitalPlantsRender::INPUTS[0].name, "instances");
-        assert_eq!(
-            DigitalPlantsRender::INPUTS[0].ty,
-            PortType::Array(layout)
-        );
+
+        let inst_in = DigitalPlantsRender::INPUTS
+            .iter()
+            .find(|p| p.name == "instances")
+            .expect("instances input must exist");
+        assert!(inst_in.required);
+        assert_eq!(inst_in.ty, PortType::Array(layout));
+
+        // Camera / light params are exposed as port-shadow ScalarF32
+        // inputs so the JSON preset can drive them from in-graph math
+        // (e.g. deg→rad conversion via node.affine_scalar) — the
+        // ParamConvert enum has no affine variant, so the conversion
+        // must live in the graph and reach the param via port-shadow.
+        for name in [
+            "instance_count",
+            "camera_distance",
+            "camera_orbit",
+            "camera_tilt",
+            "camera_fov",
+            "light_x",
+            "light_y",
+            "light_z",
+            "light_intensity",
+        ] {
+            let port = DigitalPlantsRender::INPUTS
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("{name} port-shadow input must exist"));
+            assert!(!port.required, "{name} is port-shadow, must be optional");
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+        }
+
         assert_eq!(DigitalPlantsRender::OUTPUTS.len(), 1);
         assert_eq!(DigitalPlantsRender::OUTPUTS[0].name, "color");
         assert_eq!(
