@@ -165,6 +165,10 @@ pub enum SerializedParamValue {
     /// `{"type":"Table","rows":[[1.0, 2.0], [3.0, 4.0]]}`. All rows
     /// must have the same length; rejected on load otherwise.
     Table { rows: Vec<Vec<f32>> },
+    /// Single text value (filesystem paths, font names, identifiers).
+    /// JSON shape: `{"type":"String","value":"some text"}`. Not
+    /// modulated — `ParamConvert` has no variant for strings.
+    String { value: String },
 }
 
 impl EffectGraphDef {

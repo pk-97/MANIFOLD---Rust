@@ -34,6 +34,20 @@
 //! increment regardless of size. The editor surfaces a read-only summary
 //! ("Table N×M"); editing happens in JSON until a second consumer
 //! materializes and earns a proper grid widget.
+//!
+//! ## Strings — single editable text values
+//!
+//! [`ParamValue::String`] carries a single text value (folder paths, font
+//! names, future LUT references). Arc-wrapped so clones are cheap. Unlike
+//! Table, strings are user-editable per-instance — the inner-node editor
+//! renders a text field. The intended bridge is generator-level
+//! `string_params` (existing outer-card UI with Browse buttons) feeding
+//! into inner-graph String params via the binding system, so a single
+//! preset can be re-pointed per-clip without graph edits.
+//!
+//! String is not modulated — no `ParamConvert` variant exists for it. The
+//! interpretation ("is this a filesystem path?", "is this a font name?")
+//! is the consuming primitive's contract, not core's job.
 
 use std::sync::Arc;
 
@@ -57,6 +71,9 @@ pub enum ParamType {
     /// Read-only N×M `f32` table — set in JSON, surfaced as a readonly
     /// summary in the editor. See module docs.
     Table,
+    /// Single editable text value (paths, font names, identifiers). See
+    /// module docs.
+    String,
 }
 
 /// Read-only N×M `f32` table.
@@ -127,6 +144,7 @@ pub enum ParamValue {
     Color([f32; 4]),
     Enum(u32),
     Table(Arc<TableData>),
+    String(Arc<String>),
 }
 
 impl ParamValue {
@@ -168,6 +186,15 @@ impl ParamValue {
     pub fn as_table(&self) -> Option<&TableData> {
         match self {
             ParamValue::Table(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Borrow as a string. Returns `None` for non-String variants.
+    #[inline]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            ParamValue::String(s) => Some(s.as_str()),
             _ => None,
         }
     }

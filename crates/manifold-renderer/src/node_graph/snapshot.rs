@@ -399,7 +399,8 @@ fn param_default_to_f32(value: &ParamValue) -> f32 {
         | ParamValue::Vec3(_)
         | ParamValue::Vec4(_)
         | ParamValue::Color(_)
-        | ParamValue::Table(_) => 0.0,
+        | ParamValue::Table(_)
+        | ParamValue::String(_) => 0.0,
     }
 }
 

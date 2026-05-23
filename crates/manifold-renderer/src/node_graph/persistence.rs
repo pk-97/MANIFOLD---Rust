@@ -73,6 +73,9 @@ impl From<ParamValue> for SerializedParamValue {
             ParamValue::Table(t) => Self::Table {
                 rows: t.rows().to_vec(),
             },
+            ParamValue::String(s) => Self::String {
+                value: (*s).clone(),
+            },
         }
     }
 }
@@ -102,6 +105,7 @@ impl From<SerializedParamValue> for ParamValue {
                     });
                 Self::Table(std::sync::Arc::new(data))
             }
+            SerializedParamValue::String { value } => Self::String(std::sync::Arc::new(value)),
         }
     }
 }
@@ -692,6 +696,7 @@ fn param_type_label(v: &ParamValue) -> &'static str {
         ParamValue::Color(_) => "Color",
         ParamValue::Enum(_) => "Enum",
         ParamValue::Table(_) => "Table",
+        ParamValue::String(_) => "String",
     }
 }
 
@@ -708,6 +713,7 @@ fn param_type_name(ty: crate::node_graph::parameters::ParamType) -> &'static str
         ParamType::Color => "Color",
         ParamType::Enum => "Enum",
         ParamType::Table => "Table",
+        ParamType::String => "String",
     }
 }
 
@@ -728,6 +734,7 @@ fn param_value_matches_type(v: &ParamValue, ty: crate::node_graph::parameters::P
             | (ParamType::Color, ParamValue::Color(_))
             | (ParamType::Enum, ParamValue::Enum(_))
             | (ParamType::Table, ParamValue::Table(_))
+            | (ParamType::String, ParamValue::String(_))
     )
 }
 

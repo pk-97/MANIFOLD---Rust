@@ -162,6 +162,9 @@ pub fn splice_def_into_chain(
                             crate::node_graph::ParamValue::Table(std::sync::Arc::new(t))
                         })
                     }
+                    SerializedParamValue::String { value } => Some(
+                        crate::node_graph::ParamValue::String(std::sync::Arc::new(value.clone())),
+                    ),
                 };
                 if let Some(pv) = pv
                     && let Some(static_name) = resolve_param_name(graph, chain_id, param_name)
