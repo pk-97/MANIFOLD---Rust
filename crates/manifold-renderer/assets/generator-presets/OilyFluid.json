@@ -85,6 +85,8 @@
     { "id": 10, "typeId": "node.rotate_vec2_90", "handle": "curl_rotate",
       "params": { "direction": { "type": "Enum", "value": 0 } } },
 
+    { "id": 41, "typeId": "node.downsample", "handle": "vel_downsample",
+      "params": { "factor": { "type": "Enum", "value": 1 } } },
     { "id": 11, "typeId": "node.gaussian_blur", "handle": "blur_h",
       "params": { "kernel_size": { "type": "Enum", "value": 1 }, "axis": { "type": "Enum", "value": 0 }, "step": { "type": "Float", "value": 1.0 } } },
     { "id": 12, "typeId": "node.gaussian_blur", "handle": "blur_v",
@@ -174,7 +176,8 @@
     { "fromNode": 8,  "fromPort": "out", "toNode": 9,  "toPort": "in" },
     { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "in" },
 
-    { "fromNode": 2,  "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 41, "toPort": "in" },
+    { "fromNode": 41, "fromPort": "out", "toNode": 11, "toPort": "in" },
     { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
 
     { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },

@@ -25,26 +25,41 @@ use crate::node_graph::ports::PortType;
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
     /// Acquire a slot for `id` of the given [`PortType`]. Backends are
-    /// expected to recycle freed slots of the same `(type, format)` pair
-    /// before allocating fresh ones.
+    /// expected to recycle freed slots of the same `(type, format, dims)`
+    /// tuple before allocating fresh ones.
     ///
     /// `format` is honored only for `Texture2D` slots; other port types
     /// ignore it. `None` means "use the backend's default format"
     /// (typically `Rgba16Float`) — most primitives pass `None` and
     /// only the native-precision escape hatches declare a non-default
     /// format via [`EffectNode::output_format`](crate::node_graph::EffectNode::output_format).
+    ///
+    /// `dims` is honored only for `Texture2D` slots and must be
+    /// concrete — the executor resolves
+    /// [`ExecutionPlan::resource_dims`](crate::node_graph::execution_plan::ExecutionPlan::resource_dims)'
+    /// `None` (canvas-default) against `canvas_dims()` before calling
+    /// here. Slots at different dims pool independently so a freed
+    /// quarter-res rgba16float slot won't be handed back for a
+    /// full-res rgba16float acquire.
     fn acquire(
         &mut self,
         id: ResourceId,
         ty: PortType,
         format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
     ) -> Slot;
 
-    /// Release `id`'s slot back to the per-`(type, format)` free pool.
-    /// Idempotent — releasing an already-released id is a no-op. `format`
-    /// must match what was passed to [`Backend::acquire`] so the slot
-    /// returns to the correct bucket.
-    fn release(&mut self, id: ResourceId, ty: PortType, format: Option<GpuTextureFormat>);
+    /// Release `id`'s slot back to the per-`(type, format, dims)` free
+    /// pool. Idempotent — releasing an already-released id is a no-op.
+    /// `format` and `dims` must match what was passed to
+    /// [`Backend::acquire`] so the slot returns to the correct bucket.
+    fn release(
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
+    );
 
     /// Currently bound slot for `id`, or `None` if unbound.
     fn slot_for(&self, id: ResourceId) -> Option<Slot>;
@@ -153,17 +168,25 @@ pub trait Backend: Send {
     fn clear_skip_aliases(&mut self) {}
 }
 
-/// Build the per-(type, format) slot-recycling pool key. `format` is
-/// meaningful for `Texture2D` slots only; for every other port type
-/// the value is normalized to `None` so non-texture slots pool by type
-/// alone (avoids fragmenting the recycle pool by an irrelevant axis).
+/// Slot-recycling pool key. Texture2D slots distinguish on
+/// `(PortType, GpuTextureFormat, dims)`; all other slot kinds
+/// collapse to `(PortType, None, (0, 0))` so the format and dims
+/// axes don't fragment their recycle pools.
+pub(crate) type PoolKey = (PortType, Option<GpuTextureFormat>, (u32, u32));
+
+/// Build the per-(type, format, dims) slot-recycling pool key.
+/// `format` and `dims` are meaningful for `Texture2D` slots only;
+/// for every other port type both axes are normalized away so
+/// non-texture slots pool by type alone (avoids fragmenting the
+/// recycle pool by irrelevant axes).
 pub(crate) fn pool_key(
     ty: PortType,
     format: Option<GpuTextureFormat>,
-) -> (PortType, Option<GpuTextureFormat>) {
+    dims: (u32, u32),
+) -> PoolKey {
     match ty {
-        PortType::Texture2D => (ty, format),
-        _ => (ty, None),
+        PortType::Texture2D => (ty, format, dims),
+        _ => (ty, None, (0, 0)),
     }
 }
 
@@ -174,7 +197,7 @@ pub(crate) fn pool_key(
 /// Used by every test in the `node_graph` module. Production code uses a
 /// future `MetalBackend` that wraps `manifold_gpu::RenderTargetPool`.
 pub struct MockBackend {
-    free_by_type: AHashMap<(PortType, Option<GpuTextureFormat>), Vec<Slot>>,
+    free_by_type: AHashMap<PoolKey, Vec<Slot>>,
     bound: AHashMap<ResourceId, Slot>,
     next_slot: u32,
     /// Scalar values written via [`Backend::set_scalar`]. Mock has no
@@ -206,12 +229,13 @@ impl Backend for MockBackend {
         id: ResourceId,
         ty: PortType,
         format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
     ) -> Slot {
         // Idempotent on existing bindings — mirrors `MetalBackend`.
         if let Some(&slot) = self.bound.get(&id) {
             return slot;
         }
-        let key = pool_key(ty, format);
+        let key = pool_key(ty, format, dims);
         let pool = self.free_by_type.entry(key).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);
@@ -222,9 +246,15 @@ impl Backend for MockBackend {
         slot
     }
 
-    fn release(&mut self, id: ResourceId, ty: PortType, format: Option<GpuTextureFormat>) {
+    fn release(
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
+    ) {
         if let Some(slot) = self.bound.remove(&id) {
-            let key = pool_key(ty, format);
+            let key = pool_key(ty, format, dims);
             self.free_by_type.entry(key).or_default().push(slot);
         }
     }
@@ -264,12 +294,18 @@ mod tests {
     use super::*;
     use crate::node_graph::ports::ScalarType;
 
+    /// Canvas-sized dims used by tests that don't care about
+    /// resolution — matches the dim every pre-Phase-3 acquire would
+    /// have resolved to via the new "None means canvas at acquire
+    /// time" rule.
+    const CANVAS: (u32, u32) = (1920, 1080);
+
     #[test]
     fn reuses_freed_slot_of_matching_type() {
         let mut b = MockBackend::new();
-        let s0 = b.acquire(ResourceId(0), PortType::Texture2D, None);
-        b.release(ResourceId(0), PortType::Texture2D, None);
-        let s1 = b.acquire(ResourceId(1), PortType::Texture2D, None);
+        let s0 = b.acquire(ResourceId(0), PortType::Texture2D, None, CANVAS);
+        b.release(ResourceId(0), PortType::Texture2D, None, CANVAS);
+        let s1 = b.acquire(ResourceId(1), PortType::Texture2D, None, CANVAS);
         assert_eq!(s0, s1);
         assert_eq!(b.slot_count(), 1);
     }
@@ -277,9 +313,9 @@ mod tests {
     #[test]
     fn does_not_cross_type_boundaries() {
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Texture2D, None);
-        b.release(ResourceId(0), PortType::Texture2D, None);
-        let s = b.acquire(ResourceId(1), PortType::Texture3D, None);
+        b.acquire(ResourceId(0), PortType::Texture2D, None, CANVAS);
+        b.release(ResourceId(0), PortType::Texture2D, None, CANVAS);
+        let s = b.acquire(ResourceId(1), PortType::Texture3D, None, CANVAS);
         assert_eq!(s.0, 1);
         assert_eq!(b.slot_count(), 2);
     }
@@ -289,9 +325,9 @@ mod tests {
         // F32 and Vec3 scalars live in different physical-buffer kinds even
         // though they're both Scalar-flavoured.
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None);
-        b.release(ResourceId(0), PortType::Scalar(ScalarType::F32), None);
-        let s = b.acquire(ResourceId(1), PortType::Scalar(ScalarType::Vec3), None);
+        b.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, CANVAS);
+        b.release(ResourceId(0), PortType::Scalar(ScalarType::F32), None, CANVAS);
+        let s = b.acquire(ResourceId(1), PortType::Scalar(ScalarType::Vec3), None, CANVAS);
         assert_eq!(s.0, 1);
         assert_eq!(b.slot_count(), 2);
     }
@@ -299,13 +335,13 @@ mod tests {
     #[test]
     fn clear_resets_bindings_but_preserves_high_water_mark() {
         let mut b = MockBackend::new();
-        b.acquire(ResourceId(0), PortType::Texture2D, None);
-        b.acquire(ResourceId(1), PortType::Texture2D, None);
+        b.acquire(ResourceId(0), PortType::Texture2D, None, CANVAS);
+        b.acquire(ResourceId(1), PortType::Texture2D, None, CANVAS);
         b.clear();
         assert!(b.slot_for(ResourceId(0)).is_none());
         // After clear, the next acquire allocates a fresh slot rather than
         // reusing — the cleared bindings don't repopulate the free pool.
-        let s = b.acquire(ResourceId(2), PortType::Texture2D, None);
+        let s = b.acquire(ResourceId(2), PortType::Texture2D, None, CANVAS);
         assert_eq!(s.0, 2);
     }
 
@@ -319,16 +355,19 @@ mod tests {
             ResourceId(0),
             PortType::Texture2D,
             Some(GpuTextureFormat::Rgba16Float),
+            CANVAS,
         );
         b.release(
             ResourceId(0),
             PortType::Texture2D,
             Some(GpuTextureFormat::Rgba16Float),
+            CANVAS,
         );
         let s1 = b.acquire(
             ResourceId(1),
             PortType::Texture2D,
             Some(GpuTextureFormat::Rgba32Float),
+            CANVAS,
         );
         assert_eq!(s1.0, 1, "different-format acquire must allocate a fresh slot");
         assert_eq!(b.slot_count(), 2);
@@ -343,17 +382,37 @@ mod tests {
             ResourceId(0),
             PortType::Scalar(ScalarType::F32),
             Some(GpuTextureFormat::Rgba16Float),
+            CANVAS,
         );
         b.release(
             ResourceId(0),
             PortType::Scalar(ScalarType::F32),
             Some(GpuTextureFormat::Rgba32Float),
+            CANVAS,
         );
         let s = b.acquire(
             ResourceId(1),
             PortType::Scalar(ScalarType::F32),
             None,
+            CANVAS,
         );
         assert_eq!(s.0, 0, "non-texture slots should recycle regardless of format hint");
+    }
+
+    #[test]
+    fn texture2d_pools_separately_by_dims() {
+        // Phase-3 invariant: a freed full-res rgba16float slot must
+        // NOT be reused for a quarter-res rgba16float acquire — the
+        // backing texture is allocated at a specific (width, height)
+        // and handing it back at the wrong dims would crash on
+        // dispatch or silently sample garbage.
+        let mut b = MockBackend::new();
+        let full = (1920u32, 1080u32);
+        let quarter = (480u32, 270u32);
+        let _s0 = b.acquire(ResourceId(0), PortType::Texture2D, None, full);
+        b.release(ResourceId(0), PortType::Texture2D, None, full);
+        let s1 = b.acquire(ResourceId(1), PortType::Texture2D, None, quarter);
+        assert_eq!(s1.0, 1, "different-dims acquire must allocate a fresh slot");
+        assert_eq!(b.slot_count(), 2);
     }
 }

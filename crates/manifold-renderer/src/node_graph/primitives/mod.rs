@@ -40,6 +40,7 @@ mod digital_plants_render;
 mod displace_mesh;
 mod distance_to_point;
 mod dither_pattern;
+mod downsample;
 mod edge_detect;
 mod envelope_follower_ar;
 mod fbm_2d;

@@ -159,6 +159,20 @@ pub trait Primitive: PrimitiveSpec {
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
     /// Mirror of
+    /// [`EffectNode::output_dims`](crate::node_graph::effect_node::EffectNode::output_dims).
+    /// Override on `node.downsample` (and any future `node.upsample`)
+    /// to break out of the default "match max of texture input dims"
+    /// policy. Default: `None`.
+    fn output_dims(
+        &self,
+        _port: &str,
+        _canvas_dims: (u32, u32),
+        _input_dims: &[(&str, (u32, u32))],
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Mirror of
     /// [`EffectNode::breaks_dependency_cycle`](crate::node_graph::effect_node::EffectNode::breaks_dependency_cycle).
     /// Mark a 1-frame-delay primitive so the chain compiler treats
     /// wires INTO it as state captures rather than per-frame
@@ -282,6 +296,14 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
         Primitive::set_output_format(self, port, format);
+    }
+    fn output_dims(
+        &self,
+        port: &str,
+        canvas_dims: (u32, u32),
+        input_dims: &[(&str, (u32, u32))],
+    ) -> Option<(u32, u32)> {
+        Primitive::output_dims(self, port, canvas_dims, input_dims)
     }
     fn array_output_capacity(
         &self,

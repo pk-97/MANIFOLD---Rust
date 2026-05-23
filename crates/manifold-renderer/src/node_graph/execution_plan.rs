@@ -74,6 +74,20 @@ pub struct ExecutionPlan {
     /// preventing a freed rgba16float slot from aliasing into a fresh
     /// rgba32float acquire.
     resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>>,
+    /// Producer-declared texture dims for each `Texture2D` resource,
+    /// queried at compile time. `None` means "use the backend's canvas
+    /// dims at acquire time" — the common case for full-frame
+    /// primitives. `Some((w, h))` is set when the producer explicitly
+    /// downsamples (e.g. `node.downsample`) or when a default-policy
+    /// propagation pulled a non-canvas dim from a parent texture
+    /// input. Indexed by `ResourceId`, parallel to `resource_types`.
+    ///
+    /// The runtime resolves `None` against `backend.canvas_dims()`
+    /// before calling `Backend::acquire`, so the slot pool key
+    /// `(PortType, format, dims)` is fully concrete — canvas-sized
+    /// slots pool together regardless of whether they were
+    /// implicitly canvas (None) or explicitly so.
+    resource_dims: Vec<Option<(u32, u32)>>,
     /// Union of every node's [`NodeRequires`] declaration. The
     /// executor's entry point checks this against what it can
     /// provide (encoder, state store) and panics with a clean
@@ -116,6 +130,15 @@ impl ExecutionPlan {
             .get(id.0 as usize)
             .copied()
             .flatten()
+    }
+
+    /// Producer-declared texture dims for the given resource, or
+    /// `None` to use the backend's canvas dims at acquire time.
+    /// Always `None` for non-`Texture2D` resources. See
+    /// [`EffectNode::output_dims`](crate::node_graph::EffectNode::output_dims)
+    /// for the compile-time resolution policy.
+    pub fn resource_dims(&self, id: ResourceId) -> Option<(u32, u32)> {
+        self.resource_dims.get(id.0 as usize).copied().flatten()
     }
 
     /// Aggregate runtime-service requirements across all nodes in
@@ -172,14 +195,52 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // First pass: assign a fresh ResourceId to every output port of every
     // node, in topological order. Walking in topo order gives deterministic
     // resource IDs even when the underlying node map is unordered.
+    //
+    // Dims are also resolved here. The walk is topological, so by the
+    // time a node's outputs are processed every wired Texture2D
+    // input already has its dims recorded in `resource_dims`. We
+    // gather those input dims, call the producer's
+    // `EffectNode::output_dims`, and store the result. `None` from
+    // the producer means "use the default policy" — max of texture
+    // input dims, or canvas (left as `None` here, resolved by the
+    // executor at acquire-time against the live backend's canvas).
     let mut output_resources: AHashMap<(NodeInstanceId, &'static str), ResourceId> =
         AHashMap::default();
     let mut resource_types: Vec<PortType> = Vec::new();
     let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
+    let mut resource_dims: Vec<Option<(u32, u32)>> = Vec::new();
+    // Scratch reused across nodes for the `output_dims` call's
+    // `input_dims` argument. Pre-frame-time allocation only; the
+    // executor's hot path doesn't see this.
+    let mut input_dims_scratch: Vec<(&'static str, (u32, u32))> = Vec::new();
     for &node_id in &order {
         let inst = graph
             .get_node(node_id)
             .expect("topo order references existing node");
+
+        // Gather concrete dims for this node's wired texture inputs.
+        // Anything that resolves to `None` in `resource_dims` (the
+        // producer left it as canvas-default) is omitted — the
+        // default-dim policy below treats absence as "no opinion."
+        // Treating an explicit canvas-dim producer as `None` here
+        // wouldn't be right because we don't know canvas dims at
+        // compile time; the executor handles that resolution.
+        input_dims_scratch.clear();
+        for input_port in inst.node.inputs() {
+            if !matches!(
+                input_port.ty,
+                PortType::Texture2D | PortType::Texture3D
+            ) {
+                continue;
+            }
+            if let Some(wire) = wire_by_target.get(&(node_id, input_port.name))
+                && let Some(&src_res) = output_resources.get(&wire.from)
+                && let Some(dims) = resource_dims.get(src_res.0 as usize).copied().flatten()
+            {
+                input_dims_scratch.push((input_port.name, dims));
+            }
+        }
+
         for output_port in inst.node.outputs() {
             let id = ResourceId(resource_types.len() as u32);
             output_resources.insert((node_id, output_port.name), id);
@@ -190,6 +251,34 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // aligned — the runtime normalizes non-texture formats to
             // `None` when constructing the pool key.
             resource_formats.push(inst.node.output_format(output_port.name));
+
+            // Dims: only meaningful for Texture2D outputs. Query the
+            // producer first; if it has no opinion, apply the default
+            // policy: take the max of the gathered texture-input dims,
+            // or leave `None` (= canvas) if there are no texture
+            // inputs. Non-texture outputs get `None` so the parallel
+            // arrays stay aligned (resource_dims ignores them).
+            let dims = if matches!(output_port.ty, PortType::Texture2D) {
+                // CANVAS dims aren't known at compile time. We pass
+                // a sentinel (0, 0) here — primitives that need the
+                // real canvas value should declare a width/height
+                // scalar input instead. Mostly only downsample-style
+                // primitives care, and they only need INPUT dims.
+                inst.node
+                    .output_dims(output_port.name, (0, 0), &input_dims_scratch)
+                    .or_else(|| {
+                        // Default policy: max of input texture dims.
+                        // `None` if no texture inputs → caller treats
+                        // as "use backend canvas at acquire time."
+                        input_dims_scratch
+                            .iter()
+                            .map(|(_, d)| *d)
+                            .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+                    })
+            } else {
+                None
+            };
+            resource_dims.push(dims);
         }
     }
 
@@ -342,6 +431,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         steps,
         resource_types,
         resource_formats,
+        resource_dims,
         requires,
         persistent_resources: persistent,
     })

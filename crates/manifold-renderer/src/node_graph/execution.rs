@@ -319,12 +319,19 @@ impl Executor {
         // applies when a `GpuEncoder` is available — mock-backend code
         // paths (used by logic tests) skip this and rely on the test
         // primitive's tolerance for the mock's zero slots.
+        // Canvas dims (resolved once per frame) used to concretize
+        // `ExecutionPlan::resource_dims = None` (the "use canvas"
+        // sentinel) before calling into the backend. Pulling it once
+        // here keeps the per-step loop free of repeated trait calls.
+        let canvas_dims = self.backend.canvas_dims();
+
         for &res_id in plan.persistent_resources() {
             let ty = plan
                 .resource_type(res_id)
                 .expect("persistent resource type known from compile()");
             let fmt = plan.resource_format(res_id);
-            let slot = self.backend.acquire(res_id, ty, fmt);
+            let dims = plan.resource_dims(res_id).unwrap_or(canvas_dims);
+            let slot = self.backend.acquire(res_id, ty, fmt, dims);
             if self.initialized_persistent.insert(res_id)
                 && let Some(gpu) = gpu.as_deref_mut()
                 && let Some(tex) = self.backend.texture_2d(slot)
@@ -349,7 +356,8 @@ impl Executor {
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
                 let fmt = plan.resource_format(res_id);
-                let slot = self.backend.acquire(res_id, ty, fmt);
+                let dims = plan.resource_dims(res_id).unwrap_or(canvas_dims);
+                let slot = self.backend.acquire(res_id, ty, fmt, dims);
                 self.output_scratch.push((port_name, slot));
             }
 
@@ -445,13 +453,16 @@ impl Executor {
                 }
             }
 
-            // 4. Release dead resources.
+            // 4. Release dead resources. `dims` must match the
+            // acquire-time value so the slot returns to the correct
+            // (PortType, format, dims) bucket.
             for &res_id in &step.free_after {
                 let ty = plan
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
                 let fmt = plan.resource_format(res_id);
-                self.backend.release(res_id, ty, fmt);
+                let dims = plan.resource_dims(res_id).unwrap_or(canvas_dims);
+                self.backend.release(res_id, ty, fmt, dims);
             }
         }
     }

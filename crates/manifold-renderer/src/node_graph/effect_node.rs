@@ -492,6 +492,35 @@ pub trait EffectNode: Send {
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
+    /// Output texture dimensions for the named port. Returns `None` to
+    /// let the compiler apply its default policy: "max of texture
+    /// input dims, or canvas dims if there are no texture inputs."
+    /// Override only on primitives whose output dims diverge from
+    /// every input — `node.downsample` (output = input / factor) is
+    /// the canonical case.
+    ///
+    /// `input_dims` lists the dims of every wired Texture2D / Texture3D
+    /// input the compiler has already resolved (topo-ordered walk
+    /// guarantees these are known by the time this node's outputs are
+    /// processed). `canvas_dims` is the host's final-frame target
+    /// dims — primitives that need a canvas-relative scale read it
+    /// here rather than reaching for `Backend::canvas_dims` at
+    /// dispatch time.
+    ///
+    /// Defaults: `None` for every primitive. Dim resolution then
+    /// flows through `ExecutionPlan::resource_dim` to
+    /// `Backend::acquire`, which keys its slot pool on
+    /// `(PortType, GpuTextureFormat, dims)` so e.g. a quarter-res
+    /// rgba16float slot won't alias with a full-res rgba16float slot.
+    fn output_dims(
+        &self,
+        _port: &str,
+        _canvas_dims: (u32, u32),
+        _input_dims: &[(&str, (u32, u32))],
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
     /// How many items to pre-allocate for the named `Array<T>` output
     /// port. The chain build / JsonGraphGenerator pre-allocator calls
     /// this once after the node's params are set and all its input

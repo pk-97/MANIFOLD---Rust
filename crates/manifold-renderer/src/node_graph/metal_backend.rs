@@ -81,7 +81,7 @@ pub struct MetalBackend {
     /// and silently corrupt the frame. `format = None` is the natural
     /// "use the backend's default format" key for non-Texture2D ports
     /// and for Texture2D producers that didn't override the format.
-    free_by_type: AHashMap<(PortType, Option<manifold_gpu::GpuTextureFormat>), Vec<Slot>>,
+    free_by_type: AHashMap<crate::node_graph::backend::PoolKey, Vec<Slot>>,
     bound: AHashMap<ResourceId, Slot>,
     next_slot: u32,
 
@@ -466,6 +466,7 @@ impl Backend for MetalBackend {
         id: ResourceId,
         ty: PortType,
         format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
     ) -> Slot {
         // Idempotent: if `id` is already bound (host pre-bound a frame
         // input via `pre_bind_texture_2d`, or this is a duplicate
@@ -474,7 +475,7 @@ impl Backend for MetalBackend {
         if let Some(&slot) = self.bound.get(&id) {
             return slot;
         }
-        let key = crate::node_graph::backend::pool_key(ty, format);
+        let key = crate::node_graph::backend::pool_key(ty, format, dims);
         let pool = self.free_by_type.entry(key).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);
@@ -490,6 +491,8 @@ impl Backend for MetalBackend {
         // `pre_bind_texture_2d`. The requested `format` (if any) overrides
         // the backend's default — that's how Tier 3 escape-hatch nodes
         // pull native-precision textures (`r32float`, `rgba32float`).
+        // `dims` is honoured for the allocation size — pool-keyed so
+        // a quarter-res slot doesn't collide with a full-res one.
         if matches!(ty, PortType::Texture2D)
             && let std::collections::hash_map::Entry::Vacant(e) = self.textures_2d.entry(slot)
         {
@@ -504,23 +507,29 @@ impl Backend for MetalBackend {
             // SAFETY: see `MetalBackend::device` field doc.
             let device: &GpuDevice = unsafe { &*device_ptr };
             let alloc_format = format.unwrap_or(self.format);
-            let rt = self
-                .pool
-                .get(device, self.width, self.height, alloc_format, "node_graph");
+            let rt =
+                self.pool
+                    .get(device, dims.0, dims.1, alloc_format, "node_graph");
             e.insert(rt);
         }
 
         slot
     }
 
-    fn release(&mut self, id: ResourceId, ty: PortType, format: Option<GpuTextureFormat>) {
+    fn release(
+        &mut self,
+        id: ResourceId,
+        ty: PortType,
+        format: Option<GpuTextureFormat>,
+        dims: (u32, u32),
+    ) {
         // Host-pinned resources (frame inputs pre-bound by the renderer)
         // stay bound across frames — the host owns their lifetime.
         if self.pinned.contains(&id) {
             return;
         }
         if let Some(slot) = self.bound.remove(&id) {
-            let key = crate::node_graph::backend::pool_key(ty, format);
+            let key = crate::node_graph::backend::pool_key(ty, format, dims);
             self.free_by_type.entry(key).or_default().push(slot);
         }
     }
@@ -688,7 +697,9 @@ mod array_buffer_tests {
         let buffer = device.create_buffer(u64::from(layout.item_size) * 256);
 
         let pinned = b.pre_bind_array(ResourceId(0), buffer);
-        let acquired = b.acquire(ResourceId(0), PortType::Array(layout), None);
+        // Array slots ignore dims (pool_key normalizes them); pass
+        // the backend's canvas as a no-op concrete value.
+        let acquired = b.acquire(ResourceId(0), PortType::Array(layout), None, (16, 16));
         assert_eq!(
             pinned, acquired,
             "acquire on a pre-bound resource must return the pinned slot",
@@ -705,7 +716,7 @@ mod array_buffer_tests {
         let buffer = device.create_buffer(u64::from(layout.item_size) * 64);
 
         let slot = b.pre_bind_array(ResourceId(0), buffer);
-        b.release(ResourceId(0), PortType::Array(layout), None);
+        b.release(ResourceId(0), PortType::Array(layout), None, (16, 16));
 
         assert_eq!(
             b.slot_for(ResourceId(0)),
@@ -765,7 +776,9 @@ mod array_buffer_tests {
         });
 
         let pinned = b.pre_bind_texture_3d(ResourceId(0), volume);
-        let acquired = b.acquire(ResourceId(0), PortType::Texture3D, None);
+        // Texture3D slots ignore dims (volumes are pre-bound with
+        // their own dimensions); pass canvas as no-op concrete value.
+        let acquired = b.acquire(ResourceId(0), PortType::Texture3D, None, (16, 16));
         assert_eq!(
             pinned, acquired,
             "acquire on a pre-bound 3D resource must return the pinned slot",
@@ -787,7 +800,7 @@ mod array_buffer_tests {
         });
 
         let slot = b.pre_bind_texture_3d(ResourceId(0), volume);
-        b.release(ResourceId(0), PortType::Texture3D, None);
+        b.release(ResourceId(0), PortType::Texture3D, None, (16, 16));
 
         assert_eq!(
             b.slot_for(ResourceId(0)),
@@ -862,17 +875,23 @@ mod alias_tests {
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::PortType;
 
+    /// Canvas dims the helper backend is constructed with; matches
+    /// what the executor would resolve `ExecutionPlan::resource_dims =
+    /// None` against at acquire time.
+    const W: u32 = 16;
+    const H: u32 = 16;
+
     fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
         let device = crate::test_device();
-        let backend = MetalBackend::new(&device, 16, 16, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(&device, W, H, GpuTextureFormat::Rgba16Float);
         (device, backend)
     }
 
     #[test]
     fn alias_2d_makes_dst_read_through_src() {
         let (_device, mut b) = make_backend();
-        let src = b.acquire(ResourceId(0), PortType::Texture2D, None);
-        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None);
+        let src = b.acquire(ResourceId(0), PortType::Texture2D, None, (W, H));
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None, (W, H));
 
         // Pre-alias, each slot has its own distinct texture. We compare
         // raw MTLTexture pointers — each acquire allocates a fresh
@@ -898,8 +917,8 @@ mod alias_tests {
     #[test]
     fn clear_skip_aliases_restores_dst_to_owned_texture() {
         let (_device, mut b) = make_backend();
-        let src = b.acquire(ResourceId(0), PortType::Texture2D, None);
-        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None);
+        let src = b.acquire(ResourceId(0), PortType::Texture2D, None, (W, H));
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None, (W, H));
 
         let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").raw_ptr();
         assert!(b.alias_2d(src, dst));
@@ -922,8 +941,8 @@ mod alias_tests {
         // skip-alias — the host borrow has different lifecycle and
         // points at off-backend data.
         let (device, mut b) = make_backend();
-        let src = b.acquire(ResourceId(0), PortType::Texture2D, None);
-        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None);
+        let src = b.acquire(ResourceId(0), PortType::Texture2D, None, (W, H));
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None, (W, H));
 
         // Host installs a borrowed override on dst (simulating
         // StylizedFeedback's `replace_texture_2d` for its output slot).
@@ -968,8 +987,8 @@ mod alias_tests {
         // the alias state stays consistent (no leak in
         // skip_aliased_slots).
         let (_device, mut b) = make_backend();
-        let src = b.acquire(ResourceId(0), PortType::Texture2D, None);
-        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None);
+        let src = b.acquire(ResourceId(0), PortType::Texture2D, None, (W, H));
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D, None, (W, H));
 
         for _ in 0..5 {
             b.clear_skip_aliases();
