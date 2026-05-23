@@ -9,6 +9,7 @@
 mod abs_texture;
 mod affine_transform;
 mod array_feedback;
+mod array_unpack_vec2;
 mod auto_gain;
 mod auto_gain_apply;
 mod beat_gate;
@@ -137,6 +138,7 @@ mod wireframe_depth;
 pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
 pub use array_feedback::ArrayFeedback;
+pub use array_unpack_vec2::ArrayUnpackVec2;
 pub use auto_gain::{AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID, AutoGain};
 pub use auto_gain_apply::AutoGainApply;
 pub use beat_gate::{BEAT_GATE_RATE_LABELS, BeatGate};
