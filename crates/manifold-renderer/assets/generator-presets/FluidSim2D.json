@@ -111,8 +111,6 @@
         "trigger_count": { "type": "Int",  "value": 42 }
       } },
 
-    { "id": 2,  "typeId": "node.array_feedback", "handle": "particles_feedback" },
-
     { "id": 3,  "typeId": "node.fluid_simulate", "handle": "simulate",
       "params": {
         "active_count":       { "type": "Int",   "value": 2000000 },
@@ -287,13 +285,11 @@
       "params": {} }
   ],
   "wires": [
-    { "fromNode": 1,  "fromPort": "particles", "toNode": 2,  "toPort": "seed" },
-
-    { "fromNode": 2,  "fromPort": "out",       "toNode": 3,  "toPort": "in" },
+    { "fromNode": 1,  "fromPort": "particles", "toNode": 3,  "toPort": "in" },
     { "fromNode": 11, "fromPort": "out",       "toNode": 3,  "toPort": "field" },
     { "fromNode": 8,  "fromPort": "out",       "toNode": 3,  "toPort": "density" },
 
-    { "fromNode": 2,  "fromPort": "out",       "toNode": 4,  "toPort": "particles" },
+    { "fromNode": 1,  "fromPort": "particles", "toNode": 4,  "toPort": "particles" },
     { "fromNode": 0,  "fromPort": "output_width",  "toNode": 4,  "toPort": "width" },
     { "fromNode": 0,  "fromPort": "output_height", "toNode": 4,  "toPort": "height" },
     { "fromNode": 20, "fromPort": "out",       "toNode": 4,  "toPort": "active_count" },
@@ -387,8 +383,6 @@
     { "fromNode": 72, "fromPort": "out",       "toNode": 34, "toPort": "selector" },
     { "fromNode": 72, "fromPort": "out",       "toNode": 42, "toPort": "selector" },
     { "fromNode": 72, "fromPort": "out",       "toNode": 46, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out",       "toNode": 49, "toPort": "selector" },
-
-    { "fromNode": 3,  "fromPort": "out",       "toNode": 2,  "toPort": "in" }
+    { "fromNode": 72, "fromPort": "out",       "toNode": 49, "toPort": "selector" }
   ]
 }

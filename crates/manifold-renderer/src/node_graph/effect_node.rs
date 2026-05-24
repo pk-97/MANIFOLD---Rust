@@ -269,51 +269,6 @@ impl NodeRequires {
     }
 }
 
-/// Declared lifecycle of a primitive's per-instance state across two
-/// host-triggered events: graph rebuild and pause/resume. Returned by
-/// [`EffectNode::state_lifecycle`]; both fields default to `true`
-/// (state preserved) so existing primitives don't need to override.
-///
-/// Authoring convention — when adding state to a primitive, the
-/// author thinks about what happens when the host pauses the timeline
-/// or the user edits the graph mid-set. The declaration makes the
-/// answer explicit at the type level rather than buried in primitive
-/// implementation comments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StateLifecycle {
-    /// Does this primitive's state survive a graph rebuild (full
-    /// reconstruction from definition, triggered by graph edits, JSON
-    /// re-load, undo/redo)? `false` warns the host that rebuild
-    /// produces a one-frame discontinuity — fine for authoring, but
-    /// the editor may surface this to the user.
-    ///
-    /// Technical reality: graph rebuild replaces every primitive
-    /// instance, so per-instance state is structurally lost regardless
-    /// of this flag. The declaration is informational — `true` means
-    /// "this primitive's meaningful state comes from inputs / params
-    /// and rebuilds cleanly," `false` means "the user will see a
-    /// visible glitch on rebuild." Future PRs may use this to drive
-    /// editor warnings or preserve state across rebuild for the
-    /// `true` cases.
-    pub survives_rebuild: bool,
-    /// Does this primitive's state survive a pause / resume cycle?
-    /// `true` (default) preserves state — simulations stay coherent,
-    /// FluidSim particles stay where they were paused. `false`
-    /// requests a reset on resume — useful for envelope primitives
-    /// where stale pre-pause state would confuse the post-pause
-    /// output (e.g. attack/release envelopes that should retrigger).
-    pub survives_pause: bool,
-}
-
-impl Default for StateLifecycle {
-    fn default() -> Self {
-        Self {
-            survives_rebuild: true,
-            survives_pause: true,
-        }
-    }
-}
-
 /// One unit of GPU work in the effect graph.
 ///
 /// Implemented by:
@@ -628,41 +583,6 @@ pub trait EffectNode: Send {
     /// override is in place before `compile()` walks outputs. No-op
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
-
-    /// Per-instance state lifecycle. Declares whether this
-    /// primitive's persistent state (held in the `StateStore` or in
-    /// `extra_fields` on the primitive itself) survives the two
-    /// lifecycle events the host can trigger:
-    ///
-    /// - **rebuild** — the entire graph is reconstructed from its
-    ///   definition (graph edit, JSON re-load, undo/redo). State is
-    ///   structurally lost because the primitive instance itself is
-    ///   replaced. A primitive declaring `survives_rebuild = true`
-    ///   is asserting that its meaningful state is sourced from
-    ///   inputs / params (not from accumulated frames) and can
-    ///   reconstitute on the first frame after rebuild without a
-    ///   visible glitch. Examples: `node.value`, `node.math`,
-    ///   `node.lfo` — stateless or near-stateless. A primitive
-    ///   declaring `survives_rebuild = false` warns the host that
-    ///   rebuild produces a one-frame discontinuity; the editor
-    ///   may surface this to the user. (See CLAUDE.md §10 — graph
-    ///   editor is authoring, not perform; one-frame glitches on
-    ///   edit are accepted.)
-    ///
-    /// - **pause / resume** — the host pauses playback and resumes
-    ///   later. State that survives keeps the simulation coherent
-    ///   across the pause (FluidSim particles stay where they were).
-    ///   State that doesn't reset on resume — useful for envelope-
-    ///   shaped primitives where stale state from the pre-pause
-    ///   frame would confuse the post-pause output.
-    ///
-    /// Default: both `true` — state is preserved. Override only if
-    /// the primitive genuinely needs different semantics. The
-    /// declaration is informational today; future PRs may use it to
-    /// gate reset_state behaviour automatically.
-    fn state_lifecycle(&self) -> StateLifecycle {
-        StateLifecycle::default()
-    }
 
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —

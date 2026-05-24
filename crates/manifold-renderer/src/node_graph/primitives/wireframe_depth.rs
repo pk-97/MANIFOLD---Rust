@@ -232,10 +232,7 @@ impl EffectNode for WireframeDepth {
         );
         let eff_ctx = build_effect_context(ctx, width, height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.wireframe_depth requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
 
         if amount <= 0.0 {
             gpu.copy_texture_to_texture(source, target, width, height);

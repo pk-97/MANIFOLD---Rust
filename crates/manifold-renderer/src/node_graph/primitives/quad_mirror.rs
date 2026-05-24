@@ -109,10 +109,7 @@ impl EffectNode for QuadMirror {
         let fx = build_effect_instance(&EffectTypeId::QUAD_MIRROR, ctx, QUAD_MIRROR_PARAM_ORDER);
         let eff_ctx = build_effect_context(ctx, width, height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.quad_mirror requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
 
         if amount <= 0.0 {
             gpu.copy_texture_to_texture(source, target, width, height);
