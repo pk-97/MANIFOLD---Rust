@@ -42,6 +42,21 @@ pub enum GraphError {
     CycleDetected {
         involves: Vec<NodeInstanceId>,
     },
+    /// Producer's declared output format isn't in the consumer's
+    /// accepted-format list. Fires when both sides declare formats
+    /// and they disagree — the silent format-mismatch class (e.g.
+    /// fp32 producer wired into an fp16 consumer that saturates) that
+    /// otherwise produces wrong-but-not-panicking output. When either
+    /// side is unconstrained the wire is accepted; this only fires on
+    /// the both-declared-and-incompatible case.
+    PortFormatMismatch {
+        from_node: NodeInstanceId,
+        from_port: String,
+        to_node: NodeInstanceId,
+        to_port: String,
+        producer_format: manifold_gpu::GpuTextureFormat,
+        accepted: Vec<manifold_gpu::GpuTextureFormat>,
+    },
 }
 
 impl std::fmt::Display for GraphError {
@@ -72,6 +87,21 @@ impl std::fmt::Display for GraphError {
             Self::CycleDetected { involves } => {
                 write!(f, "cycle detected involving nodes {involves:?}")
             }
+            Self::PortFormatMismatch {
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+                producer_format,
+                accepted,
+            } => write!(
+                f,
+                "format mismatch: {from_node:?}.{from_port} emits {producer_format:?}, \
+                 but {to_node:?}.{to_port} only accepts {accepted:?}. \
+                 Match the formats, change the consumer's accepted list, or \
+                 set the producer's `outputFormats` override to one of the \
+                 accepted formats."
+            ),
         }
     }
 }
@@ -130,6 +160,24 @@ pub(super) fn validate_connection(
             from: from_port.ty,
             to: to_port.ty,
         });
+    }
+
+    // Format-as-contract: when both endpoints declare formats AND
+    // they disagree, reject at connect-time with a clear error.
+    // Either-unconstrained is fine — the producer/consumer that
+    // doesn't declare is promising to handle whatever shows up. This
+    // is the cause-layer check; `validate()` runs the catch-all audit
+    // across every wire for graphs that bypass `connect()` (JSON
+    // load, composite expansion, undo/redo).
+    if let Some(err) = check_wire_format_compatibility(
+        from.0,
+        from.1,
+        &*from_node.node,
+        to.0,
+        to.1,
+        &*to_node.node,
+    ) {
+        return Err(err);
     }
 
     // State-capture wires (those landing on a port the consumer node
@@ -208,6 +256,35 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     // graph isn't a DAG. Done after the per-node sweep so the more
     // specific `RequiredInputUnwired` error wins when both apply.
     topological_sort(graph)?;
+
+    // Format-as-contract catch-all. Connect-time validation rejects
+    // mismatches on each wire as it's added, but programmatic
+    // construction (JSON load, composite expansion, undo/redo) and
+    // sequential mutations that re-order wire additions can land a
+    // mismatch in the graph without going through `connect()`. This
+    // audit walks every wire after the other checks and surfaces any
+    // format incompatibility — same shape as
+    // `JsonGraphGenerator::audit_array_resource_bindings`, applied to
+    // texture wires instead of array buffers.
+    for w in graph.wires() {
+        let Some(from_inst) = graph.get_node(w.from.0) else {
+            continue;
+        };
+        let Some(to_inst) = graph.get_node(w.to.0) else {
+            continue;
+        };
+        if let Some(err) = check_wire_format_compatibility(
+            w.from.0,
+            w.from.1,
+            &*from_inst.node,
+            w.to.0,
+            w.to.1,
+            &*to_inst.node,
+        ) {
+            return Err(err);
+        }
+    }
+
     Ok(())
 }
 
@@ -306,6 +383,45 @@ pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError
 ///
 /// True iff a directed path already exists from `to` back to `from`. DFS from
 /// `to`; if we reach `from`, a cycle would form.
+/// Format-as-contract check. Returns `Some(PortFormatMismatch)` only
+/// when BOTH the producer declares a concrete output format AND the
+/// consumer declares a non-empty accepted-format list AND the
+/// producer's format is missing from that list. When either side is
+/// unconstrained (default `None` return from `output_format` or
+/// `accepted_input_formats`), the wire is accepted — the
+/// unconstrained side accepts the relationship by not declaring.
+///
+/// Only applies to `Texture2D` wires; other port types don't carry a
+/// texture format. Type compatibility was already checked by the
+/// caller via `from_port.ty != to_port.ty`.
+fn check_wire_format_compatibility(
+    from_node_id: NodeInstanceId,
+    from_port: &'static str,
+    from_node: &dyn crate::node_graph::effect_node::EffectNode,
+    to_node_id: NodeInstanceId,
+    to_port: &'static str,
+    to_node: &dyn crate::node_graph::effect_node::EffectNode,
+) -> Option<GraphError> {
+    let producer_format = from_node.output_format(from_port)?;
+    let accepted = to_node.accepted_input_formats(to_port)?;
+    if accepted.is_empty() {
+        // An empty accept-list defaults to "any" — declaring the
+        // method exists but accepting nothing would be unreachable.
+        return None;
+    }
+    if accepted.contains(&producer_format) {
+        return None;
+    }
+    Some(GraphError::PortFormatMismatch {
+        from_node: from_node_id,
+        from_port: from_port.to_string(),
+        to_node: to_node_id,
+        to_port: to_port.to_string(),
+        producer_format,
+        accepted: accepted.to_vec(),
+    })
+}
+
 fn would_create_cycle(graph: &Graph, from: NodeInstanceId, to: NodeInstanceId) -> bool {
     if from == to {
         return true; // self-loop
@@ -401,6 +517,182 @@ mod tests {
             ty,
             kind: PortKind::Output,
             required: false,
+        }
+    }
+
+    /// Test scaffold for the format contract — extends `TestNode`
+    /// with declared output formats and accepted input formats per
+    /// port name. Default behaviour (empty maps) matches the
+    /// production default: unconstrained on every port.
+    struct FormatTestNode {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        output_formats: ahash::AHashMap<&'static str, manifold_gpu::GpuTextureFormat>,
+        accepted_inputs: ahash::AHashMap<&'static str, &'static [manifold_gpu::GpuTextureFormat]>,
+    }
+
+    impl FormatTestNode {
+        fn new(name: &'static str, inputs: Vec<NodeInput>, outputs: Vec<NodeOutput>) -> Self {
+            Self {
+                type_id: EffectNodeType::new(name),
+                inputs,
+                outputs,
+                output_formats: ahash::AHashMap::default(),
+                accepted_inputs: ahash::AHashMap::default(),
+            }
+        }
+        fn with_output_format(
+            mut self,
+            port: &'static str,
+            fmt: manifold_gpu::GpuTextureFormat,
+        ) -> Self {
+            self.output_formats.insert(port, fmt);
+            self
+        }
+        fn with_accepted_inputs(
+            mut self,
+            port: &'static str,
+            accepted: &'static [manifold_gpu::GpuTextureFormat],
+        ) -> Self {
+            self.accepted_inputs.insert(port, accepted);
+            self
+        }
+    }
+
+    impl crate::node_graph::EffectNode for FormatTestNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+            self.output_formats.get(port).copied()
+        }
+        fn accepted_input_formats(
+            &self,
+            port: &str,
+        ) -> Option<&'static [manifold_gpu::GpuTextureFormat]> {
+            self.accepted_inputs.get(port).copied()
+        }
+    }
+
+    #[test]
+    fn format_contract_accepts_when_producer_unconstrained() {
+        // Producer doesn't declare a format → wire goes through
+        // regardless of what the consumer accepts.
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(FormatTestNode::new(
+            "producer",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(
+            FormatTestNode::new(
+                "consumer",
+                vec![input("in", PortType::Texture2D, true)],
+                vec![],
+            )
+            .with_accepted_inputs("in", &[manifold_gpu::GpuTextureFormat::Rgba16Float]),
+        ));
+        g.connect((a, "out"), (b, "in"))
+            .expect("unconstrained producer accepts any consumer");
+    }
+
+    #[test]
+    fn format_contract_accepts_when_consumer_unconstrained() {
+        // Consumer doesn't declare accepted formats → wire goes
+        // through regardless of what the producer emits.
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(
+            FormatTestNode::new(
+                "producer",
+                vec![],
+                vec![output("out", PortType::Texture2D)],
+            )
+            .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba32Float),
+        ));
+        let b = g.add_node(Box::new(FormatTestNode::new(
+            "consumer",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((a, "out"), (b, "in"))
+            .expect("unconstrained consumer accepts any producer");
+    }
+
+    #[test]
+    fn format_contract_accepts_when_producer_format_in_accept_list() {
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(
+            FormatTestNode::new(
+                "producer",
+                vec![],
+                vec![output("out", PortType::Texture2D)],
+            )
+            .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba16Float),
+        ));
+        let b = g.add_node(Box::new(
+            FormatTestNode::new(
+                "consumer",
+                vec![input("in", PortType::Texture2D, true)],
+                vec![],
+            )
+            .with_accepted_inputs(
+                "in",
+                &[
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    manifold_gpu::GpuTextureFormat::Rgba32Float,
+                ],
+            ),
+        ));
+        g.connect((a, "out"), (b, "in"))
+            .expect("format in accept list passes");
+    }
+
+    #[test]
+    fn format_contract_rejects_at_connect_when_mismatch() {
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(
+            FormatTestNode::new(
+                "producer",
+                vec![],
+                vec![output("out", PortType::Texture2D)],
+            )
+            .with_output_format("out", manifold_gpu::GpuTextureFormat::Rgba32Float),
+        ));
+        let b = g.add_node(Box::new(
+            FormatTestNode::new(
+                "consumer",
+                vec![input("in", PortType::Texture2D, true)],
+                vec![],
+            )
+            .with_accepted_inputs(
+                "in",
+                &[manifold_gpu::GpuTextureFormat::Rgba16Float],
+            ),
+        ));
+        let err = g
+            .connect((a, "out"), (b, "in"))
+            .expect_err("mismatched formats must error at connect");
+        match err {
+            GraphError::PortFormatMismatch {
+                producer_format,
+                accepted,
+                ..
+            } => {
+                assert_eq!(producer_format, manifold_gpu::GpuTextureFormat::Rgba32Float);
+                assert_eq!(accepted, vec![manifold_gpu::GpuTextureFormat::Rgba16Float]);
+            }
+            other => panic!("expected PortFormatMismatch, got {other:?}"),
         }
     }
 

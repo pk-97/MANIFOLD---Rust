@@ -540,6 +540,36 @@ pub trait EffectNode: Send {
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
+    /// Texture formats this primitive's input port can natively
+    /// consume. Returns `None` (the default) to mean "any format" —
+    /// the primitive runs against whatever the upstream producer
+    /// emits, relying on Metal's sampler to handle the read.
+    ///
+    /// Override on primitives that genuinely require a specific
+    /// precision class on input — e.g. a compute shader whose
+    /// storage<read> binding declares `r32float` cannot read from
+    /// an `rgba16float` texture without an explicit conversion pass.
+    ///
+    /// The format contract: when both the producer's
+    /// [`output_format`](Self::output_format) AND the consumer's
+    /// `accepted_input_formats` are declared, the validator at
+    /// [`crate::node_graph::validation::validate`] requires the
+    /// producer's format to appear in the consumer's accept list.
+    /// Otherwise (one or both unconstrained) the wire is accepted —
+    /// the unconstrained side promises to handle whatever shows up.
+    ///
+    /// This is the "producer declares, consumer accepts" contract —
+    /// catches the silent format-mismatch class (fp32 producer wired
+    /// into fp16 consumer that saturates) at compile time, with the
+    /// same two-layer pattern as the array resource audit: cause-site
+    /// error at `connect`, catch-all audit at `validate`.
+    fn accepted_input_formats(
+        &self,
+        _port: &str,
+    ) -> Option<&'static [manifold_gpu::GpuTextureFormat]> {
+        None
+    }
+
     /// Output texture dimensions for the named port. Returns `None` to
     /// let the compiler apply its default policy: "max of texture
     /// input dims, or canvas dims if there are no texture inputs."
