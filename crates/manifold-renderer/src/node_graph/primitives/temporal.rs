@@ -8,8 +8,9 @@
 //! pattern every future stateful primitive (frame difference, motion
 //! blur, accumulators) follows.
 
-use manifold_gpu::GpuTextureFormat;
+use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureFormat};
 
+use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
@@ -46,6 +47,13 @@ crate::primitive! {
     picker: { label: "Feedback", category: Atom },
     extra_fields: {
         output_format_override: Option<GpuTextureFormat> = None,
+        // Phase 3c cross-format copy pipeline (one variant per dst
+        // format; lazy-compiled on first use). Used when the wire
+        // entering `in` carries a different pixel format than the
+        // persistent state texture — typically fp16 intermediates
+        // feeding an fp32 state. Metal's blit encoder can't bridge
+        // formats, so we route via a compute dispatch.
+        cross_format_copy_fp32: Option<manifold_gpu::GpuComputePipeline> = None,
     },
 }
 
@@ -134,7 +142,15 @@ impl Primitive for Feedback {
                 RenderTarget::new(gpu.device, width, height, state_format, "feedback prev")
             };
             let init_source = seed_tex.unwrap_or(in_tex);
-            gpu.copy_texture_to_texture(init_source, &prev.texture, width, height);
+            Self::copy_with_format_bridge(
+                gpu,
+                init_source,
+                &prev.texture,
+                width,
+                height,
+                state_format,
+                &mut self.cross_format_copy_fp32,
+            );
             store.insert(
                 node_id,
                 owner_key,
@@ -149,7 +165,10 @@ impl Primitive for Feedback {
             .get::<FeedbackState>(node_id, owner_key)
             .expect("just inserted above");
 
-        // Emit last frame's input as this frame's `out`.
+        // Emit last frame's input as this frame's `out`. state.prev
+        // and out_tex always share state_format (out_tex's slot was
+        // acquired using the same `output_format` we read above), so
+        // this stays a same-format blit.
         gpu.copy_texture_to_texture(&state.prev.texture, out_tex, width, height);
         // Capture this frame's `in` for next frame's `out` — but NOT
         // on the same frame as a fresh allocation. The in_slot at that
@@ -169,8 +188,23 @@ impl Primitive for Feedback {
         // case this is behaviorally identical: prev = in_tex = 0 from
         // the alloc init, and the skipped copy would have written 0
         // over 0 anyway.
+        //
+        // Cross-format bridge: in_tex's format is whatever the wire
+        // producer (mix/gain/etc) declared — typically rgba16float
+        // because those primitives' shaders are fp16-locked. If state
+        // was overridden to rgba32float we can't blit fp16 → fp32
+        // (Metal validation error); a compute-shader copy bridges the
+        // formats. Same-format case falls through to the cheap blit.
         if !needs_alloc {
-            gpu.copy_texture_to_texture(in_tex, &state.prev.texture, width, height);
+            Self::copy_with_format_bridge(
+                gpu,
+                in_tex,
+                &state.prev.texture,
+                width,
+                height,
+                state_format,
+                &mut self.cross_format_copy_fp32,
+            );
         }
     }
 
@@ -196,6 +230,66 @@ impl Primitive for Feedback {
         // persistent slot to black and the seed would init from
         // garbage instead of the producer's actual output.
         &["in"]
+    }
+}
+
+impl Feedback {
+    /// Copy `src → dst` at the given dims, using a blit when formats
+    /// match and a compute dispatch when they don't. The compute path
+    /// (Phase 3c) is the cross-format bridge that lets `node.feedback`
+    /// hold an fp32 state texture while its writer chain runs at fp16
+    /// — without requiring every intermediate primitive (mix, gain,
+    /// advect, etc.) to grow an fp32 shader variant. One pipeline
+    /// variant per dst format; lazy-compiled on first use.
+    fn copy_with_format_bridge(
+        gpu: &mut GpuEncoder<'_>,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        width: u32,
+        height: u32,
+        state_format: GpuTextureFormat,
+        cross_format_copy_fp32: &mut Option<manifold_gpu::GpuComputePipeline>,
+    ) {
+        if src.format == dst.format {
+            gpu.copy_texture_to_texture(src, dst, width, height);
+            return;
+        }
+        // Currently only fp32 dst is supported. Add sibling shader
+        // variants + pipeline fields if a future preset needs fp16
+        // dst with non-fp16 src (or any other dst format).
+        assert_eq!(
+            state_format,
+            GpuTextureFormat::Rgba32Float,
+            "node.feedback cross-format copy is only implemented for \
+             rgba32float state (state_format = {:?}, src.format = {:?}, \
+             dst.format = {:?}). Add a shader variant for this dst format \
+             or use a matching-format writer chain.",
+            state_format,
+            src.format,
+            dst.format,
+        );
+        let pipeline = cross_format_copy_fp32.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/feedback_cross_format_copy.wgsl"),
+                "cs_main",
+                "node.feedback cross-format copy (fp32 dst)",
+            )
+        });
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: src,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: dst,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "node.feedback cross-format copy",
+        );
     }
 }
 
@@ -363,17 +457,13 @@ mod gpu_tests {
     /// per-frame `copy_texture_to_texture(state.prev → out_tex)`
     /// would silently quantize / mismatch.
     ///
-    /// Contract being asserted: when you override feedback.out's format,
-    /// the writer feeding feedback.in MUST be overridden to the same
-    /// format. Otherwise the per-frame `copy_texture_to_texture(in_tex
-    /// → state.prev)` is a format mismatch and Metal's blit encoder
-    /// either faults loudly (debug validation) or silently corrupts
-    /// (release). The OilyFluid breakage was exactly this — fp32 state
-    /// override on `node.feedback` but fp16 default on the writer chain
-    /// (`vel_combine`, `color_combine`). The fix at the manifold-gpu
-    /// layer (assertions in `copy_texture_to_texture`) means this is
-    /// now a one-frame panic at the offending call site rather than
-    /// hours of "stays static" debugging.
+    /// Also exercises Phase 3c: src (Source = rgba16float default) feeds
+    /// feedback.in at fp16, while feedback's state is overridden to
+    /// fp32. The per-frame `in_tex → state.prev` copy crosses formats,
+    /// so feedback routes through the compute-shader bridge instead of
+    /// the blit. Surviving the round-trip without panicking proves both
+    /// the override is read in run() AND the cross-format bridge is
+    /// wired up.
     #[test]
     fn feedback_run_allocates_state_prev_in_overridden_format() {
         let device = crate::test_device();
@@ -385,19 +475,14 @@ mod gpu_tests {
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.connect((src, "out"), (fb, "in")).unwrap();
         g.connect((fb, "out"), (out, "in")).unwrap();
-        // Both the writer feeding feedback.in AND feedback.out itself
-        // need fp32 — otherwise the per-frame in_tex → state.prev copy
-        // is a format mismatch. See the docstring above.
-        g.set_output_format(src, "out", GpuTextureFormat::Rgba32Float)
-            .unwrap();
         g.set_output_format(fb, "out", GpuTextureFormat::Rgba32Float)
             .unwrap();
         let plan = compile(&g).unwrap();
 
-        // Seed the source slot at fp32 to match the override.
+        // Seed the source slot.
         let source_res = output_resource(&plan, src, "out");
         let source_target =
-            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba32Float, "fp32-feedback-src");
+            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "fp32-feedback-src");
         let mut native_enc = device.create_encoder("fp32-feedback");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);

@@ -264,6 +264,24 @@ pub enum LoadError {
         port: String,
         format: String,
     },
+    /// An `outputFormats` entry was silently ignored by the target
+    /// primitive — its `set_output_format` didn't actually update
+    /// `output_format(port)`. Most primitives have a no-op default
+    /// `set_output_format` (their WGSL shaders hardcode a format),
+    /// so writing `outputFormats` against them at JSON-load time
+    /// silently dropped to default. That used to be a debugging
+    /// nightmare: the persistent slot, the producer chain, and the
+    /// state-store texture would all disagree on format and the
+    /// per-frame `copy_texture_to_texture` would silently corrupt.
+    /// Now it's a load-time error — fix the JSON (remove the
+    /// override) or implement `set_output_format` on the primitive
+    /// (plus an fp32 shader variant if needed).
+    OutputFormatNotSupported {
+        node_id: u32,
+        type_id: String,
+        port: String,
+        format: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -312,6 +330,18 @@ impl std::fmt::Display for LoadError {
             } => write!(
                 f,
                 "node {node_id} ({type_id}): output '{port}' declares unknown format '{format}'"
+            ),
+            Self::OutputFormatNotSupported {
+                node_id,
+                type_id,
+                port,
+                format,
+            } => write!(
+                f,
+                "node {node_id} ({type_id}): outputFormats.{port} = '{format}' was silently \
+                 ignored — this primitive's shader hardcodes its output format. Either remove \
+                 the override or use a primitive that supports format choice (e.g. \
+                 `node.feedback`, `node.wgsl_compute_*`)."
             ),
         }
     }
@@ -598,6 +628,24 @@ impl EffectGraphDefExt for EffectGraphDef {
                 graph
                     .set_output_format(runtime_id, port_name, fmt)
                     .expect("node was just added");
+                // Verify the override actually stuck. Primitives whose
+                // shaders hardcode their output format have a no-op
+                // default `set_output_format`, so writing
+                // `outputFormats` against them silently dropped before
+                // — and at runtime the persistent slot, the producer
+                // chain, and the state-store texture would all
+                // disagree, causing the per-frame blit to corrupt or
+                // panic with a format mismatch. Catch the mistake at
+                // load time instead.
+                let inst = graph.get_node(runtime_id).expect("just added");
+                if inst.node.output_format(port_name) != Some(fmt) {
+                    return Err(LoadError::OutputFormatNotSupported {
+                        node_id: node_doc.id,
+                        type_id: node_doc.type_id.clone(),
+                        port: port_name.clone(),
+                        format: fmt_str.clone(),
+                    });
+                }
             }
         }
 
