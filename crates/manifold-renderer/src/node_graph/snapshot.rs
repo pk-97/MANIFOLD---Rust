@@ -348,15 +348,36 @@ impl GraphSnapshot {
         };
         let mut snap = Self::from_graph(&graph);
 
-        // Overlay `editor_pos` from the def. `into_graph` assigns
-        // runtime ids sequentially (0..n) in def order, and
-        // `from_graph` sorts snap.nodes by runtime id — so iterating
-        // both in parallel lines up doc nodes with their snap entries.
-        // Without this overlay, the snapshot loses any positions the
-        // user set via `MoveGraphNodeCommand` and the canvas
-        // auto-lays-out from scratch on every editor reopen.
+        // Translate runtime ids back to doc ids. `into_graph` assigns
+        // runtime ids sequentially (0..n) in def order, and `from_graph`
+        // sorts snap.nodes by runtime id — so iterating both in parallel
+        // lines up doc nodes with their snap entries. Editor commands
+        // (`SetGraphNodeParamCommand`, `ConnectPortsCommand`, …) address
+        // def nodes by doc id, so the snapshot must hand the UI doc ids,
+        // not the temporary runtime ids of the throwaway graph we just
+        // built. When the def's ids happen to be 0..n in declaration
+        // order the two coincide; when nodes get appended out of order
+        // (e.g. OilyFluid's `..., 10, 41, 11, 12, …, 27, 28, …`) they
+        // don't, and command targeting silently writes to the wrong node.
+        // Also overlay `editor_pos` while we're here — otherwise the
+        // canvas auto-lays-out from scratch on every editor reopen.
+        let runtime_to_doc: ahash::AHashMap<u32, u32> = snap
+            .nodes
+            .iter()
+            .zip(def.nodes.iter())
+            .map(|(s, d)| (s.id, d.id))
+            .collect();
         for (snap_node, doc_node) in snap.nodes.iter_mut().zip(def.nodes.iter()) {
             snap_node.editor_pos = doc_node.editor_pos;
+            snap_node.id = doc_node.id;
+        }
+        for wire in &mut snap.wires {
+            if let Some(&doc) = runtime_to_doc.get(&wire.from_node) {
+                wire.from_node = doc;
+            }
+            if let Some(&doc) = runtime_to_doc.get(&wire.to_node) {
+                wire.to_node = doc;
+            }
         }
         Some(snap)
     }
@@ -654,6 +675,64 @@ mod tests {
             .find(|n| n.node_handle.as_deref() == Some("source"))
             .unwrap();
         assert_eq!(snap_source.editor_pos, Some((123.0, 456.0)));
+    }
+
+    /// Regression: when a def's node ids are out of declaration order
+    /// (e.g. ids appended later to an existing preset), `from_def` must
+    /// still expose doc ids — not the throwaway runtime ids `into_graph`
+    /// assigns sequentially in visit order — on both nodes and wires.
+    /// Otherwise editor commands like `SetGraphNodeParamCommand` and
+    /// `ConnectPortsCommand`, which address def nodes by their doc id,
+    /// silently target the wrong node. (OilyFluid hit this once doc ids
+    /// 41/42/43 were appended mid-graph.)
+    #[test]
+    fn from_def_exposes_doc_ids_when_def_ids_are_out_of_order() {
+        use manifold_core::effect_graph_def::{
+            EffectGraphDef, EffectGraphNode, EffectGraphWire, EFFECT_GRAPH_VERSION,
+        };
+
+        // Visit order [10, 99] — runtime would assign 0, 1; doc ids are 10, 99.
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![
+                EffectGraphNode {
+                    id: 10,
+                    type_id: "system.source".to_string(),
+                    handle: Some("source".to_string()),
+                    params: Default::default(),
+                    exposed_params: Default::default(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    output_formats: Default::default(),
+                },
+                EffectGraphNode {
+                    id: 99,
+                    type_id: "system.final_output".to_string(),
+                    handle: Some("final_output".to_string()),
+                    params: Default::default(),
+                    exposed_params: Default::default(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    output_formats: Default::default(),
+                },
+            ],
+            wires: vec![EffectGraphWire {
+                from_node: 10,
+                from_port: "out".to_string(),
+                to_node: 99,
+                to_port: "in".to_string(),
+            }],
+        };
+        let snap = GraphSnapshot::from_def(&def).expect("from_def succeeds");
+        let mut ids: Vec<u32> = snap.nodes.iter().map(|n| n.id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![10, 99], "snap.nodes.id must be doc ids");
+        assert_eq!(snap.wires.len(), 1);
+        assert_eq!(snap.wires[0].from_node, 10);
+        assert_eq!(snap.wires[0].to_node, 99);
     }
 
     #[test]
