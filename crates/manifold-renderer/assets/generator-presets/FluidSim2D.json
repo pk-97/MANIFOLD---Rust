@@ -346,6 +346,7 @@
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 33, "toPort": "trigger_count" },
     { "fromNode": 32, "fromPort": "out",       "toNode": 33, "toPort": "enable" },
     { "fromNode": 33, "fromPort": "out",       "toNode": 1,  "toPort": "trigger" },
+    { "fromNode": 33, "fromPort": "out",       "toNode": 3,  "toPort": "trigger" },
 
     { "fromNode": 36, "fromPort": "out",       "toNode": 34, "toPort": "in_4" },
     { "fromNode": 34, "fromPort": "out",       "toNode": 35, "toPort": "a" },
@@ -375,10 +376,10 @@
     { "fromNode": 25, "fromPort": "out",       "toNode": 26, "toPort": "a" },
     { "fromNode": 26, "fromPort": "out",       "toNode": 12, "toPort": "intensity" },
 
-    { "fromNode": 5,  "fromPort": "density",   "toNode": 12, "toPort": "in" },
-    { "fromNode": 12, "fromPort": "out",       "toNode": 13, "toPort": "in" },
+    { "fromNode": 5,  "fromPort": "density",   "toNode": 13, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out",       "toNode": 12, "toPort": "in" },
     { "fromNode": 27, "fromPort": "out",       "toNode": 13, "toPort": "scale" },
-    { "fromNode": 13, "fromPort": "out",       "toNode": 14, "toPort": "in" },
+    { "fromNode": 12, "fromPort": "out",       "toNode": 14, "toPort": "in" },
 
     { "fromNode": 3,  "fromPort": "out",       "toNode": 2,  "toPort": "in" }
   ]

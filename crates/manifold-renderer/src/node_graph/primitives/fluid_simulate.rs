@@ -61,6 +61,14 @@ crate::primitive! {
         inject_point_x: ScalarF32 optional,
         inject_point_y: ScalarF32 optional,
         inject_phase: ScalarF32 optional,
+        // Optional seed-edge skip gate. When wired and the input
+        // value changes (matching FluidSim's clip-trigger mode 3
+        // re-seed event), the dispatch is suppressed for that one
+        // frame so the freshly-seeded particles aren't immediately
+        // displaced — matches the legacy `return` after dispatch_seed.
+        // Avoids the ~16 ms GPU pipeline stall from the seed
+        // write → simulate read in the same command buffer.
+        trigger: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
@@ -152,6 +160,11 @@ crate::primitive! {
     picker: { label: "Fluid Simulate", category: Atom },
     extra_fields: {
         density_sampler: Option<manifold_gpu::GpuSampler> = None,
+        // Tracks the last `trigger` input value to detect edges. On
+        // edge frames the dispatch is skipped (legacy frame-skip).
+        // `None` = no observation yet; the first observation arms
+        // the state machine without firing.
+        last_trigger: Option<i32> = None,
     },
 }
 
@@ -184,6 +197,23 @@ impl Primitive for FluidSimulate {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Seed-edge skip: when the `trigger` input is wired and its
+        // value changes vs. last frame, skip the dispatch this frame
+        // so the upstream fluid_seed's freshly-written particles
+        // aren't immediately displaced. Matches legacy FluidSimCore's
+        // `return` after dispatch_seed.
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("trigger") {
+            let current = v.round() as i32;
+            let edge = match self.last_trigger {
+                Some(prev) => current != prev,
+                None => false, // first observation arms without firing
+            };
+            self.last_trigger = Some(current);
+            if edge {
+                return;
+            }
+        }
+
         let active_count = match ctx.inputs.scalar("active_count") {
             Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
             _ => match ctx.params.get("active_count") {
@@ -378,6 +408,7 @@ mod tests {
                 "inject_point_x",
                 "inject_point_y",
                 "inject_phase",
+                "trigger",
             ]
         );
 
