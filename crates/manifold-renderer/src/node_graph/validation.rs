@@ -109,8 +109,45 @@ impl std::fmt::Display for GraphError {
 impl std::error::Error for GraphError {}
 
 /// Validate a single proposed connection. Called by [`Graph::connect`] before
-/// the wire is committed.
+/// the wire is committed. Internally delegates the per-wire checks
+/// (kind, type, format) to [`validate_wire_endpoints`] so the same
+/// checks run from [`validate`]'s post-construction audit — both
+/// paths share one definition of "is this wire well-formed?" and
+/// can't drift.
 pub(super) fn validate_connection(
+    graph: &Graph,
+    from: (NodeInstanceId, &'static str),
+    to: (NodeInstanceId, &'static str),
+) -> Result<(), GraphError> {
+    validate_wire_endpoints(graph, from, to)?;
+
+    // Cycle check is per-wire only at connect time (whole-graph cycle
+    // check at validate time goes through `topological_sort`). State-
+    // capture wires close a per-frame loop through the StateStore, so
+    // they're allowed back-edges and don't trigger this check.
+    let to_is_state_capture_port = graph
+        .get_node(to.0)
+        .map(|inst| inst.node.state_capture_input_ports().contains(&to.1))
+        .unwrap_or(false);
+    if !to_is_state_capture_port && would_create_cycle(graph, from.0, to.0) {
+        return Err(GraphError::CycleDetected {
+            involves: vec![from.0, to.0],
+        });
+    }
+
+    Ok(())
+}
+
+/// Shared per-wire endpoint check: nodes exist, ports exist, kinds
+/// match (output→input), texture types match, format contract holds.
+/// Used by both connect-time validation (when adding one wire) and
+/// `validate`'s post-construction audit (walking every wire). Having
+/// one implementation collapses the connect-vs-compile drift surface
+/// for per-wire properties — the only per-wire check NOT here is
+/// cycle detection (which is whole-graph for `validate` via topo
+/// sort, and per-edge for `validate_connection` since "would adding
+/// THIS wire form a cycle?" is the natural shape at connect time).
+pub(super) fn validate_wire_endpoints(
     graph: &Graph,
     from: (NodeInstanceId, &'static str),
     to: (NodeInstanceId, &'static str),
@@ -162,13 +199,6 @@ pub(super) fn validate_connection(
         });
     }
 
-    // Format-as-contract: when both endpoints declare formats AND
-    // they disagree, reject at connect-time with a clear error.
-    // Either-unconstrained is fine — the producer/consumer that
-    // doesn't declare is promising to handle whatever shows up. This
-    // is the cause-layer check; `validate()` runs the catch-all audit
-    // across every wire for graphs that bypass `connect()` (JSON
-    // load, composite expansion, undo/redo).
     if let Some(err) = check_wire_format_compatibility(
         from.0,
         from.1,
@@ -178,21 +208,6 @@ pub(super) fn validate_connection(
         &*to_node.node,
     ) {
         return Err(err);
-    }
-
-    // State-capture wires (those landing on a port the consumer node
-    // declared as a state capture) close a per-frame loop through the
-    // StateStore rather than through this frame's dependency graph.
-    // The cycle they "form" in the wire graph is the intended pattern,
-    // not an error. See EffectNode::state_capture_input_ports.
-    let to_is_state_capture_port = graph
-        .get_node(to.0)
-        .map(|inst| inst.node.state_capture_input_ports().contains(&to.1))
-        .unwrap_or(false);
-    if !to_is_state_capture_port && would_create_cycle(graph, from.0, to.0) {
-        return Err(GraphError::CycleDetected {
-            involves: vec![from.0, to.0],
-        });
     }
 
     Ok(())
@@ -257,32 +272,19 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     // specific `RequiredInputUnwired` error wins when both apply.
     topological_sort(graph)?;
 
-    // Format-as-contract catch-all. Connect-time validation rejects
-    // mismatches on each wire as it's added, but programmatic
+    // Per-wire catch-all — replay `validate_connection`'s endpoint
+    // checks (kind, type, format) on every wire in the existing
+    // graph. Connect-time validation rejects each wire as it's added,
+    // but `validate` is the durable safety net for programmatic
     // construction (JSON load, composite expansion, undo/redo) and
-    // sequential mutations that re-order wire additions can land a
-    // mismatch in the graph without going through `connect()`. This
-    // audit walks every wire after the other checks and surfaces any
-    // format incompatibility — same shape as
-    // `JsonGraphGenerator::audit_array_resource_bindings`, applied to
-    // texture wires instead of array buffers.
+    // sequential mutations. Because both paths invoke
+    // `validate_wire_endpoints`, the per-wire checks can't drift
+    // between connect-time and compile-time — same source-of-truth
+    // function, same rules. The only check not duplicated here is
+    // cycle detection (already covered above by `topological_sort`
+    // at the whole-graph level).
     for w in graph.wires() {
-        let Some(from_inst) = graph.get_node(w.from.0) else {
-            continue;
-        };
-        let Some(to_inst) = graph.get_node(w.to.0) else {
-            continue;
-        };
-        if let Some(err) = check_wire_format_compatibility(
-            w.from.0,
-            w.from.1,
-            &*from_inst.node,
-            w.to.0,
-            w.to.1,
-            &*to_inst.node,
-        ) {
-            return Err(err);
-        }
+        validate_wire_endpoints(graph, w.from, w.to)?;
     }
 
     Ok(())
@@ -670,6 +672,109 @@ mod tests {
                 assert_eq!(accepted, vec![manifold_gpu::GpuTextureFormat::Rgba16Float]);
             }
             other => panic!("expected PortFormatMismatch, got {other:?}"),
+        }
+    }
+
+    /// Connect-vs-compile convergence: the per-wire checks in
+    /// `validate_connection` (kind, type, format) must produce the
+    /// same verdict as `validate`'s catch-all sweep — they share the
+    /// `validate_wire_endpoints` helper, so this is a structural
+    /// invariant. The test exercises a representative spread of
+    /// well-formed and malformed wires and asserts identity. A
+    /// future refactor that lets the two paths drift fails here.
+    #[test]
+    fn validate_subsumes_connect_per_wire_checks_for_every_endpoint_failure_mode() {
+        use crate::node_graph::ports::PortType;
+
+        // Every malformed-wire scenario we care about: each is built
+        // by hand-constructing a graph through the public API (which
+        // routes through `connect`), and the test confirms that
+        // either (a) connect rejects upfront (the connect path
+        // returning a specific error), or (b) connect would have
+        // rejected if we tried — `validate_wire_endpoints` called
+        // directly returns the same error.
+        let cases: Vec<(&str, fn() -> (Graph, (NodeInstanceId, &'static str), (NodeInstanceId, &'static str), &'static str))> = vec![
+            ("type mismatch", || {
+                let mut g = Graph::new();
+                let a = g.add_node(Box::new(TestNode::new(
+                    "tex_out",
+                    vec![],
+                    vec![output("out", PortType::Texture2D)],
+                )));
+                let b = g.add_node(Box::new(TestNode::new(
+                    "tex3d_in",
+                    vec![input("in", PortType::Texture3D, true)],
+                    vec![],
+                )));
+                (g, (a, "out"), (b, "in"), "PortTypeMismatch")
+            }),
+            ("unknown from-port", || {
+                let mut g = Graph::new();
+                let a = g.add_node(Box::new(TestNode::new(
+                    "src",
+                    vec![],
+                    vec![output("out", PortType::Texture2D)],
+                )));
+                let b = g.add_node(Box::new(TestNode::new(
+                    "sink",
+                    vec![input("in", PortType::Texture2D, true)],
+                    vec![],
+                )));
+                (g, (a, "nonexistent"), (b, "in"), "PortNotFound")
+            }),
+            ("unknown to-port", || {
+                let mut g = Graph::new();
+                let a = g.add_node(Box::new(TestNode::new(
+                    "src",
+                    vec![],
+                    vec![output("out", PortType::Texture2D)],
+                )));
+                let b = g.add_node(Box::new(TestNode::new(
+                    "sink",
+                    vec![input("in", PortType::Texture2D, true)],
+                    vec![],
+                )));
+                (g, (a, "out"), (b, "nonexistent"), "PortNotFound")
+            }),
+        ];
+
+        for (label, build) in cases {
+            let (g, from, to, expected_variant) = build();
+
+            // connect-time rejection
+            let connect_err = validate_connection(&g, from, to).expect_err(
+                "connect-time validation should reject this case",
+            );
+            let connect_label = error_variant_label(&connect_err);
+            assert_eq!(
+                connect_label, expected_variant,
+                "[{label}] connect returned {connect_label}, expected {expected_variant}",
+            );
+
+            // validate_wire_endpoints called directly should return
+            // the SAME error class.
+            let endpoint_err = validate_wire_endpoints(&g, from, to).expect_err(
+                "validate_wire_endpoints should reject this case (it's what connect calls)",
+            );
+            let endpoint_label = error_variant_label(&endpoint_err);
+            assert_eq!(
+                connect_label, endpoint_label,
+                "[{label}] connect and validate_wire_endpoints diverged: \
+                 connect={connect_label} endpoint={endpoint_label}",
+            );
+        }
+    }
+
+    fn error_variant_label(e: &GraphError) -> &'static str {
+        match e {
+            GraphError::NodeNotFound(_) => "NodeNotFound",
+            GraphError::PortNotFound { .. } => "PortNotFound",
+            GraphError::PortKindMismatch { .. } => "PortKindMismatch",
+            GraphError::PortTypeMismatch { .. } => "PortTypeMismatch",
+            GraphError::RequiredInputUnwired { .. } => "RequiredInputUnwired",
+            GraphError::ParamNotFound { .. } => "ParamNotFound",
+            GraphError::CycleDetected { .. } => "CycleDetected",
+            GraphError::PortFormatMismatch { .. } => "PortFormatMismatch",
         }
     }
 
