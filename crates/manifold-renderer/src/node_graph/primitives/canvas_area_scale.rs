@@ -54,8 +54,33 @@ crate::primitive! {
             range: Some((1.0, 1.0e9)),
             enum_values: &[],
         },
+        // Minimum dimensions clamp the input width/height upward
+        // before computing the area ratio. Mirrors the legacy
+        // FluidSimCore's scatter-resolution clamp
+        // (`max(640, output_width * field_scale)`): below the
+        // minimum canvas size, the splat density would otherwise
+        // shrink linearly with area and dim the output below
+        // perceptual usefulness on small windows (perform-mode HUD,
+        // external monitor). Default 0 = no clamp (existing
+        // behaviour, no regression for non-fluid consumers).
+        ParamDef {
+            name: "min_width",
+            label: "Min Width",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 16384.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "min_height",
+            label: "Min Height",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 16384.0)),
+            enum_values: &[],
+        },
     ],
-    composition_notes: "Pair with `system.generator_input.output_width` and `output_height` to compute the runtime canvas-area ratio against the configured `reference_area` (default 1920×1080 = 2,073,600). Use the output to scale a tone-map's `intensity` so splat-based density displays stay perceptually consistent across resolutions. `reference_area = 0` falls back to 1.0 (passthrough) to avoid div-by-zero on misconfigured presets.",
+    composition_notes: "Pair with `system.generator_input.output_width` and `output_height` to compute the runtime canvas-area ratio against the configured `reference_area` (default 1920×1080 = 2,073,600). Use the output to scale a tone-map's `intensity` so splat-based density displays stay perceptually consistent across resolutions. `reference_area = 0` falls back to 1.0 (passthrough) to avoid div-by-zero on misconfigured presets. `min_width` / `min_height` clamp the inputs upward — set to 640 / 360 for FluidSim2D parity so small windows don't dim below usable brightness.",
     examples: [],
     picker: { label: "Canvas Area Scale", category: Driver },
 }
@@ -65,8 +90,18 @@ impl Primitive for CanvasAreaScale {
         let width = ctx.scalar_or_param("width", 1920.0);
         let height = ctx.scalar_or_param("height", 1080.0);
         let reference_area = ctx.scalar_or_param("reference_area", 2_073_600.0);
+        let min_w = match ctx.params.get("min_width") {
+            Some(ParamValue::Float(f)) => f.max(0.0),
+            _ => 0.0,
+        };
+        let min_h = match ctx.params.get("min_height") {
+            Some(ParamValue::Float(f)) => f.max(0.0),
+            _ => 0.0,
+        };
+        let effective_w = width.max(min_w);
+        let effective_h = height.max(min_h);
         let out = if reference_area > 0.0 {
-            (width * height) / reference_area
+            (effective_w * effective_h) / reference_area
         } else {
             1.0
         };
@@ -100,9 +135,12 @@ mod tests {
     }
 
     #[test]
-    fn canvas_area_scale_has_width_height_reference_area_params() {
+    fn canvas_area_scale_has_width_height_reference_area_and_min_params() {
         let names: Vec<&str> = CanvasAreaScale::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["width", "height", "reference_area"]);
+        assert_eq!(
+            names,
+            vec!["width", "height", "reference_area", "min_width", "min_height"]
+        );
     }
 
     #[test]

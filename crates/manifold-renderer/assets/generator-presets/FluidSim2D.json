@@ -191,7 +191,7 @@
       "params": { "a": { "type": "Float", "value": 85.0 }, "scale": { "type": "Float", "value": 0.017453293 }, "offset": { "type": "Float", "value": 0.0 } } },
 
     { "id": 25, "typeId": "node.canvas_area_scale", "handle": "area_scale",
-      "params": { "width": { "type": "Float", "value": 1920.0 }, "height": { "type": "Float", "value": 1080.0 }, "reference_area": { "type": "Float", "value": 2073600.0 } } },
+      "params": { "width": { "type": "Float", "value": 1920.0 }, "height": { "type": "Float", "value": 1080.0 }, "reference_area": { "type": "Float", "value": 2073600.0 }, "min_width": { "type": "Float", "value": 640.0 }, "min_height": { "type": "Float", "value": 360.0 } } },
 
     { "id": 26, "typeId": "node.affine_scalar", "handle": "intensity_calc",
       "params": { "a": { "type": "Float", "value": 1.0 }, "scale": { "type": "Float", "value": 3.0 }, "offset": { "type": "Float", "value": 0.0 } } },
