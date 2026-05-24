@@ -37,7 +37,10 @@ crate::primitive! {
     name: GenerateGridMesh,
     type_id: "node.generate_grid_mesh",
     purpose: "Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. Pair with a displacement primitive that perturbs Y from a Texture2D, then route to node.render_3d_mesh. The unlock for MetallicGlass-shaped graphs where the displacement source is wire-controlled.",
-    inputs: {},
+    inputs: {
+        size_x: ScalarF32 optional,
+        size_y: ScalarF32 optional,
+    },
     outputs: {
         vertices: Array(MeshVertex),
     },
@@ -83,7 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "max_capacity ≥ resolution_x × resolution_y. The chain build pre-allocates max_capacity × 32 bytes and triggers a rebuild when changed; resolution sliders only write uniforms. Default 256×256 = 65k vertices ≈ 2 MB.",
+    composition_notes: "max_capacity ≥ resolution_x × resolution_y. The chain build pre-allocates max_capacity × 32 bytes and triggers a rebuild when changed; resolution sliders only write uniforms. Default 256×256 = 65k vertices ≈ 2 MB. size_x / size_y are port-shadows-param: aspect-correct the mesh by wiring `system.generator_input.aspect → math.multiply(b=2.0) → size_x` (matches the legacy MetallicGlass mesh that spans [-aspect, +aspect] in X).",
     examples: [],
     picker: { label: "Generate Grid Mesh", category: Atom },
 }
@@ -98,14 +101,8 @@ impl Primitive for GenerateGridMesh {
             Some(ParamValue::Float(n)) => n.round().max(2_f32) as u32,
             _ => 256,
         };
-        let size_x = match ctx.params.get("size_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 2.0,
-        };
-        let size_y = match ctx.params.get("size_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 2.0,
-        };
+        let size_x = ctx.scalar_or_param("size_x", 2.0);
+        let size_y = ctx.scalar_or_param("size_y", 2.0);
 
         let Some(out_buf) = ctx.outputs.array("vertices") else {
             return;
@@ -161,12 +158,18 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn generate_grid_mesh_declares_zero_inputs_and_one_mesh_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+    fn generate_grid_mesh_declares_size_inputs_and_one_mesh_array_output() {
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let mesh_vertex_layout = ArrayType::of_known::<MeshVertex>();
 
         assert_eq!(GenerateGridMesh::TYPE_ID, "node.generate_grid_mesh");
-        assert!(GenerateGridMesh::INPUTS.is_empty());
+        assert_eq!(GenerateGridMesh::INPUTS.len(), 2);
+        assert_eq!(GenerateGridMesh::INPUTS[0].name, "size_x");
+        assert!(!GenerateGridMesh::INPUTS[0].required);
+        assert_eq!(GenerateGridMesh::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(GenerateGridMesh::INPUTS[1].name, "size_y");
+        assert!(!GenerateGridMesh::INPUTS[1].required);
+        assert_eq!(GenerateGridMesh::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(GenerateGridMesh::OUTPUTS.len(), 1);
         assert_eq!(GenerateGridMesh::OUTPUTS[0].name, "vertices");
         assert_eq!(

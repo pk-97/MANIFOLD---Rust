@@ -85,9 +85,14 @@
     { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
 
     { "id": 1,  "typeId": "node.affine_scalar", "handle": "noise_scale_inv",
-      "params": { "a": { "type": "Float", "value": 0.75 }, "scale": { "type": "Float", "value": 0.0 }, "offset": { "type": "Float", "value": 0.0 } } },
+      "params": { "a": { "type": "Float", "value": 0.75 }, "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 0.0 } } },
     { "id": 2,  "typeId": "node.math", "handle": "noise_scale_recip",
       "params": { "a": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
+    { "id": 41, "typeId": "node.affine_scalar", "handle": "noise_offset_calc",
+      "params": { "a": { "type": "Float", "value": 1.333 }, "scale": { "type": "Float", "value": -0.5 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 42, "typeId": "node.math", "handle": "mesh_size_x_calc",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 2 } } },
 
     { "id": 3,  "typeId": "node.math", "handle": "noise_z_calc",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.1 }, "op": { "type": "Enum", "value": 2 } } },
@@ -111,8 +116,6 @@
     { "id": 7,  "typeId": "node.mix", "handle": "noise_minus_prev",
       "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 5 } } },
 
-    { "id": 8,  "typeId": "node.abs_texture", "handle": "diff_abs" },
-
     { "id": 9,  "typeId": "node.mix", "handle": "blend_lerp",
       "params": { "amount": { "type": "Float", "value": 0.98 }, "mode": { "type": "Enum", "value": 0 } } },
 
@@ -123,14 +126,14 @@
 
     { "id": 12, "typeId": "node.brightness", "handle": "luma_for_height" },
 
-    { "id": 13, "typeId": "node.scale_offset_texture", "handle": "height_remap1",
-      "params": { "scale": { "type": "Float", "value": 0.7 }, "offset": { "type": "Float", "value": 0.3 } } },
-    { "id": 14, "typeId": "node.scale_offset_texture", "handle": "height_remap2",
-      "params": { "scale": { "type": "Float", "value": 1.8 }, "offset": { "type": "Float", "value": -0.25 } } },
-    { "id": 15, "typeId": "node.clamp_texture", "handle": "height_clamp",
-      "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 1.0 } } },
-    { "id": 16, "typeId": "node.power_texture", "handle": "height_pow",
-      "params": { "exponent": { "type": "Float", "value": 0.8 } } },
+    { "id": 13, "typeId": "node.levels", "handle": "height_levels",
+      "params": {
+        "scale":  { "type": "Float", "value": 1.26 },
+        "offset": { "type": "Float", "value": 0.29 },
+        "lo":     { "type": "Float", "value": 0.0 },
+        "hi":     { "type": "Float", "value": 1.0 },
+        "gamma":  { "type": "Float", "value": 0.8 }
+      } },
 
     { "id": 17, "typeId": "node.affine_scalar", "handle": "mirror_deg_to_rad",
       "params": { "a": { "type": "Float", "value": 45.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
@@ -170,12 +173,14 @@
     { "id": 25, "typeId": "node.clamp_texture", "handle": "edge_clamp",
       "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 26, "typeId": "node.scale_offset_texture", "handle": "metallic_invert",
-      "params": { "scale": { "type": "Float", "value": -1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
-    { "id": 27, "typeId": "node.clamp_texture", "handle": "metallic_clamp",
-      "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 1.0 } } },
-    { "id": 28, "typeId": "node.power_texture", "handle": "metallic_pow",
-      "params": { "exponent": { "type": "Float", "value": 1.5 } } },
+    { "id": 26, "typeId": "node.levels", "handle": "metallic_levels",
+      "params": {
+        "scale":  { "type": "Float", "value": -1.0 },
+        "offset": { "type": "Float", "value": 1.0 },
+        "lo":     { "type": "Float", "value": 0.0 },
+        "hi":     { "type": "Float", "value": 1.0 },
+        "gamma":  { "type": "Float", "value": 1.5 }
+      } },
 
     { "id": 29, "typeId": "node.pack_channels", "handle": "packed",
       "params": {
@@ -201,25 +206,25 @@
 
     { "id": 33, "typeId": "node.generate_grid_mesh", "handle": "grid_mesh",
       "params": {
-        "max_capacity": { "type": "Int", "value": 90000 },
-        "resolution_x": { "type": "Int", "value": 300 },
-        "resolution_y": { "type": "Int", "value": 300 },
+        "max_capacity": { "type": "Int", "value": 250000 },
+        "resolution_x": { "type": "Int", "value": 500 },
+        "resolution_y": { "type": "Int", "value": 500 },
         "size_x":       { "type": "Float", "value": 2.0 },
         "size_y":       { "type": "Float", "value": 2.0 }
       } },
 
     { "id": 34, "typeId": "node.displace_mesh", "handle": "displace_mesh_node",
       "params": {
-        "cols":         { "type": "Int", "value": 300 },
-        "rows":         { "type": "Int", "value": 300 },
+        "cols":         { "type": "Int", "value": 500 },
+        "rows":         { "type": "Int", "value": 500 },
         "displacement": { "type": "Float", "value": 0.2 },
         "height_bias":  { "type": "Float", "value": 0.5 }
       } },
 
     { "id": 35, "typeId": "node.triangulate_grid", "handle": "triangulated",
       "params": {
-        "src_cols": { "type": "Int", "value": 300 },
-        "src_rows": { "type": "Int", "value": 300 }
+        "src_cols": { "type": "Int", "value": 500 },
+        "src_rows": { "type": "Int", "value": 500 }
       } },
 
     { "id": 36, "typeId": "node.affine_scalar", "handle": "cam_orbit_deg_to_rad",
@@ -231,7 +236,7 @@
 
     { "id": 39, "typeId": "node.render_3d_mesh_pbr_ibl", "handle": "render",
       "params": {
-        "grid_size":          { "type": "Int", "value": 300 },
+        "grid_size":          { "type": "Int", "value": 500 },
         "camera_distance":    { "type": "Float", "value": 2.5 },
         "camera_orbit":       { "type": "Float", "value": 0.0 },
         "camera_tilt":        { "type": "Float", "value": -0.1745 },
@@ -260,15 +265,17 @@
     { "fromNode": 2,  "fromPort": "out",  "toNode": 4,  "toPort": "scale_x" },
     { "fromNode": 2,  "fromPort": "out",  "toNode": 4,  "toPort": "scale_y" },
 
+    { "fromNode": 2,  "fromPort": "out",  "toNode": 41, "toPort": "a" },
+    { "fromNode": 41, "fromPort": "out",  "toNode": 4,  "toPort": "offset_x" },
+    { "fromNode": 41, "fromPort": "out",  "toNode": 4,  "toPort": "offset_y" },
+
     { "fromNode": 4,  "fromPort": "out",  "toNode": 5,  "toPort": "in" },
 
     { "fromNode": 5,  "fromPort": "out",  "toNode": 7,  "toPort": "a" },
     { "fromNode": 6,  "fromPort": "out",  "toNode": 7,  "toPort": "b" },
 
-    { "fromNode": 7,  "fromPort": "out",  "toNode": 8,  "toPort": "in" },
-
     { "fromNode": 6,  "fromPort": "out",  "toNode": 9,  "toPort": "a" },
-    { "fromNode": 8,  "fromPort": "out",  "toNode": 9,  "toPort": "b" },
+    { "fromNode": 7,  "fromPort": "out",  "toNode": 9,  "toPort": "b" },
 
     { "fromNode": 9,  "fromPort": "out",  "toNode": 10, "toPort": "in" },
     { "fromNode": 10, "fromPort": "out",  "toNode": 11, "toPort": "in" },
@@ -276,9 +283,6 @@
 
     { "fromNode": 11, "fromPort": "out",  "toNode": 12, "toPort": "source" },
     { "fromNode": 12, "fromPort": "out",  "toNode": 13, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out",  "toNode": 14, "toPort": "in" },
-    { "fromNode": 14, "fromPort": "out",  "toNode": 15, "toPort": "in" },
-    { "fromNode": 15, "fromPort": "out",  "toNode": 16, "toPort": "in" },
 
     { "fromNode": 17, "fromPort": "out",  "toNode": 18, "toPort": "angle" },
     { "fromNode": 11, "fromPort": "out",  "toNode": 18, "toPort": "in" },
@@ -295,16 +299,18 @@
     { "fromNode": 24, "fromPort": "out",  "toNode": 25, "toPort": "in" },
 
     { "fromNode": 25, "fromPort": "out",  "toNode": 26, "toPort": "in" },
-    { "fromNode": 26, "fromPort": "out",  "toNode": 27, "toPort": "in" },
-    { "fromNode": 27, "fromPort": "out",  "toNode": 28, "toPort": "in" },
 
-    { "fromNode": 16, "fromPort": "out",  "toNode": 29, "toPort": "r" },
-    { "fromNode": 28, "fromPort": "out",  "toNode": 29, "toPort": "g" },
+    { "fromNode": 13, "fromPort": "out",  "toNode": 29, "toPort": "r" },
+    { "fromNode": 26, "fromPort": "out",  "toNode": 29, "toPort": "g" },
     { "fromNode": 25, "fromPort": "out",  "toNode": 29, "toPort": "b" },
 
     { "fromNode": 30, "fromPort": "out",  "toNode": 31, "toPort": "a" },
     { "fromNode": 29, "fromPort": "out",  "toNode": 31, "toPort": "b" },
     { "fromNode": 31, "fromPort": "out",  "toNode": 30, "toPort": "in" },
+    { "fromNode": 29, "fromPort": "out",  "toNode": 30, "toPort": "seed" },
+
+    { "fromNode": 0,  "fromPort": "aspect", "toNode": 42, "toPort": "a" },
+    { "fromNode": 42, "fromPort": "out",    "toNode": 33, "toPort": "size_x" },
 
     { "fromNode": 33, "fromPort": "vertices", "toNode": 34, "toPort": "in" },
     { "fromNode": 31, "fromPort": "out",  "toNode": 34, "toPort": "height" },
