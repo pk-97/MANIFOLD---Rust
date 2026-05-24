@@ -42,7 +42,7 @@ pub use bundled_presets::{
 };
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
-    NodeWire, ParamValues,
+    NodeWire, ParamValues, StateLifecycle,
 };
 pub use execution::Executor;
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
