@@ -29,6 +29,10 @@ core-foundation = "0.9"
 [build-dependencies]
 serde_json = "1"
 
+[[bin]]
+name = "check-presets"
+path = "src/bin/check_presets.rs"
+
 [features]
 
 [lints]
