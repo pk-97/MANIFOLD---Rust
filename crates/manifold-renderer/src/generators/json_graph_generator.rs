@@ -62,6 +62,22 @@ pub enum JsonGeneratorLoadError {
         node_type: String,
         port: String,
     },
+    /// Post-allocation catch-all: walking every `Array<T>` resource
+    /// in the compiled plan, this one has no bound slot or no
+    /// underlying buffer. The cause-layer errors above (e.g.
+    /// `UnsizedArrayOutput`) catch the specific reasons we've
+    /// enumerated; this audit catches anything we haven't — alias
+    /// chain breaks, canvas-dim-zero skips, future allocation
+    /// branches that fail silently. The architectural invariant is
+    /// that `compile()` either returns a plan with every resource
+    /// bound, or returns `Err`. No third state. Cause messages above
+    /// explain WHY; this one guarantees COMPLETENESS.
+    UnboundArrayResource {
+        producer_handle: Option<String>,
+        producer_node_type: String,
+        producer_port: String,
+        cause: &'static str,
+    },
 }
 
 impl std::fmt::Display for JsonGeneratorLoadError {
@@ -85,6 +101,28 @@ impl std::fmt::Display for JsonGeneratorLoadError {
                  Add a `max_capacity` param, or override the method to derive \
                  size from a forward-dep input (not a state-capture port)."
             ),
+            Self::UnboundArrayResource {
+                producer_handle,
+                producer_node_type,
+                producer_port,
+                cause,
+            } => {
+                let handle_part = match producer_handle {
+                    Some(h) => format!(" (handle `{h}`)"),
+                    None => String::new(),
+                };
+                write!(
+                    f,
+                    "Array<T> output of `{producer_node_type}.{producer_port}`{handle_part} \
+                     has no bound buffer after chain build: {cause}. \
+                     This is the post-allocation audit catching a wire \
+                     whose source resource was never pre-bound — downstream \
+                     consumers would read an empty buffer and render silently \
+                     wrong. The cause-layer error printed above (if any) \
+                     explains the specific failure; this audit guarantees \
+                     no plan with dangling resources reaches the executor."
+                )
+            }
         }
     }
 }
@@ -471,8 +509,113 @@ impl JsonGraphGenerator {
         // was the FluidSim2D black-output bug class).
         Self::pre_allocate_array_buffers(&g.graph, &g.plan, device, &mut backend)?;
 
+        // Post-allocation audit — catch-all that walks every Array<T>
+        // resource in the compiled plan and asserts each has a bound
+        // slot AND a real buffer. The cause-layer errors above
+        // (`UnsizedArrayOutput`, future variants) catch the specific
+        // failure reasons we've enumerated; this audit catches anything
+        // we haven't — alias chain breaks, canvas-zero skips, future
+        // allocation branches that silently fail. The architectural
+        // invariant: `from_def_with_device` returns Ok only when every
+        // resource is bound, or Err otherwise. No third state.
+        Self::audit_array_resource_bindings(&g.graph, &g.plan, &backend)?;
+
         g.executor = Executor::new(Box::new(backend));
         Ok(g)
+    }
+
+    /// Post-allocation catch-all. Walks every Array<T> resource in the
+    /// compiled plan and verifies (a) the backend has a slot mapping for
+    /// it, and (b) the slot has an underlying buffer. First failure
+    /// returns Err with the producer (node type + handle + port) named
+    /// for the operator-facing message.
+    ///
+    /// Why this lives separately from `pre_allocate_array_buffers`:
+    /// the cause-layer checks INSIDE that loop know WHY allocation
+    /// failed (sizing returned None, canvas dims 0, etc.) and surface
+    /// targeted errors. This audit knows NOTHING about why — it only
+    /// knows whether the post-condition holds — which is the right
+    /// shape for a catch-all that future-proofs against allocation
+    /// paths we haven't written yet. Both layers ship; cause errors
+    /// give actionable context, the audit guarantees completeness.
+    fn audit_array_resource_bindings(
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        backend: &MetalBackend,
+    ) -> Result<(), JsonGeneratorLoadError> {
+        use crate::node_graph::{Backend, PortType, ResourceId};
+
+        // Reverse map for friendly error messages: handle name per
+        // node id. Most nodes have a handle (set via the JSON
+        // `handle:` field); built-in / unhandled nodes return None.
+        let handle_by_node: ahash::AHashMap<NodeInstanceId, &'static str> =
+            graph.handles().map(|(h, id)| (id, h)).collect();
+
+        let total = plan.resource_count();
+        for raw in 0..total {
+            let res_id = ResourceId(raw as u32);
+            // Only Array resources are pre-bind-only; Texture2D /
+            // Texture3D resources lazy-allocate from a pool when the
+            // executor calls `acquire`, so they aren't audit-checkable
+            // at this point (a separate audit could verify their
+            // backing slots survive past `acquire`, but that's a
+            // runtime concern, not a build-time one).
+            let Some(PortType::Array(_)) = plan.resource_type(res_id) else {
+                continue;
+            };
+
+            let bound = backend.slot_for(res_id).is_some()
+                && backend
+                    .slot_for(res_id)
+                    .and_then(|s| backend.array_buffer(s))
+                    .is_some();
+            if bound {
+                continue;
+            }
+
+            // Reverse-lookup the (node, port) that produces this
+            // resource. Walking steps is O(steps × outputs) but only
+            // runs on the audit failure path so the cost is fine.
+            let (producer_node_type, producer_port, producer_handle) = plan
+                .steps()
+                .iter()
+                .find_map(|step| {
+                    step.outputs
+                        .iter()
+                        .find(|(_, id)| *id == res_id)
+                        .map(|(port_name, _)| {
+                            let node_type = graph
+                                .get_node(step.node)
+                                .map(|n| n.node.type_id().as_str().to_string())
+                                .unwrap_or_else(|| "<unknown>".to_string());
+                            let handle = handle_by_node
+                                .get(&step.node)
+                                .map(|h| h.to_string());
+                            (node_type, port_name.to_string(), handle)
+                        })
+                })
+                .unwrap_or_else(|| {
+                    (
+                        "<no producer step>".to_string(),
+                        "<unknown port>".to_string(),
+                        None,
+                    )
+                });
+
+            return Err(JsonGeneratorLoadError::UnboundArrayResource {
+                producer_handle,
+                producer_node_type,
+                producer_port,
+                cause: if backend.slot_for(res_id).is_none() {
+                    "no slot mapping (allocation skipped — possibly canvas dims 0×0, \
+                     zero-byte capacity, or a failed alias)"
+                } else {
+                    "slot exists but has no buffer (alias chain broken or \
+                     pre_bind_array not called)"
+                },
+            });
+        }
+        Ok(())
     }
 
     /// Walk the compiled plan, find every `Array<T>` output, and
@@ -957,6 +1100,67 @@ mod tests {
 
     use manifold_core::Beats;
     use manifold_core::Seconds;
+
+    /// The post-allocation wire audit must fire when an `Array<T>`
+    /// resource has no bound slot — the catch-all that future-proofs
+    /// against allocation paths we haven't enumerated. Test setup
+    /// bypasses `pre_allocate_array_buffers` (the normal cause-layer
+    /// errors handle the cases it covers) and confirms the audit
+    /// alone catches the dangling resource.
+    ///
+    /// Verifies the contract: `from_def_with_device` returns Ok only
+    /// when every Array<T> resource is bound. No third state.
+    #[test]
+    fn wire_audit_errors_when_array_resource_has_no_bound_buffer() {
+        use crate::node_graph::Graph;
+        use crate::node_graph::primitives::FluidSeed;
+
+        let device = GpuDevice::new();
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(FluidSeed::new()));
+        let plan = compile(&graph).expect("seed-only graph compiles");
+
+        // Construct a backend but deliberately DON'T call
+        // `pre_allocate_array_buffers`. The audit should see the
+        // missing slot and error.
+        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+
+        let err = JsonGraphGenerator::audit_array_resource_bindings(&graph, &plan, &backend)
+            .expect_err("audit must reject plan with unbound Array<T> resource");
+
+        match err {
+            JsonGeneratorLoadError::UnboundArrayResource {
+                producer_node_type, ..
+            } => {
+                assert!(
+                    producer_node_type.contains("fluid_seed"),
+                    "error must name the offending producer; got {producer_node_type}"
+                );
+            }
+            other => panic!("expected UnboundArrayResource, got {other:?}"),
+        }
+    }
+
+    /// Sanity: the audit accepts a fully-bound plan. Paired with the
+    /// negative test above so a regression that makes the audit
+    /// always-error or always-pass fails CI loudly.
+    #[test]
+    fn wire_audit_accepts_fully_pre_allocated_plan() {
+        use crate::node_graph::Graph;
+        use crate::node_graph::primitives::FluidSeed;
+
+        let device = GpuDevice::new();
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(FluidSeed::new()));
+        let plan = compile(&graph).expect("seed-only graph compiles");
+
+        let mut backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        JsonGraphGenerator::pre_allocate_array_buffers(&graph, &plan, &device, &mut backend)
+            .expect("pre-allocation succeeds for seed-only graph");
+
+        JsonGraphGenerator::audit_array_resource_bindings(&graph, &plan, &backend)
+            .expect("audit accepts plan after successful pre-allocation");
+    }
 
     /// Regression for the "Lissajous repeats back-to-back in
     /// clip-trigger mode" bug. The preset declares two bindings keyed
