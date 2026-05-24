@@ -40,6 +40,12 @@ crate::primitive! {
     purpose: "Fused gradient + 2D rotation for the FluidSim family. Computes central-difference gradient with toroidal wrap on a scalar density texture, scales by slope_strength, rotates by rotation_angle, writes a vec2 force field. Fused for bit-exact FluidSim parity — gradient and rotation share one dispatch with no intermediate storage write.",
     inputs: {
         density: Texture2D required,
+        // Port-shadows for the modulation surface — both legacy
+        // FluidSim's clip-trigger mode-2 (slope sign-flip) and mode-1
+        // (rotation +180°) want time-varying values here, not static
+        // params.
+        slope_strength: ScalarF32 optional,
+        rotation_angle: ScalarF32 optional,
     },
     outputs: {
         force: Texture2D,
@@ -61,21 +67,45 @@ crate::primitive! {
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
+        // Density-area normalisation reference. The shader applies
+        // `effective_slope = slope_strength * (width*height) / reference_area`
+        // so the visual feel of `slope_strength` stays consistent
+        // across canvas resolutions. Legacy FluidSim uses 1920×1080 as
+        // the reference scatter area; keep the default unless you have
+        // a reason to renormalise to a different canvas.
+        ParamDef {
+            name: "reference_area",
+            label: "Reference Area",
+            ty: ParamType::Float,
+            default: ParamValue::Float(2_073_600.0),
+            range: Some((1.0, 100_000_000.0)),
+            enum_values: &[],
+        },
     ],
-    composition_notes: "slope_strength negative = repulsion (default), positive = attraction. Texel size is read from the input texture's dimensions — no need to pass it as a param. The rotation is applied to the gradient *after* slope scaling. Output Z = 0, alpha = 1.",
+    composition_notes: "slope_strength negative = repulsion (default), positive = attraction. The effective slope at dispatch is `slope_strength * (width*height) / reference_area` — keeps feel consistent across canvas sizes; matches the legacy FluidSim `density_area_scale` factor against 1920×1080. Texel size is read from the input texture's dimensions — no need to pass it as a param. The rotation is applied to the gradient *after* slope scaling. Output Z = 0, alpha = 1.",
     examples: [],
     picker: { label: "Fluid Gradient Rotate", category: Atom },
 }
 
 impl Primitive for FluidGradientRotate {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let slope_strength = match ctx.params.get("slope_strength") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => -500.0,
+        let slope_strength = match ctx.inputs.scalar("slope_strength") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("slope_strength") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => -500.0,
+            },
         };
-        let rotation_angle = match ctx.params.get("rotation_angle") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        let rotation_angle = match ctx.inputs.scalar("rotation_angle") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("rotation_angle") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
+        };
+        let reference_area = match ctx.params.get("reference_area") {
+            Some(ParamValue::Float(f)) if *f > 0.0 => *f,
+            _ => 2_073_600.0,
         };
 
         let Some(density) = ctx.inputs.texture_2d("density") else {
@@ -99,10 +129,11 @@ impl Primitive for FluidGradientRotate {
             )
         });
 
+        let density_area_scale = (width as f32 * height as f32) / reference_area;
         let uniforms = GradientRotateUniforms {
             texel_x: 1.0 / width as f32,
             texel_y: 1.0 / height as f32,
-            slope_strength,
+            slope_strength: slope_strength * density_area_scale,
             rot_cos: rotation_angle.cos(),
             rot_sin: rotation_angle.sin(),
             _pad0: 0.0,
@@ -139,22 +170,26 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn fluid_gradient_rotate_declares_texture_in_and_out() {
+    fn fluid_gradient_rotate_declares_texture_in_scalar_ports_and_texture_out() {
         use crate::node_graph::ports::PortType;
         assert_eq!(FluidGradientRotate::TYPE_ID, "node.fluid_gradient_rotate");
-        assert_eq!(FluidGradientRotate::INPUTS.len(), 1);
-        assert_eq!(FluidGradientRotate::INPUTS[0].name, "density");
-        assert!(FluidGradientRotate::INPUTS[0].required);
+        let names: Vec<&str> = FluidGradientRotate::INPUTS.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["density", "slope_strength", "rotation_angle"]);
         assert_eq!(FluidGradientRotate::INPUTS[0].ty, PortType::Texture2D);
+        assert!(FluidGradientRotate::INPUTS[0].required);
+        // Both modulation ports are optional port-shadows.
+        for input in &FluidGradientRotate::INPUTS[1..] {
+            assert!(!input.required, "{} should be optional", input.name);
+        }
         assert_eq!(FluidGradientRotate::OUTPUTS.len(), 1);
         assert_eq!(FluidGradientRotate::OUTPUTS[0].name, "force");
         assert_eq!(FluidGradientRotate::OUTPUTS[0].ty, PortType::Texture2D);
     }
 
     #[test]
-    fn fluid_gradient_rotate_has_slope_and_rotation_params() {
+    fn fluid_gradient_rotate_has_slope_rotation_and_reference_area_params() {
         let names: Vec<&str> = FluidGradientRotate::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["slope_strength", "rotation_angle"]);
+        assert_eq!(names, vec!["slope_strength", "rotation_angle", "reference_area"]);
     }
 
     #[test]

@@ -28,9 +28,10 @@ use crate::node_graph::state_store::NodeState;
 crate::primitive! {
     name: ArrayFeedback,
     type_id: "node.array_feedback",
-    purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity).",
+    purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state.",
     inputs: {
         in: Array(Particle) required,
+        seed: Array(Particle) optional,
     },
     outputs: {
         out: Array(Particle),
@@ -60,9 +61,16 @@ impl Primitive for ArrayFeedback {
         &["in"]
     }
 
-    /// Output `out` is sized to match the input `in`. The persistent
-    /// `prev` buffer in `StateStore` reallocates internally if the
-    /// wire's byte length changes.
+    /// Output `out` is sized to match an upstream input. Prefer `seed`
+    /// (a normal forward dependency processed earlier in topo order) so
+    /// the size is available at chain build time; fall back to `in`
+    /// (the state-capture back-edge) for the no-seed-wired pattern
+    /// where the producer happens to be processed first. Without the
+    /// `seed` preference, particle-loop preset chains where the
+    /// back-edge originates downstream (e.g. `fluid_simulate.out → in`)
+    /// can't size the output and downstream consumers see an empty
+    /// buffer. The persistent `prev` buffer in `StateStore` reallocates
+    /// internally if the wire's byte length later changes.
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -70,7 +78,11 @@ impl Primitive for ArrayFeedback {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
-            input_capacities.iter().find(|(p, _)| *p == "in").map(|(_, n)| *n)
+            input_capacities
+                .iter()
+                .find(|(p, _)| *p == "seed")
+                .or_else(|| input_capacities.iter().find(|(p, _)| *p == "in"))
+                .map(|(_, n)| *n)
         } else {
             None
         }
@@ -118,10 +130,18 @@ impl Primitive for ArrayFeedback {
         };
         if needs_alloc {
             let prev = gpu.device.create_buffer(size);
-            // Seed the persistent buffer from `in` so first-frame
-            // output isn't an uninitialised buffer — first-frame
-            // semantics match a no-op pass-through.
-            gpu.native_enc.copy_buffer_to_buffer(in_buf, &prev, size);
+            // Seed the persistent buffer on first allocation. When the
+            // optional `seed` input is wired, copy its contents (the
+            // bootstrap path for sims like FluidSim2D where the
+            // initial particle layout is meaningful — pattern, not
+            // zeros). When unwired, fall back to seeding from `in` so
+            // first-frame output isn't an uninitialised buffer.
+            let init_source = ctx.inputs.array("seed").unwrap_or(in_buf);
+            let copy_size = init_source.size.min(size);
+            if copy_size > 0 {
+                gpu.native_enc
+                    .copy_buffer_to_buffer(init_source, &prev, copy_size);
+            }
             store.insert(
                 node_id,
                 owner_key,
@@ -189,17 +209,20 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn array_feedback_declares_one_array_input_and_one_array_output() {
+    fn array_feedback_declares_required_in_optional_seed_and_one_array_output() {
         use crate::node_graph::ports::{ArrayType, PortKind, PortType};
 
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(ArrayFeedback::TYPE_ID, "node.array_feedback");
-        assert_eq!(ArrayFeedback::INPUTS.len(), 1);
+        assert_eq!(ArrayFeedback::INPUTS.len(), 2);
         assert_eq!(ArrayFeedback::INPUTS[0].name, "in");
         assert_eq!(ArrayFeedback::INPUTS[0].kind, PortKind::Input);
         assert_eq!(ArrayFeedback::INPUTS[0].ty, PortType::Array(particle_layout));
         assert!(ArrayFeedback::INPUTS[0].required);
+        assert_eq!(ArrayFeedback::INPUTS[1].name, "seed");
+        assert!(!ArrayFeedback::INPUTS[1].required);
+        assert_eq!(ArrayFeedback::INPUTS[1].ty, PortType::Array(particle_layout));
 
         assert_eq!(ArrayFeedback::OUTPUTS.len(), 1);
         assert_eq!(ArrayFeedback::OUTPUTS[0].name, "out");

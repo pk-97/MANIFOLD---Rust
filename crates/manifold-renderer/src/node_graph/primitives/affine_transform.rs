@@ -30,6 +30,7 @@ crate::primitive! {
         in: Texture2D required,
         translate_x: ScalarF32 optional,
         translate_y: ScalarF32 optional,
+        scale: ScalarF32 optional,
         rotation: ScalarF32 optional,
     },
     outputs: {
@@ -106,9 +107,12 @@ impl Primitive for AffineTransform {
                 _ => 0.0,
             },
         };
-        let scale = match ctx.params.get("scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
+        let scale = match ctx.inputs.scalar("scale") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("scale") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 1.0,
+            },
         };
         // Read in user-facing units (degrees, screen-CW) and convert
         // to the shader's math frame (radians, math-CCW) inside the

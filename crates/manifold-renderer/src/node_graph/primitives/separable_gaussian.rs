@@ -29,6 +29,10 @@ crate::primitive! {
     purpose: "Single-axis Gaussian blur. Pair an H pass with a V pass (same kernel + step) for an isotropic blur. 9-tap (σ≈2), 17-tap (σ≈4), or 25-tap (σ≈6) precomputed kernels.",
     inputs: {
         in: Texture2D required,
+        // Port-shadow of `step` so a control-rate scalar (LFO, Math,
+        // outer-card slider via a value chain) can widen / narrow the
+        // blur radius without rebuilding the chain.
+        step: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -91,9 +95,12 @@ impl Primitive for GaussianBlur {
             Some(ParamValue::Float(f)) => (f.round() as u32).min(1),
             _ => 0,
         };
-        let step = match ctx.params.get("step") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
+        let step = match ctx.inputs.scalar("step") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("step") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 1.0,
+            },
         };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {

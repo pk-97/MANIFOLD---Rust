@@ -51,8 +51,16 @@ crate::primitive! {
         in: Array(Particle) required,
         field: Texture2D required,
         density: Texture2D required,
+        active_count: ScalarF32 optional,
+        visible_count: ScalarF32 optional,
         speed: ScalarF32 optional,
+        noise_amplitude: ScalarF32 optional,
+        density_noise_gain: ScalarF32 optional,
+        diffusion: ScalarF32 optional,
         inject_force: ScalarF32 optional,
+        inject_point_x: ScalarF32 optional,
+        inject_point_y: ScalarF32 optional,
+        inject_phase: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
@@ -163,14 +171,32 @@ impl Primitive for FluidSimulate {
         }
     }
 
+    /// `in` and `out` resolve to the same physical buffer at chain
+    /// build (same pattern as `integrate_particles`). The simulate
+    /// kernel binds the storage<read_write> particle buffer once and
+    /// mutates positions in place; downstream consumers of `out` read
+    /// the mutated buffer. Without this declaration, `out`'s slot
+    /// would be a separate zero-initialised buffer (the shader never
+    /// writes through it), so any preset wiring simulate.out into a
+    /// consumer would see all-zero particles.
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[("in", "out")]
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 100_000,
+        let active_count = match ctx.inputs.scalar("active_count") {
+            Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
+            _ => match ctx.params.get("active_count") {
+                Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
+                _ => 100_000,
+            },
         };
-        let visible_count = match ctx.params.get("visible_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 100_000,
+        let visible_count = match ctx.inputs.scalar("visible_count") {
+            Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
+            _ => match ctx.params.get("visible_count") {
+                Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
+                _ => 100_000,
+            },
         };
         let speed = match ctx.inputs.scalar("speed") {
             Some(ParamValue::Float(f)) => f,
@@ -179,25 +205,40 @@ impl Primitive for FluidSimulate {
                 _ => 1.0,
             },
         };
-        let noise_amplitude = match ctx.params.get("noise_amplitude") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0005,
+        let noise_amplitude = match ctx.inputs.scalar("noise_amplitude") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("noise_amplitude") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0005,
+            },
         };
-        let density_noise_gain = match ctx.params.get("density_noise_gain") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 2.0,
+        let density_noise_gain = match ctx.inputs.scalar("density_noise_gain") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("density_noise_gain") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 2.0,
+            },
         };
-        let diffusion = match ctx.params.get("diffusion") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        let diffusion = match ctx.inputs.scalar("diffusion") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("diffusion") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
-        let inject_point_x = match ctx.params.get("inject_point_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
+        let inject_point_x = match ctx.inputs.scalar("inject_point_x") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("inject_point_x") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.5,
+            },
         };
-        let inject_point_y = match ctx.params.get("inject_point_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
+        let inject_point_y = match ctx.inputs.scalar("inject_point_y") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("inject_point_y") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.5,
+            },
         };
         let inject_force = match ctx.inputs.scalar("inject_force") {
             Some(ParamValue::Float(f)) => f,
@@ -206,9 +247,12 @@ impl Primitive for FluidSimulate {
                 _ => 0.0,
             },
         };
-        let inject_phase = match ctx.params.get("inject_phase") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        let inject_phase = match ctx.inputs.scalar("inject_phase") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("inject_phase") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
 
         let Some(in_buf) = ctx.inputs.array("in") else {
@@ -312,28 +356,45 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn fluid_simulate_declares_three_required_inputs() {
+    fn fluid_simulate_declares_required_and_port_shadowed_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(FluidSimulate::TYPE_ID, "node.fluid_simulate");
-        assert_eq!(FluidSimulate::INPUTS.len(), 5);
-        assert_eq!(FluidSimulate::INPUTS[0].name, "in");
-        assert!(FluidSimulate::INPUTS[0].required);
+        let names: Vec<&str> = FluidSimulate::INPUTS.iter().map(|p| p.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "in",
+                "field",
+                "density",
+                "active_count",
+                "visible_count",
+                "speed",
+                "noise_amplitude",
+                "density_noise_gain",
+                "diffusion",
+                "inject_force",
+                "inject_point_x",
+                "inject_point_y",
+                "inject_phase",
+            ]
+        );
+
         assert_eq!(
             FluidSimulate::INPUTS[0].ty,
             PortType::Array(particle_layout)
         );
-        assert_eq!(FluidSimulate::INPUTS[1].name, "field");
+        assert!(FluidSimulate::INPUTS[0].required);
         assert_eq!(FluidSimulate::INPUTS[1].ty, PortType::Texture2D);
         assert!(FluidSimulate::INPUTS[1].required);
-        assert_eq!(FluidSimulate::INPUTS[2].name, "density");
         assert_eq!(FluidSimulate::INPUTS[2].ty, PortType::Texture2D);
         assert!(FluidSimulate::INPUTS[2].required);
-        assert_eq!(FluidSimulate::INPUTS[3].name, "speed");
-        assert!(!FluidSimulate::INPUTS[3].required);
-        assert_eq!(FluidSimulate::INPUTS[4].name, "inject_force");
-        assert!(!FluidSimulate::INPUTS[4].required);
+
+        // All scalar inputs are optional port-shadows of their params.
+        for input in &FluidSimulate::INPUTS[3..] {
+            assert!(!input.required, "{} should be optional", input.name);
+        }
     }
 
     #[test]
