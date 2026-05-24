@@ -285,7 +285,22 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         // blit faulted with "source extent out of bounds" and state
         // never updated.
         input_dims_scratch.clear();
+        // Per-input categorization, mutually exclusive:
+        //   - input_dims_scratch: input has a concrete (w, h)
+        //   - input_canvas_scales: input has a canvas-relative scale
+        //     (num, den) — e.g. a `node.downsample` producer landed
+        //     its slot at canvas/factor
+        //   - any_canvas_input: input is canvas-default (no hint at all)
+        //     OR is a state-capture back-edge whose producer hasn't
+        //     been processed yet
+        // The split lets the output-dim policy propagate a
+        // canvas-scaled chain (downsample → blur_h → blur_v → advect)
+        // without falling back to full canvas at the first blur — the
+        // bug that left OilyFluid's velocity blur dispatching at full
+        // canvas even though the downsample's output was already
+        // landed at quarter-res.
         let mut any_canvas_input = false;
+        let mut input_canvas_scales: Vec<(u32, u32)> = Vec::new();
         for input_port in inst.node.inputs() {
             if !matches!(
                 input_port.ty,
@@ -304,9 +319,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 any_canvas_input = true;
                 continue;
             };
-            match resource_dims.get(src_res.0 as usize).copied().flatten() {
-                Some(dims) => input_dims_scratch.push((input_port.name, dims)),
-                None => any_canvas_input = true,
+            let dims = resource_dims.get(src_res.0 as usize).copied().flatten();
+            let scale = resource_canvas_scales.get(src_res.0 as usize).copied().flatten();
+            match (dims, scale) {
+                (Some(d), _) => input_dims_scratch.push((input_port.name, d)),
+                (None, Some(s)) => input_canvas_scales.push(s),
+                (None, None) => any_canvas_input = true,
             }
         }
 
@@ -344,6 +362,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                             // to resolve against the runtime canvas.
                             None
                         } else {
+                            // Reduce explicit concrete dims; if none,
+                            // leave dims = None and let
+                            // `canvas_scale` propagation below pick
+                            // it up from canvas-scaled inputs.
                             input_dims_scratch
                                 .iter()
                                 .map(|(_, d)| *d)
@@ -353,18 +375,48 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             } else {
                 None
             };
-            // Canvas-relative fallback: only consulted when concrete
-            // dims couldn't be resolved AND the producer overrides
-            // `output_canvas_scale`. Lets multi-resolution primitives
-            // (`node.downsample` and any future `node.upsample` / mip
-            // chain) land their output at a fraction of canvas even
-            // when their input dim is unknown at plan time — the
-            // back-edge case from feedback chains.
+            // Canvas-relative dim: three sources, in priority order.
+            //   1. Producer override (`output_canvas_scale`) — used by
+            //      `node.downsample` to declare "my output is
+            //      canvas/factor" when its input dim is unknown.
+            //   2. Propagation from canvas-scaled inputs — when this
+            //      node is pixel-local (no override, no concrete
+            //      input dims) AND all of its inputs are themselves
+            //      canvas-scaled, the output inherits the largest
+            //      of those scales. This is what makes `downsample
+            //      → blur_h → blur_v → advect` run end-to-end at
+            //      quarter-res instead of just landing the
+            //      downsample output at quarter-res and then
+            //      dispatching every downstream node at full canvas.
+            //   3. None — output is canvas-default OR concrete (and
+            //      `dims` above has already been set).
             let canvas_scale = if matches!(output_port.ty, PortType::Texture2D)
                 && dims.is_none()
             {
                 inst.node
                     .output_canvas_scale(output_port.name, &inst.params)
+                    .or_else(|| {
+                        // Only propagate when ALL wired inputs are
+                        // canvas-scaled (none canvas-default, none
+                        // concrete). Mixed cases fall back to canvas
+                        // — we can't compare a concrete dim against
+                        // a canvas-relative one at compile time.
+                        if any_canvas_input
+                            || input_canvas_scales.is_empty()
+                            || !input_dims_scratch.is_empty()
+                        {
+                            None
+                        } else {
+                            // Largest scale = largest num/den ratio.
+                            // Compare via cross-multiply to avoid
+                            // floating-point comparison.
+                            input_canvas_scales.iter().copied().reduce(|a, b| {
+                                let a_cmp = a.0 as u64 * b.1 as u64;
+                                let b_cmp = b.0 as u64 * a.1 as u64;
+                                if a_cmp >= b_cmp { a } else { b }
+                            })
+                        }
+                    })
             } else {
                 None
             };
@@ -976,6 +1028,155 @@ mod tests {
              output must be canvas (None), not the quarter-res input's dim. \
              The old max-of-Some-only fallback silently picked quarter, \
              which caused oily-fluid's feedback blit to fault on dim mismatch."
+        );
+    }
+
+    /// `node.downsample`-style producer declares a canvas-relative
+    /// output scale. The propagation must carry that scale through
+    /// every downstream pixel-local node (blur, gain, mix, …) so the
+    /// whole chain runs at the reduced resolution. Without
+    /// propagation, only the immediate downsample slot is quarter-res
+    /// and every blur/advect downstream dispatches at full canvas —
+    /// the perf regression that left OilyFluid's velocity chain
+    /// running at full-res even though we'd added the downsample back
+    /// to the JSON.
+    #[test]
+    fn canvas_scale_propagates_through_pixel_local_chain() {
+        // A node that declares `output_canvas_scale = (1, 4)` and
+        // has no concrete output_dims (the runtime would land it at
+        // canvas/4). Models `node.downsample` with a back-edge
+        // input.
+        struct QuarterCanvasSource {
+            type_id: EffectNodeType,
+        }
+        impl crate::node_graph::EffectNode for QuarterCanvasSource {
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodePort] { &[] }
+            fn outputs(&self) -> &[NodePort] {
+                static OUTPUTS: [NodePort; 1] = [NodePort {
+                    name: "out",
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Output,
+                    required: false,
+                }];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] { &[] }
+            fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+            fn output_canvas_scale(
+                &self,
+                _port: &str,
+                _params: &crate::node_graph::effect_node::ParamValues,
+            ) -> Option<(u32, u32)> {
+                Some((1, 4))
+            }
+        }
+
+        // Quarter-canvas source → pixel-local A → pixel-local B.
+        // Both A and B should inherit the (1, 4) scale.
+        let mut g = Graph::new();
+        let q = g.add_node(Box::new(QuarterCanvasSource {
+            type_id: EffectNodeType::new("quarter_src"),
+        }));
+        let a = g.add_node(Box::new(TestNode::new(
+            "a",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "b",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        g.connect((q, "out"), (a, "in")).unwrap();
+        g.connect((a, "out"), (b, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_q = plan.steps().iter().find(|s| s.node == q).unwrap().outputs[0].1;
+        let r_a = plan.steps().iter().find(|s| s.node == a).unwrap().outputs[0].1;
+        let r_b = plan.steps().iter().find(|s| s.node == b).unwrap().outputs[0].1;
+
+        assert_eq!(plan.resource_dims(r_q), None, "Q has no concrete dim");
+        assert_eq!(plan.resource_canvas_scale(r_q), Some((1, 4)), "Q declared (1, 4)");
+        assert_eq!(
+            plan.resource_canvas_scale(r_a),
+            Some((1, 4)),
+            "A inherits Q's canvas scale (pixel-local, no output_dims override)",
+        );
+        assert_eq!(
+            plan.resource_canvas_scale(r_b),
+            Some((1, 4)),
+            "B inherits A's canvas scale — propagation reaches arbitrary depth",
+        );
+    }
+
+    /// Mixing a canvas-scaled input with a canvas-default input must
+    /// fall back to canvas (the larger). We can't statically compare
+    /// `canvas/4` against `canvas` — at runtime canvas is canvas — so
+    /// the safe choice is to not propagate the scale through a node
+    /// whose other input would have run at full canvas anyway. This
+    /// is exactly the `vel_advect` shape in OilyFluid: blurred
+    /// velocity (quarter-res) + unblurred velocity (canvas) → output
+    /// must be canvas so the advect dispatch covers the full frame.
+    #[test]
+    fn mixed_scaled_and_canvas_input_falls_back_to_canvas() {
+        struct QuarterCanvasSource {
+            type_id: EffectNodeType,
+        }
+        impl crate::node_graph::EffectNode for QuarterCanvasSource {
+            fn type_id(&self) -> &EffectNodeType { &self.type_id }
+            fn inputs(&self) -> &[NodePort] { &[] }
+            fn outputs(&self) -> &[NodePort] {
+                static OUTPUTS: [NodePort; 1] = [NodePort {
+                    name: "out",
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Output,
+                    required: false,
+                }];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] { &[] }
+            fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+            fn output_canvas_scale(
+                &self,
+                _port: &str,
+                _params: &crate::node_graph::effect_node::ParamValues,
+            ) -> Option<(u32, u32)> {
+                Some((1, 4))
+            }
+        }
+
+        let mut g = Graph::new();
+        let q = g.add_node(Box::new(QuarterCanvasSource {
+            type_id: EffectNodeType::new("quarter_src"),
+        }));
+        let canvas_src = g.add_node(Box::new(TestNode::new(
+            "canvas_src",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let mix = g.add_node(Box::new(TestNode::new(
+            "mix",
+            vec![
+                input("a", PortType::Texture2D, true),
+                input("b", PortType::Texture2D, true),
+            ],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        g.connect((q, "out"), (mix, "a")).unwrap();
+        g.connect((canvas_src, "out"), (mix, "b")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_mix = plan.steps().iter().find(|s| s.node == mix).unwrap().outputs[0].1;
+        assert_eq!(plan.resource_dims(r_mix), None);
+        assert_eq!(
+            plan.resource_canvas_scale(r_mix),
+            None,
+            "mix has one canvas-default input — output must be canvas, not the \
+             quarter-scaled input's (1, 4). Otherwise vel_advect would dispatch \
+             at quarter-res and miss writing the canvas-sized destination.",
         );
     }
 
