@@ -50,6 +50,18 @@ pub enum JsonGeneratorLoadError {
     /// isn't wired. Without it the graph has no terminal sink and the
     /// target texture has nowhere to land.
     MissingFinalOutput,
+    /// A primitive declared an `Array<T>` output but
+    /// `EffectNode::array_output_capacity` returned `None` for that
+    /// port. Loud fail instead of silently leaving the buffer
+    /// unallocated — downstream consumers would otherwise read an
+    /// empty wire and produce nothing (the silent-black-output bug
+    /// class). Fix by adding `max_capacity` to the producing
+    /// primitive's params, or by overriding `array_output_capacity`
+    /// to derive size from a sibling forward-dependency input.
+    UnsizedArrayOutput {
+        node_type: String,
+        port: String,
+    },
 }
 
 impl std::fmt::Display for JsonGeneratorLoadError {
@@ -65,6 +77,13 @@ impl std::fmt::Display for JsonGeneratorLoadError {
             Self::MissingFinalOutput => write!(
                 f,
                 "preset has no `{FINAL_OUTPUT_TYPE_ID}` node, or it is not wired"
+            ),
+            Self::UnsizedArrayOutput { node_type, port } => write!(
+                f,
+                "primitive `{node_type}` Array<T> output port `{port}` has no \
+                 concrete size — `array_output_capacity` returned None. \
+                 Add a `max_capacity` param, or override the method to derive \
+                 size from a forward-dep input (not a state-capture port)."
             ),
         }
     }
@@ -447,9 +466,10 @@ impl JsonGraphGenerator {
         // pool, but the Array path is pre-bind-only by contract
         // (see `MetalBackend::pre_bind_array` doc). The producing
         // node's `max_capacity` param drives the buffer size; if
-        // absent we skip with a warn rather than picking an
-        // arbitrary fallback that would silently truncate.
-        Self::pre_allocate_array_buffers(&g.graph, &g.plan, device, &mut backend);
+        // a producer can't size itself we fail loudly at load time
+        // (a partially-allocated chain renders silently wrong, which
+        // was the FluidSim2D black-output bug class).
+        Self::pre_allocate_array_buffers(&g.graph, &g.plan, device, &mut backend)?;
 
         g.executor = Executor::new(Box::new(backend));
         Ok(g)
@@ -470,15 +490,17 @@ impl JsonGraphGenerator {
     /// `params`. See the trait docs.
     ///
     /// A node whose `array_output_capacity` returns `None` for an
-    /// Array output triggers a warn and is skipped; downstream
-    /// primitives will then warn at draw time that the buffer isn't
-    /// bound — pre-bound zero-allocation is a hard contract.
+    /// Array output is a load-time error: pre-bound allocation is a
+    /// hard contract, and a partially-allocated chain renders
+    /// silently wrong (the silent-black-output bug class). Use
+    /// `JsonGeneratorLoadError::UnsizedArrayOutput` so the load
+    /// site decides how to surface it.
     fn pre_allocate_array_buffers(
         graph: &Graph,
         plan: &ExecutionPlan,
         device: &GpuDevice,
         backend: &mut MetalBackend,
-    ) {
+    ) -> Result<(), JsonGeneratorLoadError> {
         use crate::node_graph::{Backend, PortType};
 
         // Re-usable scratch — every step rebuilds its own (port, count)
@@ -597,15 +619,10 @@ impl JsonGraphGenerator {
                     &node_inst.params,
                     &input_capacities,
                 ) else {
-                    log::warn!(
-                        "JsonGraphGenerator: node `{node_type}` declared an \
-                         Array<T> output on port `{port_name}` but \
-                         `EffectNode::array_output_capacity` returned None — \
-                         output buffer not allocated, downstream consumers \
-                         will see an empty wire. Override the method, or for \
-                         producer primitives add a `max_capacity` param.",
-                    );
-                    continue;
+                    return Err(JsonGeneratorLoadError::UnsizedArrayOutput {
+                        node_type: node_type.to_string(),
+                        port: port_name.to_string(),
+                    });
                 };
                 let bytes = capacity as u64 * layout.item_size as u64;
                 if bytes == 0 {
@@ -622,6 +639,7 @@ impl JsonGraphGenerator {
                 backend.pre_bind_array(*res_id, buffer);
             }
         }
+        Ok(())
     }
 
     /// Stable identity for the GeneratorRegistry.
@@ -919,8 +937,15 @@ impl Generator for JsonGraphGenerator {
         // primitives don't render against an empty wire — symptom is a
         // black generator output on the first frame after a project
         // load, which only recovers when the user edits the graph
-        // (forcing a fresh `from_def_with_device` rebuild).
-        Self::pre_allocate_array_buffers(&self.graph, &self.plan, device, metal);
+        // (forcing a fresh `from_def_with_device` rebuild). Log any
+        // sizing failure rather than propagating it — `resize` runs on
+        // the hot path and has no error return; the original load-time
+        // check already caught the same condition.
+        if let Err(e) =
+            Self::pre_allocate_array_buffers(&self.graph, &self.plan, device, metal)
+        {
+            log::warn!("JsonGraphGenerator::resize array re-allocation failed: {e}");
+        }
     }
 }
 

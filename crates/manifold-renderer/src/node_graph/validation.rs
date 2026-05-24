@@ -310,6 +310,23 @@ fn would_create_cycle(graph: &Graph, from: NodeInstanceId, to: NodeInstanceId) -
     if from == to {
         return true; // self-loop
     }
+    // Skip wires that terminate on a state-capture port during the
+    // traversal — they're next-frame captures, not this-frame
+    // dependencies, so they don't contribute to a closeable cycle.
+    // Matches the topological_sort logic; without this, adding a
+    // state-capture back-edge EARLY in the wire list would make every
+    // subsequent forward edge that happens to close the loop through
+    // it falsely trip the cycle detector. (The OilyFluid preset
+    // dodges this by adding the back-edge last; FluidSim2D's
+    // particle-loop topology can't always — `simulate.out` is wired
+    // both to `array_feedback.in` (back-edge) and read as input via
+    // the alias chain.)
+    let is_state_capture_wire = |to: NodeInstanceId, port: &str| {
+        graph
+            .get_node(to)
+            .map(|inst| inst.node.state_capture_input_ports().contains(&port))
+            .unwrap_or(false)
+    };
     let mut visited: HashSet<NodeInstanceId> = HashSet::new();
     let mut stack = vec![to];
     while let Some(n) = stack.pop() {
@@ -320,6 +337,9 @@ fn would_create_cycle(graph: &Graph, from: NodeInstanceId, to: NodeInstanceId) -
             return true;
         }
         for w in graph.wires_from(n) {
+            if is_state_capture_wire(w.to.0, w.to.1) {
+                continue;
+            }
             stack.push(w.to.0);
         }
     }
