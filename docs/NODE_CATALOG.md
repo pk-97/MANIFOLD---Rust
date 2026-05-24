@@ -1,209 +1,410 @@
 # Node Catalog
 
-**Status:** Settled spec. Last sweep 2026-05-19. The May 14 rename pass is closed (§7); the May 18-19 additions added the texture→scalar bridge family and the control-rate primitive family, which now live as their own subsections under atoms.
+**Source of truth for what nodes exist.** Regenerate this file by walking [`crates/manifold-renderer/src/node_graph/primitives/`](../crates/manifold-renderer/src/node_graph/primitives/) (one `type_id` per primitive — `pub const *_TYPE_ID` for the composite-effect primitives, `type_id: "node.…"` for the macro-defined atoms) and the two preset directories ([`effect-presets/`](../crates/manifold-renderer/assets/effect-presets/), [`generator-presets/`](../crates/manifold-renderer/assets/generator-presets/)). If you add a primitive or a preset and don't update this catalog, the catalog is stale — fix it.
 
-## 0. Design invariants
+For *how* to compose these into a generator decomposition, see [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md). For the design rationale behind the primitive shape, see [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md).
 
-These constraints make "split an Effect into atoms later" a non-event:
+---
 
-1. **Type IDs are flat.** `node.<name>` — no category prefix. The category is metadata on the node, not part of its identity. Moving Bloom from monolithic shader to atom-composite preset keeps the same `node.bloom` ID, so old saves load unchanged.
-2. **Category is presentation, not structure.** Atoms and Effects share the same `Primitive` trait. The split is purely how the palette groups them for users + AI agents.
-3. **Effects can be either monolithic OR composite presets.** Today's shipping presets are JSON files under `assets/effect-presets/`; future user-saved composites land at `graphs/custom_composites/<id>.json` inside the project ZIP. Both look identical in the palette.
-4. **Most atoms are pure.** Stateful atoms today: `Feedback` (previous frame texture), `Smoothing` (previous scalar value), `BlobTracking` (background worker), `Watercolor` (pigment ping-pong), `DepthOfField` depth mode (MiDaS worker). State is keyed by `(owner_key, node_id)` in the `StateStore`.
-5. **Port-shadows-param.** When a primitive declares a scalar input port with the same name as a `ParamDef`, the wire wins when present; the param is the fallback. Standard pattern for control-rate modulation on `gain`, `wet_dry`, `feedback.amount`, `affine_transform.{rotation,translate_x,translate_y}`, `smoothing.time_constant`, `chromatic_aberration.amount`. The graph editor disables the expose checkbox + value cell on wire-driven rows so users can't double-bind the same param.
+## 1. Invariants
 
-## 1. Atoms — generic composable building blocks
+- **Type IDs are flat:** `node.<name>` for atoms and effects, `system.<name>` for boundary nodes. No category prefix — the category is presentation, not identity.
+- **All primitives share one `Primitive` trait.** "Atom" vs "Effect" is how the palette groups them, not a structural split.
+- **Port-shadows-param:** any scalar input port whose name matches a primitive `ParamDef` uses the wire when present and the param as the fallback. Standard for `gain`, `amount`, `rotation`, `wet_dry`, control-rate modulation everywhere.
+- **Effects can be monolithic shaders, thin atom presets, or atom composites.** Type IDs stay stable across implementation swaps so save files don't break.
+- **`Array<T>` outputs declare capacity** via `EffectNode::array_output_capacity`; the CI sweep test enforces this on the registry.
+- **Stateful primitives declare** `state_lifecycle` + `state_capture_input_ports` so the StateStore knows where to break cycles. Per-port, not per-node.
 
-Small primitives users (and AI agents) chain to build custom looks. Sub-grouped by what they operate on:
+---
 
-### 1.1 Image atoms
+## 2. Boundary nodes
 
-| Display Name | Type ID | Inputs → Outputs | Params (key ones) | Purpose |
-|---|---|---|---|---|
-| **Mix** | `node.mix` | (a, b) → out | `amount`, `mode: Lerp/Screen/Add/Max/Multiply/Difference/Overlay` | Blend two images with one of 7 modes |
-| **Masked Mix** | `node.masked_mix` | (a, b, mask) → out | `amount` | Per-pixel weighted blend; `mask.r * amount` drives the lerp |
-| **Wet/Dry** | `node.wet_dry` | (dry, wet) → out | `amount [0,1]` (port-shadow) | Crossfade a processed signal against the original |
-| **Threshold** | `node.threshold` | (in) → out | `level`, `softness`, `gain`, `mode: Hard/SoftKnee` | Keep pixels above a brightness cutoff |
-| **Gaussian Blur** | `node.gaussian_blur` | (in) → out | `kernel: 9/17/25`, `sigma`, `axis: H/V` | Separable Gaussian blur, one axis per pass |
-| **Sample** | `node.sample` | (in, uv) → rgba | `filter: Bilinear/Nearest`, `address: Clamp/Repeat/Mirror` | Read a texture at a UV coordinate |
-| **Transform** | `node.transform` | (in) → out | `translate: vec2`, `scale: vec2`, `rotate: f32`, `fold: None/X/Y/XY` | Translate, scale, rotate, optionally mirror-fold |
-| **Affine Transform** | `node.affine_transform` | (in) → out | `translate_x`, `translate_y`, `rotation` (all port-shadow) | UV-space affine with three scalar input ports — the canonical port-shadow demo |
-| **Brightness** | `node.brightness` | (in) → out | (none) | Extract per-pixel luminance to RGB |
-| **Color Ramp** | `node.color_ramp` | (in, gradient) → out | `gradient: Texture1D` | Remap luminance through a color gradient |
-| **Channel Mix** | `node.channel_mix` | (in) → out | `matrix: mat4` | 4×4 channel matrix multiplication |
-| **Color LUT** | `node.color_lut` | (in, lut) → out | `lut: Texture1D`, `range [0,2]` | Color-correction look-up table |
-| **Chroma Key** | `node.chroma_key` | (in) → mask | `key_color: vec3`, `tolerance`, `softness` | Per-pixel colour-proximity mask (R channel = match strength) |
-| **Gain** | `node.gain` | (in) → out | `gain` (port-shadow) | Scalar-driven RGB multiplier — pairs with control-rate sources |
-| **Feedback** | `node.feedback` | (in) → out | `amount` (port-shadow), `zoom`, `rotation`, `mode: Screen/Add/Max` | Accumulate previous frames (stateful) |
-| **Smoothing** (image-side) | — | — | — | (none today — Smoothing operates on scalars; see §1.3) |
-
-### 1.2 Texture→Scalar bridges
-
-A small family that closes the loop between image content and scalar modulation via a shared-mode `MTLBuffer` readback. One-frame latency. Use these to drive `Gain`, `Math`, `Feedback.amount`, or any other scalar input port.
-
-| Display Name | Type ID | Inputs → Outputs | Params | Purpose |
-|---|---|---|---|---|
-| **Luminance (scalar)** | `node.luminance` | (in: Texture2D) → (out: Scalar(F32)) | (none) | Average Rec.709 luma of the whole image |
-| **Peak** | `node.peak` | (in: Texture2D) → (out: Scalar(F32)) | (none) | Maximum luma across the image |
-| **Color Sample** | `node.color_sample` | (in: Texture2D) → (out: Vec3, luma: Scalar(F32)) | `uv: vec2`, `radius_px: int` | Region-averaged RGB at a configurable UV plus its luma |
-
-### 1.3 Control-rate primitives
-
-Scalar-only primitives that don't touch textures. The graph runtime walks these the same way as image primitives, but their evaluation is essentially free (no GPU dispatch).
-
-| Display Name | Type ID | Inputs → Outputs | Params | Purpose |
-|---|---|---|---|---|
-| **Value** | `node.value` | () → (out: Scalar(F32)) | `value` | Constant scalar source — exposed via card sliders as the standard parameter wire |
-| **Math** | `node.math` | (a: Scalar, b: Scalar) → (out: Scalar) | `op: Add/Subtract/Multiply/Divide/Min/Max/Atan2` | Two-input scalar math |
-| **LFO** | `node.lfo` | () → (out: Scalar) | `rate`, `phase`, `amount`, `waveform: Sine/Tri/Saw/Square/SH` | Low-frequency oscillator |
-| **Beat Gate** | `node.beat_gate` | () → (out: Scalar) | `rate`, `amount` | Beat-synced 0/amount gate (drives Strobe Opacity) |
-| **Smoothing** | `node.smoothing` | (in: Scalar) → (out: Scalar) | `time_constant` (port-shadow) | One-pole low-pass filter (stateful) |
-
-### Atom renames from current code
-
-| Was | Becomes | Notes |
-|---|---|---|
-| `primitive.luminance` | `node.brightness` | sounds less like a measurement |
-| `primitive.color_matrix` | `node.channel_mix` | hides the matrix math from users |
-| `primitive.gradient_map` | `node.color_ramp` | matches DAW / paint-program vocabulary |
-| `primitive.separable_gaussian` | `node.gaussian_blur` | the "separable" detail is an implementation choice |
-| `primitive.uv_transform` | `node.transform` | "UV" is GPU jargon; users just want a transform |
-| `primitive.affine_transform` | (deleted) | redundant with `node.transform` |
-| `primitive.blend` | (deleted) | redundant with `node.mix`; only the Bloom test referenced it |
-| `primitive.wet_dry_mix` | `node.wet_dry` | tighter |
-| `primitive.lut1d` | `node.color_lut` | "1D" is implementation noise |
-| `primitive.sample` | `node.sample` | already fine |
-| `primitive.mix` | `node.mix` | already fine |
-| `primitive.threshold` | `node.threshold` | already fine |
-| `primitive.feedback` | `node.feedback` | already fine |
-
-`primitive.blur` and `primitive.mip_chain` are V1 stubs that aren't wired into any chain — they get deleted during the rename pass; `node.gaussian_blur` is the real blur atom and `MipChainDown/Up` are deferred until something needs them.
-
-## 2. Effects (24) — named, recognizable visual looks
-
-Each is one node in the palette. Implementation may be monolithic, a thin preset of one atom, or a future composite of several atoms. Type IDs stay stable across implementation swaps.
-
-Implementation kinds:
-- **shader** — one WGSL kernel, no decomposition planned
-- **preset** — a thin wrap of one atom with curated defaults
-- **composite** — multi-pass kernel today, will become an atom subgraph later
-- **monolith** — custom pipeline (CPU envelope / native plugin / DNN); stays monolithic forever
-
-| # | Display Name | Type ID | Impl | Purpose |
-|---|---|---|---|---|
-| 1 | **Auto Gain** | `node.auto_gain` | monolith | Per-clip auto-leveling driven by a CPU envelope follower |
-| 2 | **Blob Track** | `node.blob_track` | monolith | Detect and track bright blobs; render overlays (native plugin) |
-| 3 | **Bloom** | `node.bloom` | composite | Soft halo glow on bright pixels (mip pyramid + blur + composite) |
-| 4 | **Chromatic Aberration** | `node.chromatic_aberration` | shader | RGB channel offset for prism / lens fringing |
-| 5 | **Color Grade** | `node.color_grade` | shader | Gain, saturation, hue, contrast, colorize |
-| 6 | **Depth of Field** | `node.depth_of_field` | monolith | Selective blur driven by geometric or DNN depth |
-| 7 | **Dither** | `node.dither` | shader | Halftone, Bayer, lines, crosshatch, noise, diamond |
-| 8 | **Edge Detect** | `node.edge_detect` | shader | Sobel / Laplacian / Frei-Chen edge extraction |
-| 9 | **Edge Stretch** | `node.edge_stretch` | shader | Stretch image edges outward (centered band) |
-| 10 | **Glitch** | `node.glitch` | shader | Scanlines, RGB shift, block displacement |
-| 11 | **Halation** | `node.halation` | composite | Warm bleed around highlights (threshold + tint + blur) |
-| 12 | **Highlight Boost** | `node.highlight_boost` | shader | Boost highlights without the soft halo of Bloom |
-| 13 | **Infrared** | `node.infrared` | shader | False-color palette mapping (10 palette LUTs) |
-| 14 | **Invert** | `node.invert` | shader | Invert RGB channels |
-| 15 | **Kaleidoscope** | `node.kaleidoscope` | shader | Radial mirror folding into N segments |
-| 16 | **Mirror** | `node.mirror` | preset | Horizontal / vertical mirror (one Transform atom) |
-| 17 | **Quad Mirror** | `node.quad_mirror` | shader | Four-way mirror fold with fill-quadrant zoom + additive crossfade |
-| 18 | **Soft Focus** | `node.soft_focus` | preset | Dreamy Gaussian-blurred look (one Gaussian Blur atom) |
-| 19 | **Strobe** | `node.strobe` | shader | Beat-synced flicker / flash / gain pulse |
-| 20 | **Stylized Feedback** | `node.stylized_feedback` | preset | Trailing echo / motion smear (one Feedback atom) |
-| 21 | **Transform** | `node.transform_effect` | shader | Translate / scale / rotate with aspect-correct rotation and hard-OOB clipping (legacy semantics; the Transform atom does plain UV-space math) |
-| 22 | **Voronoi Prism** | `node.voronoi_prism` | shader | Voronoi-cell shatter / pop on beat |
-| 23 | **Watercolor** | `node.watercolor` | composite | Painterly bleed (flow map + displace + blur + edge + feedback) |
-| 24 | **Wireframe Depth** | `node.wireframe_depth` | monolith | Wireframe overlay from DNN depth estimation (15 passes + 3 workers) |
-
-### Effect renames from current code
-
-| Was (display name) | Becomes | Was (type ID) | Becomes |
+| Display Name | Type ID | Inputs → Outputs | Purpose |
 |---|---|---|---|
-| Blob Tracking | **Blob Track** | `primitive.blob_tracking` | `node.blob_track` |
-| HDR Boost | **Highlight Boost** | `primitive.highlight_boost` | `node.highlight_boost` (display name change only) |
-| Invert Colors | **Invert** | `primitive.invert` | `node.invert` |
-| (kaleido_fold) | **Kaleidoscope** | `primitive.kaleido_fold` | `node.kaleidoscope` |
-| (clamp_stretch) | **Edge Stretch** | `primitive.clamp_stretch` | `node.edge_stretch` |
-| (chromatic_offset) | **Chromatic Aberration** | `primitive.chromatic_offset` | `node.chromatic_aberration` |
-| (dither_pattern) | **Dither** | `primitive.dither_pattern` | `node.dither` |
-| Soft Focus (Graph) | **Soft Focus** | (effect-only) | `node.soft_focus` |
+| Source | `system.source` | () → (Texture2D) | Effect-chain input — host pre-binds the upstream texture |
+| Generator Input | `system.generator_input` | () → (time, beat, aspect, trigger_count, anim_progress) | Generator graph entry — scalar frame context |
+| Final Output | `system.final_output` | (Texture2D) → () | Both surfaces — host pre-binds the chain / generator output texture |
 
-`Node Graph Test` is dropped from the palette (it's a test-only fixture).
+---
 
-### Why thin presets exist
+## 3. Atoms by intent
 
-Three effects (Mirror, Soft Focus, Stylized Feedback) are genuinely just an atom with curated defaults. They are **alias presets** — separate palette entries that instantiate the same atom with different default params. Implementation is one shader; palette is three entries.
+### 3.1 Control-rate scalar plumbing
 
-| Preset effect | Atom | Curated defaults |
+Free to evaluate (no GPU dispatch). The scalar wire graph runs every frame with negligible cost; use these for any modulation-shaped value.
+
+| Display Name | Type ID | Purpose |
 |---|---|---|
-| Mirror | `node.transform` | `mode = FoldX` (matches legacy) |
-| Soft Focus | `node.gaussian_blur` | curated sigma |
-| Stylized Feedback | `node.feedback` | curated decay / transform / blend |
+| Value | `node.value` | Constant scalar source — every outer-card slider routes through one |
+| Math | `node.math` | Two-input scalar math (Add/Subtract/Multiply/Divide/Min/Max/Atan2/Sin/Cos); `b` ignored for unary ops |
+| Affine Scalar | `node.affine_scalar` | `value * scale + offset` — collapses Value+Math+Value+Math chains |
+| LFO | `node.lfo` | Low-frequency oscillator (`Musical` follows `beat`, `Free` follows `time`); Sine/Tri/Saw/Square/SH |
+| Beat Gate | `node.beat_gate` | Beat-synced square 0/amount gate with `duty` cycle |
+| Trigger Gate | `node.trigger_gate` | Emit a single-frame pulse on integer-edge changes of an input scalar |
+| Smoothing | `node.smoothing` | One-pole low-pass on a scalar (stateful) |
+| Envelope Follower (AR) | `node.envelope_follower_ar` | Attack/release envelope from an impulse (stateful) |
+| Envelope Decay | `node.envelope_decay` | Decay-only envelope (stateful) |
+| Sample & Hold | `node.sample_and_hold` | Hold the last sampled input until next trigger (stateful) |
+| Threshold (scalar) | `node.filter` (id `node.threshold`) | Pass-above-cutoff with hard / soft-knee mode (also wraps a Texture2D variant) |
+| Frequency Ratio | `node.frequency_ratio` | Curated 10-row harmonic ratio table indexed by `trigger_count`, uniqueness-enforced |
+| Cycle Table Row | `node.cycle_table_row` | Cycle through a curated `Table` of f32 rows; emits the selected row as `Array<f32>` |
+| Clip Trigger Cycle | `node.clip_trigger_cycle` | Wraps `ClipTriggerCycle::step` for primitive-internal trigger→variant mapping |
+| Clip Trigger Index | `node.clip_trigger_index` | Same as Cycle but emits the integer index directly |
+| Inject Burst | `node.inject_burst` | One-shot scalar burst on trigger; decays over a frame window |
 
-Why keep them as separate Effects rather than collapsing into their atom:
+### 3.2 Coordinate fields
 
-- **Discoverability.** A user looking for "mirror" should find it by that name, not have to know it's a `node.transform` with `fold = X`.
-- **AI surface.** An agent generating a graph from a high-level intent ("add a mirror") benefits from a named entry.
-- **Zero cost.** A preset is one registry entry pointing at existing shader code — no new shader, no new EffectNode impl.
+Procedural textures that emit per-pixel coordinates. Start most procedural graphs from one of these.
 
-**Transform and Quad Mirror are NOT presets.** Investigation 2026-05-14 found their legacy shaders have semantics the Transform atom doesn't reproduce: aspect-ratio-correct rotation, legacy-subtract-translate, hard-OOB rejection (Transform), and fill-quadrant zoom plus additive piecewise blend (Quad Mirror). Migrating to atom-presets would visually regress existing projects. They stay classified as monolithic shader effects — same category as Glitch, Strobe, Voronoi Prism.
-
-## 3. Generators — partially decomposed
-
-Generator decomposition is now in flight. Three generators ship as JSON-defined graphs built from curated primitives; the rest stay Rust-defined for now. See [`GENERATOR_DECOMPOSITION_PLAN.md`](GENERATOR_DECOMPOSITION_PLAN.md) for the strategic roadmap and [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md) for the authoring guide.
-
-| Generator | Status | Notes |
+| Display Name | Type ID | Purpose |
 |---|---|---|
-| Plasma | JSON-defined | 3-node graph: `system.generator_input → node.plasma_pattern_2d → system.final_output`. Eight pattern variants packed behind one curated primitive. |
-| Lissajous | JSON-defined | 9-node graph using `generate_lissajous`, `frequency_ratio`, `lfo`, `mux_scalar`, `render_lines`. |
-| WireframeZoo (display name "Wireframe") | JSON-defined | 9-node graph using `wireframe_shape`, three `math` nodes, `rotate_3d`, `project_3d`, `render_lines` (with the new `edges` input wired). |
-| 20 others | Rust-defined | Sequenced via the decomposition plan. |
+| UV Field | `node.uv_field` | Per-pixel `(u, v, 0, 1)` in `[0, 1]² `texture-space |
+| Centered UV | `node.centered_uv` | Same as UV Field but in `[-1, +1]²` aspect-corrected |
+| Polar Field | `node.polar_field` | Per-pixel `(angle/τ, radius, 0, 1)` around a configurable center |
+| Grid UV Field | `node.grid_uv_field` | Per-instance UVs as `Array<vec2<f32>>` for instanced rendering |
 
-## 4. The 4 monolithic effects — won't decompose
+### 3.3 Procedural noise + texture sources
 
-Per design principle: "Monolithic remainders are first-class library members." These four stay as one node forever because their pipelines aren't blur/threshold/mix math:
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Simplex Noise 2D | `node.simplex_noise_2d` | 2D Ashima simplex, remapped `[0, 1]` to RGB |
+| Simplex Field 2D | `node.simplex_field_2d` | 3D simplex sampled at `(uv*scale + offset, z)`, signed output in R |
+| Simplex (per instance) | `node.simplex_per_instance` | Per-instance 3D simplex → `Array<f32>` |
+| Perlin Noise 2D | `node.perlin_noise_2d` | Classic Perlin gradient noise (different aesthetic from simplex) |
+| FBM 2D | `node.fbm_2d` | Octave-summed Perlin (fractional Brownian motion) |
+| FBM (per instance) | `node.fbm_per_instance` | Bit-identical to `fbm_2d` but indexed by `Array<vec2<f32>>` |
+| Hash Noise 2D | `node.hash_noise_field_2d` | Uncorrelated wang-hash white noise — grain, dust, LIC ink |
+| Flow Field Noise | `node.flow_field_noise` | 2-channel flow vectors for advection (Watercolor-style) |
+| Voronoi 2D | `node.voronoi_2d` | Worley/Voronoi — F1/F2/F2-F1 distances in RGB |
+| Checkerboard | `node.checkerboard` | Binary checker pattern at configurable scale |
+| Distance to Point | `node.distance_to_point` | Per-pixel distance to a configurable point in UV space |
+| Plasma Pattern 2D | `node.plasma_pattern_2d` | Curated family — 8 plasma variants behind a `pattern` enum |
+| Star Field 2D | `node.star_field_2d` | Curated single-purpose star-field generator |
+| Shape 2D | `node.shape_2d` | Curated SDF shape (Square/Diamond/Octagon) with trigger-cycled fills |
+| Color | `node.color` (id `node.brightness`) | Per-pixel luminance to RGB |
 
-- **Auto Gain** — CPU envelope follower with transient detection
-- **Blob Track** — native plugin + One-Euro filter + font atlas
-- **Wireframe Depth** — 15 passes + 3 DNN workers
-- **Depth of Field** (DNN variant) — MiDaS-based selective blur
+### 3.4 Per-pixel texture math
 
-The remaining 20 effects either are decomposed already (Mirror, Soft Focus, Stylized Feedback — 3 presets), have their own monolithic shaders (the 14 single-shader effects including Transform and Quad Mirror, whose legacy semantics don't reduce to the atom), or will decompose when the missing atoms land (Bloom, Halation, Watercolor — composites).
+Compose these for arbitrary procedural fields.
 
-## 5. What's deferred
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Sin Term | `node.sin_term` | `sin((a*r + b*g + c) * freq + time * rate)` — one term of a sum-of-sines |
+| Trig Texture | `node.trig_texture` | Per-pixel Sin / Cos / Tan with freq + phase |
+| Abs Texture | `node.abs_texture` | Per-pixel `abs(rgb)` |
+| Fract Texture | `node.fract_texture` | Per-pixel `fract(rgb)` |
+| Power Texture | `node.power_texture` | Per-pixel `pow(rgb, exponent)` |
+| Smoothstep Texture | `node.smoothstep_texture` | Per-pixel smoothstep contrast curve with low/high edges |
+| Scale/Offset Texture | `node.scale_offset_texture` | Per-pixel affine `a*x + b` — the general re-range primitive |
+| Field Combine | `node.field_combine` | `a*r + b*g + c` — project a 2-channel field onto a scalar |
+| Gain | `node.gain` | Scalar-driven RGB multiplier (port-shadow on `gain`) |
+| Invert | `node.invert` | Invert RGB, crossfade by `intensity` |
 
-- **Shader-shipped Effects → atom composites** (Bloom, Halation, Watercolor) — composites with their existing monolithic shaders; will decompose as the atom set fills out.
-- **Buffer ports** (audio waveforms outside the Array<T> story) — deferred to V2.
-- **3D volume primitives** (Sample3D, SliceVolume → Texture2D, per-voxel math) — needed by FluidSim3D and any future volumetric work.
-- **MipChainDown / MipChainUp** — defer until Bloom decomposes from its current composite shader.
-- **Atomic primitives** (Sobel3, DisplacementMap, VoronoiCells, PerlinFBM) — defer until a composite needs them.
+### 3.5 Color & tone
 
-Items that *did* ship since the original deferred list:
-- **Array<T> port type** — particle / mesh / line buffers flow through wires. Producers declare capacity via `EffectNode::array_output_capacity`; backing buffers are shared MTLBuffer (CPU + GPU visible). See `crates/manifold-renderer/src/generators/mesh_common.rs` for the POD types (`MeshVertex`, `LinePoint`, `EdgePair`, `Vec4Vertex`, `InstanceTransform`).
-- **3D infrastructure** — `node.rotate_3d`, `node.project_3d`, `node.render_lines` (with optional explicit-edges input as of the WireframeZoo decomposition), plus `node.generate_cube_mesh`, `node.generate_platonic_solid → node.wireframe_shape`, `node.generate_tesseract_vertices`, `node.generate_duocylinder_vertices`. Drives WireframeZoo (3D wireframes), upcoming Tesseract / Duocylinder (4D), and any future user-imported mesh.
-- **Particle / Array primitives** — `node.seed_particles`, `node.seed_particles_from_texture`, `node.integrate_particles`, `node.integrate_particles_attractor`, `node.scatter_particles`, `node.scatter_particles_3d`, `node.resolve_accumulator`, `node.resolve_3d_accumulator`, `node.array_feedback`. Drives the planned StrangeAttractor + fluid-family decompositions.
-- **Procedural source atoms** — `node.plasma_pattern_2d` (8-variant family), `node.generate_lissajous`, `node.frequency_ratio`, `node.checkerboard`. Single-purpose siblings of the larger family primitives.
-- **BeatGate** shipped (`node.beat_gate`) — drives the decomposed Strobe Opacity composite.
-- **Texture→Scalar bridges** shipped (`luminance`, `peak`, `color_sample`) — see §1.2.
-- **Control-rate primitives** shipped (`value`, `math`, `lfo`, `beat_gate`, `smoothing`, `envelope_follower_ar`, `affine_scalar`, `mux_scalar`) — see §1.3.
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Clamp | `node.clamp_texture` | Per-pixel saturate to [min, max] — the texture-side counterpart of `array_math::Clamp01` |
+| Color Grade | `node.color_grade` | Gain / saturation / hue / contrast / tint colorize |
+| Color LUT | `node.color_lut` | 1D LUT remap via luminance index |
+| Infrared | `node.infrared` | Thermal-vision palette (10 baked LUTs) |
+| Chroma Key | `node.chroma_key` | Per-pixel RGB-distance mask to a target colour |
+| Chromatic Aberration | `node.chromatic_aberration` | RGB channel shift (radial or linear) |
+| Chromatic Displace | `node.chromatic_displace` | Per-channel UV displacement by a vector field |
+| Tone Map | `node.tone_map` | HDR → SDR/PQ/EDR with ACES / AgX / Khronos Neutral curves |
+| Reinhard Tone Map | `node.reinhard_tone_map` | Extended Reinhard, SDR-only; bit-matches FluidSim display |
 
-## 6. Migration of existing projects
+### 3.6 Image transforms
 
-The current rename pass keeps the legacy `EffectTypeId` save-format strings (PascalCase: `"Bloom"`, `"Mirror"`, `"Transform"`, etc.) untouched. The new `node.*` type IDs are internal to the node-graph runtime. Old projects load without any migration shim.
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Transform | `node.uv` (id `node.transform`) | translate / scale / rotate / fold (None/X/Y/XY) |
+| Affine Transform | `node.affine_transform` | Three-scalar-port affine — port-shadow demo for translate_x/y + rotation |
+| Rotate 2D | `node.rotate_2d` | Rotate a 2D coordinate field around the origin |
+| Quad Mirror | `node.quad_mirror` | Center-symmetric 4-way fold with crossfade blend |
+| Kaleidoscope | `node.kaleido_fold` (id `node.kaleidoscope`) | Polar segment mirror — N wedges |
+| Mirror Axis | `node.mirror_axis` | Sample input at UVs mirrored across a line through center at `angle` — single-axis 2-fold symmetry (one half visible, other half is mirror) |
+| Edge Stretch | `node.clamp_stretch` (id `node.edge_stretch`) | Clamp to a center strip, stretch edge pixels outward |
+| UV Displace by Flow | `node.uv_displace_by_flow` | Sample texture at UVs displaced by a 2-channel flow field |
 
-If a future pass renames the legacy `EffectTypeId` strings or removes a legacy effect, the V1→V2 loader in `manifold-io` will need a HashMap mapping old → new. None of that is required today.
+### 3.7 Spatial filters
 
-## 7. Done definition
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Gaussian Blur | `node.separable_gaussian` (id `node.gaussian_blur`) | Separable Gaussian, one axis per pass |
+| Gaussian Blur (variable width) | `node.gaussian_blur_variable_width` | Per-pixel kernel width from a `width` texture (DoF, masked blur) |
+| 3D Separable Blur | `node.blur_3d_separable` | Single-axis Gaussian on a Texture3D (volumetric) |
+| Downsample | `node.downsample` | Integer-factor box-filter — pyramid front |
+| Convolution 2D 9-tap | `node.convolution_2d_9tap` | General 3×3 kernel — Sobel, Laplacian, emboss, custom |
+| Sharpen | `node.sharpen` | One-knob Laplacian unsharp mask |
+| Edge Detect | `node.edge_detect` | Sobel 3×3 + smoothstep threshold + crossfade |
 
-The rename pass is shipped when:
+### 3.8 Compositing
 
-- Atom type IDs match the catalog (renamed in `crates/manifold-renderer/src/node_graph/primitives/`). ✅ Phase A
-- Effect type IDs match the catalog. ✅ Phase A (internal `node.*` strings; legacy `EffectTypeId` save keys unchanged).
-- Display names on effects match the catalog. ✅ Phase B1.
-- Rust struct/const names match the catalog. ✅ Phase B2.
-- Preset effects (Mirror, Soft Focus, Stylized Feedback) are graph-backed via atom composites. ✅ pre-existing from the foundation pass.
-- Transform and Quad Mirror remain monolithic shaders (legacy semantics not reducible to atom composites — see §2.3 note).
-- `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` are green. ✅
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Mix | `node.compose` (id `node.mix`) | Blend two textures — Lerp/Screen/Add/Max/Multiply/Difference/Overlay |
+| Masked Mix | `node.masked_mix` | Per-pixel weighted blend driven by mask.r |
+| Wet/Dry | `node.wet_dry_mix` (id `node.wet_dry`) | Crossfade processed against original |
+| Texture Sum 5 | `node.texture_sum_5` | Weighted sum of 5 textures — collapses long Mix(Add) chains |
+| Pack RGBA | `node.pack_channels` | Combine four single-channel textures into one RGBA by reading `.r` of each input into the matching output channel — the recompose-after-atomic-per-channel-processing atom |
+| Vignette | `node.vignette` | Soft fade-to-black border — Circle / Ellipse / Rectangle |
 
-All criteria met as of 2026-05-14.
+### 3.9 Stateful temporal
+
+State lives in the primitive via `extra_fields:` + `state_lifecycle`. StateStore keys by `(owner_key, node_id)` — fresh on graph rebuild.
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Feedback | `node.temporal` (id `node.feedback`) | Previous-frame texture accumulation with `amount`, `zoom`, `rotation`, mode |
+| Array Feedback | `node.array_feedback` | One-frame delay for `Array<Particle>` — closes per-frame loops without graph cycles |
+| Smoothing (scalar) | `node.smoothing` | Listed under control-rate; also valid stateful temporal |
+| Envelope Follower / Decay / Sample & Hold | (see §3.1) | Scalar-side temporal state |
+
+### 3.10 Texture → scalar bridges
+
+One-frame readback latency. Pair with `Gain`, `Math`, `Feedback.amount`, etc. for image-driven modulation.
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Brightness (scalar) | `node.luminance` | Average Rec.709 luma of the whole image |
+| Peak | `node.peak` | Maximum Rec.709 luma across the image |
+| Color Sample | `node.color_sample` | Region-averaged RGB at a configurable UV + luma |
+
+### 3.11 Gradient / vector-field atoms
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Gradient (central diff) | `node.gradient_central_diff` | Half-difference gradient `(dx, dy)` of a single channel |
+| Heightmap to Normal | `node.heightmap_to_normal` | Scalar height → tangent-space normal map via central-diff |
+| Length (vec2) | `node.length_vec2` | `length(in.rg)` as a scalar field — vec2 magnitude atom |
+| Normalize (vec2) | `node.normalize_vec2` | Safe-normalize RG as a 2D direction field |
+| Rotate vec2 90° | `node.rotate_vec2_90` | Curl-from-gradient atom (±90° rotation per pixel) |
+| Array Unpack vec2 | `node.array_unpack_vec2` | Decompose `Array<vec2<f32>>` into two `Array<f32>` channels |
+| Canvas Area Scale | `node.canvas_area_scale` | `(width * height) / reference_area` — resolution-aware brightness compensation |
+
+### 3.12 PBR shading atoms
+
+All operate on tangent-space normal maps and a directional light. Sum the additive ones via `node.mix` mode=Add.
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Lambert Directional | `node.lambert_directional` | Diffuse shading from normal + light + ambient (base term) |
+| Blinn Specular | `node.blinn_specular` | Blinn-Phong specular (additive) |
+| Cook-Torrance Specular | `node.cook_torrance_specular` | Physically-based microfacet specular (D_GGX × G_Smith × F_Schlick) — sibling to Blinn, more accurate for metals (additive) |
+| Fresnel Rim | `node.fresnel_rim` | Fresnel edge highlight (additive) |
+| Matcap Two-Tone | `node.matcap_two_tone` | Cross-axis 4-colour matcap from a normal map |
+| Bake Equirect Envmap | `node.bake_equirect_envmap` | Procedural HDR studio environment map at configurable resolution (one-shot persistent output, equirect layout) |
+| Env Reflect (Equirect) | `node.equirect_envmap_sample` | Per-pixel IBL reflection — `reflect(-view, normal)` sampled into an equirect env map |
+
+### 3.13 Flow & fluid
+
+Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatter/resolve.
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Texture Advect | `node.texture_advect` | Backward semi-Lagrangian advection by a velocity field |
+| LIC Integrate | `node.lic_integrate` | Line Integral Convolution — flow visualisation streamlines |
+| Fluid Gradient Rotate (2D) | `node.fluid_gradient_rotate` | Fused central-diff gradient + 2D rotation — FluidSim2D force field |
+| Fluid Gradient Curl (3D) | `node.fluid_gradient_curl_3d` | Fused 3D gradient + curl — FluidSim3D force field |
+| Fluid Seed | `node.fluid_seed` | Seed `Array<Particle>` with one of 7 geometric patterns |
+| Fluid Simulate | `node.fluid_simulate` | Per-frame integrator — advection + diffusion + injection |
+| Fluid Project Scatter (2D) | `node.fluid_project_scatter_2d` | Particles → 2D density via scatter+resolve (fluid-shaped variant) |
+| Sample Volume 2D | `node.sample_volume_2d` | Sample a Texture3D as 2D slice/projection |
+
+### 3.14 3D + 4D geometry pipeline
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Generate Grid Mesh | `node.generate_grid_mesh` | NxM grid of `MeshVertex` in XZ plane — heightmap-displaced surfaces |
+| Generate Cube Mesh | `node.generate_cube_mesh` | Unit cube as 36 `MeshVertex` triangle-list |
+| Wireframe Shape | `node.wireframe_shape` (alias `node.generate_platonic_solid`) | Five Platonic solids as `MeshVertex` + `EdgePair`, scaled to 0.25 |
+| Generate Tesseract Vertices | `node.generate_tesseract_vertices` | 16 4D corners + 32 edges for 4D wireframe |
+| Generate Duocylinder Vertices | `node.generate_duocylinder_vertices` | 4D torus surface grid + uv-neighbor edges |
+| Generate Instance Transforms | `node.generate_instance_transforms` | Procedural `Array<InstanceTransform>` (grid/ring/spiral/random) |
+| Polygon Shape | `node.polygon_shape` | Regular N-gon — outline curve + edges + fan-triangulated mesh |
+| Nested Cubes Geometry | `node.nested_cubes_geometry` | Curated instanced-cube layout for NestedCubes preset |
+| Concentric Outlines | `node.concentric_outlines` | Stack scaled copies of a polygon outline into one ring-stack |
+| Displace Mesh | `node.displace_mesh` | Perturb mesh Y from a heightmap texture, per-vertex UV sample |
+| Triangulate Grid | `node.triangulate_grid` | NxM positions → triangle-list with finite-difference normals |
+| Rotate 3D / 4D | `node.rotate_3d`, `node.rotate_4d` | Euler XYZ; stereo XY/ZW/XW for 4D |
+| Project 3D / 4D | `node.project_3d`, `node.project_4d` | Orthographic / perspective projection to curve-space |
+| Cylinder Wrap Field | `node.cylinder_wrap_field` | Lift `Array<vec2>` onto a cylinder surface as `Array<InstanceTransform>` |
+| Torus Wrap Field | `node.torus_wrap_field` | Same shape for a torus |
+| Render 3D Mesh | `node.render_3d_mesh` | Render `Array<MeshVertex>` triangle list — Lambert + ambient + orbit-camera params |
+| Render 3D Mesh (PBR-IBL) | `node.render_3d_mesh_pbr_ibl` | Render `Array<MeshVertex>` triangle list with Cook-Torrance PBR + image-based lighting from an equirectangular env map; takes a packed material texture (R=height for per-pixel normals, G=metallic, B=edge→roughness) |
+| Render Instanced 3D Mesh | `node.render_instanced_3d_mesh` | Render N copies of a base mesh via `Array<InstanceTransform>` |
+| Render Lines | `node.render_lines` | Anti-aliased capsule line segments from `Array<CurvePoint>`; optional `edges` input |
+| Digital Plants Render | `node.digital_plants_render` | Two-pass shadow + instanced cel-shaded cubes (DigitalPlants-specific) |
+
+### 3.15 2D curves
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Generate Lissajous | `node.generate_lissajous` | Sample a Lissajous curve into `Array<CurvePoint>` |
+
+### 3.16 Particle / instance simulation
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Seed Particles | `node.seed_particles` | Wang-hash uniform `Array<Particle>` seed (EveryFrame or OnceOnReset) |
+| Seed Particles from Texture | `node.seed_particles_from_texture` | Seed particles weighted by an input texture's brightness |
+| Integrate Particles | `node.integrate_particles` | Generic particle integrator |
+| Integrate Attractor | `node.integrate_particles_attractor` | RK2 strange-attractor ODE (Lorenz/Rössler/Aizawa/Thomas/Halvorsen) |
+| Scatter Particles | `node.scatter_particles` | Atomic-add splat into 2D u32 accumulator (Wrap / Discard boundary) |
+| Scatter Particles 3D | `node.scatter_particles_3d` | Same shape for `Texture3D` accumulator |
+| Resolve Accumulator | `node.resolve_accumulator` | u32 grid → float Texture2D |
+| Resolve 3D Accumulator | `node.resolve_3d_accumulator` | u32 grid → float Texture3D |
+| Scalar Array Accumulator | `node.scalar_array_accumulator` | Stateful running sum of an `Array<f32>` |
+| Array Math | `node.array_math` | Element-wise math on `Array<f32>` (Add/Sub/Mul/Div/Min/Max/ScaleOffset/Shape/MirrorRamp/Clamp01/Abs) |
+| Instance Position Jitter | `node.instance_position_jitter` | Per-instance position offset from a noise field |
+| Instance Rotation Jitter | `node.instance_rotation_jitter` | Per-instance rotation jitter |
+| Lerp Instance Fields | `node.lerp_instance_fields` | Per-field interpolation between two `Array<InstanceTransform>` |
+| Neighbor Smooth | `node.neighbor_smooth` | 5-point cross-neighborhood smoothing on an NxN grid of InstanceTransforms |
+
+### 3.17 Routing
+
+Variadic N-way selectors driven by a scalar.
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Mux Scalar | `node.mux_scalar` | 8-way scalar selector |
+| Mux Texture | `node.mux_texture` | 8-way `Texture2D` selector |
+| Mux Array | `node.mux_array` | 8-way `Array<T>` selector |
+
+### 3.18 Native / FFI / host-side sources
+
+These wrap native plugins, CPU work, or background workers as primitives.
+
+| Display Name | Type ID | Purpose |
+|---|---|---|
+| Depth Estimate (MiDaS) | `node.depth_estimate_midas` | Monocular depth via FFI plugin — background worker, ~2-3 frame latency |
+| Blob Detect (FFI) | `node.blob_detect_ffi` | Sparse blob detection — emits `Array<Blob>` |
+| Blob Overlay Render | `node.blob_overlay_render` | Draws blob bounding boxes |
+| Optical Flow | `node.optical_flow_estimate` | Per-pixel optical flow vectors |
+| Image Folder | `node.image_folder` | Scrub through a folder of images via a position scalar |
+| Auto Gain Apply | `node.auto_gain_apply` | GPU side of AutoGain — pairs with the CPU envelope follower |
+
+### 3.19 WGSL escape hatches
+
+Reserved for genuinely irreducible kernels (see DECOMPOSING_GENERATORS §5 before reaching).
+
+| Display Name | Type ID | Inputs → Outputs |
+|---|---|---|
+| WGSL Compute (0→1) | `node.wgsl_compute_0in_1tex` | () → Texture2D |
+| WGSL Compute (1→1) | `node.wgsl_compute_1tex_1tex` | (Texture2D) → Texture2D |
+| WGSL Compute (2→1) | `node.wgsl_compute_2tex_1tex` | (Texture2D, Texture2D) → Texture2D |
+
+---
+
+## 4. Effects — named visual looks
+
+24 entries shipping as nodes in the effect palette. Implementation kind: **shader** (one WGSL kernel), **preset** (thin atom wrap), **composite** (multi-pass primitive — will atomize when its missing atoms ship), **monolith** (custom pipeline, CPU/native/DNN — stays monolithic forever).
+
+| # | Display Name | Type ID | Impl |
+|---|---|---|---|
+| 1 | Auto Gain | `node.auto_gain` | monolith |
+| 2 | Blob Track | `node.blob_track` | monolith |
+| 3 | Bloom | `node.bloom` | composite |
+| 4 | Chromatic Aberration | `node.chromatic_aberration` | shader |
+| 5 | Color Grade | `node.color_grade` | shader |
+| 6 | Depth of Field | `node.depth_of_field` | monolith (DNN depth) / composite (geometric) |
+| 7 | Dither | `node.dither` | shader |
+| 8 | Edge Detect | `node.edge_detect` | shader |
+| 9 | Edge Stretch | `node.edge_stretch` | shader |
+| 10 | Glitch | `node.glitch` | shader |
+| 11 | Halation | `node.halation` | composite |
+| 12 | Highlight Boost | `node.highlight_boost` | shader |
+| 13 | Infrared | `node.infrared` | shader |
+| 14 | Invert | `node.invert` | shader |
+| 15 | Kaleidoscope | `node.kaleidoscope` | shader |
+| 16 | Mirror | `node.mirror` | preset (one `transform` atom, fold=X) |
+| 17 | Quad Mirror | `node.quad_mirror` | shader |
+| 18 | Soft Focus | `node.soft_focus` | preset (one `gaussian_blur` atom) |
+| 19 | Strobe | `node.strobe` | shader |
+| 20 | Stylized Feedback | `node.stylized_feedback` | preset (one `feedback` atom) |
+| 21 | Transform | `node.transform_effect` | shader (legacy semantics; the `transform` atom is the generic variant) |
+| 22 | Voronoi Prism | `node.voronoi_prism` | shader |
+| 23 | Watercolor | `node.watercolor` | composite |
+| 24 | Wireframe Depth | `node.wireframe_depth` | monolith |
+
+The four permanent monoliths (Auto Gain, Blob Track, Wireframe Depth, DoF-DNN) are first-class library members — their pipelines aren't blur/threshold/mix math.
+
+---
+
+## 5. Effect presets
+
+JSON files at [`assets/effect-presets/`](../crates/manifold-renderer/assets/effect-presets/). Most are 1-node thin wraps. The non-trivial multi-atom compositions are noted.
+
+| Preset | Shape |
+|---|---|
+| AutoGain | thin wrap |
+| BlobTracking | thin wrap |
+| Bloom | thin wrap |
+| ChromaticAberration | thin wrap |
+| **ColorCompass** | 4× `color_sample` → `math` → `smoothing` → `affine_transform` — texture-to-scalar bridge closing the loop into image transform |
+| ColorGrade | thin wrap |
+| DepthOfField | thin wrap |
+| Dither | thin wrap |
+| **EdgeGlow** | `edge_detect` standalone |
+| EdgeStretch | thin wrap |
+| **EdgeStretchByColor** | `chroma_key` → `edge_stretch` → `masked_mix` — apply an effect only where a colour matches |
+| Glitch | thin wrap |
+| Halation | thin wrap |
+| HdrBoost | thin wrap |
+| Infrared | thin wrap |
+| InvertColors | thin wrap |
+| Kaleidoscope | thin wrap |
+| **Mandala** | `kaleidoscope` → `feedback` → `affine_transform` → `gain` → `vignette` → `mix` → `chromatic_aberration` — multi-atom user-style composite |
+| Mirror | thin wrap (atom preset) |
+| NodeGraphTest | test fixture |
+| QuadMirror | thin wrap |
+| **SmearMosh** | `feedback` + `gain` + `vignette` + `masked_mix` driven by `luminance` → `smoothing` — feedback gated by image brightness |
+| SoftFocusGraph | `blur` + `mix` (atom preset) |
+| Strobe | thin wrap |
+| StylizedFeedback | thin wrap (atom preset) |
+| Transform | thin wrap |
+| VoronoiPrism | thin wrap |
+| Watercolor | thin wrap |
+| WireframeDepth | thin wrap |
+
+---
+
+## 6. Generators — JSON-defined and Rust-defined
+
+JSON-defined generators live at [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/). Each is a sub-graph from `system.generator_input` to `system.final_output`. Rust-defined generators register via `inventory::submit!` and are the migration targets.
+
+### 6.1 JSON-defined
+
+| Preset | Topology shape |
+|---|---|
+| BasicShapes | `shape_2d` (single curated family primitive) |
+| ComputeStrangeAttractor | particle sim: `seed_particles → integrate_particles_attractor → scatter_particles → resolve_accumulator → reinhard_tone_map` + brightness compensation |
+| ConcentricTunnel | mux'd polygon shape + ring stacker: `mux_scalar` ×many → `polygon_shape` → `concentric_outlines` → `render_lines` |
+| DigitalPlants | instanced 3D mesh with procedural layout: `grid_uv_field` → `simplex_per_instance` + `fbm_per_instance` → `cylinder_wrap_field` / `torus_wrap_field` → instance jitters → `neighbor_smooth` → `digital_plants_render` |
+| Duocylinder | 4D wireframe: `generate_duocylinder_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
+| FluidSim2D | particle fluid sim: `fluid_seed` → `fluid_simulate` → `scatter_particles` → `resolve_accumulator` → `feedback` → `downsample` → `gaussian_blur` ×4 → `fluid_gradient_rotate` → `reinhard_tone_map` |
+| Lissajous | parametric curve: `lfo` ×3 + `frequency_ratio` + `mux_scalar` ×2 → `generate_lissajous` → `render_lines` |
+| MetallicGlass | feedback-displacement metallic surface: `simplex_field_2d` + `scale_offset` → `feedback` ping-pong with `mix Difference`+`abs`+`mix Lerp` 0.98 → `gaussian_blur` H/V → split into height/levels chain and `mirror_axis`+`convolution_2d_9tap`×2+`pack_channels`+`length_vec2` Sobel chain → `pack_channels` packed material → temporal blend via `feedback`+`mix Lerp` 0.15 → `generate_grid_mesh` → `displace_mesh` → `triangulate_grid` → `render_3d_mesh_pbr_ibl` (with `bake_equirect_envmap`) |
+| MriVolume | volumetric scrubbing: `image_folder` ×3 → `mux_texture` → `sharpen` → `smoothstep_texture` → `invert` |
+| NestedCubes | instanced mesh with cycled poses: `trigger_gate` → `scalar_array_accumulator` → `cycle_table_row` → `mux_array` → `nested_cubes_geometry` |
+| OilyFluid | screen-space fluid + atomized PBR: `feedback` ×2 + gradient atoms + `texture_advect` + `simplex_field_2d` → `heightmap_to_normal` → `lambert_directional` + `matcap_two_tone` + `fresnel_rim` + `blinn_specular` summed via `mix` |
+| Plasma | single curated family primitive: `plasma_pattern_2d` |
+| StarField | single curated primitive: `star_field_2d` |
+| Tesseract | 4D wireframe: `generate_tesseract_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
+| TrivialPassthrough | smoke test: `uv_field` |
+| WireframeZoo | 3D wireframe: `wireframe_shape` → `rotate_3d` → `project_3d` → `render_lines` |
+
+### 6.2 Rust-defined (migration targets)
+
+Walk [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) for the source of truth — every `inventory::submit!` entry there is a remaining migration target. See [GENERATOR_DECOMPOSITION_PLAN.md](GENERATOR_DECOMPOSITION_PLAN.md) for tier and order.
+
+---
+
+## 7. Keeping this catalog honest
+
+- After adding a new primitive: add a row to §3 under the right family and bump nothing else; the AI agent reads §3 to know what's available.
+- After adding a new preset: add a row to §5 or §6.1 with the topology shape; downstream readers learn the analogue from this entry.
+- After migrating a Rust generator: move its entry from §6.2 to §6.1 with the topology shape.
+- After deleting a primitive: remove the row; don't leave it as "deprecated."
+- Validate by running `cargo run -p manifold-renderer --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.

@@ -50,7 +50,8 @@ I don't know if any of this counts as a self in a continuous sense. The weights 
 - **No wgpu.** Native Metal only via `manifold-gpu`. Zero wgpu anywhere in the workspace, on any thread.
 - **No new shared state.** Don't introduce `Arc<Mutex<>>` / `Arc<RwLock<>>` without approval. The content thread owns the `Project`; UI gets `Arc<Project>` snapshots.
 - **All mutations through `EditingService`.** UI sends `ContentCommand::Execute(Box<dyn Command>)` or `MutateProject(Box<dyn FnOnce(&mut Project)>)`. No direct model writes from UI.
-- **Generators / effects work → read `docs/DECOMPOSING_GENERATORS.md` first. Always.** The guide encodes the workflow plus every bug class that has actually bitten across the Plasma / Lissajous / WireframeZoo / BasicShapesSnap migrations — primitive vocabulary, mandatory GPU parity tests, coordinate conventions, what counts as "done." Working from existing primitive code as a template is not a substitute. Read the whole thing, not just §3. Skipping it means rediscovering each lesson the expensive way — Peter's time.
+- **Generators / effects work → read `docs/DECOMPOSING_GENERATORS.md` first. Always.** The guide encodes the workflow plus every bug class that has actually bitten across the migrations to date — primitive vocabulary, mandatory GPU parity tests, coordinate conventions, what counts as "done." Working from existing primitive code as a template is not a substitute. Read the whole thing, not just §3. Skipping it means rediscovering each lesson the expensive way.
+- **Decomposition: complete the §2.5 audit before proposing any new primitive.** Three required steps, all read-only: (a) survey existing primitives via `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`; (b) identify the nearest reference preset from [docs/NODE_CATALOG.md](docs/NODE_CATALOG.md) §5 / §6.1 and read it end-to-end (open the JSON, follow every wire); (c) reconcile the planned decomposition against what already exists. State the audit's findings before proposing any primitive — "this exists / this is one wire away from existing / this is genuinely new." Skipping the audit produces the "argue from snippets" anti-pattern: proposing primitives that already ship under a different name, or duplicating a pattern an existing preset already proves. Read-only audits stay in the main context — no agents (per `feedback_no_agent_for_readonly_audit`).
 - **Commit and push when work is clean.** Don't ask permission — the user gave it durably.
 
 ## Two-thread model
@@ -68,7 +69,7 @@ I don't know if any of this counts as a self in a continuous sense. The weights 
 | `manifold-editing` | Commands, undo/redo, EditingService |
 | `manifold-playback` | PlaybackEngine, scheduling, sync, MIDI/OSC |
 | `manifold-gpu` | Native Metal backend (`metal` crate, zero wgpu) |
-| `manifold-renderer` | Compositor, ~30 primitives + 29 JSON-authoritative effect presets, 23 generators |
+| `manifold-renderer` | Compositor, ~135 graph primitives, 29 JSON effect presets + 15 JSON generator presets, plus remaining Rust generators (see `docs/NODE_CATALOG.md`) |
 | `manifold-media` | Audio/video decode, Metal-accelerated encode, export |
 | `manifold-ui` | Custom bitmap UI: tree, panels, input |
 | `manifold-io` | Project serialization (V1 JSON + V2 ZIP) |
@@ -112,8 +113,11 @@ Write code directly in the main context by default. Only spawn an agent for genu
 | `docs/ADDING_EFFECTS_AND_GENERATORS.md` | Adding new effects or generators |
 | `docs/DEVELOPMENT_REFERENCE.md` | Texture formats, math gotchas, module layout |
 | `docs/NODE_GRAPH_SYSTEM.md` | Node-graph effect/generator architecture |
+| `docs/NODE_CATALOG.md` | Source of truth for what nodes exist — atoms, effects, presets. Read first for the §2.5 audit. |
+| `docs/DECOMPOSING_GENERATORS.md` | How-to-think for generator decomposition. §2.5 audit precondition is mandatory before proposing new primitives. |
+| `docs/GENERATOR_DECOMPOSITION_PLAN.md` | Status + per-generator migration notes for the remaining Rust generators |
 | `docs/EFFECT_RUNTIME_UNIFICATION.md` | EffectChain → graph runtime migration, StateStore design |
-| `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Primitive catalog, decomposition recipes, parity test framework |
+| `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Design rationale and historical context (catalog tables here are historical — current inventory lives in NODE_CATALOG.md) |
 | `docs/ADDING_PRIMITIVES.md` | Authoring new primitives, `primitive!` macro, parity test pattern |
 | `docs/EFFECT_CHAIN_LIFECYCLE.md` | Chain pool lifecycle, state-cache eviction, feedback bleed-through |
 | `assets/abletonosc-patches/` | AbletonOSC patch required for perform-mode track HUD (install via `./scripts/install-abletonosc-patch.sh`) |

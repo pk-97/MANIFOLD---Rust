@@ -50,6 +50,37 @@ system.generator_input  ──►  [your nodes]  ──►  final_output
 
 The runtime walks the graph plan once per frame on the content thread, dispatching primitive `run` calls. There are no per-frame allocations on the steady-state path (confirmed in the audit) — your job as a primitive author is to not regress that.
 
+## 2.5 Precondition: audit by analogy before workflow step 1
+
+Every decomposition you start has a closely-shaped predecessor already in the tree. Find it before writing anything. Three concrete steps, all read-only, all required:
+
+1. **Survey what primitives exist.** Run `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` (and the `pub const *_TYPE_ID` form for composite-effect primitives). One line per node telling you what it does. The [NODE_CATALOG.md](NODE_CATALOG.md) groups these by intent — read the families relevant to your generator's shape. **The trap this prevents:** proposing a "new" primitive that already exists with a different name (`sobel_edge` re-inventing `convolution_2d_9tap` with Sobel kernels, `levels_remap` re-inventing `scale_offset_texture`, a fused mesh+PBR render duplicating the atomized PBR pattern shipped in OilyFluid).
+2. **Identify the nearest reference preset and read it end-to-end.** Each shipping JSON preset embodies a canonical decomposition shape:
+
+   | Shape | Reference preset |
+   |---|---|
+   | Pure procedural texture (curated family) | [Plasma.json](../crates/manifold-renderer/assets/generator-presets/Plasma.json) — single `plasma_pattern_2d` node |
+   | Pure procedural texture (single-purpose atom) | [StarField.json](../crates/manifold-renderer/assets/generator-presets/StarField.json) |
+   | Per-pixel SDF / shape rendering | [BasicShapes.json](../crates/manifold-renderer/assets/generator-presets/BasicShapes.json) |
+   | Parametric curve rendering | [Lissajous.json](../crates/manifold-renderer/assets/generator-presets/Lissajous.json) — `lfo` + `frequency_ratio` + `generate_lissajous` + `render_lines` |
+   | Beat-cycled shape morph (mux'd variants) | [ConcentricTunnel.json](../crates/manifold-renderer/assets/generator-presets/ConcentricTunnel.json) — `mux_scalar` driven by `trigger_count` |
+   | 3D wireframe rendering | [WireframeZoo.json](../crates/manifold-renderer/assets/generator-presets/WireframeZoo.json) — `wireframe_shape` → `rotate_3d` → `project_3d` → `render_lines` |
+   | 4D wireframe rendering | [Tesseract.json](../crates/manifold-renderer/assets/generator-presets/Tesseract.json) / [Duocylinder.json](../crates/manifold-renderer/assets/generator-presets/Duocylinder.json) — same shape with `rotate_4d` / `project_4d` |
+   | 3D instanced mesh with cycled poses | [NestedCubes.json](../crates/manifold-renderer/assets/generator-presets/NestedCubes.json) — `cycle_table_row` + `mux_array` + `nested_cubes_geometry` |
+   | 3D instanced mesh with procedural layout | [DigitalPlants.json](../crates/manifold-renderer/assets/generator-presets/DigitalPlants.json) — `grid_uv_field` + per-instance noise + `cylinder_wrap_field` + `digital_plants_render` |
+   | Particle sim with deterministic ODE | [ComputeStrangeAttractor.json](../crates/manifold-renderer/assets/generator-presets/ComputeStrangeAttractor.json) — `seed_particles` → `integrate_particles_attractor` → `scatter_particles` → `resolve_accumulator` → `reinhard_tone_map` |
+   | Particle fluid sim with ping-pong + force field | [FluidSim2D.json](../crates/manifold-renderer/assets/generator-presets/FluidSim2D.json) |
+   | Screen-space surface with atomized PBR | [OilyFluid.json](../crates/manifold-renderer/assets/generator-presets/OilyFluid.json) — `heightmap_to_normal` + `lambert_directional` + `matcap_two_tone` + `fresnel_rim` + `blinn_specular` summed via `mix` |
+   | Volumetric / image-folder scrubbing | [MriVolume.json](../crates/manifold-renderer/assets/generator-presets/MriVolume.json) — `image_folder` × 3 + `mux_texture` |
+   | Multi-atom user-style composite (effect side) | [Mandala.json](../crates/manifold-renderer/assets/effect-presets/Mandala.json), [SmearMosh.json](../crates/manifold-renderer/assets/effect-presets/SmearMosh.json) |
+   | Image-to-control bridge closing a loop | [ColorCompass.json](../crates/manifold-renderer/assets/effect-presets/ColorCompass.json) — `color_sample` → `math` → `smoothing` → `affine_transform` |
+   | Chroma-keyed selective effect | [EdgeStretchByColor.json](../crates/manifold-renderer/assets/effect-presets/EdgeStretchByColor.json) — `chroma_key` → effect → `masked_mix` |
+
+   Open the JSON, read every node, follow every wire. The reference preset is the proof-of-existence for the pattern you're about to use; until you've read it, you don't know what primitives the pattern already requires.
+3. **Reconcile your sketch against §1 and §2.** If your sketch invents a primitive that the reference already covers, drop the invention. If your sketch invents a primitive that's *almost* but not exactly an existing one, the right move is to extend (see §6.2), not to add. Only after the audit gives you a list of (existing primitives you'll reuse, existing primitives you'll extend, genuinely new primitives you'll build) do you start workflow step 1.
+
+This precondition is mandatory. Skipping it produces the "argue from snippets" anti-pattern — proposing six new primitives when three are already shipped and the fourth is a one-line extension of an existing atom. **Do not propose new primitives before completing this audit.**
+
 ## 3. The workflow
 
 The order matters. Skipping a step is how you end up with a graph that "almost works" plus six bugs.
@@ -148,18 +179,30 @@ These primitives hold state across frames. They require the `StateStore` path �
 
 ## 5. The WGSL escape hatch — when it's right, when it's wrong
 
-The `wgsl_compute_*` nodes let a JSON preset embed raw WGSL. They exist for two specific reasons:
+The `wgsl_compute_*` nodes let a JSON preset embed raw WGSL. The escape hatch is a sharp tool with a narrow remit: irreducible multi-pass coupled shaders. Most things that *feel* like §5 cases aren't.
 
-1. **Multi-pass shaders with tight per-pass coupling and native precision needs.** Fluid simulations are the archetype: 7 passes with hand-tuned `r32float` / `rgba16float` / `rgba32float` boundaries. Decomposing each pass into per-pixel-math primitives would (a) explode into hundreds of nodes and (b) compound fp16 rounding across each boundary and visibly degrade the sim. The legacy shader code lifts verbatim into a `wgsl_compute_*` node; only the inter-pass wiring becomes JSON. This is Tier 3 in the decomposition plan.
-2. **One-off compute kernels where the math has zero reuse potential.** A custom raymarched analytic SDF, a specific FFT layout, a domain-specific reaction-diffusion update — things where decomposing would mean writing eight new primitives that nothing else will ever call.
+### Where the escape hatch IS right
 
-The escape hatch is **wrong** when:
+1. **Multi-pass shaders where both the inter-pass coupling AND the per-pass texture format choices are load-bearing.** Fluid simulations are the archetype: 7 passes with hand-tuned `r32float` / `rgba16float` / `rgba32float` boundaries chosen so a long frame-to-frame feedback loop stays numerically stable. Decomposing each pass into per-pixel-math primitives would (a) explode into hundreds of nodes and (b) compound rounding across each boundary at formats the legacy pipeline never used, degrading the sim. The legacy shader code lifts verbatim into a `wgsl_compute_*` node per pass; only the inter-pass wiring becomes JSON. This is Tier 3 in the decomposition plan.
+2. **One-off compute kernels where the math has zero reuse potential.** A relativistic geodesic trace, a domain-specific reaction-diffusion update, a custom FFT layout — things where decomposing would mean writing eight new primitives that nothing else will ever call.
 
-- The pass is a generic per-pixel transform expressible through existing primitives. Lissajous's curve sampling pre-decomposition was tempted-but-resisted — sampling a parametric curve plus emitting a `Array<LinePoint>` is one primitive, not a WGSL paste.
-- You're using it because writing a new curated primitive feels like "too much infra for this one generator." The new primitive is almost always worth it — it earns its keep when the next generator needs the same shape.
-- You're trying to dodge graph complexity. If the graph is feeling unwieldy, the answer is "build a higher-level primitive that packs the sub-graph," not "give up and paste in WGSL." See [feedback_curated_primitives_over_wgsl](../.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/memory/feedback_curated_primitives_over_wgsl.md) in memory.
+The qualifying word in (1) is **both**. Multi-pass alone doesn't qualify — most multi-pass shaders are just sequenced operations and decompose cleanly. Coupling+formats together is what makes a pass chain irreducible.
 
-If you do reach for `wgsl_compute_*`, treat the embedded WGSL as the contract: format declarations are load-bearing (per the per-slot format work in D5 of the decomposition plan), uniform layouts must match what the JSON binds, and the node's `composition_notes` field must call out the precision requirements so the next reader knows why the escape hatch is here.
+### Where the escape hatch is WRONG
+
+- **Single-pass shaders that internally do multiple logical operations.** A compute pass doing "Sobel + mirror + levels + temporal blend" in one shader is a *decomposition target*, not a §5 case. It looks coupled because the operations share a kernel, but each is a per-pixel transform with no precision-load-bearing format choice between them. Atomize: Sobel → mirror → levels → temporal blend, with the intermediate texture format chosen so quantization isn't a regression vs the original's single quantization at the final write. fp32 intermediates plus matching arithmetic order get byte-exact parity in almost every case; the only theoretical drift is FMA reassociation across kernel boundaries, which is ~1 ULP and well inside any sane parity epsilon. **The trap:** convincing yourself the operations "must stay fused for parity" when the real reason is decomposition is more work.
+- **Per-shader primitive wraps.** Lifting each generator's individual shaders into one primitive per shader (`MyGenerator_PassA`, `MyGenerator_PassB`, …) defeats the entire point of the library. The result is generator-specific palette entries that no future generator can reuse, the catalog bloats, and the AI authoring surface is poisoned with named-after-the-source primitives. §5 is for *passes within a single irreducible chain*, not "I have N shaders, I'll wrap each."
+- **A generic per-pixel transform expressible through existing primitives.** Lissajous's curve sampling pre-decomposition was tempted-but-resisted — sampling a parametric curve plus emitting an `Array<LinePoint>` is one primitive, not a WGSL paste.
+- **"Too much infra for this one generator."** The new primitive is almost always worth it — it earns its keep when the next generator needs the same shape. The audit precondition (§2.5) is how you verify the shape doesn't already exist before paying that cost.
+- **Dodging graph complexity.** If the graph is feeling unwieldy, the answer is "build a higher-level primitive that packs the sub-graph," not "give up and paste in WGSL." See [feedback_curated_primitives_over_wgsl](../.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/memory/feedback_curated_primitives_over_wgsl.md).
+
+### The test: would the next generator want this primitive?
+
+Apply this to anything you're tempted to call a §5 case. If the answer is "no, this primitive is only useful for this one generator," the path is decomposition into atoms (which other generators *will* want), not a per-shader wrap. The only exception is the genuinely irreducible chain — and "irreducible" means the precondition test in (1) above is met: both coupling and per-pass format choices are load-bearing.
+
+### If you do reach for `wgsl_compute_*`
+
+Treat the embedded WGSL as the contract: format declarations are load-bearing (per the per-slot format work in D5 of the decomposition plan), uniform layouts must match what the JSON binds, and the node's `composition_notes` field must call out the precision requirements so the next reader knows why the escape hatch is here.
 
 ## 6. Keep the graph small
 
