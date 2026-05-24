@@ -262,6 +262,30 @@ pub trait EffectNode: Send {
     /// Run one frame of GPU work: read inputs, write outputs.
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
+    /// Post-frame capture phase for state-capture primitives. Called
+    /// AFTER every node's `evaluate` has run for the frame — so by
+    /// the time `late_capture` fires, the producer feeding any
+    /// state-capture input port has already written THIS frame's
+    /// output into the persistent back-edge slot. Reading that input
+    /// here lets a stateful primitive snapshot the value it should
+    /// emit on next frame's `evaluate`, giving a true 1-frame delay
+    /// (matching ping-pong with end-of-frame swap).
+    ///
+    /// Only invoked when [`state_capture_input_ports`] returns a
+    /// non-empty list — pure / stateless primitives have no reason
+    /// to override this and pay no cost. The context exposes the
+    /// same inputs and state store as `evaluate`; **outputs are not
+    /// guaranteed to be acquired** (their slot may have been freed
+    /// by the planner's `free_after` pass), so `late_capture`
+    /// implementations should only read inputs and write to state.
+    ///
+    /// Default: no-op. Authors of new state-capture primitives MUST
+    /// override this rather than encoding a capture inside `evaluate`
+    /// — capture-before-producer in `evaluate` reads stale data
+    /// (the 2-frame-delay class bug from the OilyFluid flicker
+    /// incident).
+    fn late_capture(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+
     /// Static declaration of the `(input_port, output_port)` pair
     /// this node would alias when `skip_passthrough` fires. Must not
     /// depend on params, frame state, or anything dynamic.
@@ -541,6 +565,37 @@ pub trait EffectNode: Send {
         _port: &str,
         _canvas_dims: (u32, u32),
         _input_dims: &[(&str, (u32, u32))],
+        _params: &ParamValues,
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Canvas-relative output dim hint, used as a fallback when
+    /// [`output_dims`] returns `None` (typically because the input is
+    /// a state-capture back-edge whose dim isn't compile-time known).
+    /// The runtime computes
+    /// `(canvas_w * num / den, canvas_h * num / den)` and allocates
+    /// the slot at that size — letting primitives like `node.downsample`
+    /// land their output at `canvas / factor` even when fed from a
+    /// feedback loop where the input dim isn't yet resolved at plan
+    /// time.
+    ///
+    /// Default: `None`. Most primitives produce canvas-sized output
+    /// and have no need to override. Multi-resolution primitives
+    /// (`node.downsample`, future `node.upsample` / mip stages)
+    /// override to express their compile-time-known scale relative
+    /// to canvas.
+    ///
+    /// Read-priority order at slot acquire: concrete `output_dims`
+    /// → `output_canvas_scale` → canvas-sized fallback. So when
+    /// `output_dims` resolves from a known input chain, the canvas
+    /// scale hint is ignored — chaining downsamples (`canvas →
+    /// canvas/4 → canvas/16`) works correctly because the second
+    /// downsample sees a concrete input dim from the first.
+    fn output_canvas_scale(
+        &self,
+        _port: &str,
+        _params: &ParamValues,
     ) -> Option<(u32, u32)> {
         None
     }

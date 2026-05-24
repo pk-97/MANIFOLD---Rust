@@ -126,6 +126,20 @@ pub trait Primitive: PrimitiveSpec {
     /// definition.
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
+    /// Mirror of [`EffectNode::late_capture`](crate::node_graph::effect_node::EffectNode::late_capture).
+    /// Default no-op. Override on stateful primitives that declare
+    /// [`state_capture_input_ports`](Self::state_capture_input_ports)
+    /// — read state-capture inputs here (they hold THIS frame's
+    /// producer output by `late_capture` time) and snapshot into
+    /// persistent state via the StateStore.
+    ///
+    /// Capture-before-producer inside `run` reads STALE inputs
+    /// (state-capture nodes run first in topo, before their feeding
+    /// producers). Always use `late_capture` for snapshot work — the
+    /// 2-frame-delay bug that caused per-frame flicker in OilyFluid
+    /// is exactly the failure mode that arises from doing it in `run`.
+    fn late_capture(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+
     /// Reset persistent state. Default no-op; stateful primitives
     /// (Feedback, MipChain when state-backed) override to drop their
     /// previous-frame textures on seek.
@@ -168,6 +182,22 @@ pub trait Primitive: PrimitiveSpec {
         _port: &str,
         _canvas_dims: (u32, u32),
         _input_dims: &[(&str, (u32, u32))],
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Mirror of
+    /// [`EffectNode::output_canvas_scale`](crate::node_graph::effect_node::EffectNode::output_canvas_scale).
+    /// Default `None`. Override on multi-resolution primitives
+    /// (`node.downsample` and any future `node.upsample` / mip
+    /// stages) to land output slots at `canvas * num / den` when the
+    /// concrete `output_dims` fallback can't resolve (state-capture
+    /// back-edge inputs whose dim isn't compile-time known).
+    fn output_canvas_scale(
+        &self,
+        _port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         None
     }
@@ -291,6 +321,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         Primitive::run(self, ctx);
     }
+    fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        Primitive::late_capture(self, ctx);
+    }
     fn clear_state(&mut self) {
         Primitive::clear_state(self);
     }
@@ -311,8 +344,16 @@ impl<P: Primitive + 'static> EffectNode for P {
         port: &str,
         canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
+        params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
-        Primitive::output_dims(self, port, canvas_dims, input_dims)
+        Primitive::output_dims(self, port, canvas_dims, input_dims, params)
+    }
+    fn output_canvas_scale(
+        &self,
+        port: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        Primitive::output_canvas_scale(self, port, params)
     }
     fn array_output_capacity(
         &self,

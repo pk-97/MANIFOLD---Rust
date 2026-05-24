@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Oily Fluid",
-  "description": "Oily Fluid — decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) `feedback_velocity` is downsampled 4× (`node.downsample`) then H+V Gaussian blurred at quarter-res, mirroring the legacy `cs_downsample → 2× separable blur` path; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90°) and advects the quarter-res blurred velocity using the full-res unblurred velocity as the displacement field, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of simplex noise injection, then carries the result back to the color feedback. Both advect timesteps are `speed × disp` via `node.math` so the outer-card Speed slider actually scales the simulation rate. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines); only the selected one's producer subgraph runs each frame via mux short-circuit (`EffectNode::selected_input_branch`), and the result is graded by `node.color_grade`.\n\nKnown parity deltas vs legacy: (1) ~2-frame state delay through `node.feedback` instead of legacy's same-frame ping-pong + swap — visually indistinguishable for the chaotic sim, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted — recover via the outer-card Hue / Saturation, (3) sim evolves from black via per-frame noise injection — takes a few seconds to build visible patterns, (4) state textures are rgba16float pending the Feedback compute-shader copy path (Phase 3c) that will lift the cross-format blit restriction so fp32 state can be opt-in without requiring every intermediate node in the loop to also be annotated fp32.",
+  "description": "Oily Fluid — decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) `feedback_velocity` is downsampled 4× (`node.downsample`) then H+V Gaussian blurred at quarter-res, mirroring the legacy `cs_downsample → 2× separable blur` path; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90°) and advects the quarter-res blurred velocity using the full-res unblurred velocity as the displacement field, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of simplex noise injection (z-axis driven by `system.generator_input.time × speed × 0.6` so the noise field evolves frame-to-frame, matching the legacy `noise_time` term), then carries the result back to the color feedback. Both advect timesteps are `speed × disp` via `node.math` so the outer-card Speed slider scales both advection and noise rate. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines); only the selected one's producer subgraph runs each frame via mux short-circuit (`EffectNode::selected_input_branch`), and the result is graded by `node.color_grade`.\n\nKnown parity deltas vs legacy: (1) 1-frame state delay through `node.feedback`'s `late_capture` phase, matching legacy's same-frame ping-pong + swap, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted — recover via the outer-card Hue / Saturation, (3) sim evolves from black via per-frame noise injection — takes a few seconds to build visible patterns, (4) state textures are rgba16float pending the Feedback compute-shader copy path that will lift the cross-format blit restriction so fp32 state can be opt-in without requiring every intermediate node in the loop to also be annotated fp32.",
   "presetMetadata": {
     "id": "OilyFluid",
     "displayName": "Oily Fluid",
@@ -68,6 +68,9 @@
       { "id": "speed", "label": "Speed", "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "color_speed_mul", "param": "a" },
         "convert": { "type": "Float" } },
+      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "noise_speed_factor", "param": "a" },
+        "convert": { "type": "Float" } },
       { "id": "mode", "label": "Mode", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mode_mux", "param": "selector" },
         "convert": { "type": "Float" } }
@@ -116,6 +119,10 @@
       "params": { "scale_x": { "type": "Float", "value": 3.0 }, "scale_y": { "type": "Float", "value": 3.0 }, "offset_x": { "type": "Float", "value": 0.0 }, "offset_y": { "type": "Float", "value": 0.0 }, "z": { "type": "Float", "value": 0.0 }, "output_channel": { "type": "Enum", "value": 0 } } },
     { "id": 19, "typeId": "node.simplex_field_2d", "handle": "noise_g",
       "params": { "scale_x": { "type": "Float", "value": 3.0 }, "scale_y": { "type": "Float", "value": 3.0 }, "offset_x": { "type": "Float", "value": 31.7 }, "offset_y": { "type": "Float", "value": 17.3 }, "z": { "type": "Float", "value": 0.0 }, "output_channel": { "type": "Enum", "value": 1 } } },
+    { "id": 44, "typeId": "node.math", "handle": "noise_speed_factor",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.6 }, "op": { "type": "Enum", "value": 2 } } },
+    { "id": 45, "typeId": "node.math", "handle": "noise_time_mul",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
     { "id": 20, "typeId": "node.mix", "handle": "noise_combine",
       "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
     { "id": 21, "typeId": "node.gain", "handle": "noise_inject_gain", "params": { "gain": { "type": "Float", "value": 0.002 } } },
@@ -203,6 +210,11 @@
     { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "velocity" },
     { "fromNode": 43, "fromPort": "out", "toNode": 16, "toPort": "dt" },
     { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "in" },
+
+    { "fromNode": 0,  "fromPort": "time", "toNode": 45, "toPort": "a" },
+    { "fromNode": 44, "fromPort": "out",  "toNode": 45, "toPort": "b" },
+    { "fromNode": 45, "fromPort": "out",  "toNode": 18, "toPort": "z" },
+    { "fromNode": 45, "fromPort": "out",  "toNode": 19, "toPort": "z" },
 
     { "fromNode": 18, "fromPort": "out", "toNode": 20, "toPort": "a" },
     { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "b" },

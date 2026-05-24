@@ -64,53 +64,79 @@ crate::primitive! {
     picker: { label: "Downsample", category: Atom },
 }
 
+/// Decode the `factor` enum param into the integer downsample factor.
+/// Default to 4 (the enum's default value `1`) for unset / malformed
+/// params; matches the run-time fallback.
+fn read_factor(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+    match params.get("factor") {
+        Some(ParamValue::Enum(n)) => match *n {
+            0 => 2u32,
+            1 => 4u32,
+            2 => 8u32,
+            _ => 4u32,
+        },
+        Some(ParamValue::Float(f)) => match f.round() as i32 {
+            0 => 2u32,
+            1 => 4u32,
+            2 => 8u32,
+            _ => 4u32,
+        },
+        _ => 4u32,
+    }
+}
+
 impl Primitive for Downsample {
     fn output_dims(
         &self,
         port: &str,
         _canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
+        params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "out" {
             return None;
         }
-        // Output dims = input dims / factor. If `in` isn't in the
-        // scratch (producer is canvas-default OR a state-capture
-        // back-edge whose dim isn't yet resolved), return None so
-        // the executor resolves the slot to runtime canvas dims.
-        // That means the downsample shader dispatches at canvas
-        // resolution and performs a 4×4 box blur without actually
-        // shrinking — variable-res becomes a no-op for this slot.
-        // The old behaviour of falling back to a (0,0) canvas sentinel
-        // here returned (1, 1), starving the entire downstream blur
-        // chain. A proper fix is runtime dim resolution (Phase 3a-
-        // followup); for now this keeps the chain functional when
-        // the input dim isn't compile-time-knowable.
+        // Output dims = input dims / factor when input dim is known.
+        // When `in`'s producer is canvas-default OR a state-capture
+        // back-edge whose dim isn't yet resolved, returning `None`
+        // here lets the executor fall back to
+        // [`output_canvas_scale`] below — which lands the slot at
+        // `canvas / factor` so the shader sees the dim ratio it
+        // expects. Without that fallback, the old behaviour was to
+        // allocate the slot at full canvas and dispatch a shader
+        // that strides by `factor` — OOB reads returned zero and
+        // poisoned everything outside the top-left 1/factor² of the
+        // texture (the OilyFluid top-left-tile bug).
         let (src_w, src_h) = input_dims
             .iter()
             .find(|(name, _)| *name == "in")
             .map(|(_, d)| *d)?;
-        // Factor is an enum: 0 → 2x, 1 → 4x, 2 → 8x. Default param
-        // value is 1 (4x). The EffectNode trait doesn't pass params
-        // to output_dims, so we hardcode 4x; widen the trait surface
-        // in a follow-up if more presets need per-instance factor at
-        // compile time.
-        let factor = 4u32;
+        let factor = read_factor(params);
         let out_w = (src_w / factor).max(1);
         let out_h = (src_h / factor).max(1);
         Some((out_w, out_h))
     }
 
+    fn output_canvas_scale(
+        &self,
+        port: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        if port != "out" {
+            return None;
+        }
+        // When `output_dims` couldn't resolve (input dim unknown),
+        // declare the output as `canvas × 1 / factor`. The executor
+        // computes this against the live canvas at slot-acquire time
+        // and the shader's `id.xy * factor` indexing then reads
+        // within bounds. State-capture back-edges from `node.feedback`
+        // (and any future stateful primitive whose state texture is
+        // canvas-sized) flow through here cleanly.
+        Some((1, read_factor(params)))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let factor = match ctx.params.get("factor") {
-            Some(ParamValue::Enum(n)) => match *n {
-                0 => 2u32,
-                1 => 4u32,
-                2 => 8u32,
-                _ => 4u32,
-            },
-            _ => 4u32,
-        };
+        let factor = read_factor(ctx.params);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
@@ -189,39 +215,83 @@ mod tests {
         assert_eq!(Downsample::PARAMS[0].name, "factor");
     }
 
+    /// Build a `ParamValues` map containing only the default `factor`
+    /// (enum 1 = 4×) — enough to drive `output_dims` /
+    /// `output_canvas_scale` in tests without exercising the full
+    /// graph param-init path.
+    fn default_params() -> crate::node_graph::effect_node::ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert("factor", ParamValue::Enum(1));
+        p
+    }
+
     #[test]
-    fn output_dims_divides_input_by_four() {
-        // Phase-3-followup note: factor is hardcoded to 4 in
-        // `output_dims` until the trait passes params at compile
-        // time. Assert that contract here so a future widening
-        // catches this test as the place to thread params through.
+    fn output_dims_divides_input_by_factor() {
+        // Default factor = 4×. With known input dims the planner gets
+        // a concrete output dim and uses it directly.
         let prim = Downsample::new();
         let node: &dyn EffectNode = &prim;
-        let dims = node.output_dims("out", (1920, 1080), &[("in", (1920, 1080))]);
+        let params = default_params();
+        let dims = node.output_dims("out", (1920, 1080), &[("in", (1920, 1080))], &params);
         assert_eq!(dims, Some((480, 270)));
     }
 
     #[test]
     fn output_dims_returns_none_when_input_dim_is_unknown() {
         // When `in`'s producer is canvas-default or a state-capture
-        // back-edge, the compile-time dim isn't known. Returning None
-        // lets the executor resolve the slot to runtime canvas. Old
-        // behaviour (fall back to canvas_dims sentinel = (0,0) →
-        // returns (1,1)) starved the downstream blur chain.
+        // back-edge, the compile-time dim isn't known. `output_dims`
+        // returns None; the planner then consults `output_canvas_scale`
+        // (next test) which lands the slot at canvas/factor.
         let prim = Downsample::new();
         let node: &dyn EffectNode = &prim;
-        let dims = node.output_dims("out", (800, 600), &[]);
+        let params = default_params();
+        let dims = node.output_dims("out", (800, 600), &[], &params);
         assert_eq!(dims, None);
+    }
+
+    #[test]
+    fn output_canvas_scale_is_one_over_factor() {
+        // The fallback used by the planner when `output_dims` returns
+        // None. At runtime the executor resolves this against the live
+        // canvas: `(canvas_w * 1 / 4, canvas_h * 1 / 4)`. The shader's
+        // `id.xy * factor` indexing then reads within bounds (vs. the
+        // pre-fix bug where the slot landed at full canvas and OOB
+        // reads zero-poisoned everything past the top-left 1/16).
+        let prim = Downsample::new();
+        let node: &dyn EffectNode = &prim;
+        let params = default_params();
+        let scale = node.output_canvas_scale("out", &params);
+        assert_eq!(scale, Some((1, 4)));
+    }
+
+    #[test]
+    fn output_canvas_scale_tracks_factor_enum() {
+        // Per-instance factor → per-instance scale. Verifies that the
+        // canvas-scale hint reads from the live param value rather
+        // than a hardcoded constant — so a JSON preset that sets
+        // factor=0 (2×) lands its slot at canvas/2, not canvas/4.
+        let prim = Downsample::new();
+        let node: &dyn EffectNode = &prim;
+        for (enum_v, expected_den) in [(0u32, 2u32), (1, 4), (2, 8)] {
+            let mut params = ahash::AHashMap::default();
+            params.insert("factor", ParamValue::Enum(enum_v));
+            assert_eq!(
+                node.output_canvas_scale("out", &params),
+                Some((1, expected_den)),
+                "factor enum {enum_v} should map to canvas/{expected_den}",
+            );
+        }
     }
 
     #[test]
     fn output_dims_clamps_to_at_least_one() {
         let prim = Downsample::new();
         let node: &dyn EffectNode = &prim;
+        let params = default_params();
         // Input smaller than factor → output rounds to 0 → clamp to 1
         // so the executor doesn't try to allocate a zero-sized
         // texture (would crash in the backend).
-        let dims = node.output_dims("out", (1920, 1080), &[("in", (3, 3))]);
+        let dims = node.output_dims("out", (1920, 1080), &[("in", (3, 3))], &params);
         assert_eq!(dims, Some((1, 1)));
     }
 

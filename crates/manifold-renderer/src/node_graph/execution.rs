@@ -24,6 +24,36 @@ use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
 
+/// Resolve a resource's slot dims for `Backend::acquire` / `release`.
+///
+/// Resolution order (matches the planner's compile-time decision):
+///   1. `plan.resource_dims(res_id)` — concrete `(w, h)` resolved at
+///      compile time from a known input chain.
+///   2. `plan.resource_canvas_scale(res_id)` — a canvas-relative
+///      `(num, den)` hint declared by the producer's
+///      `EffectNode::output_canvas_scale`. Resolved here to
+///      `(canvas_w * num / den, canvas_h * num / den)`, with `max(1)`
+///      so a too-small canvas can't produce a zero-sized allocation.
+///   3. Full canvas fallback.
+///
+/// Used by every site that allocates / releases a slot so the
+/// resolution policy lives in one place — the `acquire` / `release`
+/// pair MUST agree on dims (the backend's pool keys on dims), so a
+/// single helper here prevents the two sites from drifting.
+fn resolve_dims(plan: &ExecutionPlan, res_id: ResourceId, canvas_dims: (u32, u32)) -> (u32, u32) {
+    if let Some(dims) = plan.resource_dims(res_id) {
+        return dims;
+    }
+    if let Some((num, den)) = plan.resource_canvas_scale(res_id)
+        && den != 0
+    {
+        let w = (canvas_dims.0 as u64 * num as u64 / den as u64).max(1) as u32;
+        let h = (canvas_dims.1 as u64 * num as u64 / den as u64).max(1) as u32;
+        return (w, h);
+    }
+    canvas_dims
+}
+
 /// Runs a graph against a precompiled plan, one frame per call.
 ///
 /// The executor owns its [`Backend`] across frames so the high-water mark
@@ -339,7 +369,7 @@ impl Executor {
                 .resource_type(res_id)
                 .expect("persistent resource type known from compile()");
             let fmt = plan.resource_format(res_id);
-            let dims = plan.resource_dims(res_id).unwrap_or(canvas_dims);
+            let dims = resolve_dims(plan, res_id, canvas_dims);
             let slot = self.backend.acquire(res_id, ty, fmt, dims);
             if self.initialized_persistent.insert(res_id)
                 && let Some(gpu) = gpu.as_deref_mut()
@@ -365,7 +395,7 @@ impl Executor {
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
                 let fmt = plan.resource_format(res_id);
-                let dims = plan.resource_dims(res_id).unwrap_or(canvas_dims);
+                let dims = resolve_dims(plan, res_id, canvas_dims);
                 let slot = self.backend.acquire(res_id, ty, fmt, dims);
                 self.output_scratch.push((port_name, slot));
             }
@@ -470,8 +500,77 @@ impl Executor {
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
                 let fmt = plan.resource_format(res_id);
-                let dims = plan.resource_dims(res_id).unwrap_or(canvas_dims);
+                let dims = resolve_dims(plan, res_id, canvas_dims);
                 self.backend.release(res_id, ty, fmt, dims);
+            }
+        }
+
+        // ===== Late-capture pass =====
+        //
+        // Runs AFTER every node's `evaluate` for the frame has been
+        // encoded. At this point the producer feeding any state-capture
+        // input port has already written THIS frame's output into the
+        // persistent back-edge slot — `late_capture` reads that fresh
+        // value and snapshots it into the node's StateStore entry, so
+        // next frame's `evaluate` emits a true 1-frame-delayed value
+        // (matching ping-pong + end-of-frame swap).
+        //
+        // Doing the capture here instead of inside `evaluate` is the
+        // structural fix for the 2-frame-delay bug class that produced
+        // the OilyFluid per-frame flicker: state-capture nodes run
+        // FIRST in topo, so an in-`evaluate` capture would read the
+        // PREVIOUS frame's producer output, decoupling the simulation
+        // into independent even/odd streams driven by per-frame noise.
+        // No new primitive that declares `state_capture_input_ports`
+        // can recreate that bug as long as it uses `late_capture` for
+        // its snapshot.
+        //
+        // Output slots may have been freed by `step.free_after` above —
+        // we deliberately build the context with an EMPTY output
+        // scratch. `late_capture` implementations must read only inputs
+        // and write to state, never to outputs.
+        for &step_idx in plan.late_capture_step_indices() {
+            if !self.live_steps[step_idx] {
+                continue;
+            }
+            let step = &plan.steps()[step_idx];
+            // Re-resolve input slot bindings. State-capture inputs are
+            // backed by persistent resources whose slots stay bound
+            // across the frame, so the same slot the main pass saw is
+            // still live and now holds the producer's frame-N write.
+            self.input_scratch.clear();
+            for &(port_name, res_id) in &step.inputs {
+                if let Some(slot) = self.backend.slot_for(res_id) {
+                    self.input_scratch.push((port_name, slot));
+                }
+            }
+            // Empty output scratch — late_capture must not write to
+            // outputs. The trait contract documents this; the absence
+            // of bindings means any erroneous attempt to do so via
+            // `ctx.outputs` resolves to `None` rather than corrupting
+            // a recycled slot.
+            self.output_scratch.clear();
+
+            if let Some(inst) = graph.get_node_mut(step.node) {
+                self.scalar_write_scratch.clear();
+                let backend_ref: &dyn Backend = &*self.backend;
+                let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
+                let outputs = NodeOutputs::new(
+                    &self.output_scratch,
+                    backend_ref,
+                    &mut self.scalar_write_scratch,
+                );
+                let mut ctx = EffectNodeContext::with_state(
+                    time,
+                    &inst.params,
+                    inputs,
+                    outputs,
+                    gpu.as_deref_mut(),
+                    state.as_deref_mut(),
+                    step.node,
+                    owner_key,
+                );
+                inst.node.late_capture(&mut ctx);
             }
         }
     }

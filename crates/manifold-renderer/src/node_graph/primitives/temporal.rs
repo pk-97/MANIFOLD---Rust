@@ -17,7 +17,7 @@ use crate::node_graph::state_store::NodeState;
 use crate::render_target::RenderTarget;
 
 // =====================================================================
-// Feedback — pure 1-frame texture delay. This frame's `in` becomes next
+// Feedback — 1-frame texture delay. Last frame's `in` becomes this
 // frame's `out`. The texture analog of `node.array_feedback`.
 //
 // Closes per-frame feedback loops without introducing graph cycles:
@@ -33,7 +33,7 @@ pub const FEEDBACK_TYPE_ID: &str = "node.feedback";
 crate::primitive! {
     name: Feedback,
     type_id: "node.feedback",
-    purpose: "Pure 1-frame texture delay. This frame's `in` becomes next frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims.",
+    purpose: "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims.",
     inputs: {
         in: Texture2D required,
         seed: Texture2D optional,
@@ -85,6 +85,15 @@ impl Primitive for Feedback {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // `evaluate` (= `run`) phase: emit only. The capture lives in
+        // `late_capture` because state-capture nodes run BEFORE their
+        // producer in topo order, so the producer's frame-N write
+        // hasn't landed yet at this point. The persistent back-edge
+        // slot still carries last frame's writes (the slot survives
+        // between frames via the persistent-resource list), so an
+        // in-`run` capture would snapshot stale data and decouple the
+        // simulation into independent even/odd streams driven by
+        // per-frame noise — the 2-frame-delay flicker class.
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
         };
@@ -165,29 +174,22 @@ impl Primitive for Feedback {
             .get::<FeedbackState>(node_id, owner_key)
             .expect("just inserted above");
 
-        // Emit last frame's input as this frame's `out`. state.prev
-        // and out_tex always share state_format (out_tex's slot was
-        // acquired using the same `output_format` we read above), so
-        // this stays a same-format blit.
+        // Emit `out` ← state.prev. state.prev holds last frame's
+        // producer output (snapshotted by `late_capture` at end of
+        // the previous frame), giving a true 1-frame delay. On the
+        // alloc frame, state.prev = seed (or in_tex passthrough).
+        // state.prev and out_tex always share state_format (out_tex's
+        // slot was acquired using the same `output_format` we read
+        // above), so this stays a same-format blit.
         gpu.copy_texture_to_texture(&state.prev.texture, out_tex, width, height);
-        // Capture this frame's `in` for next frame's `out` — but NOT
-        // on the same frame as a fresh allocation. The in_slot at that
-        // point is whatever the executor pre-cleared / left stale BEFORE
-        // the chain's producer ran (feedback runs first under the
-        // state-capture topo exemption, so the producer's write for this
-        // frame hasn't landed yet). Capturing it would clobber the seed
-        // we just installed into `state.prev`, and the very next frame's
-        // `out = prev` would resolve to that zero — turning a seeded
-        // chain into a 2-frame oscillation between "seed" and "zero"
-        // instead of the intended bootstrap-then-evolve.
-        //
-        // Skipping the capture for one frame lets prev = seed survive
-        // into frame 2. By frame 2's evaluation the chain has run once
-        // with seed-driven `out`, so the slot now holds a meaningful
-        // value and the capture resumes as normal. For the unseeded
-        // case this is behaviorally identical: prev = in_tex = 0 from
-        // the alloc init, and the skipped copy would have written 0
-        // over 0 anyway.
+    }
+
+    fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Post-frame snapshot: `in_tex` now holds THIS frame's producer
+        // output (the back-edge slot was written during the main
+        // step-loop pass). Capturing it here means next frame's `run`
+        // emits this value via the state.prev → out_tex blit — clean
+        // 1-frame delay matching legacy ping-pong + end-of-frame swap.
         //
         // Cross-format bridge: in_tex's format is whatever the wire
         // producer (mix/gain/etc) declared — typically rgba16float
@@ -195,17 +197,37 @@ impl Primitive for Feedback {
         // was overridden to rgba32float we can't blit fp16 → fp32
         // (Metal validation error); a compute-shader copy bridges the
         // formats. Same-format case falls through to the cheap blit.
-        if !needs_alloc {
-            Self::copy_with_format_bridge(
-                gpu,
-                in_tex,
-                &state.prev.texture,
-                width,
-                height,
-                state_format,
-                &mut self.cross_format_copy_fp32,
-            );
-        }
+        let Some(in_tex) = ctx.inputs.texture_2d("in") else {
+            return;
+        };
+        let node_id = ctx.node_id;
+        let owner_key = ctx.owner_key;
+        let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
+
+        let gpu = ctx
+            .gpu
+            .as_deref_mut()
+            .expect("Feedback::late_capture requires a GpuEncoder");
+        let store = ctx
+            .state
+            .as_deref_mut()
+            .expect("Feedback::late_capture requires a StateStore");
+
+        // If `run` short-circuited before allocating state (zero-dim
+        // out_tex), there's nothing to capture into yet.
+        let Some(state) = store.get::<FeedbackState>(node_id, owner_key) else {
+            return;
+        };
+        let (width, height) = (state.width, state.height);
+        Self::copy_with_format_bridge(
+            gpu,
+            in_tex,
+            &state.prev.texture,
+            width,
+            height,
+            state_format,
+            &mut self.cross_format_copy_fp32,
+        );
     }
 
     fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
@@ -533,22 +555,22 @@ mod gpu_tests {
         native_enc.commit_and_wait_completed();
     }
 
-    /// The seed-bootstrap contract: when `seed` is wired, the seed
-    /// value MUST survive into frame 2's output, not just frame 1.
-    /// Without this, the dual-buffer (state.prev + per-frame capture)
-    /// pattern destroys the seed at the end of frame 1 — capturing the
-    /// in_slot's pre-cleared zero into state.prev, and frame 2 emits
-    /// that zero. The chain alternates seed/zero/seed/zero and never
-    /// bootstraps. Regression-locks the OilyFluid breakage where the
-    /// fluid sim never built up from the noise seed.
+    /// The seed-bootstrap contract: when `seed` is wired, frame 1's
+    /// `out` MUST be the seed color (not zero). That's the contract
+    /// the chain relies on to start from structured noise instead of
+    /// black — without it, the alloc-frame `init_source = seed` copy
+    /// has no observable effect.
     ///
-    /// Strategy: build `noise_src → feedback.seed`, leave feedback.in
-    /// unwired (it'll fall through to a black persistent slot, mimicking
-    /// the pre-chain-write state of a real feedback loop's first frame).
-    /// Run two frames. Read back out_slot at end of frame 2. Expect the
-    /// seed's color, not zero.
+    /// Strategy: wire seed_src to a distinctive color, wire in_src to
+    /// black (so we can distinguish seed from "whatever ended up in
+    /// the in_slot"). Run one frame. Read back out at end of frame 1.
+    /// Expect the seed color.
+    ///
+    /// (Under the post-fix capture-then-emit ordering, frame 2 emits
+    /// in_src's content = black, because the seed is one-shot
+    /// bootstrap. The chain's seed-bootstrap test belongs at frame 1.)
     #[test]
-    fn feedback_seed_survives_into_second_frame() {
+    fn feedback_seed_drives_first_frame_output() {
         use crate::node_graph::Backend;
         use crate::node_graph::bindings::Slot;
         use half::f16;
@@ -600,26 +622,7 @@ mod gpu_tests {
         let mut exec = Executor::new(Box::new(backend));
         let mut store = StateStore::new();
 
-        // Frame 1: allocates, seeds, emits seed.
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
-            exec.execute_frame_with_state(
-                &mut g,
-                &plan,
-                frame_time(),
-                &mut gpu,
-                &mut store,
-                17,
-            );
-        }
-        native_enc.commit_and_wait_completed();
-
-        // Frame 2: no alloc. With the skip-on-fresh-alloc fix in place,
-        // state.prev still = seed (the capture was skipped on frame 1),
-        // so frame 2's `out := prev` again emits the seed color. Without
-        // the fix, state.prev = in_tex = black (captured at end of frame
-        // 1), and frame 2's output would be black.
-        let mut native_enc = device.create_encoder("seed-bootstrap-frame-2");
+        // Frame 1: allocates state.prev from seed, emits seed → out.
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_state(
@@ -657,10 +660,10 @@ mod gpu_tests {
             (pixel[0] - 0.7).abs() < tol
                 && (pixel[1] - 0.3).abs() < tol
                 && (pixel[2] - 0.1).abs() < tol,
-            "frame-2 output must still be the seed color (0.7, 0.3, 0.1) — \
-             skip-on-fresh-alloc keeps state.prev = seed through frame 2 so \
-             the chain bootstraps from real content instead of alternating \
-             between seed and zero. got {pixel:?}"
+            "frame-1 output must be the seed color (0.7, 0.3, 0.1) — \
+             the alloc-frame init copies seed into state.prev and emits \
+             that on the same frame, so downstream chains start from \
+             structured noise instead of black. got {pixel:?}"
         );
     }
 }

@@ -77,6 +77,13 @@ impl Primitive for ArrayFeedback {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // `evaluate` (= `run`) phase: emit only. The capture lives in
+        // `late_capture` because state-capture nodes run BEFORE their
+        // producer in topo order, so the producer's frame-N write
+        // hasn't landed yet at this point. Snapshotting `in_buf` from
+        // inside `run` would copy LAST frame's producer output and
+        // give a 2-frame delay — the bug class that produced
+        // OilyFluid's per-frame flicker on the texture side.
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
         };
@@ -128,13 +135,43 @@ impl Primitive for ArrayFeedback {
             .get::<ArrayFeedbackState>(node_id, owner_key)
             .expect("just inserted above");
 
-        // Output = state.prev (last frame's data; or this frame's
-        // `in` on the first frame after alloc).
+        // Emit `out` ← state.prev. state.prev holds last frame's
+        // producer output (snapshotted by `late_capture` at end of
+        // the previous frame), or — on the alloc frame — the in_buf
+        // passthrough seed copy above. Gives a true 1-frame delay.
         gpu.native_enc
             .copy_buffer_to_buffer(&state.prev, out_buf, size);
+    }
 
-        // Update persistent buffer with this frame's `in` so the
-        // next frame reads it as its prev.
+    fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Post-frame snapshot: `in_buf` now holds THIS frame's
+        // producer output (the back-edge slot was written during the
+        // main step-loop pass). Captured here, it becomes next
+        // frame's `state.prev` and is emitted by next frame's `run`
+        // — a clean 1-frame delay.
+        let Some(in_buf) = ctx.inputs.array("in") else {
+            return;
+        };
+        let node_id = ctx.node_id;
+        let owner_key = ctx.owner_key;
+        let gpu = ctx
+            .gpu
+            .as_deref_mut()
+            .expect("ArrayFeedback::late_capture requires a GpuEncoder");
+        let store = ctx
+            .state
+            .as_deref_mut()
+            .expect("ArrayFeedback::late_capture requires a StateStore");
+
+        // If `run` short-circuited before allocating state (zero-size
+        // wire), there's nothing to capture into yet.
+        let Some(state) = store.get::<ArrayFeedbackState>(node_id, owner_key) else {
+            return;
+        };
+        let size = in_buf.size.min(state.capacity_bytes);
+        if size == 0 {
+            return;
+        }
         gpu.native_enc
             .copy_buffer_to_buffer(in_buf, &state.prev, size);
     }

@@ -88,6 +88,27 @@ pub struct ExecutionPlan {
     /// slots pool together regardless of whether they were
     /// implicitly canvas (None) or explicitly so.
     resource_dims: Vec<Option<(u32, u32)>>,
+    /// Canvas-relative dim hint per resource, as `(num, den)`. Only
+    /// populated when [`resource_dims`] is `None` (the concrete dim
+    /// couldn't be resolved at compile time — typically because the
+    /// producing node fed from a state-capture back-edge). At slot
+    /// acquire the executor resolves this to
+    /// `(canvas_w * num / den, canvas_h * num / den)`, so primitives
+    /// like `node.downsample` land their output at the right
+    /// fraction of canvas even when their input dim is unknown at
+    /// plan time. `None` here means "use the canvas-sized fallback"
+    /// (the existing behaviour for textures with no producer hint).
+    ///
+    /// Read-priority order at slot acquire:
+    ///   1. [`resource_dims`] — concrete `(w, h)` from the producer.
+    ///   2. `resource_canvas_scales` — canvas-relative fraction.
+    ///   3. `backend.canvas_dims()` — full canvas fallback.
+    ///
+    /// Sourced from
+    /// [`EffectNode::output_canvas_scale`](crate::node_graph::EffectNode::output_canvas_scale)
+    /// at compile time. Indexed by `ResourceId`, parallel to
+    /// `resource_types` / `resource_formats` / `resource_dims`.
+    resource_canvas_scales: Vec<Option<(u32, u32)>>,
     /// Union of every node's [`NodeRequires`] declaration. The
     /// executor's entry point checks this against what it can
     /// provide (encoder, state store) and panics with a clean
@@ -104,6 +125,16 @@ pub struct ExecutionPlan {
     /// frame. The executor walks this list and calls `Backend::acquire`
     /// (idempotent on existing bindings) before the step loop.
     persistent_resources: Vec<ResourceId>,
+    /// Indices into [`steps`] of nodes that declare non-empty
+    /// [`state_capture_input_ports`](crate::node_graph::effect_node::EffectNode::state_capture_input_ports).
+    /// The executor invokes
+    /// [`EffectNode::late_capture`](crate::node_graph::effect_node::EffectNode::late_capture)
+    /// on these — and ONLY these — after the main step loop completes,
+    /// when their state-capture inputs hold THIS frame's producer
+    /// output (the back-edge slot has just been written). Skipping
+    /// non-stateful nodes here keeps the late pass cost proportional
+    /// to the number of feedback / accumulator nodes in the graph.
+    late_capture_steps: Vec<usize>,
 }
 
 impl ExecutionPlan {
@@ -141,6 +172,17 @@ impl ExecutionPlan {
         self.resource_dims.get(id.0 as usize).copied().flatten()
     }
 
+    /// Canvas-relative dim hint for the given resource, as `(num, den)`.
+    /// `None` means "no hint" — the executor falls back to canvas-sized
+    /// allocation. See [`resource_canvas_scales`](Self::resource_canvas_scales)
+    /// field docs for the full resolution order.
+    pub fn resource_canvas_scale(&self, id: ResourceId) -> Option<(u32, u32)> {
+        self.resource_canvas_scales
+            .get(id.0 as usize)
+            .copied()
+            .flatten()
+    }
+
     /// Aggregate runtime-service requirements across all nodes in
     /// the plan. The executor uses this to validate at the entry
     /// boundary rather than discovering mid-frame via `.expect()`.
@@ -153,6 +195,12 @@ impl ExecutionPlan {
     /// step's `free_after`. See the struct field docstring.
     pub fn persistent_resources(&self) -> &[ResourceId] {
         &self.persistent_resources
+    }
+
+    /// Step indices that need a post-frame `late_capture` invocation —
+    /// see [`late_capture_steps`](Self::late_capture_steps) field docs.
+    pub fn late_capture_step_indices(&self) -> &[usize] {
+        &self.late_capture_steps
     }
 }
 
@@ -209,6 +257,11 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     let mut resource_types: Vec<PortType> = Vec::new();
     let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
     let mut resource_dims: Vec<Option<(u32, u32)>> = Vec::new();
+    // Parallel to `resource_dims`. Populated only when `resource_dims`
+    // is `None` AND the producer overrides `output_canvas_scale` —
+    // see the field doc on `ExecutionPlan::resource_canvas_scales`.
+    // Non-Texture2D resources always get `None`.
+    let mut resource_canvas_scales: Vec<Option<(u32, u32)>> = Vec::new();
     // Scratch reused across nodes for the `output_dims` call's
     // `input_dims` argument. Pre-frame-time allocation only; the
     // executor's hot path doesn't see this.
@@ -282,7 +335,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 // scalar input instead. Mostly only downsample-style
                 // primitives care, and they only need INPUT dims.
                 inst.node
-                    .output_dims(output_port.name, (0, 0), &input_dims_scratch)
+                    .output_dims(output_port.name, (0, 0), &input_dims_scratch, &inst.params)
                     .or_else(|| {
                         if any_canvas_input {
                             // Propagate canvas: any None input means
@@ -300,7 +353,23 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             } else {
                 None
             };
+            // Canvas-relative fallback: only consulted when concrete
+            // dims couldn't be resolved AND the producer overrides
+            // `output_canvas_scale`. Lets multi-resolution primitives
+            // (`node.downsample` and any future `node.upsample` / mip
+            // chain) land their output at a fraction of canvas even
+            // when their input dim is unknown at plan time — the
+            // back-edge case from feedback chains.
+            let canvas_scale = if matches!(output_port.ty, PortType::Texture2D)
+                && dims.is_none()
+            {
+                inst.node
+                    .output_canvas_scale(output_port.name, &inst.params)
+            } else {
+                None
+            };
             resource_dims.push(dims);
+            resource_canvas_scales.push(canvas_scale);
         }
     }
 
@@ -329,12 +398,19 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     let mut persistent_seen: std::collections::HashSet<ResourceId> =
         std::collections::HashSet::new();
     let mut steps: Vec<ExecutionStep> = Vec::with_capacity(order.len());
+    // Step indices whose nodes need a post-frame late_capture pass.
+    // Populated alongside the step-building loop; the executor uses
+    // this list after the main `evaluate` pass completes.
+    let mut late_capture_steps: Vec<usize> = Vec::new();
 
     for (step_idx, &node_id) in order.iter().enumerate() {
         let inst = graph
             .get_node(node_id)
             .expect("topo order references existing node");
         let state_capture_ports = inst.node.state_capture_input_ports();
+        if !state_capture_ports.is_empty() {
+            late_capture_steps.push(step_idx);
+        }
 
         let mut step_inputs = Vec::new();
         for input_port in inst.node.inputs() {
@@ -461,8 +537,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         resource_types,
         resource_formats,
         resource_dims,
+        resource_canvas_scales,
         requires,
         persistent_resources: persistent,
+        late_capture_steps,
     })
 }
 
@@ -851,6 +929,7 @@ mod tests {
                 _port: &str,
                 _canvas: (u32, u32),
                 _inputs: &[(&str, (u32, u32))],
+                _params: &crate::node_graph::effect_node::ParamValues,
             ) -> Option<(u32, u32)> {
                 Some((480, 270))
             }
