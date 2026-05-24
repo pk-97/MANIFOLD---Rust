@@ -480,6 +480,17 @@ impl Executor {
                             owner_key,
                         );
                         inst.node.evaluate(&mut ctx);
+                        // Aliased-output contract enforcement lands in
+                        // a follow-up PR once the primitive surface
+                        // standardises on `ctx.gpu_encoder()` /
+                        // `ctx.gpu_and_state_mut()` (the helpers that
+                        // set `ctx.gpu_accessed`) instead of the
+                        // current mix of direct field access patterns.
+                        // The field is wired now so the check is a
+                        // one-line debug_assert when the migration is
+                        // done; today's mixed access means many
+                        // legitimate dispatches don't set the flag and
+                        // would false-positive the assertion.
                     }
                     // Drain scalar writes back into the backend so
                     // downstream readers in the same frame see them via

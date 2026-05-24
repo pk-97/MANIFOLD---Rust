@@ -102,6 +102,16 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// 1` for a layer, `hash(clip_id)` for a clip. Matches the legacy
     /// `EffectContext::owner_key` namespace.
     pub owner_key: OwnerKey,
+    /// Did this primitive's `evaluate` / `run` access the GPU encoder?
+    /// Set to `true` by [`gpu_encoder`](Self::gpu_encoder) on first
+    /// call. The executor reads this after `evaluate` returns to verify
+    /// the aliased-output contract — a primitive that declared
+    /// `aliased_array_io` but never touched the GPU clearly didn't
+    /// dispatch the kernel that's supposed to mutate the aliased
+    /// buffer, leaving downstream consumers reading stale data. Debug
+    /// builds panic loudly; release builds silently accept (the cost
+    /// of a per-frame check on the hot path is the trade-off).
+    pub gpu_accessed: bool,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -121,6 +131,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             state: None,
             node_id: NodeInstanceId(0),
             owner_key: 0,
+            gpu_accessed: false,
         }
     }
 
@@ -146,6 +157,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             state,
             node_id,
             owner_key,
+            gpu_accessed: false,
         }
     }
 
@@ -155,10 +167,42 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// docs / contract) that they require a backend-backed executor.
     /// Mock-backend tests never call into real-GPU evaluate paths so the
     /// panic should be unreachable in correctly-typed code.
+    ///
+    /// Side-effect: marks `gpu_accessed = true` so the executor's
+    /// post-evaluate aliased-output contract check passes for any
+    /// primitive that touched the GPU. Primitives that just want to
+    /// inspect inputs / write scalar outputs without touching the GPU
+    /// must not call this (they aren't subject to the aliased-output
+    /// contract either, since they can't declare aliased_array_io
+    /// meaningfully without dispatching).
     pub fn gpu_encoder(&mut self) -> &mut crate::gpu_encoder::GpuEncoder<'gpu> {
+        self.gpu_accessed = true;
         self.gpu
             .as_deref_mut()
             .expect("EffectNodeContext::gpu_encoder called without a GpuEncoder bound")
+    }
+
+    /// Borrow GPU encoder + state store simultaneously. Returns both
+    /// as `Option` so the caller can `.expect(...)` with a primitive-
+    /// specific message; both fields are disjoint on `Self` so the
+    /// borrow checker is happy. Sets `gpu_accessed = true` so the
+    /// (future) aliased-output contract check sees this primitive as
+    /// having dispatched.
+    ///
+    /// Use this instead of the direct `ctx.gpu.as_deref_mut() / ctx
+    /// .state.as_deref_mut()` split-borrow pattern — same ergonomics,
+    /// and the flag stays accurate. The direct field access still
+    /// compiles for now (backward compat) but won't set the flag, so
+    /// primitives using it are exempt from the contract check until
+    /// they migrate.
+    pub fn gpu_and_state_mut(
+        &mut self,
+    ) -> (
+        Option<&mut crate::gpu_encoder::GpuEncoder<'gpu>>,
+        Option<&mut StateStore>,
+    ) {
+        self.gpu_accessed = true;
+        (self.gpu.as_deref_mut(), self.state.as_deref_mut())
     }
 
     /// Borrow the [`StateStore`], panicking if absent. Use the node's
