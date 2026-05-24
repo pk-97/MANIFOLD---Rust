@@ -141,10 +141,10 @@
       "params": { "factor": { "type": "Enum", "value": 0 } } },
 
     { "id": 7,  "typeId": "node.gaussian_blur", "handle": "density_blur_h",
-      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 } } },
+      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
     { "id": 8,  "typeId": "node.gaussian_blur", "handle": "density_blur_v",
-      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 } } },
+      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
     { "id": 9,  "typeId": "node.fluid_gradient_rotate", "handle": "grad_rot",
       "params": {
@@ -154,10 +154,10 @@
       } },
 
     { "id": 10, "typeId": "node.gaussian_blur", "handle": "field_blur_h",
-      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 } } },
+      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
     { "id": 11, "typeId": "node.gaussian_blur", "handle": "field_blur_v",
-      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 } } },
+      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
     { "id": 12, "typeId": "node.reinhard_tone_map", "handle": "display_tone",
       "params": {

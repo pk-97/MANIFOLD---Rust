@@ -26,6 +26,10 @@ pub const GAUSSIAN_BLUR_AXES: &[&str] = &["Horizontal", "Vertical"];
 /// Display labels for the `radius_mode` enum.
 pub const GAUSSIAN_BLUR_RADIUS_MODES: &[&str] = &["Fixed", "Dynamic"];
 
+/// Display labels for the `address_mode` enum — sampler wrap policy.
+/// Matches `manifold_gpu::GpuAddressMode` enum order.
+pub const GAUSSIAN_BLUR_ADDRESS_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];
+
 crate::primitive! {
     name: GaussianBlur,
     type_id: "node.gaussian_blur",
@@ -85,10 +89,31 @@ crate::primitive! {
             range: Some((0.0, 256.0)),
             enum_values: &[],
         },
+        // Sampler wrap policy at the texture edge. Default Clamp
+        // matches the legacy behavior of every existing preset
+        // (OilyFluid, Halation, Bloom, DoF). Set to Repeat for
+        // toroidal sims (FluidSim2D) so edge-spanning blur kernels
+        // wrap continuously instead of duplicating edge pixels —
+        // critical for particles that wrap position-side at uv=1
+        // to flow visually into uv=0 instead of piling up at the
+        // edge. Mirror is the third sampler option, less common.
+        ParamDef {
+            name: "address_mode",
+            label: "Address Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 2.0)),
+            enum_values: GAUSSIAN_BLUR_ADDRESS_MODES,
+        },
     ],
-    composition_notes: "Fixed mode: same `kernel_size` and `step` on H + V for separable isotropic blur; kernels are normalized so DC gain = 1. Dynamic mode: bit-exact wrap of legacy `gaussian_blur_compute.wgsl` — feed `radius` (pixels) from a canvas-aware math chain so the perceived blur scales with the output resolution (the FluidSim convention is `blur_radius * bw/640`). Dynamic + radius=0 = single-tap sample (the legacy downsample trick).",
+    composition_notes: "Fixed mode: same `kernel_size` and `step` on H + V for separable isotropic blur; kernels are normalized so DC gain = 1. Dynamic mode: bit-exact wrap of legacy `gaussian_blur_compute.wgsl` — feed `radius` (pixels) from a canvas-aware math chain so the perceived blur scales with the output resolution (the FluidSim convention is `blur_radius * bw/640`). Dynamic + radius=0 = single-tap sample (the legacy downsample trick). `address_mode = Repeat` for toroidal sims (FluidSim2D) — edge-spanning blur kernels then wrap continuously, so wrap-position particles flow visually across the screen edge.",
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
     picker: { label: "Gaussian Blur", category: Atom },
+    extra_fields: {
+        // Track the GpuAddressMode the cached sampler was created
+        // with so we can rebuild it on address_mode param edits.
+        sampler_address_mode: Option<manifold_gpu::GpuAddressMode> = None,
+    },
 }
 
 pub const GAUSSIAN_BLUR_TYPE_ID: &str = "node.gaussian_blur";
@@ -137,6 +162,11 @@ impl Primitive for GaussianBlur {
                 _ => 0.0,
             },
         };
+        let address_mode = match ctx.params.get("address_mode") {
+            Some(ParamValue::Enum(v)) => (*v).min(2),
+            Some(ParamValue::Float(f)) => (f.round() as u32).min(2),
+            _ => 0,
+        };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -156,9 +186,24 @@ impl Primitive for GaussianBlur {
                 "node.gaussian_blur",
             )
         });
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+        // Pick the GpuAddressMode that matches the address_mode enum.
+        // Recreate the sampler when the mode changes — cheap (state
+        // object) and only happens on param edits, not per frame.
+        let want_mode = match address_mode {
+            1 => manifold_gpu::GpuAddressMode::Repeat,
+            2 => manifold_gpu::GpuAddressMode::MirrorRepeat,
+            _ => manifold_gpu::GpuAddressMode::ClampToEdge,
+        };
+        if self.sampler_address_mode != Some(want_mode) {
+            self.sampler = Some(gpu.device.create_sampler(&GpuSamplerDesc {
+                address_mode_u: want_mode,
+                address_mode_v: want_mode,
+                address_mode_w: want_mode,
+                ..Default::default()
+            }));
+            self.sampler_address_mode = Some(want_mode);
+        }
+        let sampler = self.sampler.as_ref().expect("sampler just inserted");
 
         let uniforms = SeparableGaussianUniforms {
             kernel_size,

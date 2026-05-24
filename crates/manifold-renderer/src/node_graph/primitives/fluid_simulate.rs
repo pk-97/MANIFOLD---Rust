@@ -318,12 +318,23 @@ impl Primitive for FluidSimulate {
                 "node.fluid_simulate",
             )
         });
+        // Fluid sim is toroidal — match legacy FluidSimCore's Repeat
+        // sampler so bilinear taps at uv ≈ 0 / 1 wrap across the canvas
+        // edge instead of duplicating the boundary texel. Without
+        // Repeat, density flows pile up at edges and particles that
+        // wrap position-side at uv=1 don't visually flow into uv=0.
+        let toroidal = GpuSamplerDesc {
+            address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
+            address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+            address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
+            ..Default::default()
+        };
         let field_sampler = self
             .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            .get_or_insert_with(|| gpu.device.create_sampler(&toroidal));
         let density_sampler = self
             .density_sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            .get_or_insert_with(|| gpu.device.create_sampler(&toroidal));
 
         let uniforms = FluidSimUniforms {
             active_count,
