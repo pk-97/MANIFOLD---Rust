@@ -315,31 +315,22 @@ pub(crate) fn reachable_from_final_output(graph: &Graph) -> AHashSet<NodeInstanc
 
 /// Return nodes in evaluation order (dependencies before dependents).
 /// Errors with [`GraphError::CycleDetected`] if the graph contains a cycle.
+///
+/// Walks the graph in `ForwardOnly` mode — state-capture wires close
+/// per-frame loops through the StateStore rather than this-frame's
+/// dependency graph, so they don't contribute to in-degree and don't
+/// form cycles in the causality sense. The decision is uniform with
+/// [`would_create_cycle`] via the shared
+/// [`crate::node_graph::WireWalkMode`] API; no more per-pass
+/// `is_state_capture_wire` closures to drift apart.
 pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError> {
-    // Wires that terminate on a state-capture port are next-frame
-    // captures, not this-frame dependencies — they don't contribute
-    // to in-degree, and the dependency walk skips them. Result: the
-    // wire's CONSUMER side breaks the cycle (zero effective in-degree
-    // from state-capture wires only), so the consumer runs each frame
-    // before the producer writes the next state. Crucially this is
-    // PER-PORT: a stateful primitive can declare `in` as a state
-    // capture while sibling inputs like `seed` are normal per-frame
-    // dependencies whose producers must run upstream.
-    let is_state_capture_wire = |to: NodeInstanceId, port: &str| {
-        graph
-            .get_node(to)
-            .map(|inst| inst.node.state_capture_input_ports().contains(&port))
-            .unwrap_or(false)
-    };
+    use crate::node_graph::WireWalkMode;
 
     let mut in_degree: AHashMap<NodeInstanceId, u32> = AHashMap::default();
     for inst in graph.nodes() {
         in_degree.insert(inst.id, 0);
     }
-    for w in graph.wires() {
-        if is_state_capture_wire(w.to.0, w.to.1) {
-            continue;
-        }
+    for w in graph.walk_wires(WireWalkMode::ForwardOnly) {
         if let Some(d) = in_degree.get_mut(&w.to.0) {
             *d += 1;
         }
@@ -353,10 +344,7 @@ pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError
     let mut order = Vec::with_capacity(graph.node_count());
     while let Some(id) = queue.pop_front() {
         order.push(id);
-        for w in graph.wires_from(id) {
-            if is_state_capture_wire(w.to.0, w.to.1) {
-                continue;
-            }
+        for w in graph.walk_wires_from(id, WireWalkMode::ForwardOnly) {
             if let Some(d) = in_degree.get_mut(&w.to.0) {
                 *d -= 1;
                 if *d == 0 {
@@ -429,20 +417,12 @@ fn would_create_cycle(graph: &Graph, from: NodeInstanceId, to: NodeInstanceId) -
     // Skip wires that terminate on a state-capture port during the
     // traversal — they're next-frame captures, not this-frame
     // dependencies, so they don't contribute to a closeable cycle.
-    // Matches the topological_sort logic; without this, adding a
-    // state-capture back-edge EARLY in the wire list would make every
-    // subsequent forward edge that happens to close the loop through
-    // it falsely trip the cycle detector. (The OilyFluid preset
-    // dodges this by adding the back-edge last; FluidSim2D's
-    // particle-loop topology can't always — `simulate.out` is wired
-    // both to `array_feedback.in` (back-edge) and read as input via
-    // the alias chain.)
-    let is_state_capture_wire = |to: NodeInstanceId, port: &str| {
-        graph
-            .get_node(to)
-            .map(|inst| inst.node.state_capture_input_ports().contains(&port))
-            .unwrap_or(false)
-    };
+    // Matches the topological_sort logic via the shared
+    // `WireWalkMode::ForwardOnly` API — both passes now share one
+    // definition of "forward dependency only" so the two can't drift
+    // (they did before this API existed; that's the bug this whole
+    // unification PR closes).
+    use crate::node_graph::WireWalkMode;
     let mut visited: HashSet<NodeInstanceId> = HashSet::new();
     let mut stack = vec![to];
     while let Some(n) = stack.pop() {
@@ -452,10 +432,7 @@ fn would_create_cycle(graph: &Graph, from: NodeInstanceId, to: NodeInstanceId) -
         if n == from {
             return true;
         }
-        for w in graph.wires_from(n) {
-            if is_state_capture_wire(w.to.0, w.to.1) {
-                continue;
-            }
+        for w in graph.walk_wires_from(n, WireWalkMode::ForwardOnly) {
             stack.push(w.to.0);
         }
     }
@@ -693,6 +670,93 @@ mod tests {
                 assert_eq!(accepted, vec![manifold_gpu::GpuTextureFormat::Rgba16Float]);
             }
             other => panic!("expected PortFormatMismatch, got {other:?}"),
+        }
+    }
+
+    /// Regression: when a state-capture back-edge is added BEFORE the
+    /// forward edges that close the loop through it, the cycle
+    /// detector must NOT false-positive. Before the `WireWalkMode`
+    /// unification (and before `would_create_cycle` learned to skip
+    /// state-capture wires in its DFS), this scenario was a silent
+    /// footgun — adding edges in the "wrong" order rejected a valid
+    /// feedback-loop graph that adding them in a different order
+    /// would accept.
+    #[test]
+    fn cycle_detector_ignores_state_capture_back_edges_regardless_of_wire_order() {
+        // Graph: producer → mid → consumer, with consumer → producer
+        // wired into a state-capture port. The legitimate feedback
+        // loop is `producer.out → mid.in → consumer.in (forward)`
+        // closed by `consumer.out → producer.capture_in` (back-edge).
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(
+            TestNodeWithCapturePort::new("producer", vec![
+                input("capture_in", PortType::Texture2D, false),
+            ], vec![output("out", PortType::Texture2D)]),
+        ));
+        let mid = g.add_node(Box::new(TestNode::new(
+            "mid",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let consumer = g.add_node(Box::new(TestNode::new(
+            "consumer",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+
+        // Add the BACK-edge first — this used to break the cycle
+        // detector.
+        g.connect((consumer, "out"), (producer, "capture_in"))
+            .expect("back-edge wire onto state-capture port is allowed");
+
+        // Then the forward chain that closes the loop.
+        g.connect((producer, "out"), (mid, "in"))
+            .expect("forward edge producer → mid should not trip cycle detector");
+        g.connect((mid, "out"), (consumer, "in"))
+            .expect("forward edge mid → consumer should not trip cycle detector");
+
+        // Whole-graph validation also accepts (topological_sort
+        // returns an order rather than CycleDetected).
+        topological_sort(&g).expect("graph with state-capture back-edge has a valid topo order");
+    }
+
+    /// Local test scaffold: like `TestNode` but declares its first
+    /// input port as a state-capture port via
+    /// `state_capture_input_ports`.
+    struct TestNodeWithCapturePort {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        capture_ports: &'static [&'static str],
+    }
+
+    impl TestNodeWithCapturePort {
+        fn new(name: &'static str, inputs: Vec<NodeInput>, outputs: Vec<NodeOutput>) -> Self {
+            Self {
+                type_id: EffectNodeType::new(name),
+                inputs,
+                outputs,
+                capture_ports: &["capture_in"],
+            }
+        }
+    }
+
+    impl crate::node_graph::EffectNode for TestNodeWithCapturePort {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn state_capture_input_ports(&self) -> &'static [&'static str] {
+            self.capture_ports
         }
     }
 

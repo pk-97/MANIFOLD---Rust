@@ -356,6 +356,96 @@ impl Graph {
     pub fn wires_from(&self, id: NodeInstanceId) -> impl Iterator<Item = &NodeWire> {
         self.wires.iter().filter(move |w| w.from.0 == id)
     }
+
+    /// Filtered wire-walking API. The bare `wires()` / `wires_from()`
+    /// / `wires_into()` accessors above return every wire regardless
+    /// of state-capture status — correct for live-set walks, format
+    /// audits, and serialization. Code that follows *this-frame
+    /// causality* (topological sort, cycle detection, dependency
+    /// propagation) must skip state-capture back-edges; that decision
+    /// used to live as duplicated `is_state_capture_wire` closures
+    /// scattered across `validation.rs` and `execution_plan.rs`. Two
+    /// instances of "pass X forgot to skip state-capture" landed as
+    /// silent bugs (the cycle detector false-positive, the array
+    /// resource sizing failure); this API forces every caller to
+    /// declare its intent, so the next pass we add can't drift the
+    /// same way.
+    ///
+    /// Use [`walk_wires`](Self::walk_wires) for whole-graph walks,
+    /// [`walk_wires_from`](Self::walk_wires_from) for outgoing walks,
+    /// [`walk_wires_into`](Self::walk_wires_into) for incoming walks.
+    pub fn walk_wires(&self, mode: WireWalkMode) -> impl Iterator<Item = &NodeWire> {
+        self.wires.iter().filter(move |w| self.wire_matches(w, mode))
+    }
+
+    /// Outgoing-wire walk filtered by `mode`. See [`walk_wires`](Self::walk_wires).
+    pub fn walk_wires_from(
+        &self,
+        id: NodeInstanceId,
+        mode: WireWalkMode,
+    ) -> impl Iterator<Item = &NodeWire> {
+        self.wires
+            .iter()
+            .filter(move |w| w.from.0 == id && self.wire_matches(w, mode))
+    }
+
+    /// Incoming-wire walk filtered by `mode`. See [`walk_wires`](Self::walk_wires).
+    pub fn walk_wires_into(
+        &self,
+        id: NodeInstanceId,
+        mode: WireWalkMode,
+    ) -> impl Iterator<Item = &NodeWire> {
+        self.wires
+            .iter()
+            .filter(move |w| w.to.0 == id && self.wire_matches(w, mode))
+    }
+
+    /// Single source of truth for the state-capture predicate. All
+    /// `walk_wires*` methods delegate to this so the rule lives in
+    /// one place — if the runtime ever adds another kind of back-edge
+    /// (e.g. a `state_capture_output_ports` for producer-side
+    /// captures) the check extends here, not at every caller.
+    pub fn is_state_capture_wire(&self, w: &NodeWire) -> bool {
+        self.get_node(w.to.0)
+            .map(|inst| inst.node.state_capture_input_ports().contains(&w.to.1))
+            .unwrap_or(false)
+    }
+
+    fn wire_matches(&self, w: &NodeWire, mode: WireWalkMode) -> bool {
+        match mode {
+            WireWalkMode::All => true,
+            WireWalkMode::ForwardOnly => !self.is_state_capture_wire(w),
+            WireWalkMode::CaptureOnly => self.is_state_capture_wire(w),
+        }
+    }
+}
+
+/// Filter mode for [`Graph::walk_wires`] and friends. Every wire-
+/// walking call site must declare its intent — the API forces the
+/// choice rather than letting a forgotten state-capture check drift
+/// into a silent bug (as happened twice before this API existed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireWalkMode {
+    /// Every wire, regardless of whether it terminates on a
+    /// state-capture input port. Use for live-set reachability,
+    /// format compatibility audits, JSON serialization — anywhere
+    /// the question is "what wires exist?" not "what depends on
+    /// what this frame?"
+    All,
+    /// Skip wires terminating on a state-capture input port — the
+    /// "forward dependencies only" view. Use for topological sort,
+    /// cycle detection, in-degree counting, dependency propagation —
+    /// anywhere the question is "what runs before what THIS frame?"
+    ///
+    /// State-capture wires close per-frame loops through the
+    /// StateStore rather than this-frame's dependency graph; they
+    /// don't contribute to in-degree and don't form cycles in the
+    /// causality sense.
+    ForwardOnly,
+    /// Only wires terminating on a state-capture input port. Use
+    /// for the late-capture phase that snapshots producer outputs
+    /// at end of frame.
+    CaptureOnly,
 }
 
 impl Default for Graph {
