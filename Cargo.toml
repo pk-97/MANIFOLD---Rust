@@ -16,6 +16,11 @@ members = [
     "crates/manifold-recording",
     "crates/manifold-app",
 ]
+# `cargo run` and bare `cargo test` at workspace root resolve to
+# manifold-app — restores the pre-`check-presets`-binary behavior
+# where `cargo run --release` launches the app without --bin.
+# `cargo test --workspace` and `cargo test -p <crate>` are unaffected.
+default-members = ["crates/manifold-app"]
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
