@@ -182,27 +182,26 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             .expect("EffectNodeContext::gpu_encoder called without a GpuEncoder bound")
     }
 
-    /// Borrow GPU encoder + state store simultaneously. Returns both
-    /// as `Option` so the caller can `.expect(...)` with a primitive-
-    /// specific message; both fields are disjoint on `Self` so the
-    /// borrow checker is happy. Sets `gpu_accessed = true` so the
-    /// (future) aliased-output contract check sees this primitive as
-    /// having dispatched.
+    /// Mark this primitive as having accessed the GPU during the
+    /// current `evaluate` call. Call once at the top of any code
+    /// path that will dispatch compute or copy buffers / textures.
     ///
-    /// Use this instead of the direct `ctx.gpu.as_deref_mut() / ctx
-    /// .state.as_deref_mut()` split-borrow pattern — same ergonomics,
-    /// and the flag stays accurate. The direct field access still
-    /// compiles for now (backward compat) but won't set the flag, so
-    /// primitives using it are exempt from the contract check until
-    /// they migrate.
-    pub fn gpu_and_state_mut(
-        &mut self,
-    ) -> (
-        Option<&mut crate::gpu_encoder::GpuEncoder<'gpu>>,
-        Option<&mut StateStore>,
-    ) {
+    /// The flag flips `ctx.gpu_accessed = true`. The executor reads
+    /// it after `evaluate` returns to enforce the aliased-output
+    /// contract — a primitive that declared `aliased_array_io` but
+    /// never called this (or `gpu_encoder()`, which also flips the
+    /// flag) clearly didn't dispatch the kernel that mutates the
+    /// aliased buffer, so downstream consumers would read stale
+    /// data. Debug builds panic loudly.
+    ///
+    /// Use this when you need the split-borrow `ctx.gpu.as_deref_mut()
+    /// / ctx.state.as_deref_mut()` pattern (gpu + state + inputs
+    /// referenced together) — the borrow checker can see each field
+    /// is disjoint when you access them directly, but a single helper
+    /// method that returned both refs would borrow the whole ctx and
+    /// conflict with subsequent `ctx.inputs.*` reads.
+    pub fn mark_gpu_accessed(&mut self) {
         self.gpu_accessed = true;
-        (self.gpu.as_deref_mut(), self.state.as_deref_mut())
     }
 
     /// Borrow the [`StateStore`], panicking if absent. Use the node's

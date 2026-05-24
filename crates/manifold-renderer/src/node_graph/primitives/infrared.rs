@@ -148,10 +148,7 @@ impl EffectNode for Infrared {
         let fx = build_effect_instance(&EffectTypeId::INFRARED, ctx, INFRARED_PARAM_ORDER);
         let eff_ctx = build_effect_context(ctx, width, height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.infrared requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
         let legacy = self
             .legacy
             .get_or_insert_with(|| InfraredFX::new(gpu.device));

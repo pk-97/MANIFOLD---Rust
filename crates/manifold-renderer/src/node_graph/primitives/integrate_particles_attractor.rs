@@ -348,6 +348,7 @@ impl Primitive for IntegrateParticlesAttractor {
         // Split-borrow disjoint fields on ctx so gpu + state are both
         // mutable at once. Mirrors `temporal::Feedback` and
         // `array_feedback`.
+        ctx.mark_gpu_accessed();
         let gpu = ctx
             .gpu
             .as_deref_mut()

@@ -137,6 +137,7 @@ impl Primitive for SeedParticles {
 
         // Split-borrow `gpu` and `state` directly so we can both
         // dispatch and update state in one pass (mirror of array_feedback).
+        ctx.mark_gpu_accessed();
         let gpu = ctx
             .gpu
             .as_deref_mut()

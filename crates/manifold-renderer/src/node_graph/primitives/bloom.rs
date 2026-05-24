@@ -236,10 +236,7 @@ impl EffectNode for Bloom {
         };
         let (width, height) = (target.width, target.height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.bloom requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
         self.ensure_pipelines(gpu.device);
         self.ensure_pyramid(gpu.device, width, height);
 

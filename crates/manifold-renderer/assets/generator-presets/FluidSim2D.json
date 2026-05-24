@@ -289,7 +289,7 @@
     { "fromNode": 11, "fromPort": "out",       "toNode": 3,  "toPort": "field" },
     { "fromNode": 8,  "fromPort": "out",       "toNode": 3,  "toPort": "density" },
 
-    { "fromNode": 1,  "fromPort": "particles", "toNode": 4,  "toPort": "particles" },
+    { "fromNode": 3,  "fromPort": "out",       "toNode": 4,  "toPort": "particles" },
     { "fromNode": 0,  "fromPort": "output_width",  "toNode": 4,  "toPort": "width" },
     { "fromNode": 0,  "fromPort": "output_height", "toNode": 4,  "toPort": "height" },
     { "fromNode": 20, "fromPort": "out",       "toNode": 4,  "toPort": "active_count" },

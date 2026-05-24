@@ -126,6 +126,7 @@ impl Primitive for Feedback {
         // keeps the two allocations bit-aligned.
         let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
 
+        ctx.mark_gpu_accessed();
         let gpu = ctx
             .gpu
             .as_deref_mut()
@@ -204,6 +205,7 @@ impl Primitive for Feedback {
         let owner_key = ctx.owner_key;
         let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
 
+        ctx.mark_gpu_accessed();
         let gpu = ctx
             .gpu
             .as_deref_mut()

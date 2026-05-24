@@ -305,10 +305,7 @@ impl EffectNode for Watercolor {
         };
         let (width, height) = (target.width, target.height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.watercolor requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
         self.ensure_pipelines(gpu.device);
         self.ensure_state(gpu.device, width, height);
 

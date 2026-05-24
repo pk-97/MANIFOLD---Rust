@@ -112,6 +112,11 @@ impl Primitive for ArrayFeedback {
         let node_id = ctx.node_id;
         let owner_key = ctx.owner_key;
 
+        // Mark GPU access for the aliased-output contract check. This
+        // primitive dispatches buffer copies, so the executor's
+        // post-evaluate audit needs to see the flag.
+        ctx.mark_gpu_accessed();
+
         // Split borrows: gpu / state are disjoint fields on ctx, so
         // both can be borrowed mutably at once. Mirrors
         // `temporal::Feedback`.
@@ -174,6 +179,7 @@ impl Primitive for ArrayFeedback {
         };
         let node_id = ctx.node_id;
         let owner_key = ctx.owner_key;
+        ctx.mark_gpu_accessed();
         let gpu = ctx
             .gpu
             .as_deref_mut()

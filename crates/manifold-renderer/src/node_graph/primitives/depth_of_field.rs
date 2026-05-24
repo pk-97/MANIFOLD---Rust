@@ -388,10 +388,7 @@ impl EffectNode for DepthOfField {
         };
         let (width, height) = (target.width, target.height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.depth_of_field requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
         self.ensure_pipelines(gpu.device);
         self.ensure_buffers(gpu.device, width, height);
 

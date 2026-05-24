@@ -177,10 +177,7 @@ impl EffectNode for AutoGain {
         let fx = build_effect_instance(&EffectTypeId::AUTO_GAIN, ctx, AUTO_GAIN_PARAM_ORDER);
         let eff_ctx = build_effect_context(ctx, width, height);
 
-        let gpu = ctx
-            .gpu
-            .as_deref_mut()
-            .expect("node.auto_gain requires a GpuEncoder");
+        let gpu = ctx.gpu_encoder();
         let legacy = self
             .legacy
             .get_or_insert_with(|| AutoGainFX::new(gpu.device));

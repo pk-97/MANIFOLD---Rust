@@ -479,18 +479,38 @@ impl Executor {
                             step.node,
                             owner_key,
                         );
+                        let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
-                        // Aliased-output contract enforcement lands in
-                        // a follow-up PR once the primitive surface
-                        // standardises on `ctx.gpu_encoder()` /
-                        // `ctx.gpu_and_state_mut()` (the helpers that
-                        // set `ctx.gpu_accessed`) instead of the
-                        // current mix of direct field access patterns.
-                        // The field is wired now so the check is a
-                        // one-line debug_assert when the migration is
-                        // done; today's mixed access means many
-                        // legitimate dispatches don't set the flag and
-                        // would false-positive the assertion.
+                        // Aliased-output contract: a primitive that
+                        // declares `aliased_array_io = [(in, out)]`
+                        // promises its dispatch writes to the aliased
+                        // buffer. If it returned without touching the
+                        // GPU at all (early-return path skipped the
+                        // dispatch), downstream consumers of `out`
+                        // read whatever was in the buffer last frame —
+                        // stale data with no error signal. Debug
+                        // builds panic loudly; release builds skip
+                        // the check (per-frame cost stays off the hot
+                        // path). The primitive surface uses either
+                        // `ctx.gpu_encoder()` or
+                        // `ctx.mark_gpu_accessed()` to flip the flag.
+                        debug_assert!(
+                            !(has_gpu_binding
+                                && !ctx.gpu_accessed
+                                && !inst.node.aliased_array_io().is_empty()),
+                            "primitive `{}` declared aliased_array_io {:?} \
+                             but its `evaluate` returned without accessing \
+                             the GPU. Downstream consumers of the aliased \
+                             output will read stale data. Fix: either drop \
+                             the aliased_array_io declaration (the primitive \
+                             isn't actually in-place mutating), or call \
+                             `ctx.gpu_encoder()` / `ctx.mark_gpu_accessed()` \
+                             on every code path through `evaluate` and \
+                             ensure each one dispatches at least one \
+                             compute pass through the encoder.",
+                            inst.node.type_id().as_str(),
+                            inst.node.aliased_array_io(),
+                        );
                     }
                     // Drain scalar writes back into the backend so
                     // downstream readers in the same frame see them via
@@ -633,6 +653,90 @@ mod tests {
             kind: PortKind::Output,
             required: false,
         }
+    }
+
+    /// Misbehaving test node: declares `aliased_array_io` claiming
+    /// in-place mutation but its `evaluate` returns without touching
+    /// the GPU. Exercises the debug-build aliased-output assertion
+    /// in the executor — without it, downstream consumers of the
+    /// aliased output would silently read stale data.
+    struct SilentAliasedNode {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl SilentAliasedNode {
+        fn new(particle_layout: crate::node_graph::ports::ArrayType) -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.silent_aliased"),
+                outputs: vec![output("out", PortType::Array(particle_layout))],
+            }
+        }
+    }
+
+    impl EffectNode for SilentAliasedNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+            // Asserts a self-loop alias even though `in` isn't an
+            // input port. The runtime check fires on the contract
+            // ("if you declare aliased_array_io, you must dispatch"),
+            // not on whether the declared ports exist.
+            &[("in", "out")]
+        }
+        fn array_output_capacity(
+            &self,
+            _port: &str,
+            _params: &crate::node_graph::effect_node::ParamValues,
+            _input_capacities: &[(&str, u32)],
+        ) -> Option<u32> {
+            Some(16)
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            // Deliberately silent — no `gpu_encoder()` call, no
+            // `mark_gpu_accessed()`, no dispatch. The debug_assert
+            // should fire.
+        }
+    }
+
+    /// Debug-build aliased-output contract: a primitive that declares
+    /// `aliased_array_io` MUST access the GPU during `evaluate`,
+    /// otherwise the aliased output never gets written and downstream
+    /// reads stale data. Release builds skip the check; debug catches
+    /// the contract violation.
+    #[test]
+    #[should_panic(expected = "aliased_array_io")]
+    #[cfg(debug_assertions)]
+    fn aliased_output_assertion_fires_on_silent_primitive() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::node_graph::MetalBackend;
+        use crate::node_graph::ports::ArrayType;
+        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+
+        let device = GpuDevice::new();
+        let particle_layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
+
+        let mut g = Graph::new();
+        g.add_node(Box::new(SilentAliasedNode::new(particle_layout)));
+        let plan = compile(&g).expect("trivial graph compiles");
+
+        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let mut exec = Executor::new(Box::new(backend));
+        let mut native_enc = device.create_encoder("aliased-contract-test");
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+        // Should panic inside the executor's debug_assert! after the
+        // node's `evaluate` returns without touching the GPU.
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
     }
 
     /// Test EffectNode that records each evaluation's bindings into a shared log.
