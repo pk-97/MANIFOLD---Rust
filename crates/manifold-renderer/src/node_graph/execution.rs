@@ -168,17 +168,21 @@ impl Executor {
     /// them. Equivalent to "every node reachable from a FinalOutput
     /// via at least one live mux branch."
     ///
-    /// Why reverse-walk works in one pass: by the time we reach a
-    /// step in reverse order, every downstream step that could mark
-    /// it live has already been visited. So a single pass propagates
-    /// liveness without iteration to convergence.
-    ///
-    /// Wires that close per-frame loops through a `breaks_dependency_cycle`
-    /// node ARE handled correctly: those wires appear in `step.inputs`
-    /// like any other, so liveness propagates through them. The
-    /// state-capture semantics (resource carries across frames) is
-    /// orthogonal — handled by `persistent_resources` acquisition,
-    /// not live-set propagation.
+    /// Worklist propagation: push every newly-live step and process
+    /// it once. The reason a single reverse-only sweep is wrong: a
+    /// state-capture wire from a `breaks_dependency_cycle` node (e.g.
+    /// `node.feedback`'s `in` port) connects a LOW-topo-idx consumer
+    /// to a HIGH-topo-idx producer — `feedback`'s `in` reads from
+    /// `color_combine`, which runs LATER in the plan because the
+    /// state-capture exemption removes that wire from in-degree. A
+    /// reverse sweep marks `color_combine` live when it visits
+    /// `feedback`, but it has already passed `color_combine`'s index,
+    /// so `color_combine`'s OWN inputs (and their producers) never
+    /// propagate. Result: the feedback-write subgraph runs with
+    /// unbound inputs, the persistent slot never updates, state
+    /// stays at the first-frame clear. Worklist processes a step
+    /// the moment it's marked, so back-edges across topo order are
+    /// handled without iteration to convergence.
     ///
     /// `wired_scratch` is reused across nodes to avoid per-frame
     /// allocation in the inner loop.
@@ -205,20 +209,22 @@ impl Executor {
 
         // Seed: every FinalOutput step is live. (Multi-FinalOutput
         // graphs are unusual but legal; this handles them uniformly.)
+        let mut worklist: Vec<usize> = Vec::new();
         for (idx, step) in steps.iter().enumerate() {
             if let Some(inst) = graph.get_node(step.node)
                 && inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID
             {
                 self.live_steps[idx] = true;
+                worklist.push(idx);
             }
         }
 
-        // Reverse propagation. For each live step, mark its input
-        // producers live — with the mux short-circuit applied.
-        for idx in (0..steps.len()).rev() {
-            if !self.live_steps[idx] {
-                continue;
-            }
+        // Drain the worklist. Each pop processes a live step's inputs,
+        // marking their producers live and pushing them on for their
+        // own propagation. Mux short-circuit applies as before:
+        // selector-equipped nodes restrict propagation to the chosen
+        // branch's input port.
+        while let Some(idx) = worklist.pop() {
             let step = &steps[idx];
             let Some(inst) = graph.get_node(step.node) else {
                 continue;
@@ -241,8 +247,11 @@ impl Executor {
                 {
                     continue;
                 }
-                if let Some(&prod_step) = producer.get(&res_id) {
+                if let Some(&prod_step) = producer.get(&res_id)
+                    && !self.live_steps[prod_step]
+                {
                     self.live_steps[prod_step] = true;
+                    worklist.push(prod_step);
                 }
             }
         }
@@ -534,6 +543,12 @@ mod tests {
         /// model the same write-then-rebuild behaviour via a shared
         /// handle the test holds onto).
         selected_branch: Arc<Mutex<Option<&'static str>>>,
+        /// Optional list of state-capture input port names. Mirrors
+        /// the `EffectNode::state_capture_input_ports` declaration on
+        /// real stateful primitives (`node.feedback`, `node.array_feedback`).
+        /// `&'static [&'static str]` so the trait can return it
+        /// directly; tests pass leaked slices.
+        state_capture_ports: &'static [&'static str],
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -556,7 +571,16 @@ mod tests {
                 outputs,
                 log,
                 selected_branch: Arc::new(Mutex::new(None)),
+                state_capture_ports: &[],
             }
+        }
+
+        /// Mark a port as state-capture for executor tests that need
+        /// to exercise the back-edge propagation path. Mirrors what
+        /// `node.feedback` declares for its `in` port.
+        fn with_state_capture_ports(mut self, ports: &'static [&'static str]) -> Self {
+            self.state_capture_ports = ports;
+            self
         }
 
         /// Make this node act as a branch-selector for executor
@@ -601,6 +625,9 @@ mod tests {
             _wired_inputs: &[&str],
         ) -> Option<&'static str> {
             *self.selected_branch.lock().unwrap()
+        }
+        fn state_capture_input_ports(&self) -> &'static [&'static str] {
+            self.state_capture_ports
         }
     }
 
@@ -1026,6 +1053,121 @@ mod tests {
             !names.contains(&"prod_a".to_string()),
             "frame 1 should NOT run the previously-selected branch (prod_a) — \
              live set must be rebuilt per frame, got: {names:?}",
+        );
+    }
+
+    /// Regression: live-set propagation must traverse state-capture
+    /// back-edges. OilyFluid hit this — `node.feedback` (low topo idx)
+    /// reads its `in` port from `color_combine` (high topo idx, because
+    /// the state-capture exemption removes the back-wire from in-degree).
+    /// A pure reverse single-pass walk marks `color_combine` live when
+    /// it reaches `feedback`, but its iteration has already passed
+    /// `color_combine`'s slot — so `color_combine`'s OWN inputs never
+    /// propagate. The noise/advect subgraph stays dark, the persistent
+    /// resource never gets written, state stays at the first-frame
+    /// clear, the visible output is static.
+    ///
+    /// Shape mirrors OilyFluid (mode = 0 = "Oil Slick"): only `in_0`
+    /// of the mux is live → `consumer → feedback.out → mux.in_0 → final`.
+    /// `feedback.in` is fed by `writer`, which combines `noise` and
+    /// `feedback.out`. `noise` exists only to feed `writer`; if the
+    /// propagation skips `writer`'s producers, `noise` is dead — which
+    /// is the exact bug.
+    #[test]
+    fn live_set_propagates_through_state_capture_back_edge() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+
+        // noise: only consumed by writer (whose only consumer is the
+        // feedback's state-capture `in` port).
+        let noise = g.add_node(Box::new(RecordingNode::new(
+            "noise",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        // feedback: state-capture on `in`. Topo order places feedback
+        // EARLIER than writer because the `in`-port wire from writer
+        // skips in-degree counting.
+        let feedback = g.add_node(Box::new(
+            RecordingNode::new(
+                "feedback",
+                vec![input("in", PortType::Texture2D, true)],
+                vec![output("out", PortType::Texture2D)],
+                log.clone(),
+            )
+            .with_state_capture_ports(&["in"]),
+        ));
+        // writer: combines noise + feedback.out into the resource
+        // feedback's `in` reads next frame. Sits HIGHER in topo than
+        // feedback (this is what trips the single-pass walk).
+        let writer = g.add_node(Box::new(RecordingNode::new(
+            "writer",
+            vec![
+                input("a", PortType::Texture2D, true),
+                input("b", PortType::Texture2D, true),
+            ],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        // consumer: reads feedback.out — the path that pulls feedback
+        // into the live set in the first place.
+        let consumer = g.add_node(Box::new(RecordingNode::new(
+            "consumer",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        // mux: in_0 selected. consumer feeds in_0; an unused producer
+        // feeds in_1 to make the short-circuit do real work.
+        let unused = g.add_node(Box::new(RecordingNode::new(
+            "unused",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let (mux_node, _sel) = RecordingNode::new(
+            "mux",
+            vec![
+                input("in_0", PortType::Texture2D, false),
+                input("in_1", PortType::Texture2D, false),
+            ],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )
+        .with_selected_branch(Some("in_0"));
+        let mux = g.add_node(Box::new(mux_node));
+        let fout = g.add_node(Box::new(FinalOutput::new()));
+
+        g.connect((noise, "out"), (writer, "a")).unwrap();
+        g.connect((feedback, "out"), (writer, "b")).unwrap();
+        g.connect((writer, "out"), (feedback, "in")).unwrap();
+        g.connect((feedback, "out"), (consumer, "in")).unwrap();
+        g.connect((consumer, "out"), (mux, "in_0")).unwrap();
+        g.connect((unused, "out"), (mux, "in_1")).unwrap();
+        g.connect((mux, "out"), (fout, "in")).unwrap();
+
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_time());
+
+        let names: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.type_name.clone())
+            .collect();
+        for required in ["noise", "writer", "feedback", "consumer", "mux"] {
+            assert!(
+                names.contains(&required.to_string()),
+                "state-capture back-edge propagation must keep the feedback-write \
+                 chain live; missing `{required}` in {names:?}",
+            );
+        }
+        // Mux short-circuit still works: the in_1 producer is dead.
+        assert!(
+            !names.contains(&"unused".to_string()),
+            "mux short-circuit must still prune the unselected branch; got {names:?}",
         );
     }
 
