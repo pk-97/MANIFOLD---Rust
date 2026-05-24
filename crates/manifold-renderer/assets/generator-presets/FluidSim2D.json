@@ -75,19 +75,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_mode3", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_mode4", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_noise", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_rotation", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_slope", "param": "selector" },
+        "target": { "kind": "handleNode", "handle": "mode_value", "param": "value" },
         "convert": { "type": "Float" } },
 
       { "id": "splat_size",        "label": "Splat Size",   "defaultValue": 3.0,
@@ -287,7 +275,16 @@
       "params": { "duration": { "type": "Float", "value": 0.5 } } },
 
     { "id": 53, "typeId": "node.math", "handle": "inject_force_gated",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.005 }, "op": { "type": "Enum", "value": 2 } } }
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.005 }, "op": { "type": "Enum", "value": 2 } } },
+
+    { "id": 70, "typeId": "node.clip_trigger_cycle", "handle": "pattern_cycle",
+      "params": { "modulus": { "type": "Int", "value": 7 } } },
+
+    { "id": 71, "typeId": "node.value", "handle": "mode_value",
+      "params": { "value": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 72, "typeId": "node.sample_and_hold", "handle": "mode_hold",
+      "params": {} }
   ],
   "wires": [
     { "fromNode": 1,  "fromPort": "particles", "toNode": 2,  "toPort": "seed" },
@@ -380,6 +377,17 @@
     { "fromNode": 13, "fromPort": "out",       "toNode": 12, "toPort": "in" },
     { "fromNode": 27, "fromPort": "out",       "toNode": 13, "toPort": "scale" },
     { "fromNode": 12, "fromPort": "out",       "toNode": 14, "toPort": "in" },
+
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 70, "toPort": "trigger_count" },
+    { "fromNode": 70, "fromPort": "out",       "toNode": 1,  "toPort": "pattern" },
+
+    { "fromNode": 71, "fromPort": "out",       "toNode": 72, "toPort": "value" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 72, "toPort": "trigger" },
+    { "fromNode": 72, "fromPort": "out",       "toNode": 31, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out",       "toNode": 34, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out",       "toNode": 42, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out",       "toNode": 46, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out",       "toNode": 49, "toPort": "selector" },
 
     { "fromNode": 3,  "fromPort": "out",       "toNode": 2,  "toPort": "in" }
   ]
