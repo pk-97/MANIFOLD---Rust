@@ -219,13 +219,20 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             .expect("topo order references existing node");
 
         // Gather concrete dims for this node's wired texture inputs.
-        // Anything that resolves to `None` in `resource_dims` (the
-        // producer left it as canvas-default) is omitted — the
-        // default-dim policy below treats absence as "no opinion."
-        // Treating an explicit canvas-dim producer as `None` here
-        // wouldn't be right because we don't know canvas dims at
-        // compile time; the executor handles that resolution.
+        // Producers that resolved to `None` (canvas-default) or whose
+        // resource isn't yet assigned (state-capture back-edge to a
+        // node later in topo order) are tracked separately as
+        // `any_canvas_input` so the fallback below can propagate
+        // canvas correctly. The old behaviour was to drop them from
+        // the scratch entirely and take max-of-Some-only, which
+        // silently picked a small dim when a chain mixed an explicit
+        // downsample with a canvas-default feedback wire — the bug
+        // that left oily-fluid's velocity-feedback writer at quarter-
+        // res while feedback's state was canvas, so the per-frame
+        // blit faulted with "source extent out of bounds" and state
+        // never updated.
         input_dims_scratch.clear();
+        let mut any_canvas_input = false;
         for input_port in inst.node.inputs() {
             if !matches!(
                 input_port.ty,
@@ -233,11 +240,20 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             ) {
                 continue;
             }
-            if let Some(wire) = wire_by_target.get(&(node_id, input_port.name))
-                && let Some(&src_res) = output_resources.get(&wire.from)
-                && let Some(dims) = resource_dims.get(src_res.0 as usize).copied().flatten()
-            {
-                input_dims_scratch.push((input_port.name, dims));
+            let Some(wire) = wire_by_target.get(&(node_id, input_port.name)) else {
+                continue; // optional unwired input doesn't count
+            };
+            let Some(&src_res) = output_resources.get(&wire.from) else {
+                // Producer hasn't been processed yet — state-capture
+                // back-edge. Its dim will be resolved when the writer
+                // is visited later in topo; for the purposes of THIS
+                // node's output dim, treat it as canvas (None).
+                any_canvas_input = true;
+                continue;
+            };
+            match resource_dims.get(src_res.0 as usize).copied().flatten() {
+                Some(dims) => input_dims_scratch.push((input_port.name, dims)),
+                None => any_canvas_input = true,
             }
         }
 
@@ -254,10 +270,11 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
 
             // Dims: only meaningful for Texture2D outputs. Query the
             // producer first; if it has no opinion, apply the default
-            // policy: take the max of the gathered texture-input dims,
-            // or leave `None` (= canvas) if there are no texture
-            // inputs. Non-texture outputs get `None` so the parallel
-            // arrays stay aligned (resource_dims ignores them).
+            // policy: any canvas-default / unresolved input means the
+            // output is canvas (None) because canvas is — by
+            // construction — the largest dim in the chain and we
+            // can't compute max(canvas, explicit) at compile time.
+            // Otherwise, max of the explicit input dims.
             let dims = if matches!(output_port.ty, PortType::Texture2D) {
                 // CANVAS dims aren't known at compile time. We pass
                 // a sentinel (0, 0) here — primitives that need the
@@ -267,13 +284,18 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 inst.node
                     .output_dims(output_port.name, (0, 0), &input_dims_scratch)
                     .or_else(|| {
-                        // Default policy: max of input texture dims.
-                        // `None` if no texture inputs → caller treats
-                        // as "use backend canvas at acquire time."
-                        input_dims_scratch
-                            .iter()
-                            .map(|(_, d)| *d)
-                            .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+                        if any_canvas_input {
+                            // Propagate canvas: any None input means
+                            // we can't be sure max is below canvas,
+                            // so leave dims = None for the executor
+                            // to resolve against the runtime canvas.
+                            None
+                        } else {
+                            input_dims_scratch
+                                .iter()
+                                .map(|(_, d)| *d)
+                                .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+                        }
                     })
             } else {
                 None
@@ -286,15 +308,22 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // last_reader starts at the producer's step (so unread resources are
     // freed immediately) and gets bumped each time a downstream node reads.
     //
-    // Wires that terminate on a `breaks_dependency_cycle` node are
-    // STATE CAPTURES, not per-frame reads — the read happens at step 0
-    // (the marked node runs first under the topo-sort exemption) but
-    // semantically picks up the previous frame's producer write that
-    // still occupies the buffer. They must NOT contribute to
-    // `last_reader` (else the resource gets freed before the producer
-    // writes it this frame) and the resource's slot must persist
-    // across frame boundaries. We collect them in `persistent` and
-    // surface them on the plan so the executor pre-acquires them.
+    // Wires that terminate on a state-capture port are STATE CAPTURES,
+    // not per-frame reads — the read happens at the consumer's step
+    // (the consumer runs first relative to its state-capture wires
+    // under the topo-sort exemption) but semantically picks up the
+    // previous frame's producer write that still occupies the buffer.
+    // They must NOT contribute to `last_reader` (else the resource
+    // gets freed before the producer writes it this frame) and the
+    // resource's slot must persist across frame boundaries. We collect
+    // them in `persistent` and surface them on the plan so the executor
+    // pre-acquires them.
+    //
+    // Per-PORT check: a stateful node can have a mix of state-capture
+    // inputs (`in` on `node.feedback`) and regular per-frame inputs
+    // (`seed`). Only the former get persistent-slot treatment; the
+    // latter participate in `last_reader` like any other read so their
+    // producers run upstream as normal.
     let mut last_reader: AHashMap<ResourceId, usize> = AHashMap::default();
     let mut persistent: Vec<ResourceId> = Vec::new();
     let mut persistent_seen: std::collections::HashSet<ResourceId> =
@@ -305,7 +334,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         let inst = graph
             .get_node(node_id)
             .expect("topo order references existing node");
-        let is_state_capture_consumer = inst.node.breaks_dependency_cycle();
+        let state_capture_ports = inst.node.state_capture_input_ports();
 
         let mut step_inputs = Vec::new();
         for input_port in inst.node.inputs() {
@@ -314,7 +343,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                     .get(&wire.from)
                     .expect("connect() guarantees the wire's source has a resource");
                 step_inputs.push((input_port.name, res_id));
-                if is_state_capture_consumer {
+                if state_capture_ports.contains(&input_port.name) {
                     if persistent_seen.insert(res_id) {
                         persistent.push(res_id);
                     }
@@ -782,6 +811,92 @@ mod tests {
         assert!(
             plan.steps()[2].free_after.contains(&r_a),
             "R_a must be freed at C's step (the alias's last reader)"
+        );
+    }
+
+    /// Regression: a node with one explicit-dim input AND one
+    /// canvas-default input must NOT pick up the explicit dim via
+    /// max-of-Some-only — that's the bug that left oily-fluid's
+    /// velocity-feedback writer at quarter-res while feedback's state
+    /// was canvas, causing the per-frame blit to fault. Any canvas
+    /// input means "we can't bound the output below canvas," so the
+    /// output dim must propagate as None (= canvas at runtime).
+    #[test]
+    fn output_dims_canvas_input_overrides_explicit_input() {
+        struct ExplicitDimNode {
+            type_id: EffectNodeType,
+        }
+        impl crate::node_graph::EffectNode for ExplicitDimNode {
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodePort] {
+                &[]
+            }
+            fn outputs(&self) -> &[NodePort] {
+                static OUTPUTS: [NodePort; 1] = [NodePort {
+                    name: "out",
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Output,
+                    required: false,
+                }];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+            fn output_dims(
+                &self,
+                _port: &str,
+                _canvas: (u32, u32),
+                _inputs: &[(&str, (u32, u32))],
+            ) -> Option<(u32, u32)> {
+                Some((480, 270))
+            }
+        }
+
+        // A_explicit (quarter-res) ─┐
+        //                            ├─→ B (mix)
+        // A_canvas (None)        ─┘
+        // B's output should be None (canvas), NOT quarter-res.
+        let mut g = Graph::new();
+        let a_explicit = g.add_node(Box::new(ExplicitDimNode {
+            type_id: EffectNodeType::new("a_explicit"),
+        }));
+        let a_canvas = g.add_node(Box::new(TestNode::new(
+            "a_canvas",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "b",
+            vec![
+                input("a", PortType::Texture2D, true),
+                input("b", PortType::Texture2D, true),
+            ],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        g.connect((a_explicit, "out"), (b, "a")).unwrap();
+        g.connect((a_canvas, "out"), (b, "b")).unwrap();
+        let plan = compile(&g).unwrap();
+        // The explicit-dim node should still resolve to quarter-res...
+        let r_explicit = plan.steps().iter()
+            .find(|s| s.node == a_explicit).unwrap()
+            .outputs[0].1;
+        assert_eq!(plan.resource_dims(r_explicit), Some((480, 270)));
+        // ...but B's mix output, because one input is canvas-default,
+        // must NOT inherit the quarter-res — it must be None (canvas).
+        let r_b = plan.steps().iter()
+            .find(|s| s.node == b).unwrap()
+            .outputs[0].1;
+        assert_eq!(
+            plan.resource_dims(r_b),
+            None,
+            "B mixes a quarter-res input with a canvas-default input; \
+             output must be canvas (None), not the quarter-res input's dim. \
+             The old max-of-Some-only fallback silently picked quarter, \
+             which caused oily-fluid's feedback blit to fault on dim mismatch."
         );
     }
 

@@ -68,38 +68,34 @@ impl Primitive for Downsample {
     fn output_dims(
         &self,
         port: &str,
-        canvas_dims: (u32, u32),
+        _canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
     ) -> Option<(u32, u32)> {
         if port != "out" {
             return None;
         }
-        // Output dims = input dims / factor. The compiler already
-        // resolved the input's dims into `input_dims`. If the input
-        // is unwired (shouldn't happen — it's required), fall back
-        // to canvas dims / factor so the slot allocation at least
-        // makes sense rather than being (0, 0).
+        // Output dims = input dims / factor. If `in` isn't in the
+        // scratch (producer is canvas-default OR a state-capture
+        // back-edge whose dim isn't yet resolved), return None so
+        // the executor resolves the slot to runtime canvas dims.
+        // That means the downsample shader dispatches at canvas
+        // resolution and performs a 4×4 box blur without actually
+        // shrinking — variable-res becomes a no-op for this slot.
+        // The old behaviour of falling back to a (0,0) canvas sentinel
+        // here returned (1, 1), starving the entire downstream blur
+        // chain. A proper fix is runtime dim resolution (Phase 3a-
+        // followup); for now this keeps the chain functional when
+        // the input dim isn't compile-time-knowable.
         let (src_w, src_h) = input_dims
             .iter()
             .find(|(name, _)| *name == "in")
-            .map(|(_, d)| *d)
-            .unwrap_or(canvas_dims);
+            .map(|(_, d)| *d)?;
         // Factor is an enum: 0 → 2x, 1 → 4x, 2 → 8x. Default param
-        // value is 1 (4x). Reading via match against the inventoried
-        // default avoids a separate u32 lookup since the primitive!
-        // macro stores params as ParamValue::Enum(u32).
-        // NOTE: we don't have access to params here — the trait
-        // method is called at compile time before per-instance
-        // params are applied? Actually `inst.params` IS resolved by
-        // this point (primitive! macro caches them on the instance).
-        // But the EffectNode trait doesn't pass params to
-        // output_dims. We'd need to either pass params through OR
-        // resolve via a field on the struct. For now: hardcode 4x
-        // since that's what oily fluid needs; widen the trait
-        // surface in a follow-up if more presets need per-instance
-        // factor at compile time.
+        // value is 1 (4x). The EffectNode trait doesn't pass params
+        // to output_dims, so we hardcode 4x; widen the trait surface
+        // in a follow-up if more presets need per-instance factor at
+        // compile time.
         let factor = 4u32;
-        let _ = (src_w, src_h, factor);
         let out_w = (src_w / factor).max(1);
         let out_h = (src_h / factor).max(1);
         Some((out_w, out_h))
@@ -206,11 +202,16 @@ mod tests {
     }
 
     #[test]
-    fn output_dims_falls_back_to_canvas_when_input_unwired() {
+    fn output_dims_returns_none_when_input_dim_is_unknown() {
+        // When `in`'s producer is canvas-default or a state-capture
+        // back-edge, the compile-time dim isn't known. Returning None
+        // lets the executor resolve the slot to runtime canvas. Old
+        // behaviour (fall back to canvas_dims sentinel = (0,0) →
+        // returns (1,1)) starved the downstream blur chain.
         let prim = Downsample::new();
         let node: &dyn EffectNode = &prim;
         let dims = node.output_dims("out", (800, 600), &[]);
-        assert_eq!(dims, Some((200, 150)));
+        assert_eq!(dims, None);
     }
 
     #[test]

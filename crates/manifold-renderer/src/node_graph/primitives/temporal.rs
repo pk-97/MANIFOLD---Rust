@@ -35,12 +35,13 @@ crate::primitive! {
     purpose: "Pure 1-frame texture delay. This frame's `in` becomes next frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims.",
     inputs: {
         in: Texture2D required,
+        seed: Texture2D optional,
     },
     outputs: {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: `out` mirrors `in` (no uninitialised pixels). For iterative simulations whose state compounds rounding error frame-to-frame (fluid sims, reaction-diffusion, anything with a decay-and-inject feedback shape), set `outputFormats.out: \"rgba32float\"` in the JSON node entry — the state texture and the persistent slot both upcast, preserving precision across the loop. Default is rgba16float for memory parity with the rest of the chain.",
+    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels). When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise seed, reaction-diffusion's spike pattern, etc.). The seed producer runs every frame in v1 but only matters on the first allocation; gating it to first-frame-only is a planner-pass follow-up. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands.",
     examples: ["preset.effect.stylized_feedback", "preset.effect.mandala", "preset.effect.smear_mosh"],
     picker: { label: "Feedback", category: Atom },
     extra_fields: {
@@ -82,6 +83,14 @@ impl Primitive for Feedback {
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
         };
+        // Optional seed for first-allocation init. When unwired, fall
+        // back to seeding from `in` so first-frame `out` is a
+        // pass-through (preserves the contract every existing
+        // feedback-using preset relies on). When wired, the seed's
+        // contents land in `state.prev` and downstream consumers see
+        // a non-black initial state — used for sims that need
+        // structured noise to start (oily fluid).
+        let seed_tex = ctx.inputs.texture_2d("seed");
         let (width, height) = (out_tex.width, out_tex.height);
         if width == 0 || height == 0 {
             return;
@@ -109,10 +118,11 @@ impl Primitive for Feedback {
             .as_deref_mut()
             .expect("Feedback::run requires a StateStore");
 
-        // Lazy-init the persistent prev-frame buffer. Seeded from `in`
-        // on first allocation so first-frame `out` is a pass-through
-        // rather than uninit garbage — matches `node.array_feedback`'s
-        // first-frame contract. Resized (re-allocated) if dims change.
+        // Lazy-init the persistent prev-frame buffer. First-allocation
+        // seed: when `seed` is wired, copy it in; otherwise fall back
+        // to seeding from `in` (matches `node.array_feedback`'s
+        // first-frame contract — first frame's `out` reads the
+        // current input). Re-allocated if dims change.
         let needs_alloc = match store.get::<FeedbackState>(node_id, owner_key) {
             Some(s) => s.width != width || s.height != height,
             None => true,
@@ -123,10 +133,8 @@ impl Primitive for Feedback {
             } else {
                 RenderTarget::new(gpu.device, width, height, state_format, "feedback prev")
             };
-            // Seed prev from `in` so first-frame `out` reads the
-            // current input (pass-through). Subsequent frames see the
-            // *actual* previous input.
-            gpu.copy_texture_to_texture(in_tex, &prev.texture, width, height);
+            let init_source = seed_tex.unwrap_or(in_tex);
+            gpu.copy_texture_to_texture(init_source, &prev.texture, width, height);
             store.insert(
                 node_id,
                 owner_key,
@@ -143,8 +151,27 @@ impl Primitive for Feedback {
 
         // Emit last frame's input as this frame's `out`.
         gpu.copy_texture_to_texture(&state.prev.texture, out_tex, width, height);
-        // Capture this frame's `in` for next frame's `out`.
-        gpu.copy_texture_to_texture(in_tex, &state.prev.texture, width, height);
+        // Capture this frame's `in` for next frame's `out` — but NOT
+        // on the same frame as a fresh allocation. The in_slot at that
+        // point is whatever the executor pre-cleared / left stale BEFORE
+        // the chain's producer ran (feedback runs first under the
+        // state-capture topo exemption, so the producer's write for this
+        // frame hasn't landed yet). Capturing it would clobber the seed
+        // we just installed into `state.prev`, and the very next frame's
+        // `out = prev` would resolve to that zero — turning a seeded
+        // chain into a 2-frame oscillation between "seed" and "zero"
+        // instead of the intended bootstrap-then-evolve.
+        //
+        // Skipping the capture for one frame lets prev = seed survive
+        // into frame 2. By frame 2's evaluation the chain has run once
+        // with seed-driven `out`, so the slot now holds a meaningful
+        // value and the capture resumes as normal. For the unseeded
+        // case this is behaviorally identical: prev = in_tex = 0 from
+        // the alloc init, and the skipped copy would have written 0
+        // over 0 anyway.
+        if !needs_alloc {
+            gpu.copy_texture_to_texture(in_tex, &state.prev.texture, width, height);
+        }
     }
 
     fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
@@ -157,12 +184,18 @@ impl Primitive for Feedback {
         }
     }
 
-    fn breaks_dependency_cycle(&self) -> bool {
+    fn state_capture_input_ports(&self) -> &'static [&'static str] {
         // `in` is a state capture for next frame, not a per-frame
         // dependency. Lets feedback chains like
         // `source → ... → mix → feedback → ... → mix` close their
         // loop in the wire graph instead of inside the primitive.
-        true
+        //
+        // `seed` is deliberately NOT listed: it's a one-shot init
+        // source that has to run BEFORE this node on the first frame.
+        // If it were listed here, the planner would pre-clear its
+        // persistent slot to black and the seed would init from
+        // garbage instead of the producer's actual output.
+        &["in"]
     }
 }
 
@@ -329,6 +362,18 @@ mod gpu_tests {
     /// executor-allocated `out_tex` upcasts to rgba32float — and the
     /// per-frame `copy_texture_to_texture(state.prev → out_tex)`
     /// would silently quantize / mismatch.
+    ///
+    /// Contract being asserted: when you override feedback.out's format,
+    /// the writer feeding feedback.in MUST be overridden to the same
+    /// format. Otherwise the per-frame `copy_texture_to_texture(in_tex
+    /// → state.prev)` is a format mismatch and Metal's blit encoder
+    /// either faults loudly (debug validation) or silently corrupts
+    /// (release). The OilyFluid breakage was exactly this — fp32 state
+    /// override on `node.feedback` but fp16 default on the writer chain
+    /// (`vel_combine`, `color_combine`). The fix at the manifold-gpu
+    /// layer (assertions in `copy_texture_to_texture`) means this is
+    /// now a one-frame panic at the offending call site rather than
+    /// hours of "stays static" debugging.
     #[test]
     fn feedback_run_allocates_state_prev_in_overridden_format() {
         let device = crate::test_device();
@@ -340,14 +385,19 @@ mod gpu_tests {
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.connect((src, "out"), (fb, "in")).unwrap();
         g.connect((fb, "out"), (out, "in")).unwrap();
+        // Both the writer feeding feedback.in AND feedback.out itself
+        // need fp32 — otherwise the per-frame in_tex → state.prev copy
+        // is a format mismatch. See the docstring above.
+        g.set_output_format(src, "out", GpuTextureFormat::Rgba32Float)
+            .unwrap();
         g.set_output_format(fb, "out", GpuTextureFormat::Rgba32Float)
             .unwrap();
         let plan = compile(&g).unwrap();
 
-        // Seed the source slot.
+        // Seed the source slot at fp32 to match the override.
         let source_res = output_resource(&plan, src, "out");
         let source_target =
-            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "fp32-feedback-src");
+            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba32Float, "fp32-feedback-src");
         let mut native_enc = device.create_encoder("fp32-feedback");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
@@ -396,5 +446,136 @@ mod gpu_tests {
             );
         }
         native_enc.commit_and_wait_completed();
+    }
+
+    /// The seed-bootstrap contract: when `seed` is wired, the seed
+    /// value MUST survive into frame 2's output, not just frame 1.
+    /// Without this, the dual-buffer (state.prev + per-frame capture)
+    /// pattern destroys the seed at the end of frame 1 — capturing the
+    /// in_slot's pre-cleared zero into state.prev, and frame 2 emits
+    /// that zero. The chain alternates seed/zero/seed/zero and never
+    /// bootstraps. Regression-locks the OilyFluid breakage where the
+    /// fluid sim never built up from the noise seed.
+    ///
+    /// Strategy: build `noise_src → feedback.seed`, leave feedback.in
+    /// unwired (it'll fall through to a black persistent slot, mimicking
+    /// the pre-chain-write state of a real feedback loop's first frame).
+    /// Run two frames. Read back out_slot at end of frame 2. Expect the
+    /// seed's color, not zero.
+    #[test]
+    fn feedback_seed_survives_into_second_frame() {
+        use crate::node_graph::Backend;
+        use crate::node_graph::bindings::Slot;
+        use half::f16;
+
+        let device = crate::test_device();
+        let (w, h) = (4u32, 4u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        // Graph: seed_src → feedback.seed, feedback.out → final.
+        // feedback.in is unwired; the runtime treats unwired inputs as
+        // absent and the producer falls back to the seed for first-alloc
+        // init (`init_source = seed_tex.unwrap_or(in_tex)`). To exercise
+        // the "in_tex slot is pre-cleared / stale" condition we still
+        // wire feedback.in — but to a different source whose slot we
+        // pre-bind to BLACK so the capture-into-prev would clobber the
+        // seed if the skip-on-fresh-alloc fix regressed.
+        let mut g = Graph::new();
+        let in_src = g.add_node(Box::new(Source::new()));
+        let seed_src = g.add_node(Box::new(Source::new()));
+        let fb = g.add_node(Box::new(Feedback::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((in_src, "out"), (fb, "in")).unwrap();
+        g.connect((seed_src, "out"), (fb, "seed")).unwrap();
+        g.connect((fb, "out"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let in_res = output_resource(&plan, in_src, "out");
+        let seed_res = output_resource(&plan, seed_src, "out");
+
+        // Pre-bind the in_src slot to BLACK and the seed_src slot to a
+        // distinctive color (0.7, 0.3, 0.1). Frame 2's output is the
+        // assertion: if the skip-on-fresh-alloc fix is in place, the
+        // seed color makes it through; without the fix, in_src's black
+        // overwrites prev at end of frame 1 and frame 2 emits black.
+        let in_target = RenderTarget::new(&device, w, h, format, "test-in-black");
+        let seed_target = RenderTarget::new(&device, w, h, format, "test-seed-color");
+        let mut native_enc = device.create_encoder("seed-fill");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(&in_target.texture, 0.0, 0.0, 0.0, 1.0);
+            gpu.clear_texture(&seed_target.texture, 0.7, 0.3, 0.1, 1.0);
+        }
+
+        let mut backend = MetalBackend::new(&device, w, h, format);
+        backend.pre_bind_texture_2d(in_res, in_target);
+        backend.pre_bind_texture_2d(seed_res, seed_target);
+        let out_slot = Slot(backend.slot_count());
+
+        let mut exec = Executor::new(Box::new(backend));
+        let mut store = StateStore::new();
+
+        // Frame 1: allocates, seeds, emits seed.
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_state(
+                &mut g,
+                &plan,
+                frame_time(),
+                &mut gpu,
+                &mut store,
+                17,
+            );
+        }
+        native_enc.commit_and_wait_completed();
+
+        // Frame 2: no alloc. With the skip-on-fresh-alloc fix in place,
+        // state.prev still = seed (the capture was skipped on frame 1),
+        // so frame 2's `out := prev` again emits the seed color. Without
+        // the fix, state.prev = in_tex = black (captured at end of frame
+        // 1), and frame 2's output would be black.
+        let mut native_enc = device.create_encoder("seed-bootstrap-frame-2");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_state(
+                &mut g,
+                &plan,
+                frame_time(),
+                &mut gpu,
+                &mut store,
+                17,
+            );
+        }
+        native_enc.commit_and_wait_completed();
+
+        let out_tex = exec
+            .backend()
+            .texture_2d(out_slot)
+            .expect("output texture retained");
+        let bytes_per_row = w * 8;
+        let total_bytes = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total_bytes);
+        let mut readback_enc = device.create_encoder("seed-readback");
+        readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+        let ptr = readback_buf.mapped_ptr().expect("shared buffer pointer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        let pixel = [
+            f16::from_bits(halves[0]).to_f32(),
+            f16::from_bits(halves[1]).to_f32(),
+            f16::from_bits(halves[2]).to_f32(),
+            f16::from_bits(halves[3]).to_f32(),
+        ];
+        let tol = 0.01;
+        assert!(
+            (pixel[0] - 0.7).abs() < tol
+                && (pixel[1] - 0.3).abs() < tol
+                && (pixel[2] - 0.1).abs() < tol,
+            "frame-2 output must still be the seed color (0.7, 0.3, 0.1) — \
+             skip-on-fresh-alloc keeps state.prev = seed through frame 2 so \
+             the chain bootstraps from real content instead of alternating \
+             between seed and zero. got {pixel:?}"
+        );
     }
 }

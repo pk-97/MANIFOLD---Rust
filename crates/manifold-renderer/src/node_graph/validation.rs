@@ -132,16 +132,16 @@ pub(super) fn validate_connection(
         });
     }
 
-    // State-capture wires (those landing on a node that flags
-    // `breaks_dependency_cycle`) close a per-frame loop through the
+    // State-capture wires (those landing on a port the consumer node
+    // declared as a state capture) close a per-frame loop through the
     // StateStore rather than through this frame's dependency graph.
     // The cycle they "form" in the wire graph is the intended pattern,
-    // not an error. See EffectNode::breaks_dependency_cycle.
-    let to_breaks_cycle = graph
+    // not an error. See EffectNode::state_capture_input_ports.
+    let to_is_state_capture_port = graph
         .get_node(to.0)
-        .map(|inst| inst.node.breaks_dependency_cycle())
+        .map(|inst| inst.node.state_capture_input_ports().contains(&to.1))
         .unwrap_or(false);
-    if !to_breaks_cycle && would_create_cycle(graph, from.0, to.0) {
+    if !to_is_state_capture_port && would_create_cycle(graph, from.0, to.0) {
         return Err(GraphError::CycleDetected {
             involves: vec![from.0, to.0],
         });
@@ -239,17 +239,19 @@ pub(crate) fn reachable_from_final_output(graph: &Graph) -> AHashSet<NodeInstanc
 /// Return nodes in evaluation order (dependencies before dependents).
 /// Errors with [`GraphError::CycleDetected`] if the graph contains a cycle.
 pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError> {
-    // Wires that terminate on a `breaks_dependency_cycle` node are
-    // state captures for next frame, not this-frame dependencies —
-    // they don't contribute to in-degree, and the dependency walk
-    // skips them. Result: marked nodes have zero effective in-degree
-    // and run FIRST each frame (emitting their state.prev), while
-    // the rest of the chain runs after, eventually writing to the
-    // wires that the marked nodes will capture on the next frame.
-    let is_state_capture = |to: NodeInstanceId| {
+    // Wires that terminate on a state-capture port are next-frame
+    // captures, not this-frame dependencies — they don't contribute
+    // to in-degree, and the dependency walk skips them. Result: the
+    // wire's CONSUMER side breaks the cycle (zero effective in-degree
+    // from state-capture wires only), so the consumer runs each frame
+    // before the producer writes the next state. Crucially this is
+    // PER-PORT: a stateful primitive can declare `in` as a state
+    // capture while sibling inputs like `seed` are normal per-frame
+    // dependencies whose producers must run upstream.
+    let is_state_capture_wire = |to: NodeInstanceId, port: &str| {
         graph
             .get_node(to)
-            .map(|inst| inst.node.breaks_dependency_cycle())
+            .map(|inst| inst.node.state_capture_input_ports().contains(&port))
             .unwrap_or(false)
     };
 
@@ -258,7 +260,7 @@ pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError
         in_degree.insert(inst.id, 0);
     }
     for w in graph.wires() {
-        if is_state_capture(w.to.0) {
+        if is_state_capture_wire(w.to.0, w.to.1) {
             continue;
         }
         if let Some(d) = in_degree.get_mut(&w.to.0) {
@@ -275,7 +277,7 @@ pub fn topological_sort(graph: &Graph) -> Result<Vec<NodeInstanceId>, GraphError
     while let Some(id) = queue.pop_front() {
         order.push(id);
         for w in graph.wires_from(id) {
-            if is_state_capture(w.to.0) {
+            if is_state_capture_wire(w.to.0, w.to.1) {
                 continue;
             }
             if let Some(d) = in_degree.get_mut(&w.to.0) {
@@ -600,6 +602,100 @@ mod tests {
         assert_eq!(order[0], a);
         assert_eq!(order[3], d);
         assert!(order[1..3].contains(&b) && order[1..3].contains(&c));
+    }
+
+    /// State-capture is per-PORT, not per-NODE. A stateful node can have
+    /// `in` as a cycle-break input (exempt from in-degree, runs first)
+    /// while a sibling input like `seed` is a normal per-frame dependency
+    /// whose producer must run upstream. Regression for the `node.feedback`
+    /// seed bug where the planner treated every incoming wire to a
+    /// cycle-breaker as a state capture, so the seed source's output slot
+    /// was pre-cleared to black and the seed-on-first-allocation contract
+    /// silently failed.
+    #[test]
+    fn topo_sort_state_capture_is_per_port_not_per_node() {
+        struct StatefulNode {
+            type_id: EffectNodeType,
+        }
+        impl crate::node_graph::EffectNode for StatefulNode {
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                static INPUTS: [NodeInput; 2] = [
+                    NodePort {
+                        name: "in",
+                        ty: PortType::Texture2D,
+                        kind: PortKind::Input,
+                        required: true,
+                    },
+                    NodePort {
+                        name: "seed",
+                        ty: PortType::Texture2D,
+                        kind: PortKind::Input,
+                        required: false,
+                    },
+                ];
+                &INPUTS
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                    name: "out",
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Output,
+                    required: false,
+                }];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+            fn state_capture_input_ports(&self) -> &'static [&'static str] {
+                &["in"]
+            }
+        }
+
+        // Graph shape:
+        //   src         (produces -> stateful.in via loop_back)
+        //   seed_src    (produces -> stateful.seed)
+        //   stateful    (in = state capture, seed = per-frame)
+        //   loop_back   (consumes stateful.out, produces back to stateful.in)
+        //
+        // Because `in` is a state capture, the wire loop_back -> stateful.in
+        // doesn't impose an in-degree on stateful. But the wire
+        // seed_src -> stateful.seed MUST impose in-degree, so seed_src
+        // runs BEFORE stateful.
+        let mut g = Graph::new();
+        let stateful = g.add_node(Box::new(StatefulNode {
+            type_id: EffectNodeType::new("stateful"),
+        }));
+        let seed_src = g.add_node(Box::new(TestNode::new(
+            "seed_src",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let loop_back = g.add_node(Box::new(TestNode::new(
+            "loop_back",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        // stateful.out -> loop_back.in (regular wire)
+        g.connect((stateful, "out"), (loop_back, "in")).unwrap();
+        // loop_back.out -> stateful.in (state capture; would be a cycle
+        // without the per-port exemption)
+        g.connect((loop_back, "out"), (stateful, "in")).unwrap();
+        // seed_src.out -> stateful.seed (per-frame dependency)
+        g.connect((seed_src, "out"), (stateful, "seed")).unwrap();
+
+        let order = topological_sort(&g).unwrap();
+        let index_of = |id: NodeInstanceId| order.iter().position(|&n| n == id).unwrap();
+        assert!(
+            index_of(seed_src) < index_of(stateful),
+            "seed producer must run before the stateful consumer — its `seed` \
+             wire is a regular per-frame dependency, not a state capture. \
+             order: {order:?}"
+        );
     }
 
     #[test]

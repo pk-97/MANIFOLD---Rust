@@ -55,9 +55,9 @@ impl NodeState for ArrayFeedbackState {}
 impl Primitive for ArrayFeedback {
     /// `in` is a state capture for next frame, not a per-frame
     /// dependency. Mirrors `temporal::Feedback`'s contract — see the
-    /// `EffectNode::breaks_dependency_cycle` docstring.
-    fn breaks_dependency_cycle(&self) -> bool {
-        true
+    /// `EffectNode::state_capture_input_ports` docstring.
+    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+        &["in"]
     }
 
     /// Output `out` is sized to match the input `in`. The persistent

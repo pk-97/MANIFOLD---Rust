@@ -174,12 +174,21 @@ pub trait Primitive: PrimitiveSpec {
 
     /// Mirror of
     /// [`EffectNode::breaks_dependency_cycle`](crate::node_graph::effect_node::EffectNode::breaks_dependency_cycle).
-    /// Mark a 1-frame-delay primitive so the chain compiler treats
-    /// wires INTO it as state captures rather than per-frame
-    /// dependencies. See the EffectNode docstring for the contract and
-    /// implications for execution order. Default: `false`.
+    /// Default derives from [`state_capture_input_ports`](Self::state_capture_input_ports)
+    /// — a primitive is a cycle-breaker iff it declares at least one
+    /// state-capture input port. Override only if you need to assert
+    /// cycle-break-ness without listing any specific port (rare).
     fn breaks_dependency_cycle(&self) -> bool {
-        false
+        !self.state_capture_input_ports().is_empty()
+    }
+
+    /// Mirror of
+    /// [`EffectNode::state_capture_input_ports`](crate::node_graph::effect_node::EffectNode::state_capture_input_ports).
+    /// Stateful primitives override to list the input port(s) that close
+    /// a per-frame loop through the StateStore. Every other input runs
+    /// upstream of this node in topological order. Default: empty.
+    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Mirror of
@@ -324,6 +333,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn breaks_dependency_cycle(&self) -> bool {
         Primitive::breaks_dependency_cycle(self)
+    }
+    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+        Primitive::state_capture_input_ports(self)
     }
     fn selected_input_branch(
         &self,

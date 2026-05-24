@@ -390,7 +390,31 @@ pub trait EffectNode: Send {
     ///
     /// Default: `false`.
     fn breaks_dependency_cycle(&self) -> bool {
-        false
+        !self.state_capture_input_ports().is_empty()
+    }
+
+    /// The subset of input ports that are state-capture wires (the
+    /// per-port companion to [`breaks_dependency_cycle`]). The planner
+    /// treats only these ports as cycle-break wires — their producer
+    /// resources become persistent slots and they don't contribute to
+    /// the topological in-degree of this node. Every OTHER input port
+    /// is a regular per-frame dependency: it must be produced before
+    /// this node runs, and the planner orders accordingly.
+    ///
+    /// Used to distinguish `node.feedback`'s `in` port (the closed
+    /// loop) from sibling inputs like `seed` (a one-shot init source
+    /// that has to run BEFORE feedback on the first frame). Without
+    /// this distinction the planner couldn't schedule a seed producer
+    /// upstream of the cycle-breaker: it'd see all incoming wires as
+    /// state captures, pre-clear the seed slot to black, and feedback
+    /// would init from black on the first frame even though the seed
+    /// producer is wired and ready to compute.
+    ///
+    /// Default: empty (the node has no state-capture inputs). When a
+    /// node overrides this to a non-empty list, `breaks_dependency_cycle`
+    /// follows automatically via its default impl.
+    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// If `Some(port_name)`, this node is a branch-selector: only the

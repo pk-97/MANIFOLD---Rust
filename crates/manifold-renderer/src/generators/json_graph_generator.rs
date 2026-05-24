@@ -1060,6 +1060,7 @@ mod tests {
         }
     }
 
+
     /// Smoke test for the loader path. A minimal generator preset:
     /// `generator_input → uv_field → final_output`. Parses to a
     /// runtime graph, compiles, and executes against the mock backend.

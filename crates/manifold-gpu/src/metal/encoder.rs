@@ -1096,6 +1096,18 @@ impl GpuEncoder {
     }
 
     /// Copy texture to texture via blit encoder.
+    ///
+    /// Validates dims and pixel format before encoding. Metal's blit
+    /// encoder requires matching pixel formats and the copy region to
+    /// fit within source bounds; in debug builds Metal's validation
+    /// layer catches this loudly, but in release the result is
+    /// undefined (silent corruption, no-op, or rare GPU fault). Sims
+    /// that copy stale/zero into a feedback state texture freeze
+    /// visibly instead of erroring — surfaced as days of "why is the
+    /// preset not animating" before the dim/format mismatch is found.
+    /// Asserting here turns every such bug into a one-frame panic with
+    /// the actual offending sizes / formats, at the call site that
+    /// introduced the mismatch.
     pub fn copy_texture_to_texture(
         &mut self,
         src: &GpuTexture,
@@ -1104,6 +1116,28 @@ impl GpuEncoder {
         height: u32,
         depth: u32,
     ) {
+        assert_eq!(
+            src.format, dst.format,
+            "copy_texture_to_texture: pixel format mismatch — \
+             src {:?} ({}×{}) → dst {:?} ({}×{}), copy region {}×{}×{}. \
+             Metal blit requires matching formats. If you need a cross-\
+             format copy, use a compute-shader copy path instead.",
+            src.format, src.width, src.height,
+            dst.format, dst.width, dst.height,
+            width, height, depth,
+        );
+        assert!(
+            width <= src.width && height <= src.height,
+            "copy_texture_to_texture: copy region exceeds source bounds — \
+             src {}×{} ({:?}), copy region {}×{}×{}. Source extent out of bounds.",
+            src.width, src.height, src.format, width, height, depth,
+        );
+        assert!(
+            width <= dst.width && height <= dst.height,
+            "copy_texture_to_texture: copy region exceeds destination bounds — \
+             dst {}×{} ({:?}), copy region {}×{}×{}. Destination extent out of bounds.",
+            dst.width, dst.height, dst.format, width, height, depth,
+        );
         self.end_current();
         let enc = self
             .cmd_buf
@@ -1134,9 +1168,21 @@ impl GpuEncoder {
     /// buffer contents into a state-store-held persistent buffer (and
     /// vice versa, for the per-frame swap).
     ///
-    /// Both buffers must have at least `size` bytes; the call doesn't
-    /// validate.
+    /// Asserts both buffers are at least `size` bytes. Metal's blit
+    /// encoder silently corrupts on out-of-bounds copies in release
+    /// builds; loud asserts here turn a future undersized-buffer bug
+    /// into a one-frame panic at the offending call site.
     pub fn copy_buffer_to_buffer(&mut self, src: &GpuBuffer, dst: &GpuBuffer, size: u64) {
+        assert!(
+            size <= src.size,
+            "copy_buffer_to_buffer: copy size {size} exceeds source buffer ({} bytes)",
+            src.size,
+        );
+        assert!(
+            size <= dst.size,
+            "copy_buffer_to_buffer: copy size {size} exceeds destination buffer ({} bytes)",
+            dst.size,
+        );
         self.end_current();
         let enc = self
             .cmd_buf
@@ -1155,6 +1201,10 @@ impl GpuEncoder {
     }
 
     /// Copy texture to buffer via blit encoder (for readback).
+    ///
+    /// Asserts the copy region fits in source and the destination
+    /// buffer has at least `bytes_per_row * height` bytes. Same loud-
+    /// failure rationale as [`Self::copy_texture_to_texture`].
     pub fn copy_texture_to_buffer(
         &mut self,
         src: &GpuTexture,
@@ -1163,6 +1213,20 @@ impl GpuEncoder {
         height: u32,
         bytes_per_row: u32,
     ) {
+        assert!(
+            width <= src.width && height <= src.height,
+            "copy_texture_to_buffer: copy region exceeds source bounds — \
+             src {}×{} ({:?}), copy region {}×{}. Source extent out of bounds.",
+            src.width, src.height, src.format, width, height,
+        );
+        let required = u64::from(bytes_per_row) * u64::from(height);
+        assert!(
+            required <= dst.size,
+            "copy_texture_to_buffer: destination buffer too small — \
+             needed {required} bytes (bytes_per_row {bytes_per_row} × height {height}), \
+             dst buffer is {} bytes",
+            dst.size,
+        );
         self.end_current();
         let enc = self
             .cmd_buf
