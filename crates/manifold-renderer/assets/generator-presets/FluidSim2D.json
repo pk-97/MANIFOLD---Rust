@@ -135,6 +135,9 @@
     { "id": 5,  "typeId": "node.resolve_accumulator", "handle": "resolve",
       "params": { "fixed_point_scale": { "type": "Float", "value": 4096.0 } } },
 
+    { "id": 80, "typeId": "node.feedback", "handle": "density_feedback",
+      "params": {} },
+
     { "id": 6,  "typeId": "node.downsample", "handle": "density_downsample",
       "params": { "factor": { "type": "Enum", "value": 0 } } },
 
@@ -297,7 +300,8 @@
 
     { "fromNode": 4,  "fromPort": "accum",     "toNode": 5,  "toPort": "accum" },
 
-    { "fromNode": 5,  "fromPort": "density",   "toNode": 6,  "toPort": "in" },
+    { "fromNode": 5,  "fromPort": "density",   "toNode": 80, "toPort": "in" },
+    { "fromNode": 80, "fromPort": "out",       "toNode": 6,  "toPort": "in" },
     { "fromNode": 6,  "fromPort": "out",       "toNode": 7,  "toPort": "in" },
     { "fromNode": 7,  "fromPort": "out",       "toNode": 8,  "toPort": "in" },
 
