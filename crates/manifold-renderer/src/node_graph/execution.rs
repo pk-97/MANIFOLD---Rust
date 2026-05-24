@@ -239,13 +239,27 @@ impl Executor {
 
         // Seed: every FinalOutput step is live. (Multi-FinalOutput
         // graphs are unusual but legal; this handles them uniformly.)
+        //
+        // Also seed: every step that declares `aliased_array_io`. The
+        // aliased contract is that the primitive's dispatch writes to
+        // a persistent shared buffer (input and output ports resolved
+        // to the same physical slot by the chain build). Downstream
+        // reads of those writes happen via the aliased slot in
+        // subsequent frames — there is no per-frame graph wire from
+        // simulate.out → scatter to expose this dependency to a
+        // wire-walking pruner. Without auto-liveness, a scatter-first
+        // wiring (where simulate sits at the bottom of the chain
+        // mutating its in-place buffer for next frame's scatter to
+        // read) would prune simulate entirely, freezing the loop.
         let mut worklist: Vec<usize> = Vec::new();
         for (idx, step) in steps.iter().enumerate() {
-            if let Some(inst) = graph.get_node(step.node)
-                && inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID
-            {
-                self.live_steps[idx] = true;
-                worklist.push(idx);
+            if let Some(inst) = graph.get_node(step.node) {
+                let is_final = inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID;
+                let has_aliased = !inst.node.aliased_array_io().is_empty();
+                if is_final || has_aliased {
+                    self.live_steps[idx] = true;
+                    worklist.push(idx);
+                }
             }
         }
 
