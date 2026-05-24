@@ -203,4 +203,112 @@ mod tests {
             failures.join("\n  - "),
         );
     }
+
+    /// Sweep guard: every bundled generator preset must successfully
+    /// execute one full frame against a real Metal backend. Parse +
+    /// chain-build cover the load-time validators (`into_graph` +
+    /// `compile`); this catches the deeper failures that only surface
+    /// at first dispatch — pipelines are created lazily inside primitive
+    /// `run()` calls, so a malformed WGSL kernel, a Metal blit between
+    /// mismatched texture formats (`copy_texture_to_texture` panic on
+    /// cross-format `outputFormats` overrides), a workgroup-size
+    /// mismatch, or an out-of-bounds binding all slip past compile and
+    /// only blow up when the encoder actually records the dispatch.
+    ///
+    /// Failure mode caught: the "first frame grey, then app panic"
+    /// symptom that's otherwise only visible at app launch on a real
+    /// project load.
+    ///
+    /// Uses the production `Generator::render` path with `param_count =
+    /// 0` so each outer-card slider falls back to the binding's
+    /// `default_value` — same shape the host takes on a freshly loaded
+    /// card before any user drag. Wraps the encoder dispatch +
+    /// commit_and_wait in `catch_unwind` so one bad preset doesn't tear
+    /// down the run; all failures are collected and reported at once.
+    #[test]
+    fn every_bundled_preset_executes_one_frame() {
+        use crate::generator::Generator;
+        use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+        use crate::generators::json_graph_generator::JsonGraphGenerator;
+        use crate::node_graph::PrimitiveRegistry;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        // 256x256 is enough to exercise every dispatch + copy path
+        // without paying for 1080p memory traffic. The bug classes this
+        // test catches (format mismatches, missing bindings, bad WGSL,
+        // workgroup-size errors) reproduce at any size.
+        let (w, h) = (256u32, 256u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut failures: Vec<String> = Vec::new();
+
+        for (preset_id, json) in BUNDLED_GENERATOR_PRESETS {
+            let mut g = match JsonGraphGenerator::from_json_str_with_device(
+                json, &registry, &device, w, h, format,
+            ) {
+                Ok(g) => g,
+                Err(e) => {
+                    // Already caught by `every_bundled_preset_chain_builds`
+                    // but report here too so the failure list is complete
+                    // when only this test gets run in isolation.
+                    failures.push(format!("{preset_id}: load failed: {e}"));
+                    continue;
+                }
+            };
+
+            let target = RenderTarget::new(&device, w, h, format, "first-frame-test");
+            let ctx = GeneratorContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width: w,
+                height: h,
+                output_width: w,
+                output_height: h,
+                aspect: w as f32 / h as f32,
+                anim_progress: 0.0,
+                trigger_count: 0,
+                params: [0.0; MAX_GEN_PARAMS],
+                param_count: 0,
+            };
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut native_enc = device.create_encoder("first-frame-test");
+                {
+                    let mut gpu =
+                        crate::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                    g.render(&mut gpu, &target.texture, &ctx);
+                }
+                native_enc.commit_and_wait_completed();
+            }));
+
+            if let Err(panic) = result {
+                let msg = panic_msg(&panic);
+                failures.push(format!("{preset_id}: first-frame panic: {msg}"));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Bundled generator presets panicked on first-frame execute:\n  - {}",
+            failures.join("\n  - "),
+        );
+    }
+
+    /// Extract a printable message from a `catch_unwind` payload —
+    /// `panic::Any` is opaque, but the standard payload shapes are
+    /// `String` (from `panic!("{...}")`) and `&'static str` (from
+    /// `panic!("literal")`).
+    fn panic_msg(panic: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = panic.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = panic.downcast_ref::<&'static str>() {
+            (*s).to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
 }

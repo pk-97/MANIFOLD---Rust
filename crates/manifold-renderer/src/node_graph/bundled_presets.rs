@@ -216,6 +216,148 @@ mod tests {
         }
     }
 
+    /// Sweep guard: every bundled effect preset must successfully
+    /// execute one full frame against a real Metal backend. Splices the
+    /// preset into a minimal chain (Source → effect → FinalOutput),
+    /// compiles, pre-binds a source texture, and runs one
+    /// `execute_frame_with_state` + `commit_and_wait`. Catches the
+    /// failure classes that load + compile can't reach because pipelines
+    /// are created lazily on first dispatch: bad WGSL, mismatched
+    /// texture formats in `outputFormats` overrides hitting a Metal
+    /// blit, missing bindings, workgroup-size errors.
+    ///
+    /// Failure mode caught: the "first-frame panic" symptom that
+    /// otherwise only surfaces when a real project loads the effect on
+    /// stage.
+    ///
+    /// Inner-node params stay at JSON defaults (no `apply_param_values`
+    /// equivalent on the effect splice path right now). Wraps each
+    /// preset's execute in `catch_unwind` so one bad preset doesn't
+    /// tear down the run; all failures are collected and reported at
+    /// once.
+    #[test]
+    fn every_bundled_preset_executes_one_frame() {
+        use crate::node_graph::boundary_nodes::{FinalOutput, Source};
+        use crate::node_graph::chain_spec::splice_def_into_chain;
+        use crate::node_graph::effect_node::FrameTime;
+        use crate::node_graph::execution::Executor;
+        use crate::node_graph::execution_plan::{ResourceId, compile};
+        use crate::node_graph::graph::Graph;
+        use crate::node_graph::metal_backend::MetalBackend;
+        use crate::node_graph::state_store::StateStore;
+        use crate::render_target::RenderTarget;
+        use manifold_core::{Beats, Seconds};
+        use manifold_gpu::GpuTextureFormat;
+
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        // 256x256 — see generator-side test for size rationale.
+        let (w, h) = (256u32, 256u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let frame_time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+
+        let mut failures: Vec<String> = Vec::new();
+
+        for type_id in bundled_preset_type_ids() {
+            let preset_id = type_id.as_str().to_string();
+            let Some(def) = bundled_preset_def(&type_id) else {
+                continue;
+            };
+
+            // Splice into a minimal chain. Source produces the input
+            // texture; FinalOutput terminates the texture path so
+            // validate is satisfied.
+            let mut chain = Graph::new();
+            let src = chain.add_node(Box::new(Source::new()));
+            let Some(result) =
+                splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+            else {
+                failures.push(format!("{preset_id}: splice failed"));
+                continue;
+            };
+            let final_out = chain.add_node(Box::new(FinalOutput::new()));
+            let effect_out = result.output;
+            if chain.connect(effect_out, (final_out, "in")).is_err() {
+                failures.push(format!("{preset_id}: final-output wire failed"));
+                continue;
+            }
+
+            let plan = match compile(&chain) {
+                Ok(p) => p,
+                Err(e) => {
+                    failures.push(format!("{preset_id}: compile failed: {e:?}"));
+                    continue;
+                }
+            };
+
+            // Pre-bind the source texture. Intermediate textures auto-
+            // allocate inside MetalBackend on first acquire.
+            let r_src = plan
+                .steps()
+                .iter()
+                .find(|s| s.node == src)
+                .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
+                .map(|(_, id)| *id)
+                .unwrap_or(ResourceId(u32::MAX));
+            if r_src.0 == u32::MAX {
+                failures.push(format!(
+                    "{preset_id}: Source.out resource not found in plan",
+                ));
+                continue;
+            }
+
+            let src_target =
+                RenderTarget::new(&device, w, h, format, "first-frame-test-src");
+            let mut backend = MetalBackend::new(&device, w, h, format);
+            backend.pre_bind_texture_2d(r_src, src_target);
+
+            let mut exec = Executor::new(Box::new(backend));
+            let mut state = StateStore::new();
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut native_enc =
+                    device.create_encoder("effect-first-frame-test");
+                {
+                    let mut gpu = crate::gpu_encoder::GpuEncoder::new(
+                        &mut native_enc,
+                        &device,
+                    );
+                    exec.execute_frame_with_state(
+                        &mut chain,
+                        &plan,
+                        frame_time,
+                        &mut gpu,
+                        &mut state,
+                        0,
+                    );
+                }
+                native_enc.commit_and_wait_completed();
+            }));
+
+            if let Err(panic) = result {
+                let msg = if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic.downcast_ref::<&'static str>() {
+                    (*s).to_string()
+                } else {
+                    "<non-string panic>".to_string()
+                };
+                failures.push(format!("{preset_id}: first-frame panic: {msg}"));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Bundled effect presets panicked on first-frame execute:\n  - {}",
+            failures.join("\n  - "),
+        );
+    }
+
     /// Color Compass specifically: every wire the JSON declares must
     /// land in the chain-spliced graph. Catches the case where the
     /// JSON wires up `translate_x` / `translate_y` / `time_constant`
