@@ -411,7 +411,7 @@ pub trait EffectNode: Send {
     /// slot to the input's, so upstream writes flow through and
     /// cross-frame state lives in the chain-allocated buffer. Default:
     /// empty (no aliasing).
-    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+    fn aliased_array_io(&self) -> &[(&str, &str)] {
         &[]
     }
 
@@ -461,7 +461,7 @@ pub trait EffectNode: Send {
     /// ports. Used by scatter accumulators and any future primitive
     /// whose output must align pixel-for-pixel with the canvas.
     /// Default: empty.
-    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+    fn canvas_sized_array_outputs(&self) -> &[&str] {
         &[]
     }
 
@@ -518,7 +518,7 @@ pub trait EffectNode: Send {
     /// Default: empty (the node has no state-capture inputs). When a
     /// node overrides this to a non-empty list, `breaks_dependency_cycle`
     /// follows automatically via its default impl.
-    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+    fn state_capture_input_ports(&self) -> &[&str] {
         &[]
     }
 

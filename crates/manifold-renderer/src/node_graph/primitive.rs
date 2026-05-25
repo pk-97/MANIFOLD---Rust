@@ -217,7 +217,7 @@ pub trait Primitive: PrimitiveSpec {
     /// Stateful primitives override to list the input port(s) that close
     /// a per-frame loop through the StateStore. Every other input runs
     /// upstream of this node in topological order. Default: empty.
-    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+    fn state_capture_input_ports(&self) -> &[&str] {
         &[]
     }
 
@@ -258,7 +258,7 @@ pub trait Primitive: PrimitiveSpec {
     /// by the input wire's capacity) and aliases the output's slot to
     /// the input's, so upstream writes flow through and cross-frame
     /// state lives in the chain-allocated buffer.
-    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+    fn aliased_array_io(&self) -> &[(&str, &str)] {
         &[]
     }
 
@@ -271,7 +271,7 @@ pub trait Primitive: PrimitiveSpec {
     /// allocates `canvas_w * canvas_h * item_size` bytes — the
     /// primitive's `array_output_capacity` is bypassed for these
     /// ports.
-    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+    fn canvas_sized_array_outputs(&self) -> &[&str] {
         &[]
     }
 
@@ -363,10 +363,10 @@ impl<P: Primitive + 'static> EffectNode for P {
     ) -> Option<u32> {
         Primitive::array_output_capacity(self, port_name, params, input_capacities)
     }
-    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+    fn aliased_array_io(&self) -> &[(&str, &str)] {
         Primitive::aliased_array_io(self)
     }
-    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+    fn canvas_sized_array_outputs(&self) -> &[&str] {
         Primitive::canvas_sized_array_outputs(self)
     }
     fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
@@ -375,7 +375,7 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn breaks_dependency_cycle(&self) -> bool {
         Primitive::breaks_dependency_cycle(self)
     }
-    fn state_capture_input_ports(&self) -> &'static [&'static str] {
+    fn state_capture_input_ports(&self) -> &[&str] {
         Primitive::state_capture_input_ports(self)
     }
     fn selected_input_branch(
