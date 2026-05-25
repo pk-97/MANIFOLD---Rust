@@ -210,6 +210,15 @@ impl Primitive for FluidSimulate {
             };
             self.last_trigger = Some(current);
             if edge {
+                // Mark the encoder as accessed even though we didn't
+                // dispatch — the executor's aliased-output debug-assert
+                // would otherwise treat the skip as "primitive forgot to
+                // dispatch, downstream reads stale data." The aliased
+                // buffer's content for this frame is fluid_seed's fresh
+                // write (which IS what we want to preserve, hence the
+                // skip); marking access tells the runtime the skip was
+                // intentional.
+                ctx.mark_gpu_accessed();
                 return;
             }
         }
