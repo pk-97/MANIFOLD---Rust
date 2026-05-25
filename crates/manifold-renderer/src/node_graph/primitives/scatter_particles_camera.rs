@@ -121,12 +121,9 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h.",
+    composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h. Downstream node.resolve_accumulator self-clears the accumulator after reading it — no scatter-side pre-clear needed.",
     examples: [],
     picker: { label: "Scatter Particles Camera", category: Atom },
-    extra_fields: {
-        clear_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
-    },
 }
 
 // Legacy type-ID alias — projects authored before the rename from
@@ -227,43 +224,6 @@ impl Primitive for ScatterParticlesCamera {
         };
 
         let gpu = ctx.gpu_encoder();
-        // Pre-splat clear of the accumulator. The display accumulator
-        // buffer is reused frame-to-frame, so without this zero pass
-        // the atomicAdd values pile up and the downstream tonemap
-        // saturates to white in a few seconds. Mirrors `clear_main` in
-        // node.scatter_particles (2D sibling); the legacy generator
-        // self-cleared inside `resolve_display`, but the JSON path
-        // replaced that with `node.resolve_accumulator` which only
-        // reads.
-        let clear_pipeline = self.clear_pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("../../generators/shaders/fluid_scatter_3d.wgsl"),
-                "clear_display",
-                "node.scatter_particles_camera.clear",
-            )
-        });
-        gpu.native_enc.dispatch_compute(
-            clear_pipeline,
-            &[
-                GpuBinding::Buffer {
-                    binding: 0,
-                    buffer: particles,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: accum,
-                    offset: 0,
-                },
-                GpuBinding::Bytes {
-                    binding: 2,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-            ],
-            [disp_w.div_ceil(16), disp_h.div_ceil(16), 1],
-            "node.scatter_particles_camera.clear",
-        );
-
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("../../generators/shaders/fluid_scatter_3d.wgsl"),
