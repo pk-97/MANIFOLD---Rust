@@ -38,6 +38,8 @@ crate::primitive! {
     purpose: "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_3d_accumulator to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
     inputs: {
         particles: Array(Particle) required,
+        active_count: ScalarF32 optional,
+        scaled_energy: ScalarF32 optional,
     },
     outputs: {
         accum: Array(u32),
@@ -102,10 +104,8 @@ impl Primitive for ScatterParticles3D {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let active_count = match ctx.params.get("active_count") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 100_000,
-        };
+        let active_count =
+            ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
         let vol_res = match ctx.params.get("vol_res") {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
@@ -114,10 +114,8 @@ impl Primitive for ScatterParticles3D {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
-        let scaled_energy = match ctx.params.get("scaled_energy") {
-            Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
-            _ => 4096,
-        };
+        let scaled_energy =
+            ctx.scalar_or_param("scaled_energy", 4096.0).round().max(0.0) as u32;
 
         let Some(particles) = ctx.inputs.array("particles") else {
             return;
@@ -184,17 +182,27 @@ mod tests {
 
     #[test]
     fn scatter_3d_declares_particle_in_and_u32_array_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let particle_layout = ArrayType::of_known::<Particle>();
         let u32_layout = ArrayType::of_known::<u32>();
 
         assert_eq!(ScatterParticles3D::TYPE_ID, "node.scatter_particles_3d");
-        assert_eq!(ScatterParticles3D::INPUTS.len(), 1);
         assert_eq!(ScatterParticles3D::INPUTS[0].name, "particles");
         assert_eq!(
             ScatterParticles3D::INPUTS[0].ty,
             PortType::Array(particle_layout)
         );
+        assert!(ScatterParticles3D::INPUTS[0].required);
+        // Port-shadow inputs let the JSON drive active_count + scaled_energy
+        // from the outer-card particle-count / energy chains.
+        for name in ["active_count", "scaled_energy"] {
+            let port = ScatterParticles3D::INPUTS
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("{name} port-shadow input must exist"));
+            assert!(!port.required, "{name} should be optional port-shadow");
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(ScatterParticles3D::OUTPUTS.len(), 1);
         assert_eq!(ScatterParticles3D::OUTPUTS[0].name, "accum");
         assert_eq!(

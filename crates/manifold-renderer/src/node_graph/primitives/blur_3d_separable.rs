@@ -34,6 +34,7 @@ crate::primitive! {
     purpose: "Single-axis separable Gaussian blur on a Texture3D. Mode selects scalar (samples .r, writes single channel) or vector (samples .rgba, writes all channels). For a full 3-axis separable blur, wire three instances with ping-pong textures (axis=X(a→b), axis=Y(b→a), axis=Z(a→b)). Bilinear tap-pairing halves the sample count vs a naive Gaussian.",
     inputs: {
         in: Texture3D required,
+        radius: ScalarF32 optional,
     },
     outputs: {
         out: Texture3D,
@@ -94,10 +95,7 @@ impl Primitive for Blur3DSeparable {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
-        let radius = match ctx.params.get("radius") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 2.0,
-        };
+        let radius = ctx.scalar_or_param("radius", 2.0);
 
         let Some(src) = ctx.inputs.texture_3d("in") else {
             return;
@@ -170,11 +168,20 @@ mod tests {
 
     #[test]
     fn blur_3d_declares_texture_3d_in_and_out() {
-        use crate::node_graph::ports::PortType;
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(Blur3DSeparable::TYPE_ID, "node.blur_3d_separable");
-        assert_eq!(Blur3DSeparable::INPUTS.len(), 1);
         assert_eq!(Blur3DSeparable::INPUTS[0].name, "in");
         assert_eq!(Blur3DSeparable::INPUTS[0].ty, PortType::Texture3D);
+        assert!(Blur3DSeparable::INPUTS[0].required);
+        // `radius` port-shadow lets the JSON drive blur width from an
+        // upstream scalar (e.g. a deg→rad-style affine on the feather
+        // slider for FluidSim3D).
+        let radius_port = Blur3DSeparable::INPUTS
+            .iter()
+            .find(|p| p.name == "radius")
+            .expect("radius port-shadow input must exist");
+        assert!(!radius_port.required);
+        assert_eq!(radius_port.ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(Blur3DSeparable::OUTPUTS.len(), 1);
         assert_eq!(Blur3DSeparable::OUTPUTS[0].name, "out");
         assert_eq!(Blur3DSeparable::OUTPUTS[0].ty, PortType::Texture3D);

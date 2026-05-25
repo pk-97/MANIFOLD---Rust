@@ -275,7 +275,6 @@ inventory::submit! {
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
             ParamSpec::whole_labels("container", "Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
             ParamSpec::continuous("ctr_scale", "Container Scale", 0.2, 1.0, 0.8, "F2", "containerScale"),
-            ParamSpec::whole_labels("vol_res", "Volume Resolution", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),
             ParamSpec::continuous("cam_dist", "Cam Dist", 1.0, 8.0, 3.0, "F1", "camDist"),
             ParamSpec::continuous("rotate_x", "Rotate X", -1.0, 1.0, 0.0, "F2", "rotX"),
             ParamSpec::continuous("rotate_y", "Rotate Y", -1.0, 1.0, 0.0, "F2", "rotY"),

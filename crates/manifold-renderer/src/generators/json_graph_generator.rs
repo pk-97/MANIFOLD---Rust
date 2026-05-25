@@ -62,6 +62,15 @@ pub enum JsonGeneratorLoadError {
         node_type: String,
         port: String,
     },
+    /// Sibling of `UnsizedArrayOutput` for Texture3D — a primitive
+    /// declared a Texture3D output but
+    /// [`EffectNode::texture_3d_output_dims`] returned `None` for that
+    /// port. Pre-binding Texture3D resources is a hard contract (no
+    /// lazy-alloc), so a missing sizing implementation can't go silent.
+    UnsizedTexture3DOutput {
+        node_type: String,
+        port: String,
+    },
     /// Post-allocation catch-all: walking every `Array<T>` resource
     /// in the compiled plan, this one has no bound slot or no
     /// underlying buffer. The cause-layer errors above (e.g.
@@ -100,6 +109,13 @@ impl std::fmt::Display for JsonGeneratorLoadError {
                  concrete size — `array_output_capacity` returned None. \
                  Add a `max_capacity` param, or override the method to derive \
                  size from a forward-dep input (not a state-capture port)."
+            ),
+            Self::UnsizedTexture3DOutput { node_type, port } => write!(
+                f,
+                "primitive `{node_type}` Texture3D output port `{port}` has no \
+                 concrete dims — `texture_3d_output_dims` returned None. \
+                 Add `vol_res` / `vol_depth` params, or override the method to \
+                 derive dims from a forward-dep input."
             ),
             Self::UnboundArrayResource {
                 producer_handle,
@@ -509,6 +525,12 @@ impl JsonGraphGenerator {
         // was the FluidSim2D black-output bug class).
         Self::pre_allocate_array_buffers(&g.graph, &g.plan, device, &mut backend)?;
 
+        // Texture3D resources have no lazy-alloc path (volume dims are
+        // per-instance data, same shape as Array<T>); the producing
+        // primitive's `texture_3d_output_dims` drives the allocation
+        // and `MetalBackend::pre_bind_texture_3d` pins the slot.
+        Self::pre_allocate_texture_3d_volumes(&g.graph, &g.plan, device, &mut backend)?;
+
         // Post-allocation audit — catch-all that walks every Array<T>
         // resource in the compiled plan and asserts each has a bound
         // slot AND a real buffer. The cause-layer errors above
@@ -780,6 +802,92 @@ impl JsonGraphGenerator {
                 }
                 let buffer = device.create_buffer_shared(bytes);
                 backend.pre_bind_array(*res_id, buffer);
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk the compiled plan, find every `Texture3D` output, and
+    /// allocate + pre-bind a `GpuTexture` sized via
+    /// [`crate::node_graph::EffectNode::texture_3d_output_dims`].
+    ///
+    /// Mirror of [`pre_allocate_array_buffers`] for the Texture3D port
+    /// type. Same shape: gather every Texture3D input that's already
+    /// pre-bound (topological order makes this safe), pass that dims
+    /// table to `texture_3d_output_dims`, allocate a volume at the
+    /// returned dims with the format declared by `output_format`
+    /// (default `Rgba16Float` matches the FluidSim3D shaders).
+    ///
+    /// A node whose `texture_3d_output_dims` returns `None` for a
+    /// Texture3D output is a load-time error — same contract as
+    /// `pre_allocate_array_buffers`, since Texture3D has no lazy-alloc
+    /// path in `MetalBackend`.
+    fn pre_allocate_texture_3d_volumes(
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        device: &GpuDevice,
+        backend: &mut MetalBackend,
+    ) -> Result<(), JsonGeneratorLoadError> {
+        use crate::node_graph::{Backend, PortType};
+
+        let mut input_dims: Vec<(&str, (u32, u32, u32))> = Vec::with_capacity(4);
+
+        for step in plan.steps() {
+            let Some(node_inst) = graph.get_node(step.node) else {
+                continue;
+            };
+            let node_type = node_inst.node.type_id().as_str();
+
+            input_dims.clear();
+            for (port_name, res_id) in &step.inputs {
+                if !matches!(plan.resource_type(*res_id), Some(PortType::Texture3D)) {
+                    continue;
+                }
+                let Some(slot) = backend.slot_for(*res_id) else {
+                    continue;
+                };
+                let Some(tex) = backend.texture_3d(slot) else {
+                    continue;
+                };
+                input_dims.push((*port_name, (tex.width, tex.height, tex.depth)));
+            }
+
+            for (port_name, res_id) in &step.outputs {
+                if !matches!(plan.resource_type(*res_id), Some(PortType::Texture3D)) {
+                    continue;
+                }
+                // Already pre-bound (e.g. a producer pinned by an alias
+                // earlier in the walk) — skip.
+                if backend.slot_for(*res_id).is_some() {
+                    continue;
+                }
+                let Some((w, h, d)) = node_inst.node.texture_3d_output_dims(
+                    port_name,
+                    &node_inst.params,
+                    &input_dims,
+                ) else {
+                    return Err(JsonGeneratorLoadError::UnsizedTexture3DOutput {
+                        node_type: node_type.to_string(),
+                        port: port_name.to_string(),
+                    });
+                };
+                let format = node_inst
+                    .node
+                    .output_format(port_name)
+                    .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
+                let label = format!("json_graph 3d volume: {node_type}.{port_name}");
+                let label_static: &'static str = Box::leak(label.into_boxed_str());
+                let texture = device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: w,
+                    height: h,
+                    depth: d,
+                    format,
+                    dimension: manifold_gpu::GpuTextureDimension::D3,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                    label: label_static,
+                    mip_levels: 1,
+                });
+                backend.pre_bind_texture_3d(*res_id, texture);
             }
         }
         Ok(())

@@ -768,4 +768,47 @@ pub trait EffectNode: Send {
             .get("max_capacity")
             .and_then(|v| v.as_u32_clamped(1))
     }
+
+    /// Dimensions for the named `Texture3D` output port, as
+    /// `(width, height, depth)` in voxels. Mirror of
+    /// [`array_output_capacity`] for the Texture3D port type — the JSON
+    /// loader's chain-build code calls this once after the node's params
+    /// are set, then allocates a `GpuTexture` of those dims (with format
+    /// from [`output_format`]) and pre-binds it via
+    /// `MetalBackend::pre_bind_texture_3d`.
+    ///
+    /// **Patterns mirror `array_output_capacity`**:
+    /// - **Producer** — reads node-local `vol_res` / `vol_depth` params.
+    ///   Default impl handles this pattern: returns
+    ///   `(params["vol_res"], params["vol_res"], params["vol_depth"])`
+    ///   when both are present. Most FluidSim3D-family primitives match
+    ///   without an override.
+    /// - **Transform (same-as-input)** — primitives that pass a Texture3D
+    ///   through (blur, gradient) override and return the matching input
+    ///   dim from `input_dims`.
+    ///
+    /// Returning `None` for a Texture3D output is a load-time error —
+    /// pre-bound allocation is a hard contract. Same shape as
+    /// `array_output_capacity`'s `None` semantics; the JSON loader
+    /// emits a clean `UnsizedTexture3DOutput` error.
+    fn texture_3d_output_dims(
+        &self,
+        port_name: &str,
+        params: &ParamValues,
+        _input_dims: &[(&str, (u32, u32, u32))],
+    ) -> Option<(u32, u32, u32)> {
+        let is_texture_3d_output = self
+            .outputs()
+            .iter()
+            .any(|p| p.name == port_name && p.ty == crate::node_graph::ports::PortType::Texture3D);
+        if !is_texture_3d_output {
+            return None;
+        }
+        let vol_res = params.get("vol_res").and_then(|v| v.as_u32_clamped(1))?;
+        let vol_depth = params
+            .get("vol_depth")
+            .and_then(|v| v.as_u32_clamped(1))
+            .unwrap_or(vol_res);
+        Some((vol_res, vol_res, vol_depth))
+    }
 }

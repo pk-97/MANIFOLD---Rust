@@ -1,0 +1,458 @@
+{
+  "version": 2,
+  "name": "Fluid Sim 3D",
+  "description": "Volumetric 3D particle compute fluid simulation — decomposed from `FluidSimulation3DGenerator` + the four fluid_*_3d shaders into the curated primitive library. Built on the new Camera-port shape (PortType::Camera, node.camera_orbit) so the camera basis lives in one node feeding both the volume sim (cam.fwd drives flatten) and the display projector (camera_orbit → scatter_particles_camera).\n\nPer-frame pipeline:\n1. Volume buildup: seed→scatter_3d→resolve_3d→blur_3d ×3 (density volume) → fluid_gradient_curl_3d → blur_3d ×3 (vector field).\n2. Simulate: fluid_simulate_3d consumes (aliased in particles, blurred field, blurred density) and mutates positions in place. Uses cam.fwd for the flatten-toward-camera math.\n3. Display: seed.particles (aliased — already mutated by simulate) → scatter_particles_camera (mode dispatched by container — None→Orthographic toroidal wrap, else Perspective) → resolve_accumulator → reinhard_tone_map → affine_transform → final_output.\n\nClip-trigger envelope: same structural shape as FluidSim2D — trigger_gate gates raw trigger_count by `clip_trigger > 0.5`; envelope_decay (rate 12.0) produces a one-shot 0→1 envelope per gated edge; sample_and_hold latches the mode slider at trigger time. Five modes:\n- mode 0 (turbulence burst): turbulence *= 1 + 9*env\n- mode 1 (curl rotation): curl_angle += π * env\n- mode 2 (flow sign-flip): flow *= 1 - 2*env\n- mode 3 (re-seed): trigger_gate(clip_trigger AND mode==3) → fluid_seed_3d.trigger + simulate.trigger; clip_trigger_cycle(mod=8) drives pattern (8 patterns: 7 geometric + Random)\n- mode 4 (3D inject): inject_burst.active gates clip_trigger_cycle(mod=4) → mux to either the cycled zone index (active=1) or -1 (active=0) → simulate.inject_index; the four zones are hardcoded tetrahedron vertices in the shader\n\nKnown parity deltas vs legacy:\n(1) Volume pipeline runs every frame; legacy amortized to every-other-frame to halve GPU cost on the volume passes. Graph runtime lacks per-frame sub-graph gating (same shape as FluidSim2D's mode-3 hitch). ~30–40% extra GPU on the volume passes.\n(2) vol_res baked at 128 — the legacy 64/128/256 slider is dropped because the graph runtime can't reallocate Texture3D mid-frame.\n(3) Display tone curve UV recenter is a separate affine_transform pass instead of fused into the tone shader — mathematically equivalent, not byte-exact (same delta as FluidSim2D).\n(4) The mode-3 re-seed will produce a ~16ms GPU pipeline hitch on each fire; legacy skipped the full pipeline on seed frames via the trigger port. The trigger-port skip is supported here (fluid_simulate_3d.trigger), but the volume pipeline still runs that frame — acceptable.\n\nCamera wiring: rotate_x (legacy [-1, +1] slider) → ×π → camera_orbit.tilt; rotate_y → ×π → camera_orbit.orbit; rotate_z → ×π → camera_orbit.roll (new in Camera struct); cam_dist → camera_orbit.distance. fov is baked at π/3 ≈ 60° to match the legacy implicit FOV.",
+  "presetMetadata": {
+    "id": "FluidSimulation3D",
+    "displayName": "Fluid Sim 3D",
+    "category": "Generator",
+    "oscPrefix": "fluidSimulation3D",
+    "legacyDiscriminant": 19,
+    "available": true,
+    "params": [
+      { "id": "flow",              "name": "Flow",              "min": -0.1,  "max": -0.001, "defaultValue": -0.01,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
+      { "id": "feather",           "name": "Feather",           "min": 4.0,   "max": 60.0,   "defaultValue": 20.0,   "wholeNumbers": true,  "isToggle": false, "formatString": "F0" },
+      { "id": "curl",              "name": "Curl",              "min": 30.0,  "max": 90.0,   "defaultValue": 85.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
+      { "id": "turbulence",        "name": "Turbulence",        "min": 0.0,   "max": 0.01,   "defaultValue": 0.001,  "wholeNumbers": false, "isToggle": false, "formatString": "F4" },
+      { "id": "speed",             "name": "Speed",             "min": 0.1,   "max": 3.0,    "defaultValue": 1.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
+      { "id": "contrast",          "name": "Contrast",          "min": 1.0,   "max": 8.0,    "defaultValue": 3.5,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
+      { "id": "scale",             "name": "Scale",             "min": 0.25,  "max": 3.0,    "defaultValue": 1.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "count_m",           "name": "Particle Count",    "min": 0.1,   "max": 8.0,    "defaultValue": 2.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
+      { "id": "clip_trigger",      "name": "Clip Trigger",      "min": 0.0,   "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": true,  "formatString": "F0" },
+      { "id": "clip_trigger_mode", "name": "Clip Trigger Mode", "min": 0.0,   "max": 4.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": false, "valueLabels": ["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"] },
+      { "id": "size",              "name": "Size",              "min": 1.0,   "max": 8.0,    "defaultValue": 3.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
+      { "id": "anti_clump",        "name": "Anti-Clump",        "min": 0.0,   "max": 60.0,   "defaultValue": 20.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
+      { "id": "force",             "name": "Force",             "min": 0.0,   "max": 0.1,    "defaultValue": 0.005,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
+      { "id": "container",         "name": "Container",         "min": 0.0,   "max": 3.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": false, "valueLabels": ["None", "Cube", "Sphere", "Torus"] },
+      { "id": "ctr_scale",         "name": "Container Scale",   "min": 0.2,   "max": 1.0,    "defaultValue": 0.8,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "cam_dist",          "name": "Cam Dist",          "min": 1.0,   "max": 8.0,    "defaultValue": 3.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
+      { "id": "rotate_x",          "name": "Rotate X",          "min": -1.0,  "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "rotate_y",          "name": "Rotate Y",          "min": -1.0,  "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "rotate_z",          "name": "Rotate Z",          "min": -1.0,  "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "flatten",           "name": "Flatten",           "min": 0.0,   "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" }
+    ],
+    "bindings": [
+      { "id": "speed",             "label": "Speed",        "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "simulate", "param": "speed" },
+        "convert": { "type": "Float" } },
+
+      { "id": "flow",              "label": "Flow",         "defaultValue": -0.01,
+        "target": { "kind": "handleNode", "handle": "slope_final", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "feather",           "label": "Feather",      "defaultValue": 20.0,
+        "target": { "kind": "handleNode", "handle": "blur_radius_scaled", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "curl",              "label": "Curl",         "defaultValue": 85.0,
+        "target": { "kind": "handleNode", "handle": "curl_angle_base", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "turbulence",        "label": "Turbulence",   "defaultValue": 0.001,
+        "target": { "kind": "handleNode", "handle": "noise_final", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "contrast",          "label": "Contrast",     "defaultValue": 3.5,
+        "target": { "kind": "handleNode", "handle": "display_tone", "param": "contrast" },
+        "convert": { "type": "Float" } },
+
+      { "id": "scale",             "label": "Scale",        "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "uv_scale_inv", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "particle_count_calc", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
+        "target": { "kind": "handleNode", "handle": "size_per_pm", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "trig_gate_env", "param": "enable" },
+        "convert": { "type": "Float" } },
+      { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mode3_gate", "param": "b" },
+        "convert": { "type": "Float" } },
+      { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mode4_gate", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "mode_value", "param": "value" },
+        "convert": { "type": "Float" } },
+
+      { "id": "size",              "label": "Size",         "defaultValue": 3.0,
+        "target": { "kind": "handleNode", "handle": "size_per_pm", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
+        "target": { "kind": "handleNode", "handle": "simulate", "param": "anti_clump" },
+        "convert": { "type": "Float" } },
+      { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
+        "target": { "kind": "handleNode", "handle": "diffusion_calc", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "force",             "label": "Force",        "defaultValue": 0.005,
+        "target": { "kind": "handleNode", "handle": "inject_force_gated", "param": "b" },
+        "convert": { "type": "Float" } },
+
+      { "id": "container",         "label": "Container",    "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "simulate", "param": "container" },
+        "convert": { "type": "EnumRound" } },
+      { "id": "container",         "label": "Container",    "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "seed", "param": "container" },
+        "convert": { "type": "EnumRound" } },
+      { "id": "container",         "label": "Container",    "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "display_scatter", "param": "mode" },
+        "convert": { "type": "EnumRound" } },
+
+      { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
+        "target": { "kind": "handleNode", "handle": "simulate", "param": "ctr_scale" },
+        "convert": { "type": "Float" } },
+      { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
+        "target": { "kind": "handleNode", "handle": "seed", "param": "ctr_scale" },
+        "convert": { "type": "Float" } },
+
+      { "id": "cam_dist",          "label": "Cam Dist",     "defaultValue": 3.0,
+        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "distance" },
+        "convert": { "type": "Float" } },
+
+      { "id": "rotate_x",          "label": "Rotate X",     "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "tilt_to_rad", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "rotate_y",          "label": "Rotate Y",     "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "orbit_to_rad", "param": "a" },
+        "convert": { "type": "Float" } },
+      { "id": "rotate_z",          "label": "Rotate Z",     "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "roll_to_rad", "param": "a" },
+        "convert": { "type": "Float" } },
+
+      { "id": "flatten",           "label": "Flatten",      "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "simulate", "param": "flatten" },
+        "convert": { "type": "Float" } },
+      { "id": "flatten",           "label": "Flatten",      "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "seed", "param": "flatten" },
+        "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1,  "typeId": "system.final_output",    "handle": "final_output" },
+
+    { "id": 2,  "typeId": "node.camera_orbit", "handle": "cam_orbit_node",
+      "params": {
+        "orbit":    { "type": "Float", "value": 0.0 },
+        "tilt":     { "type": "Float", "value": 0.0 },
+        "distance": { "type": "Float", "value": 3.0 },
+        "fov_y":    { "type": "Float", "value": 1.0472 },
+        "look_y":   { "type": "Float", "value": 0.0 },
+        "roll":     { "type": "Float", "value": 0.0 },
+        "near":     { "type": "Float", "value": 0.05 },
+        "far":      { "type": "Float", "value": 200.0 }
+      } },
+
+    { "id": 3,  "typeId": "node.affine_scalar", "handle": "tilt_to_rad",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
+    { "id": 4,  "typeId": "node.affine_scalar", "handle": "orbit_to_rad",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
+    { "id": 5,  "typeId": "node.affine_scalar", "handle": "roll_to_rad",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 6,  "typeId": "node.fluid_seed_3d", "handle": "seed",
+      "params": {
+        "max_capacity":  { "type": "Int",  "value": 8000000 },
+        "active_count":  { "type": "Int",  "value": 2000000 },
+        "pattern":       { "type": "Enum", "value": 7 },
+        "trigger_count": { "type": "Int",  "value": 42 },
+        "container":     { "type": "Enum", "value": 0 },
+        "ctr_scale":     { "type": "Float", "value": 0.8 },
+        "flatten":       { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 7,  "typeId": "node.scatter_particles_3d", "handle": "vol_scatter",
+      "params": {
+        "active_count":  { "type": "Int",  "value": 2000000 },
+        "vol_res":       { "type": "Int",  "value": 128 },
+        "vol_depth":     { "type": "Int",  "value": 128 },
+        "scaled_energy": { "type": "Int",  "value": 4096 }
+      } },
+
+    { "id": 8,  "typeId": "node.resolve_3d_accumulator", "handle": "vol_resolve",
+      "params": {
+        "vol_res":   { "type": "Int", "value": 128 },
+        "vol_depth": { "type": "Int", "value": 128 }
+      } },
+
+    { "id": 9,  "typeId": "node.blur_3d_separable", "handle": "density_blur_x",
+      "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 0 }, "radius": { "type": "Float", "value": 5.0 } } },
+    { "id": 10, "typeId": "node.blur_3d_separable", "handle": "density_blur_y",
+      "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 5.0 } } },
+    { "id": 11, "typeId": "node.blur_3d_separable", "handle": "density_blur_z",
+      "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 2 }, "radius": { "type": "Float", "value": 5.0 } } },
+
+    { "id": 12, "typeId": "node.fluid_gradient_curl_3d", "handle": "grad_curl",
+      "params": {
+        "vol_res":        { "type": "Int",   "value": 128 },
+        "vol_depth":      { "type": "Int",   "value": 128 },
+        "curl_strength":  { "type": "Float", "value": 0.0 },
+        "slope_strength": { "type": "Float", "value": -500.0 },
+        "ref_axis_x":     { "type": "Float", "value": 0.0 },
+        "ref_axis_y":     { "type": "Float", "value": 1.0 },
+        "ref_axis_z":     { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 13, "typeId": "node.blur_3d_separable", "handle": "field_blur_x",
+      "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 0 }, "radius": { "type": "Float", "value": 5.0 } } },
+    { "id": 14, "typeId": "node.blur_3d_separable", "handle": "field_blur_y",
+      "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 5.0 } } },
+    { "id": 15, "typeId": "node.blur_3d_separable", "handle": "field_blur_z",
+      "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 2 }, "radius": { "type": "Float", "value": 5.0 } } },
+
+    { "id": 16, "typeId": "node.fluid_simulate_3d", "handle": "simulate",
+      "params": {
+        "active_count":  { "type": "Int",   "value": 2000000 },
+        "speed":         { "type": "Float", "value": 1.0 },
+        "turbulence":    { "type": "Float", "value": 0.001 },
+        "anti_clump":    { "type": "Float", "value": 20.0 },
+        "diffusion":     { "type": "Float", "value": 0.0166 },
+        "container":     { "type": "Enum",  "value": 0 },
+        "ctr_scale":     { "type": "Float", "value": 0.8 },
+        "flatten":       { "type": "Float", "value": 0.0 },
+        "inject_index":  { "type": "Int",   "value": -1 },
+        "inject_force":  { "type": "Float", "value": 0.0 },
+        "inject_phase":  { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 17, "typeId": "node.scatter_particles_camera", "handle": "display_scatter",
+      "params": {
+        "active_count":  { "type": "Int",  "value": 2000000 },
+        "disp_w":        { "type": "Int",  "value": 1920 },
+        "disp_h":        { "type": "Int",  "value": 1080 },
+        "mode":          { "type": "Enum", "value": 1 },
+        "scaled_energy": { "type": "Int",  "value": 4096 }
+      } },
+
+    { "id": 18, "typeId": "node.resolve_accumulator", "handle": "display_resolve",
+      "params": { "fixed_point_scale": { "type": "Float", "value": 4096.0 } } },
+
+    { "id": 19, "typeId": "node.reinhard_tone_map", "handle": "display_tone",
+      "params": {
+        "intensity": { "type": "Float", "value": 3.0 },
+        "contrast":  { "type": "Float", "value": 3.5 }
+      } },
+
+    { "id": 20, "typeId": "node.affine_transform", "handle": "display_zoom",
+      "params": {
+        "translate_x": { "type": "Float", "value": 0.0 },
+        "translate_y": { "type": "Float", "value": 0.0 },
+        "scale":       { "type": "Float", "value": 1.0 },
+        "rotation":    { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 21, "typeId": "node.canvas_area_scale", "handle": "area_scale",
+      "params": { "width": { "type": "Float", "value": 1920.0 }, "height": { "type": "Float", "value": 1080.0 }, "reference_area": { "type": "Float", "value": 2073600.0 }, "min_width": { "type": "Float", "value": 640.0 }, "min_height": { "type": "Float", "value": 360.0 } } },
+
+    { "id": 22, "typeId": "node.affine_scalar", "handle": "intensity_calc",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "scale": { "type": "Float", "value": 3.0 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 23, "typeId": "node.math", "handle": "uv_scale_inv",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
+
+    { "id": 24, "typeId": "node.affine_scalar", "handle": "particle_count_calc",
+      "params": { "a": { "type": "Float", "value": 2.0 }, "scale": { "type": "Float", "value": 1000000.0 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 25, "typeId": "node.math", "handle": "size_per_pm",
+      "params": { "a": { "type": "Float", "value": 3.0 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 3 } } },
+
+    { "id": 26, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc",
+      "params": { "a": { "type": "Float", "value": 1.5 }, "scale": { "type": "Float", "value": 6.8266667 }, "offset": { "type": "Float", "value": 0.5 } } },
+
+    { "id": 27, "typeId": "node.affine_scalar", "handle": "diffusion_calc",
+      "params": { "a": { "type": "Float", "value": 20.0 }, "scale": { "type": "Float", "value": 0.0008333333 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 28, "typeId": "node.affine_scalar", "handle": "blur_radius_scaled",
+      "params": { "a": { "type": "Float", "value": 20.0 }, "scale": { "type": "Float", "value": 0.2 }, "offset": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 30, "typeId": "node.trigger_gate", "handle": "trig_gate_env",
+      "params": { "enable": { "type": "Bool", "value": false } } },
+
+    { "id": 31, "typeId": "node.envelope_decay", "handle": "env",
+      "params": { "decay_rate": { "type": "Float", "value": 12.0 } } },
+
+    { "id": 32, "typeId": "node.value", "handle": "mode_value",
+      "params": { "value": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 33, "typeId": "node.sample_and_hold", "handle": "mode_hold",
+      "params": {} },
+
+    { "id": 34, "typeId": "node.value", "handle": "const_one",
+      "params": { "value": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 35, "typeId": "node.mux_scalar", "handle": "mux_noise",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+    { "id": 36, "typeId": "node.math", "handle": "env_x9",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 9.0 }, "op": { "type": "Enum", "value": 2 } } },
+    { "id": 37, "typeId": "node.math", "handle": "noise_factor",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
+    { "id": 38, "typeId": "node.math", "handle": "noise_final",
+      "params": { "a": { "type": "Float", "value": 0.001 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
+
+    { "id": 39, "typeId": "node.mux_scalar", "handle": "mux_curl",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+    { "id": 40, "typeId": "node.math", "handle": "env_x_pi",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 3.14159265 }, "op": { "type": "Enum", "value": 2 } } },
+    { "id": 41, "typeId": "node.affine_scalar", "handle": "curl_angle_base",
+      "params": { "a": { "type": "Float", "value": 85.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
+    { "id": 42, "typeId": "node.math", "handle": "curl_angle_final",
+      "params": { "a": { "type": "Float", "value": 1.4835 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
+
+    { "id": 43, "typeId": "node.mux_scalar", "handle": "mux_flow",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+    { "id": 44, "typeId": "node.math", "handle": "env_x_neg2",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": -2.0 }, "op": { "type": "Enum", "value": 2 } } },
+    { "id": 45, "typeId": "node.math", "handle": "flow_factor",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
+    { "id": 46, "typeId": "node.math", "handle": "slope_final",
+      "params": { "a": { "type": "Float", "value": -0.01 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
+
+    { "id": 50, "typeId": "node.mux_scalar", "handle": "mux_mode3",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+    { "id": 51, "typeId": "node.math", "handle": "mode3_gate",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 2 } } },
+    { "id": 52, "typeId": "node.trigger_gate", "handle": "trig_gate_seed",
+      "params": { "enable": { "type": "Bool", "value": false } } },
+    { "id": 53, "typeId": "node.clip_trigger_cycle", "handle": "pattern_cycle",
+      "params": { "modulus": { "type": "Int", "value": 8 } } },
+
+    { "id": 60, "typeId": "node.mux_scalar", "handle": "mux_mode4",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+    { "id": 61, "typeId": "node.math", "handle": "mode4_gate",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 2 } } },
+    { "id": 62, "typeId": "node.inject_burst", "handle": "inject",
+      "params": { "duration": { "type": "Float", "value": 0.5 } } },
+    { "id": 63, "typeId": "node.clip_trigger_cycle", "handle": "inject_zone_cycle",
+      "params": { "modulus": { "type": "Int", "value": 4 } } },
+    { "id": 64, "typeId": "node.value", "handle": "const_neg_one",
+      "params": { "value": { "type": "Float", "value": -1.0 } } },
+    { "id": 65, "typeId": "node.mux_scalar", "handle": "mux_inject_index",
+      "params": { "selector": { "type": "Float", "value": 0.0 } } },
+    { "id": 66, "typeId": "node.math", "handle": "inject_force_gated",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.005 }, "op": { "type": "Enum", "value": 2 } } }
+  ],
+  "wires": [
+    { "fromNode": 3,  "fromPort": "out", "toNode": 2, "toPort": "tilt" },
+    { "fromNode": 4,  "fromPort": "out", "toNode": 2, "toPort": "orbit" },
+    { "fromNode": 5,  "fromPort": "out", "toNode": 2, "toPort": "roll" },
+
+    { "fromNode": 2,  "fromPort": "out", "toNode": 6,  "toPort": "camera" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 16, "toPort": "camera" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 17, "toPort": "camera" },
+
+    { "fromNode": 24, "fromPort": "out", "toNode": 6,  "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 7,  "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 16, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 17, "toPort": "active_count" },
+
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "a" },
+    { "fromNode": 26, "fromPort": "out", "toNode": 17, "toPort": "scaled_energy" },
+
+    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 17, "toPort": "disp_w" },
+    { "fromNode": 0,  "fromPort": "output_height", "toNode": 17, "toPort": "disp_h" },
+
+    { "fromNode": 6,  "fromPort": "particles", "toNode": 7,  "toPort": "particles" },
+    { "fromNode": 6,  "fromPort": "particles", "toNode": 16, "toPort": "in" },
+
+    { "fromNode": 7,  "fromPort": "accum", "toNode": 8, "toPort": "accum" },
+    { "fromNode": 8,  "fromPort": "density", "toNode": 9, "toPort": "in" },
+    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
+
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "density" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 16, "toPort": "density" },
+
+    { "fromNode": 28, "fromPort": "out", "toNode": 9,  "toPort": "radius" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 10, "toPort": "radius" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 11, "toPort": "radius" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 13, "toPort": "radius" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 14, "toPort": "radius" },
+    { "fromNode": 28, "fromPort": "out", "toNode": 15, "toPort": "radius" },
+
+    { "fromNode": 42, "fromPort": "out", "toNode": 12, "toPort": "curl_strength" },
+    { "fromNode": 46, "fromPort": "out", "toNode": 12, "toPort": "slope_strength" },
+
+    { "fromNode": 12, "fromPort": "force", "toNode": 13, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out",   "toNode": 14, "toPort": "in" },
+    { "fromNode": 14, "fromPort": "out",   "toNode": 15, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out",   "toNode": 16, "toPort": "field" },
+
+    { "fromNode": 27, "fromPort": "out", "toNode": 16, "toPort": "diffusion" },
+
+    { "fromNode": 6,  "fromPort": "particles", "toNode": 17, "toPort": "particles" },
+
+    { "fromNode": 17, "fromPort": "accum",   "toNode": 18, "toPort": "accum" },
+    { "fromNode": 18, "fromPort": "density", "toNode": 20, "toPort": "in" },
+    { "fromNode": 23, "fromPort": "out",     "toNode": 20, "toPort": "scale" },
+    { "fromNode": 20, "fromPort": "out",     "toNode": 19, "toPort": "in" },
+    { "fromNode": 19, "fromPort": "out",     "toNode": 1,  "toPort": "in" },
+
+    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 21, "toPort": "width" },
+    { "fromNode": 0,  "fromPort": "output_height", "toNode": 21, "toPort": "height" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 22, "toPort": "a" },
+    { "fromNode": 22, "fromPort": "out", "toNode": 19, "toPort": "intensity" },
+
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 30, "toPort": "trigger_count" },
+    { "fromNode": 30, "fromPort": "out",           "toNode": 31, "toPort": "trigger" },
+
+    { "fromNode": 32, "fromPort": "out",           "toNode": 33, "toPort": "value" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 33, "toPort": "trigger" },
+
+    { "fromNode": 33, "fromPort": "out", "toNode": 35, "toPort": "selector" },
+    { "fromNode": 33, "fromPort": "out", "toNode": 39, "toPort": "selector" },
+    { "fromNode": 33, "fromPort": "out", "toNode": 43, "toPort": "selector" },
+    { "fromNode": 33, "fromPort": "out", "toNode": 50, "toPort": "selector" },
+    { "fromNode": 33, "fromPort": "out", "toNode": 60, "toPort": "selector" },
+
+    { "fromNode": 34, "fromPort": "out", "toNode": 35, "toPort": "in_0" },
+    { "fromNode": 31, "fromPort": "out", "toNode": 36, "toPort": "a" },
+    { "fromNode": 35, "fromPort": "out", "toNode": 37, "toPort": "b" },
+    { "fromNode": 36, "fromPort": "out", "toNode": 37, "toPort": "b" },
+    { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "b" },
+    { "fromNode": 38, "fromPort": "out", "toNode": 16, "toPort": "turbulence" },
+
+    { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "a" },
+    { "fromNode": 39, "fromPort": "out", "toNode": 42, "toPort": "b" },
+    { "fromNode": 31, "fromPort": "out", "toNode": 40, "toPort": "a" },
+    { "fromNode": 40, "fromPort": "out", "toNode": 39, "toPort": "in_1" },
+
+    { "fromNode": 43, "fromPort": "out", "toNode": 45, "toPort": "b" },
+    { "fromNode": 45, "fromPort": "out", "toNode": 46, "toPort": "b" },
+    { "fromNode": 31, "fromPort": "out", "toNode": 44, "toPort": "a" },
+    { "fromNode": 44, "fromPort": "out", "toNode": 43, "toPort": "in_2" },
+
+    { "fromNode": 34, "fromPort": "out", "toNode": 50, "toPort": "in_3" },
+    { "fromNode": 50, "fromPort": "out", "toNode": 51, "toPort": "a" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 52, "toPort": "trigger_count" },
+    { "fromNode": 51, "fromPort": "out", "toNode": 52, "toPort": "enable" },
+    { "fromNode": 52, "fromPort": "out", "toNode": 6,  "toPort": "trigger" },
+    { "fromNode": 52, "fromPort": "out", "toNode": 16, "toPort": "trigger" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 53, "toPort": "trigger_count" },
+    { "fromNode": 53, "fromPort": "out", "toNode": 6,  "toPort": "pattern" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 6,  "toPort": "trigger_count" },
+
+    { "fromNode": 34, "fromPort": "out", "toNode": 60, "toPort": "in_4" },
+    { "fromNode": 60, "fromPort": "out", "toNode": 61, "toPort": "a" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 62, "toPort": "trigger" },
+    { "fromNode": 61, "fromPort": "out", "toNode": 62, "toPort": "enable" },
+
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 63, "toPort": "trigger_count" },
+    { "fromNode": 63, "fromPort": "out", "toNode": 65, "toPort": "in_1" },
+    { "fromNode": 64, "fromPort": "out", "toNode": 65, "toPort": "in_0" },
+    { "fromNode": 62, "fromPort": "active", "toNode": 65, "toPort": "selector" },
+    { "fromNode": 65, "fromPort": "out",    "toNode": 16, "toPort": "inject_index" },
+
+    { "fromNode": 62, "fromPort": "active", "toNode": 66, "toPort": "a" },
+    { "fromNode": 66, "fromPort": "out",    "toNode": 16, "toPort": "inject_force" },
+    { "fromNode": 62, "fromPort": "phase",  "toNode": 16, "toPort": "inject_phase" }
+  ]
+}

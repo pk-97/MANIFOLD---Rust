@@ -3,7 +3,6 @@ pub mod bundled_generator_presets;
 pub mod clip_trigger;
 pub mod compute_common;
 pub mod fluid_sim_core;
-pub mod fluid_simulation_3d;
 pub mod generator_math;
 pub mod json_graph_generator;
 pub mod line_pipeline;

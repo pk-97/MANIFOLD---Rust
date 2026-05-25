@@ -34,6 +34,7 @@ crate::primitive! {
         distance: ScalarF32 optional,
         fov_y: ScalarF32 optional,
         look_y: ScalarF32 optional,
+        roll: ScalarF32 optional,
     },
     outputs: {
         out: Camera,
@@ -80,6 +81,14 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: "roll",
+            label: "Roll (rad)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: "near",
             label: "Near",
             ty: ParamType::Float,
@@ -108,6 +117,7 @@ impl Primitive for CameraOrbit {
         let distance = ctx.scalar_or_param("distance", 4.0).max(0.001);
         let fov_y = ctx.scalar_or_param("fov_y", 0.9).max(0.01);
         let look_y = ctx.scalar_or_param("look_y", 0.0);
+        let roll = ctx.scalar_or_param("roll", 0.0);
         let near = match ctx.params.get("near") {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.05,
@@ -117,7 +127,7 @@ impl Primitive for CameraOrbit {
             _ => 200.0,
         };
 
-        let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, near, far);
+        let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, roll, near, far);
         ctx.outputs.set_camera("out", cam);
     }
 }
@@ -129,12 +139,12 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn camera_orbit_declares_five_scalar_inputs_and_camera_output() {
+    fn camera_orbit_declares_six_scalar_inputs_and_camera_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
 
         assert_eq!(CameraOrbit::TYPE_ID, "node.camera_orbit");
         let in_names: Vec<&str> = CameraOrbit::INPUTS.iter().map(|p| p.name).collect();
-        assert_eq!(in_names, vec!["orbit", "tilt", "distance", "fov_y", "look_y"]);
+        assert_eq!(in_names, vec!["orbit", "tilt", "distance", "fov_y", "look_y", "roll"]);
         for input in CameraOrbit::INPUTS {
             assert!(!input.required, "{} should be optional (port-shadow)", input.name);
             assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
@@ -149,7 +159,7 @@ mod tests {
         let names: Vec<&str> = CameraOrbit::PARAMS.iter().map(|p| p.name).collect();
         assert_eq!(
             names,
-            vec!["orbit", "tilt", "distance", "fov_y", "look_y", "near", "far"]
+            vec!["orbit", "tilt", "distance", "fov_y", "look_y", "roll", "near", "far"]
         );
     }
 

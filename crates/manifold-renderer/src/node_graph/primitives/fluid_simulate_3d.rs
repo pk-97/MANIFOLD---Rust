@@ -211,6 +211,10 @@ impl Primitive for FluidSimulate3D {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // Seed-edge skip — mirrors node.fluid_simulate's trigger semantics.
+        // The aliased in→out buffer wasn't written this frame, but downstream
+        // reads it via the same slot so the aliased-IO debug assertion fires
+        // unless we mark the GPU as accessed (per the 3de536e4 fix on the 2D
+        // sibling).
         if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("trigger") {
             let current = v.round() as i32;
             let edge = match self.last_trigger {
@@ -219,6 +223,7 @@ impl Primitive for FluidSimulate3D {
             };
             self.last_trigger = Some(current);
             if edge {
+                ctx.mark_gpu_accessed();
                 return;
             }
         }

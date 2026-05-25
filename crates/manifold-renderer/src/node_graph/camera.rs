@@ -87,15 +87,20 @@ impl Camera {
     }
 
     /// Build an orbit-style perspective camera from `(orbit, tilt, distance,
-    /// fov_y, look_y)`. The orbit math mirrors the inline formula every 3D
+    /// fov_y, look_y, roll)`. The orbit math mirrors the inline formula every 3D
     /// renderer used pre-Camera-port (`render_3d_mesh`, `render_instanced_3d_mesh`,
-    /// `render_3d_mesh_pbr_ibl`, `digital_plants_render`).
+    /// `render_3d_mesh_pbr_ibl`, `digital_plants_render`). `roll` rotates the
+    /// `right` and `up` vectors around `fwd` so the camera banks while still
+    /// orbiting the same target — radians, positive = clockwise when looking
+    /// along `fwd`. `look_at_rh` is rebuilt from the rolled `up` so the view
+    /// matrix reflects the roll too.
     pub fn orbit_perspective(
         orbit: f32,
         tilt: f32,
         distance: f32,
         fov_y: f32,
         look_y: f32,
+        roll: f32,
         near: f32,
         far: f32,
     ) -> Self {
@@ -106,10 +111,22 @@ impl Camera {
             distance * orbit.sin() * tilt.cos(),
         ];
         let world_up = [0.0, 1.0, 0.0];
-        let view = look_at_rh(pos, target, world_up);
         let fwd = normalize3(sub3(target, pos));
-        let right = normalize3(cross3(fwd, world_up));
-        let up = normalize3(cross3(right, fwd));
+        let right0 = normalize3(cross3(fwd, world_up));
+        let up0 = normalize3(cross3(right0, fwd));
+        // Roll around the fwd axis. Rotate (right, up) by `roll`.
+        let (s, c) = (roll.sin(), roll.cos());
+        let right = normalize3([
+            right0[0] * c + up0[0] * s,
+            right0[1] * c + up0[1] * s,
+            right0[2] * c + up0[2] * s,
+        ]);
+        let up = normalize3([
+            -right0[0] * s + up0[0] * c,
+            -right0[1] * s + up0[1] * c,
+            -right0[2] * s + up0[2] * c,
+        ]);
+        let view = look_at_rh(pos, target, up);
         Self {
             pos,
             fwd,
@@ -206,7 +223,7 @@ mod tests {
 
     #[test]
     fn orbit_perspective_matches_legacy_eye_formula() {
-        let cam = Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.05, 200.0);
+        let cam = Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
         let expected_pos = [
             4.0 * 0.7_f32.cos() * 0.3_f32.cos(),
             4.0 * 0.3_f32.sin(),
@@ -224,7 +241,7 @@ mod tests {
 
     #[test]
     fn fwd_right_up_form_orthonormal_basis() {
-        let cam = Camera::orbit_perspective(0.5, 0.4, 3.0, 1.0, 0.1, 0.1, 100.0);
+        let cam = Camera::orbit_perspective(0.5, 0.4, 3.0, 1.0, 0.1, 0.0, 0.1, 100.0);
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         assert!(dot(cam.fwd, cam.fwd).abs() - 1.0 < 1e-5);
         assert!(dot(cam.right, cam.right).abs() - 1.0 < 1e-5);
@@ -232,6 +249,29 @@ mod tests {
         assert!(dot(cam.fwd, cam.right).abs() < 1e-5);
         assert!(dot(cam.fwd, cam.up).abs() < 1e-5);
         assert!(dot(cam.right, cam.up).abs() < 1e-5);
+    }
+
+    #[test]
+    fn roll_rotates_right_up_around_fwd_and_preserves_basis() {
+        let no_roll = Camera::orbit_perspective(0.5, 0.4, 3.0, 1.0, 0.0, 0.0, 0.1, 100.0);
+        let rolled = Camera::orbit_perspective(0.5, 0.4, 3.0, 1.0, 0.0, 1.5, 0.1, 100.0);
+        // pos + fwd are roll-invariant
+        for axis in 0..3 {
+            assert!((no_roll.pos[axis] - rolled.pos[axis]).abs() < 1e-5);
+            assert!((no_roll.fwd[axis] - rolled.fwd[axis]).abs() < 1e-5);
+        }
+        // Rolled basis is still orthonormal
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        assert!((dot(rolled.right, rolled.right) - 1.0).abs() < 1e-5);
+        assert!((dot(rolled.up, rolled.up) - 1.0).abs() < 1e-5);
+        assert!(dot(rolled.fwd, rolled.right).abs() < 1e-5);
+        assert!(dot(rolled.fwd, rolled.up).abs() < 1e-5);
+        assert!(dot(rolled.right, rolled.up).abs() < 1e-5);
+        // And actually different from the unrolled basis
+        let diff = (no_roll.right[0] - rolled.right[0]).abs()
+            + (no_roll.right[1] - rolled.right[1]).abs()
+            + (no_roll.right[2] - rolled.right[2]).abs();
+        assert!(diff > 0.01, "roll should change `right` vector");
     }
 
     #[test]
@@ -243,7 +283,7 @@ mod tests {
 
     #[test]
     fn proj_dispatches_on_mode() {
-        let mut cam = Camera::orbit_perspective(0.0, 0.0, 5.0, 1.0, 0.0, 0.1, 100.0);
+        let mut cam = Camera::orbit_perspective(0.0, 0.0, 5.0, 1.0, 0.0, 0.0, 0.1, 100.0);
         let _persp = cam.proj(16.0 / 9.0);
         cam.mode = CameraMode::Orthographic { half_height: 1.0 };
         let ortho = cam.proj(16.0 / 9.0);
