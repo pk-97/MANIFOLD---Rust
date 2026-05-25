@@ -16,8 +16,8 @@ Don't decompose for its own sake — see DECOMPOSING_GENERATORS §1 for the "mon
 
 ## State of play
 
-- **JSON-defined generators:** 19 (full list in [NODE_CATALOG.md §6.1](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, volumetric-scrubbing, relativistic-lensing, and CPU-rasterized-text families.
-- **Rust-defined generators:** 1 remaining (see §3 below). Register via `inventory::submit!` in [crates/manifold-renderer/src/generators/](../crates/manifold-renderer/src/generators/).
+- **JSON-defined generators:** 20 (full list in [NODE_CATALOG.md §6.1](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, volumetric-scrubbing, relativistic-lensing, CPU-rasterized-text, and text-baked-into-force-field families.
+- **Rust-defined generators:** 0 remaining. Every shipping generator now lives in [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/) as a JSON graph composition.
 - **Primitive vocabulary:** ~135 shipped — see NODE_CATALOG.md for the full inventory.
 - **Infra:** all the foundation work has shipped — `system.generator_input` boundary node, variadic mux primitives, per-slot texture format declaration on the backend, the JSON loader (`JsonGraphGenerator`), `paramAliases` migration support, and StateStore plumbing for stateful primitives inside generators.
 
@@ -52,6 +52,7 @@ See [NODE_CATALOG.md §6.1](NODE_CATALOG.md) for the topology shape of each. Eac
 | MetallicGlass | 3D-mesh PBR-IBL on a displaced grid: feedback-displacement liquid surface + Cook-Torrance render + IBL env-map. First consumer of the new PBR-IBL atom family (cook_torrance_specular, equirect_envmap_sample, bake_equirect_envmap, render_3d_mesh_pbr_ibl, mirror_axis, pack_channels, clamp_texture). |
 | MriVolume | Image-folder scrubbing with mux'd slices |
 | Text | Single-primitive wrap of the CoreText glyph rasterizer (`node.render_text`) — sibling pattern to `node.image_folder` but rasterizing strings instead of decoding files |
+| ParticleText | FluidSim2D variant with the text bitmap baked into the force field as a curl-rotated gradient — particles stream along glyph edges instead of being seeded at bright text texels (departure from the legacy "form-and-dissolve" visual) |
 | TrivialPassthrough | Smoke-test fixture for the boundary nodes |
 
 ---
@@ -60,9 +61,7 @@ See [NODE_CATALOG.md §6.1](NODE_CATALOG.md) for the topology shape of each. Eac
 
 The migration targets. Each lives at `crates/manifold-renderer/src/generators/<name>.rs`.
 
-| Generator | Migration notes |
-|---|---|
-| **ParticleText** | CPU text rasterizer + fluid-sim seeded from text bitmap. Falls out for free now that `node.render_text` exists: re-use the FluidSim2D preset's graph with the rasterized text bitmap as the seed input. |
+All migration targets have shipped. The remaining Rust files under [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) are runtime infrastructure (`json_graph_generator`, `bundled_generator_presets`, `registration`, `registry`, `clip_trigger`, `compute_common`, `generator_math`, `line_pipeline`, `mesh_common`, `mesh_pipeline`, `stateful_base`) — not generators in their own right.
 
 ---
 

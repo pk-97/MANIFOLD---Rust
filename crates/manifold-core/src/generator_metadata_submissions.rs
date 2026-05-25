@@ -492,6 +492,7 @@ inventory::submit! {
             ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
             ParamSpec::continuous("text_size", "Text Size", 0.05, 1.0, 0.25, "F2", "textSize"),
+            ParamSpec::continuous("text_strength", "Text Strength", 0.0, 20.0, 4.0, "F1", "textStrength"),
         ],
         string_params: &[("Text", "text", "HELLO", false), ("Font", "fontFamily", "", true)],
     }

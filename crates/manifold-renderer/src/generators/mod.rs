@@ -1,13 +1,11 @@
 pub mod bundled_generator_presets;
 pub mod clip_trigger;
 pub mod compute_common;
-pub mod fluid_sim_core;
 pub mod generator_math;
 pub mod json_graph_generator;
 pub mod line_pipeline;
 pub mod mesh_common;
 pub mod mesh_pipeline;
-pub mod particle_text;
 pub mod registration;
 pub mod registry;
 pub mod stateful_base;
