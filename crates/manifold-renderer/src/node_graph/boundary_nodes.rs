@@ -174,6 +174,10 @@ impl EffectNode for FinalOutput {
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
         // No-op. Host reads the final result from this node's input slot.
     }
+    fn is_liveness_root(&self) -> bool {
+        // FinalOutput writes to the host display — always live by definition.
+        true
+    }
 }
 
 inventory::submit! {

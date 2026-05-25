@@ -17,7 +17,6 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
 use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
 use crate::node_graph::graph::Graph;
@@ -237,29 +236,20 @@ impl Executor {
             }
         }
 
-        // Seed: every FinalOutput step is live. (Multi-FinalOutput
-        // graphs are unusual but legal; this handles them uniformly.)
-        //
-        // Also seed: every step that declares `aliased_array_io`. The
-        // aliased contract is that the primitive's dispatch writes to
-        // a persistent shared buffer (input and output ports resolved
-        // to the same physical slot by the chain build). Downstream
-        // reads of those writes happen via the aliased slot in
-        // subsequent frames — there is no per-frame graph wire from
-        // simulate.out → scatter to expose this dependency to a
-        // wire-walking pruner. Without auto-liveness, a scatter-first
-        // wiring (where simulate sits at the bottom of the chain
-        // mutating its in-place buffer for next frame's scatter to
-        // read) would prune simulate entirely, freezing the loop.
+        // Seed every node that's a liveness root — `system.final_output`,
+        // primitives with `aliased_array_io`, primitives with
+        // `state_capture_input_ports`, and any future cross-frame
+        // mechanism. See `EffectNode::is_liveness_root` for the concept
+        // and the default impl. Roots run regardless of downstream
+        // consumers; everything else is reachable from a root via
+        // per-frame wires or gets pruned.
         let mut worklist: Vec<usize> = Vec::new();
         for (idx, step) in steps.iter().enumerate() {
-            if let Some(inst) = graph.get_node(step.node) {
-                let is_final = inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID;
-                let has_aliased = !inst.node.aliased_array_io().is_empty();
-                if is_final || has_aliased {
-                    self.live_steps[idx] = true;
-                    worklist.push(idx);
-                }
+            if let Some(inst) = graph.get_node(step.node)
+                && inst.node.is_liveness_root()
+            {
+                self.live_steps[idx] = true;
+                worklist.push(idx);
             }
         }
 

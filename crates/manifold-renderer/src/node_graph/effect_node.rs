@@ -415,6 +415,44 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Whether this node is a **liveness root** — must run every frame
+    /// regardless of whether any per-frame wire consumes its output.
+    ///
+    /// The pruner (`Executor::compute_live_steps`) walks backwards from
+    /// liveness roots through per-frame wires to decide which nodes
+    /// dispatch each frame. A node that isn't reachable from any root
+    /// is pruned to save GPU work.
+    ///
+    /// Most nodes are NOT roots — they're reachable from `system.final_output`
+    /// via wires the pruner can see, and being live propagates naturally.
+    /// A node IS a root when its effects reach next frame through a channel
+    /// the wire walker can't see. Three current mechanisms qualify:
+    ///
+    /// 1. **`system.final_output`** writes to the host's display target,
+    ///    which is the user-visible artefact. Always a root by definition.
+    /// 2. **`aliased_array_io`** declares an input/output port pair that
+    ///    resolve to one physical buffer at chain build. The dispatch
+    ///    mutates that buffer in place; next frame's read picks up the
+    ///    mutation through the persistent aliased slot. No per-frame wire
+    ///    expresses the cross-frame consumer.
+    /// 3. **`state_capture_input_ports`** declares input ports that capture
+    ///    this-frame's producer output via `late_capture` into the
+    ///    `StateStore` for next-frame `run` calls. The captured value
+    ///    flows through persistent state, not through a per-frame wire.
+    ///
+    /// The default impl ORs the second and third together; nodes whose
+    /// roots come from other channels (FinalOutput, future host-side
+    /// effects like MIDI emit) override directly.
+    ///
+    /// New cross-frame mechanisms extend this default rather than adding
+    /// a third inline criterion to the pruner. The pruner asks one
+    /// question — "is this a liveness root?" — and every mechanism
+    /// declares itself through this single method.
+    fn is_liveness_root(&self) -> bool {
+        !self.state_capture_input_ports().is_empty()
+            || !self.aliased_array_io().is_empty()
+    }
+
     /// Output Array port names whose buffer size must equal the
     /// canvas (`width × height` cells). The chain builder, on
     /// encountering one of these, allocates

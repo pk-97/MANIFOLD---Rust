@@ -222,23 +222,19 @@ pub(super) fn validate_wire_endpoints(
 /// construction (composite presets, JSON load, undo / redo) bypasses
 /// `connect()` and so this second check is the durable safety net.
 pub fn validate(graph: &Graph) -> Result<(), GraphError> {
-    let live = reachable_from_final_output(graph);
-    // Reachability filtering only kicks in when a FinalOutput is
-    // actually present. Graphs without one (most unit-test
-    // fixtures, plus any caller that builds a graph for its side
-    // effects rather than to render) fall back to validating every
-    // node — there's no "what reaches the output?" to compute.
-    let has_final_output = graph.nodes().any(|inst| {
-        inst.node.type_id().as_str()
-            == crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID
-    });
+    let live = reachable_from_liveness_roots(graph);
+    // Reachability filtering only kicks in when at least one liveness
+    // root is present. Graphs without any (most unit-test fixtures,
+    // plus any caller that builds a graph for its side effects rather
+    // than to render) fall back to validating every node — there's no
+    // "what does the executor run?" to compute.
+    let has_root = graph.nodes().any(|inst| inst.node.is_liveness_root());
     for inst in graph.nodes() {
-        // Nodes that can't reach any FinalOutput don't run, so their
-        // required inputs aren't actually required this frame.
-        // Skipping them here makes editing-time graphs robust: the
-        // user can drop a Sample into the canvas before wiring it
-        // without the renderer falling back to catalog default.
-        if has_final_output && !live.contains(&inst.id) {
+        // Nodes the executor won't run don't have to satisfy required-
+        // input rules — skipping them here makes editing-time graphs
+        // robust: the user can drop a Sample into the canvas before
+        // wiring it without the renderer falling back to catalog.
+        if has_root && !live.contains(&inst.id) {
             continue;
         }
         for input in inst.node.inputs() {
@@ -290,16 +286,26 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Set of nodes whose output is (transitively) consumed by a
-/// `system.final_output` boundary node. Built by BFS backward across
-/// `wires` from every FinalOutput. Anything outside this set is dead
-/// — the executor won't run it and the validator shouldn't reject it.
-pub(crate) fn reachable_from_final_output(graph: &Graph) -> AHashSet<NodeInstanceId> {
-    use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
+/// Set of nodes whose output is (transitively) consumed by any
+/// liveness root. Built by BFS backward across `wires` from every
+/// `EffectNode::is_liveness_root` node. Anything outside this set is
+/// dead — the executor won't run it and the validator shouldn't
+/// reject it.
+///
+/// Liveness roots include `system.final_output`, primitives declaring
+/// `aliased_array_io`, and primitives declaring
+/// `state_capture_input_ports` (see [`EffectNode::is_liveness_root`]).
+/// Seeding the BFS from only FinalOutput silently strips simulators
+/// at the bottom of a scatter-first chain (their output never wires
+/// into a FinalOutput-reachable consumer — next frame's read happens
+/// through the persistent aliased slot), so this set must match the
+/// runtime pruner in [`Executor::compute_live_steps`] one-for-one or
+/// the chain compiler filters away nodes the executor would have run.
+pub(crate) fn reachable_from_liveness_roots(graph: &Graph) -> AHashSet<NodeInstanceId> {
     let mut live: AHashSet<NodeInstanceId> = AHashSet::default();
     let mut frontier: Vec<NodeInstanceId> = graph
         .nodes()
-        .filter(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
+        .filter(|inst| inst.node.is_liveness_root())
         .map(|inst| inst.id)
         .collect();
     while let Some(id) = frontier.pop() {
@@ -479,6 +485,13 @@ mod tests {
             &[]
         }
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        // Tests construct stand-ins for the FinalOutput boundary by
+        // its type_id string. The real FinalOutput impl overrides
+        // `is_liveness_root` to true; mirror that here so tests don't
+        // have to wrap in a separate fixture struct.
+        fn is_liveness_root(&self) -> bool {
+            self.type_id.as_str() == crate::node_graph::FINAL_OUTPUT_TYPE_ID
+        }
     }
 
     fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {

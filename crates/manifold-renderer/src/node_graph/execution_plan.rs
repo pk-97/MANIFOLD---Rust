@@ -210,20 +210,21 @@ impl ExecutionPlan {
 /// as [`GraphError`]. The graph is not consumed.
 pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     validate(graph)?;
-    // Topological order, then filter to nodes whose output is
-    // (transitively) consumed by a FinalOutput. Anything outside
-    // that set is dead — the executor mustn't try to evaluate it
-    // (its required inputs aren't bound), and validate() already
-    // skipped its required-input check on the same reachability
+    // Topological order, then filter to nodes the executor will
+    // actually run: those whose output is (transitively) consumed by
+    // any liveness root (FinalOutput, aliased_array_io primitives,
+    // state-capture primitives — see [`EffectNode::is_liveness_root`]).
+    // Anything outside that set is dead — the executor mustn't try to
+    // evaluate it (its required inputs aren't bound), and validate()
+    // already skipped its required-input check on the same reachability
     // grounds. Keeps editing-time graphs (orphan nodes in flight)
-    // compilable instead of falling back to catalog.
+    // compilable instead of falling back to catalog. Filter only
+    // applies when at least one root exists — graphs without any
+    // (most unit-test fixtures) fall back to running every node.
     let full_order = topological_sort(graph)?;
-    let has_final_output = graph.nodes().any(|inst| {
-        inst.node.type_id().as_str()
-            == crate::node_graph::FINAL_OUTPUT_TYPE_ID
-    });
-    let order: Vec<NodeInstanceId> = if has_final_output {
-        let live = crate::node_graph::validation::reachable_from_final_output(graph);
+    let has_root = graph.nodes().any(|inst| inst.node.is_liveness_root());
+    let order: Vec<NodeInstanceId> = if has_root {
+        let live = crate::node_graph::validation::reachable_from_liveness_roots(graph);
         full_order
             .into_iter()
             .filter(|id| live.contains(id))
