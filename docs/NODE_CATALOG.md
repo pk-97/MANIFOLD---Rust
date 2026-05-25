@@ -283,6 +283,7 @@ These wrap native plugins, CPU work, or background workers as primitives.
 | Blob Overlay Render | `node.blob_overlay_render` | Draws blob bounding boxes |
 | Optical Flow | `node.optical_flow_estimate` | Per-pixel optical flow vectors |
 | Image Folder | `node.image_folder` | Scrub through a folder of images via a position scalar |
+| Render Text | `node.render_text` | CoreText glyph rasterizer wrapped as a primitive — composite a text string into the output with position / scale / aspect / alignment |
 | Auto Gain Apply | `node.auto_gain_apply` | GPU side of AutoGain — pairs with the CPU envelope follower |
 
 ### 3.19 WGSL escape hatches
@@ -394,6 +395,7 @@ JSON-defined generators live at [`assets/generator-presets/`](../crates/manifold
 | Plasma | single curated family primitive: `plasma_pattern_2d` |
 | StarField | single curated primitive: `star_field_2d` |
 | Tesseract | 4D wireframe: `generate_tesseract_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
+| Text | single-primitive wrap of the CoreText glyph rasterizer: `node.render_text` |
 | TrivialPassthrough | smoke test: `uv_field` |
 | WireframeZoo | 3D wireframe: `wireframe_shape` → `rotate_3d` → `project_3d` → `render_lines` |
 

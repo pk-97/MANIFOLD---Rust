@@ -1,0 +1,149 @@
+{
+  "version": 2,
+  "name": "Text",
+  "description": "Text generator — decomposed from the legacy `TextGenerator` Rust struct into a single-primitive JSON graph.\n\nThe preset is the smallest possible shape: `system.generator_input → node.render_text → system.final_output`. All scalar outer-card params (size / position_x / position_y / scale / h_align / v_align / letter_spacing / line_spacing) bind 1:1 to `node.render_text`'s matching ports — port-shadows-param, so wiring an LFO or envelope through the graph editor animates them. The two string params (text + fontFamily) flow through `stringBindings` into the primitive's String ParamDefs, the same shape `node.image_folder.folder` is driven from the MriVolume preset.\n\nThe glyph rasterizer lives entirely inside `node.render_text` (CoreText → R8Unorm bitmap, dirty-cached) and the composite shader writes white-on-black into the output with aspect correction. Per-clip overrides for text + fontFamily flow through `Clip.string_params` the same way they did on the legacy Rust generator — one preset, any clip can re-point at different text or a different font.",
+  "presetMetadata": {
+    "id": "Text",
+    "displayName": "Text",
+    "category": "Source",
+    "oscPrefix": "text",
+    "available": true,
+    "params": [
+      {
+        "id": "size",
+        "name": "Size",
+        "min": 0.02,
+        "max": 1.0,
+        "defaultValue": 0.25,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "size"
+      },
+      {
+        "id": "position_x",
+        "name": "Position X",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "posX"
+      },
+      {
+        "id": "position_y",
+        "name": "Position Y",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "posY"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.1,
+        "max": 5.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "scale"
+      },
+      {
+        "id": "h_align",
+        "name": "H Align",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": ["Left", "Center", "Right"],
+        "formatString": "F0",
+        "oscSuffix": "hAlign"
+      },
+      {
+        "id": "v_align",
+        "name": "V Align",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": ["Top", "Center", "Bottom"],
+        "formatString": "F0",
+        "oscSuffix": "vAlign"
+      },
+      {
+        "id": "letter_spacing",
+        "name": "Letter Spacing",
+        "min": -0.5,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "letterSpacing"
+      },
+      {
+        "id": "line_spacing",
+        "name": "Line Spacing",
+        "min": 0.5,
+        "max": 3.0,
+        "defaultValue": 1.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1",
+        "oscSuffix": "lineSpacing"
+      }
+    ],
+    "stringParams": [
+      { "id": "text", "name": "Text", "defaultValue": "HELLO" },
+      { "id": "fontFamily", "name": "Font", "defaultValue": "" }
+    ],
+    "bindings": [
+      { "id": "size", "label": "Size", "defaultValue": 0.25,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "size" },
+        "convert": { "type": "Float" } },
+      { "id": "position_x", "label": "Position X", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "pos_x" },
+        "convert": { "type": "Float" } },
+      { "id": "position_y", "label": "Position Y", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "pos_y" },
+        "convert": { "type": "Float" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "scale" },
+        "convert": { "type": "Float" } },
+      { "id": "h_align", "label": "H Align", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "h_align" },
+        "convert": { "type": "Float" } },
+      { "id": "v_align", "label": "V Align", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "v_align" },
+        "convert": { "type": "Float" } },
+      { "id": "letter_spacing", "label": "Letter Spacing", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "letter_spacing" },
+        "convert": { "type": "Float" } },
+      { "id": "line_spacing", "label": "Line Spacing", "defaultValue": 1.2,
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "line_spacing" },
+        "convert": { "type": "Float" } }
+    ],
+    "stringBindings": [
+      { "id": "text", "label": "Text", "defaultValue": "HELLO",
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "text" } },
+      { "id": "fontFamily", "label": "Font", "defaultValue": "",
+        "target": { "kind": "handleNode", "handle": "render_text", "param": "fontFamily" } }
+    ],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1, "typeId": "node.render_text", "handle": "render_text" },
+    { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+  ]
+}
