@@ -42,6 +42,11 @@ crate::primitive! {
     purpose: "Fused 3D gradient + curl force field for the FluidSim3D family. Reads a scalar density Texture3D, computes 6-tap central-difference gradient with toroidal wrap, crosses with a rotating reference axis for curl (tangential orbit), combines with slope (radial). Writes vec3 force to an output Texture3D. Fused for bit-exact FluidSim3D parity.",
     inputs: {
         density: Texture3D required,
+        curl_strength: ScalarF32 optional,
+        slope_strength: ScalarF32 optional,
+        ref_axis_x: ScalarF32 optional,
+        ref_axis_y: ScalarF32 optional,
+        ref_axis_z: ScalarF32 optional,
     },
     outputs: {
         force: Texture3D,
@@ -119,26 +124,11 @@ impl Primitive for FluidGradientCurl3D {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
         };
-        let curl_strength = match ctx.params.get("curl_strength") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let slope_strength = match ctx.params.get("slope_strength") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => -500.0,
-        };
-        let ref_axis_x = match ctx.params.get("ref_axis_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let ref_axis_y = match ctx.params.get("ref_axis_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let ref_axis_z = match ctx.params.get("ref_axis_z") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let curl_strength = ctx.scalar_or_param("curl_strength", 0.0);
+        let slope_strength = ctx.scalar_or_param("slope_strength", -500.0);
+        let ref_axis_x = ctx.scalar_or_param("ref_axis_x", 0.0);
+        let ref_axis_y = ctx.scalar_or_param("ref_axis_y", 1.0);
+        let ref_axis_z = ctx.scalar_or_param("ref_axis_z", 0.0);
 
         let Some(density) = ctx.inputs.texture_3d("density") else {
             return;
@@ -201,11 +191,19 @@ mod tests {
 
     #[test]
     fn fluid_gradient_curl_3d_declares_texture_3d_in_and_out() {
-        use crate::node_graph::ports::PortType;
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(FluidGradientCurl3D::TYPE_ID, "node.fluid_gradient_curl_3d");
-        assert_eq!(FluidGradientCurl3D::INPUTS.len(), 1);
         assert_eq!(FluidGradientCurl3D::INPUTS[0].name, "density");
         assert_eq!(FluidGradientCurl3D::INPUTS[0].ty, PortType::Texture3D);
+        assert!(FluidGradientCurl3D::INPUTS[0].required);
+        // The remaining inputs are port-shadow scalar overrides for
+        // every param the FluidSim3D family wants to drive from the graph
+        // (curl/slope are time-varying angle decompositions, ref_axis
+        // rotates over time).
+        for input in &FluidGradientCurl3D::INPUTS[1..] {
+            assert!(!input.required, "{} should be optional port-shadow", input.name);
+            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(FluidGradientCurl3D::OUTPUTS.len(), 1);
         assert_eq!(FluidGradientCurl3D::OUTPUTS[0].name, "force");
         assert_eq!(FluidGradientCurl3D::OUTPUTS[0].ty, PortType::Texture3D);
