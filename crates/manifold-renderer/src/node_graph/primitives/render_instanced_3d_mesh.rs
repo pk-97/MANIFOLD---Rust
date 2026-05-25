@@ -10,7 +10,7 @@
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, perspective_rh};
+use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -28,10 +28,11 @@ struct InstancedRenderUniforms {
 crate::primitive! {
     name: RenderInstanced3DMesh,
     type_id: "node.render_instanced_3d_mesh",
-    purpose: "Render N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Triangle list topology (every 3 verts = 1 triangle). One directional light + ambient. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants-shaped graphs.",
+    purpose: "Render N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Triangle list topology (every 3 verts = 1 triangle). One directional light + ambient. Takes a `camera: Camera` input. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants-shaped graphs.",
     inputs: {
         vertices: Array(MeshVertex) required,
         instances: Array(InstanceTransform) required,
+        camera: Camera required,
     },
     outputs: {
         color: Texture2D,
@@ -43,46 +44,6 @@ crate::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(64.0),
             range: Some((1.0, 1_000_000.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_distance",
-            label: "Camera Distance",
-            ty: ParamType::Float,
-            default: ParamValue::Float(8.0),
-            range: Some((0.1, 100.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_orbit",
-            label: "Camera Orbit",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.7),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_tilt",
-            label: "Camera Tilt",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.3),
-            range: Some((-1.5, 1.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_fov",
-            label: "Camera FOV",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.9),
-            range: Some((0.1, 2.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "look_y",
-            label: "Look Y",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-10.0, 10.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -167,26 +128,7 @@ impl Primitive for RenderInstanced3DMesh {
             Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 64,
         };
-        let camera_distance = match ctx.params.get("camera_distance") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 8.0,
-        };
-        let camera_orbit = match ctx.params.get("camera_orbit") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.7,
-        };
-        let camera_tilt = match ctx.params.get("camera_tilt") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.3,
-        };
-        let camera_fov = match ctx.params.get("camera_fov") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.9,
-        };
-        let look_y = match ctx.params.get("look_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let light_intensity = match ctx.params.get("light_intensity") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
@@ -236,18 +178,11 @@ impl Primitive for RenderInstanced3DMesh {
         }
 
         let aspect = width as f32 / height as f32;
-        let proj = perspective_rh(camera_fov, aspect, 0.05, 200.0);
-        let eye = [
-            camera_distance * camera_orbit.cos() * camera_tilt.cos(),
-            camera_distance * camera_tilt.sin() + look_y,
-            camera_distance * camera_orbit.sin() * camera_tilt.cos(),
-        ];
-        let view = look_at_rh(eye, [0.0, look_y, 0.0], [0.0, 1.0, 0.0]);
-        let view_proj = mat4_mul(proj, view);
+        let view_proj = cam.view_proj(aspect);
 
         let uniforms = InstancedRenderUniforms {
             view_proj,
-            camera_pos: [eye[0], eye[1], eye[2], 1.0],
+            camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
             light_dir: [0.3, 0.7, 0.6, light_intensity],
             light_color: [1.0, 1.0, 1.0, ambient],
             base_color: [color_r, color_g, color_b, 1.0],
@@ -317,7 +252,7 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn render_instanced_declares_mesh_and_instance_inputs() {
+    fn render_instanced_declares_mesh_instance_and_camera_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
         let instance_layout = ArrayType::of_known::<InstanceTransform>();
@@ -326,7 +261,7 @@ mod tests {
             RenderInstanced3DMesh::TYPE_ID,
             "node.render_instanced_3d_mesh"
         );
-        assert_eq!(RenderInstanced3DMesh::INPUTS.len(), 2);
+        assert_eq!(RenderInstanced3DMesh::INPUTS.len(), 3);
         assert_eq!(RenderInstanced3DMesh::INPUTS[0].name, "vertices");
         assert_eq!(
             RenderInstanced3DMesh::INPUTS[0].ty,
@@ -337,6 +272,9 @@ mod tests {
             RenderInstanced3DMesh::INPUTS[1].ty,
             PortType::Array(instance_layout)
         );
+        assert_eq!(RenderInstanced3DMesh::INPUTS[2].name, "camera");
+        assert!(RenderInstanced3DMesh::INPUTS[2].required);
+        assert_eq!(RenderInstanced3DMesh::INPUTS[2].ty, PortType::Camera);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS.len(), 1);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS[0].name, "color");
     }

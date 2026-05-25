@@ -17,7 +17,7 @@
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
 use crate::generators::mesh_common::MeshVertex;
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, perspective_rh};
+use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -35,54 +35,15 @@ struct MeshRenderUniforms {
 crate::primitive! {
     name: Render3DMesh,
     type_id: "node.render_3d_mesh",
-    purpose: "Render an Array<MeshVertex> as a depth-tested triangle list (every 3 consecutive vertices form one triangle). One directional light + ambient. Camera control via orbit/tilt/distance/FOV scalars. The first render-pass primitive in node_graph — establishes the pattern for line / instanced renderers.",
+    purpose: "Render an Array<MeshVertex> as a depth-tested triangle list (every 3 consecutive vertices form one triangle). One directional light + ambient. Takes a `camera: Camera` input from `node.camera_orbit` (or any future Camera source) — the renderer reads view + projection from the camera instead of holding its own orbit/tilt/distance/FOV scalars. Establishes the pattern for the rest of the 3D-renderer family.",
     inputs: {
         vertices: Array(MeshVertex) required,
+        camera: Camera required,
     },
     outputs: {
         color: Texture2D,
     },
     params: [
-        ParamDef {
-            name: "camera_distance",
-            label: "Camera Distance",
-            ty: ParamType::Float,
-            default: ParamValue::Float(4.0),
-            range: Some((0.1, 100.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_orbit",
-            label: "Camera Orbit",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.7),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_tilt",
-            label: "Camera Tilt",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.3),
-            range: Some((-1.5, 1.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_fov",
-            label: "Camera FOV",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.9),
-            range: Some((0.1, 2.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "look_y",
-            label: "Look Y",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-10.0, 10.0)),
-            enum_values: &[],
-        },
         ParamDef {
             name: "light_intensity",
             label: "Light Intensity",
@@ -161,26 +122,7 @@ impl Render3DMesh {
 
 impl Primitive for Render3DMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let camera_distance = match ctx.params.get("camera_distance") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 4.0,
-        };
-        let camera_orbit = match ctx.params.get("camera_orbit") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.7,
-        };
-        let camera_tilt = match ctx.params.get("camera_tilt") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.3,
-        };
-        let camera_fov = match ctx.params.get("camera_fov") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.9,
-        };
-        let look_y = match ctx.params.get("look_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
+        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let light_intensity = match ctx.params.get("light_intensity") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
@@ -226,18 +168,11 @@ impl Primitive for Render3DMesh {
         }
 
         let aspect = width as f32 / height as f32;
-        let proj = perspective_rh(camera_fov, aspect, 0.05, 200.0);
-        let eye = [
-            camera_distance * camera_orbit.cos() * camera_tilt.cos(),
-            camera_distance * camera_tilt.sin() + look_y,
-            camera_distance * camera_orbit.sin() * camera_tilt.cos(),
-        ];
-        let view = look_at_rh(eye, [0.0, look_y, 0.0], [0.0, 1.0, 0.0]);
-        let view_proj = mat4_mul(proj, view);
+        let view_proj = cam.view_proj(aspect);
 
         let uniforms = MeshRenderUniforms {
             view_proj,
-            camera_pos: [eye[0], eye[1], eye[2], 1.0],
+            camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
             light_dir: [0.3, 0.7, 0.6, light_intensity],
             light_color: [1.0, 1.0, 1.0, ambient],
             base_color: [color_r, color_g, color_b, 1.0],
@@ -303,34 +238,32 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn render_3d_mesh_declares_array_mesh_in_and_texture_out() {
+    fn render_3d_mesh_declares_array_mesh_camera_in_and_texture_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
 
         assert_eq!(Render3DMesh::TYPE_ID, "node.render_3d_mesh");
-        assert_eq!(Render3DMesh::INPUTS.len(), 1);
+        assert_eq!(Render3DMesh::INPUTS.len(), 2);
         assert_eq!(Render3DMesh::INPUTS[0].name, "vertices");
         assert!(Render3DMesh::INPUTS[0].required);
         assert_eq!(
             Render3DMesh::INPUTS[0].ty,
             PortType::Array(mesh_layout)
         );
+        assert_eq!(Render3DMesh::INPUTS[1].name, "camera");
+        assert!(Render3DMesh::INPUTS[1].required);
+        assert_eq!(Render3DMesh::INPUTS[1].ty, PortType::Camera);
         assert_eq!(Render3DMesh::OUTPUTS.len(), 1);
         assert_eq!(Render3DMesh::OUTPUTS[0].name, "color");
         assert_eq!(Render3DMesh::OUTPUTS[0].ty, PortType::Texture2D);
     }
 
     #[test]
-    fn render_3d_mesh_has_camera_lighting_color_params() {
+    fn render_3d_mesh_has_lighting_color_params() {
         let names: Vec<&str> = Render3DMesh::PARAMS.iter().map(|p| p.name).collect();
         assert_eq!(
             names,
             vec![
-                "camera_distance",
-                "camera_orbit",
-                "camera_tilt",
-                "camera_fov",
-                "look_y",
                 "light_intensity",
                 "ambient",
                 "color_r",

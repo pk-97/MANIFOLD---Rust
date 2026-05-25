@@ -180,6 +180,7 @@ pub enum PortKindSnapshot {
     Texture3D,
     Scalar,
     Array,
+    Camera,
 }
 
 impl From<PortType> for PortKindSnapshot {
@@ -189,6 +190,7 @@ impl From<PortType> for PortKindSnapshot {
             PortType::Texture3D => Self::Texture3D,
             PortType::Scalar(_) => Self::Scalar,
             PortType::Array(_) => Self::Array,
+            PortType::Camera => Self::Camera,
         }
     }
 }

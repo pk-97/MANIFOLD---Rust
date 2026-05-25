@@ -660,6 +660,9 @@ macro_rules! __primitive_port_type {
             $crate::node_graph::ports::ArrayType::of_known::<$T>()
         )
     };
+    (Camera) => {
+        $crate::node_graph::ports::PortType::Camera
+    };
 }
 
 // ---------------------------------------------------------------------------

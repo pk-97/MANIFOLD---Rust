@@ -15,6 +15,7 @@
 use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
+use crate::node_graph::camera::Camera;
 use crate::node_graph::parameters::ParamValue;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
@@ -83,6 +84,15 @@ impl<'a> NodeInputs<'a> {
         self.backend.array_buffer(self.slot(port)?)
     }
 
+    /// [`Camera`] bound to the named [`PortType::Camera`] input port.
+    /// `None` if unwired. Camera wires are CPU-only structs, set by
+    /// the producing camera primitive's `set_camera` write and drained
+    /// by the executor into the backend's per-slot map before the
+    /// consumer runs.
+    pub fn camera(&self, port: &str) -> Option<Camera> {
+        self.backend.camera(self.slot(port)?)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -115,6 +125,8 @@ pub struct NodeOutputs<'a> {
     /// Per-step scratch the executor hands to every node so scalar
     /// writes can be drained back into the backend after `evaluate`.
     pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
+    /// Sibling scratch for `Camera` writes — same shape as scalars.
+    pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
 }
 
 impl<'a> NodeOutputs<'a> {
@@ -122,11 +134,13 @@ impl<'a> NodeOutputs<'a> {
         bindings: &'a [(&'static str, Slot)],
         backend: &'a dyn Backend,
         pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
+        pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
     ) -> Self {
         Self {
             bindings,
             backend,
             pending_scalar_writes,
+            pending_camera_writes,
         }
     }
 
@@ -175,6 +189,15 @@ impl<'a> NodeOutputs<'a> {
     pub fn set_scalar(&mut self, port: &str, value: ParamValue) {
         if let Some(slot) = self.slot(port) {
             self.pending_scalar_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`Camera`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_scalar`.
+    pub fn set_camera(&mut self, port: &str, value: Camera) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_camera_writes.push((slot, value));
         }
     }
 
@@ -230,7 +253,8 @@ mod array_accessor_tests {
         let slot = backend.pre_bind_array(ResourceId(0), buffer);
         let bindings: &[(&'static str, Slot)] = &[("particles_out", slot)];
         let mut scratch = Vec::new();
-        let outputs = NodeOutputs::new(bindings, &backend, &mut scratch);
+        let mut cam_scratch = Vec::new();
+        let outputs = NodeOutputs::new(bindings, &backend, &mut scratch, &mut cam_scratch);
 
         let got = outputs.array("particles_out").expect("should resolve");
         assert_eq!(got.size, expected_size);

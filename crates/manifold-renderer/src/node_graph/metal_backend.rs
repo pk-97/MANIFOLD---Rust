@@ -137,6 +137,11 @@ pub struct MetalBackend {
     /// volume size is per-instance data, not a port-static property
     /// (same reasoning as `buffers_array`).
     textures_3d: AHashMap<Slot, GpuTexture>,
+
+    /// CPU-only [`Camera`] values written via [`Backend::set_camera`].
+    /// Same shape as `scalars` — drained from per-step scratch by the
+    /// executor after the producing camera primitive's `evaluate`.
+    cameras: AHashMap<Slot, crate::node_graph::camera::Camera>,
 }
 
 // Safety: the raw `*const GpuDevice` points to a device owned by the
@@ -172,6 +177,7 @@ impl MetalBackend {
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
             textures_3d: AHashMap::default(),
+            cameras: AHashMap::default(),
         }
     }
 
@@ -198,6 +204,7 @@ impl MetalBackend {
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
             textures_3d: AHashMap::default(),
+            cameras: AHashMap::default(),
         }
     }
 
@@ -572,6 +579,14 @@ impl Backend for MetalBackend {
 
     fn set_scalar(&mut self, slot: Slot, value: ParamValue) {
         self.scalars.insert(slot, value);
+    }
+
+    fn camera(&self, slot: Slot) -> Option<crate::node_graph::camera::Camera> {
+        self.cameras.get(&slot).copied()
+    }
+
+    fn set_camera(&mut self, slot: Slot, value: crate::node_graph::camera::Camera) {
+        self.cameras.insert(slot, value);
     }
 
     fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {

@@ -205,6 +205,7 @@ mod tests {
                 "LFO",
                 "Luminance",
                 "Math",
+                "Orbit Camera",
                 "Peak",
                 "Sample & Hold",
                 "Scalar Array Accumulator",

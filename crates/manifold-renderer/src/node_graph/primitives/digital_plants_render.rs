@@ -25,7 +25,8 @@ use manifold_gpu::{
 };
 
 use crate::generators::mesh_common::InstanceTransform;
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
+use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh};
+use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -55,11 +56,8 @@ crate::primitive! {
     purpose: "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.generate_instance_transforms (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
     inputs: {
         instances: Array(InstanceTransform) required,
+        camera: Camera required,
         instance_count: ScalarF32 optional,
-        camera_distance: ScalarF32 optional,
-        camera_orbit: ScalarF32 optional,
-        camera_tilt: ScalarF32 optional,
-        camera_fov: ScalarF32 optional,
         light_x: ScalarF32 optional,
         light_y: ScalarF32 optional,
         light_z: ScalarF32 optional,
@@ -75,38 +73,6 @@ crate::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(160_000.0),
             range: Some((1.0, 1_000_000.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_distance",
-            label: "Camera Distance",
-            ty: ParamType::Float,
-            default: ParamValue::Float(15.0),
-            range: Some((0.1, 200.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_orbit",
-            label: "Camera Orbit",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.7),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_tilt",
-            label: "Camera Tilt",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.4),
-            range: Some((-1.5, 1.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_fov",
-            label: "Camera FOV",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.9),
-            range: Some((0.1, 2.5)),
             enum_values: &[],
         },
         ParamDef {
@@ -185,10 +151,7 @@ impl DigitalPlantsRender {
 impl Primitive for DigitalPlantsRender {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let instance_count = ctx.scalar_or_param("instance_count", 160_000.0).round().max(0.0) as u32;
-        let camera_distance = ctx.scalar_or_param("camera_distance", 15.0);
-        let camera_orbit = ctx.scalar_or_param("camera_orbit", 0.7);
-        let camera_tilt = ctx.scalar_or_param("camera_tilt", 0.4);
-        let camera_fov = ctx.scalar_or_param("camera_fov", 0.9);
+        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let light_x = ctx.scalar_or_param("light_x", 8.0);
         let light_y = ctx.scalar_or_param("light_y", 20.0);
         let light_z = ctx.scalar_or_param("light_z", 8.0);
@@ -217,14 +180,7 @@ impl Primitive for DigitalPlantsRender {
 
         // Camera setup
         let aspect = width as f32 / height as f32;
-        let proj = perspective_rh(camera_fov, aspect, 0.05, 500.0);
-        let eye = [
-            camera_distance * camera_orbit.cos() * camera_tilt.cos(),
-            camera_distance * camera_tilt.sin(),
-            camera_distance * camera_orbit.sin() * camera_tilt.cos(),
-        ];
-        let view = look_at_rh(eye, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
-        let view_proj = mat4_mul(proj, view);
+        let view_proj = cam.view_proj(aspect);
 
         // Light VP — orthographic from light POV
         let light_proj = ortho_rh(-30.0, 30.0, -30.0, 30.0, 0.1, 200.0);
@@ -233,7 +189,7 @@ impl Primitive for DigitalPlantsRender {
 
         let render_uniforms = RenderUniforms {
             view_proj,
-            camera_pos: [eye[0], eye[1], eye[2], 1.0],
+            camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
             light_pos: [light_x, light_y, light_z, 1.0],
             light_color: [1.0, 1.0, 1.0, light_intensity],
             shadow_info: [SHADOW_MAP_SIZE as f32, 0.0, 0.0, 0.0],
@@ -398,7 +354,7 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn digital_plants_render_declares_instance_in_and_color_out() {
+    fn digital_plants_render_declares_instance_camera_in_and_color_out() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(DigitalPlantsRender::TYPE_ID, "node.digital_plants_render");
@@ -410,17 +366,17 @@ mod tests {
         assert!(inst_in.required);
         assert_eq!(inst_in.ty, PortType::Array(layout));
 
-        // Camera / light params are exposed as port-shadow ScalarF32
-        // inputs so the JSON preset can drive them from in-graph math
-        // (e.g. deg→rad conversion via node.affine_scalar) — the
-        // ParamConvert enum has no affine variant, so the conversion
-        // must live in the graph and reach the param via port-shadow.
+        let cam_in = DigitalPlantsRender::INPUTS
+            .iter()
+            .find(|p| p.name == "camera")
+            .expect("camera input must exist");
+        assert!(cam_in.required);
+        assert_eq!(cam_in.ty, PortType::Camera);
+
+        // Light params stay as port-shadow ScalarF32 — the JSON preset can drive
+        // them from in-graph math if needed.
         for name in [
             "instance_count",
-            "camera_distance",
-            "camera_orbit",
-            "camera_tilt",
-            "camera_fov",
             "light_x",
             "light_y",
             "light_z",
@@ -443,13 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn digital_plants_render_has_camera_and_light_params() {
+    fn digital_plants_render_has_light_params() {
         let names: Vec<&str> = DigitalPlantsRender::PARAMS.iter().map(|p| p.name).collect();
         for required in &[
             "instance_count",
-            "camera_distance",
-            "camera_orbit",
-            "camera_fov",
             "light_x",
             "light_intensity",
         ] {

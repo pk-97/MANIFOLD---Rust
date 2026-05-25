@@ -18,6 +18,7 @@ use ahash::AHashMap;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 
 use crate::node_graph::bindings::Slot;
+use crate::node_graph::camera::Camera;
 use crate::node_graph::execution_plan::ResourceId;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
@@ -131,6 +132,17 @@ pub trait Backend: Send {
     /// synchronously in topological order.
     fn set_scalar(&mut self, slot: Slot, value: ParamValue);
 
+    /// [`Camera`] value bound to a slot. Mirrors `scalar` for the
+    /// [`PortType::Camera`] wire shape — CPU-only struct payload.
+    /// Mock and default impls return `None`.
+    fn camera(&self, _slot: Slot) -> Option<Camera> {
+        None
+    }
+
+    /// Write a [`Camera`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as `set_scalar`.
+    fn set_camera(&mut self, _slot: Slot, _value: Camera) {}
+
     /// Backend-specific downcast hook. Default implementation returns
     /// `None`. Real backends override to expose themselves for
     /// implementation-specific calls (e.g., the chain's swap-based
@@ -204,6 +216,8 @@ pub struct MockBackend {
     /// real GPU resources, but the scalar map is needed so tests can
     /// observe control-wire dataflow without a Metal device.
     scalars: AHashMap<Slot, ParamValue>,
+    /// Camera values written via [`Backend::set_camera`] — same shape.
+    cameras: AHashMap<Slot, Camera>,
 }
 
 impl MockBackend {
@@ -213,6 +227,7 @@ impl MockBackend {
             bound: AHashMap::default(),
             next_slot: 0,
             scalars: AHashMap::default(),
+            cameras: AHashMap::default(),
         }
     }
 }
@@ -286,6 +301,14 @@ impl Backend for MockBackend {
 
     fn set_scalar(&mut self, slot: Slot, value: ParamValue) {
         self.scalars.insert(slot, value);
+    }
+
+    fn camera(&self, slot: Slot) -> Option<Camera> {
+        self.cameras.get(&slot).copied()
+    }
+
+    fn set_camera(&mut self, slot: Slot, value: Camera) {
+        self.cameras.insert(slot, value);
     }
 }
 

@@ -75,7 +75,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist", "label": "Camera Distance", "defaultValue": 3.5,
-        "target": { "kind": "handleNode", "handle": "dp_render", "param": "camera_distance" },
+        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "distance" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_orbit", "label": "Camera Orbit", "defaultValue": 0.0,
@@ -355,14 +355,21 @@
     { "id": 36, "typeId": "node.digital_plants_render", "handle": "dp_render",
       "params": {
         "instance_count":  { "type": "Float", "value": 160000.0 },
-        "camera_distance": { "type": "Float", "value": 3.5 },
-        "camera_orbit":    { "type": "Float", "value": 1.57079632679 },
-        "camera_tilt":     { "type": "Float", "value": 0.26179938779 },
-        "camera_fov":      { "type": "Float", "value": 0.87266462599 },
         "light_x":         { "type": "Float", "value": 2.8 },
         "light_y":         { "type": "Float", "value": 3.0 },
         "light_z":         { "type": "Float", "value": 2.8 },
         "light_intensity": { "type": "Float", "value": 2.0 }
+      } },
+
+    { "id": 37, "typeId": "node.camera_orbit", "handle": "cam_orbit_node",
+      "params": {
+        "orbit":    { "type": "Float", "value": 1.57079632679 },
+        "tilt":     { "type": "Float", "value": 0.26179938779 },
+        "distance": { "type": "Float", "value": 3.5 },
+        "fov_y":    { "type": "Float", "value": 0.87266462599 },
+        "look_y":   { "type": "Float", "value": 0.0 },
+        "near":     { "type": "Float", "value": 0.05 },
+        "far":      { "type": "Float", "value": 500.0 }
       } }
   ],
   "wires": [
@@ -425,9 +432,10 @@
     { "fromNode": 31, "fromPort": "instances", "toNode": 32, "toPort": "in" },
     { "fromNode": 32, "fromPort": "out", "toNode": 36, "toPort": "instances" },
 
-    { "fromNode": 33, "fromPort": "out", "toNode": 36, "toPort": "camera_orbit" },
-    { "fromNode": 34, "fromPort": "out", "toNode": 36, "toPort": "camera_tilt" },
-    { "fromNode": 35, "fromPort": "out", "toNode": 36, "toPort": "camera_fov" },
+    { "fromNode": 33, "fromPort": "out", "toNode": 37, "toPort": "orbit" },
+    { "fromNode": 34, "fromPort": "out", "toNode": 37, "toPort": "tilt" },
+    { "fromNode": 35, "fromPort": "out", "toNode": 37, "toPort": "fov_y" },
+    { "fromNode": 37, "fromPort": "out", "toNode": 36, "toPort": "camera" },
 
     { "fromNode": 36, "fromPort": "color", "toNode": 1, "toPort": "in" }
   ]

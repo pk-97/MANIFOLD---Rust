@@ -61,7 +61,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",    "label": "Camera Distance", "defaultValue": 2.5,
-        "target": { "kind": "handleNode", "handle": "render", "param": "camera_distance" },
+        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "distance" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_orbit",   "label": "Camera Orbit",    "defaultValue": 0.0,
@@ -77,7 +77,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "look_y",      "label": "Look Y",          "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "look_y" },
+        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "look_y" },
         "convert": { "type": "Float" } }
     ]
   },
@@ -228,7 +228,7 @@
       } },
 
     { "id": 36, "typeId": "node.affine_scalar", "handle": "cam_orbit_deg_to_rad",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 1.57079632679 } } },
     { "id": 37, "typeId": "node.affine_scalar", "handle": "cam_tilt_deg_to_rad",
       "params": { "a": { "type": "Float", "value": -10.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
     { "id": 38, "typeId": "node.affine_scalar", "handle": "cam_fov_deg_to_rad",
@@ -237,11 +237,6 @@
     { "id": 39, "typeId": "node.render_3d_mesh_pbr_ibl", "handle": "render",
       "params": {
         "grid_size":          { "type": "Int", "value": 500 },
-        "camera_distance":    { "type": "Float", "value": 2.5 },
-        "camera_orbit":       { "type": "Float", "value": 0.0 },
-        "camera_tilt":        { "type": "Float", "value": -0.1745 },
-        "camera_fov":         { "type": "Float", "value": 0.9425 },
-        "look_y":             { "type": "Float", "value": 0.0 },
         "light_x":            { "type": "Float", "value": -2.0 },
         "light_y":            { "type": "Float", "value": 2.0 },
         "light_z":            { "type": "Float", "value": 5.0 },
@@ -252,6 +247,17 @@
         "edge_roughness_mul": { "type": "Float", "value": 4.0 },
         "light_color":        { "type": "Color", "value": [1.0, 1.0, 1.0, 1.0] },
         "base_color":         { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
+      } },
+
+    { "id": 43, "typeId": "node.camera_orbit", "handle": "cam_orbit_node",
+      "params": {
+        "orbit":    { "type": "Float", "value": 1.57079632679 },
+        "tilt":     { "type": "Float", "value": -0.1745 },
+        "distance": { "type": "Float", "value": 2.5 },
+        "fov_y":    { "type": "Float", "value": 0.9425 },
+        "look_y":   { "type": "Float", "value": 0.0 },
+        "near":     { "type": "Float", "value": 0.01 },
+        "far":      { "type": "Float", "value": 50.0 }
       } },
 
     { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
@@ -316,9 +322,10 @@
     { "fromNode": 31, "fromPort": "out",  "toNode": 34, "toPort": "height" },
     { "fromNode": 34, "fromPort": "out",  "toNode": 35, "toPort": "in" },
 
-    { "fromNode": 36, "fromPort": "out",  "toNode": 39, "toPort": "camera_orbit" },
-    { "fromNode": 37, "fromPort": "out",  "toNode": 39, "toPort": "camera_tilt" },
-    { "fromNode": 38, "fromPort": "out",  "toNode": 39, "toPort": "camera_fov" },
+    { "fromNode": 36, "fromPort": "out",  "toNode": 43, "toPort": "orbit" },
+    { "fromNode": 37, "fromPort": "out",  "toNode": 43, "toPort": "tilt" },
+    { "fromNode": 38, "fromPort": "out",  "toNode": 43, "toPort": "fov_y" },
+    { "fromNode": 43, "fromPort": "out",  "toNode": 39, "toPort": "camera" },
 
     { "fromNode": 35, "fromPort": "out",     "toNode": 39, "toPort": "vertices" },
     { "fromNode": 31, "fromPort": "out",     "toNode": 39, "toPort": "material" },

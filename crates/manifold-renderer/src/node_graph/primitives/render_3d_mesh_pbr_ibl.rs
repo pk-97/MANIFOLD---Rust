@@ -19,7 +19,7 @@
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
 use crate::generators::mesh_common::MeshVertex;
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, perspective_rh};
+use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -46,11 +46,7 @@ crate::primitive! {
         vertices: Array(MeshVertex) required,
         material: Texture2D required,
         env_map: Texture2D required,
-        camera_distance: ScalarF32 optional,
-        camera_orbit: ScalarF32 optional,
-        camera_tilt: ScalarF32 optional,
-        camera_fov: ScalarF32 optional,
-        look_y: ScalarF32 optional,
+        camera: Camera required,
         light_x: ScalarF32 optional,
         light_y: ScalarF32 optional,
         light_z: ScalarF32 optional,
@@ -70,46 +66,6 @@ crate::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(300.0),
             range: Some((4.0, 4096.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_distance",
-            label: "Camera Distance",
-            ty: ParamType::Float,
-            default: ParamValue::Float(2.0),
-            range: Some((0.1, 100.0)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_orbit",
-            label: "Camera Orbit",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_tilt",
-            label: "Camera Tilt",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.3),
-            range: Some((-1.5, 1.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "camera_fov",
-            label: "Camera FOV",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.95),
-            range: Some((0.1, 2.5)),
-            enum_values: &[],
-        },
-        ParamDef {
-            name: "look_y",
-            label: "Look Y",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((-10.0, 10.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -248,11 +204,7 @@ impl Primitive for Render3DMeshPbrIbl {
             }
         };
         let grid_size = read_int("grid_size", 300.0).round().max(4.0) as u32;
-        let camera_distance = read("camera_distance", 2.0).max(0.01);
-        let camera_orbit = read("camera_orbit", 0.0);
-        let camera_tilt = read("camera_tilt", 0.3);
-        let camera_fov = read("camera_fov", 0.95).max(0.05);
-        let look_y = read("look_y", 0.0);
+        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let light_x = read("light_x", -2.0);
         let light_y = read("light_y", 2.0);
         let light_z = read("light_z", 5.0);
@@ -298,21 +250,12 @@ impl Primitive for Render3DMeshPbrIbl {
         }
 
         let aspect = width as f32 / height as f32;
-        let proj = perspective_rh(camera_fov, aspect, 0.01, 50.0);
-        let target_pos = [0.0_f32, look_y, 0.0];
-        let eye = [
-            camera_distance * camera_tilt.cos() * camera_orbit.sin(),
-            camera_distance * camera_tilt.sin() + look_y,
-            camera_distance * camera_tilt.cos() * camera_orbit.cos(),
-        ];
-        let view = look_at_rh(eye, target_pos, [0.0, 1.0, 0.0]);
-        let view_proj = mat4_mul(proj, view);
-
+        let view_proj = cam.view_proj(aspect);
         let material_w = material.width.max(1) as f32;
 
         let uniforms = PbrRenderUniforms {
             view_proj,
-            camera_pos: [eye[0], eye[1], eye[2], 1.0],
+            camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
             light_pos: [light_x, light_y, light_z, light_intensity],
             light_color: [light_color[0], light_color[1], light_color[2], 0.0],
             material: [metallic, roughness, displacement, edge_roughness_mul],
@@ -415,12 +358,12 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn declares_vertices_material_envmap_inputs() {
+    fn declares_vertices_material_envmap_camera_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(Render3DMeshPbrIbl::TYPE_ID, "node.render_3d_mesh_pbr_ibl");
 
-        // Three required Array/Texture inputs come first.
+        // Required Array/Texture/Camera inputs come first.
         assert_eq!(Render3DMeshPbrIbl::INPUTS[0].name, "vertices");
         assert!(Render3DMeshPbrIbl::INPUTS[0].required);
         assert_eq!(
@@ -433,9 +376,12 @@ mod tests {
         assert_eq!(Render3DMeshPbrIbl::INPUTS[2].name, "env_map");
         assert!(Render3DMeshPbrIbl::INPUTS[2].required);
         assert_eq!(Render3DMeshPbrIbl::INPUTS[2].ty, PortType::Texture2D);
+        assert_eq!(Render3DMeshPbrIbl::INPUTS[3].name, "camera");
+        assert!(Render3DMeshPbrIbl::INPUTS[3].required);
+        assert_eq!(Render3DMeshPbrIbl::INPUTS[3].ty, PortType::Camera);
 
         // Remaining inputs are optional port-shadows over scalar params.
-        for input in &Render3DMeshPbrIbl::INPUTS[3..] {
+        for input in &Render3DMeshPbrIbl::INPUTS[4..] {
             assert!(
                 !input.required,
                 "scalar port-shadow `{}` should be optional",
