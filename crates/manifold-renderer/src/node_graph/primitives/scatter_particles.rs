@@ -6,11 +6,13 @@
 //! buffer sized `width × height`. Each live particle adds the
 //! configured `scaled_energy` to its nearest texel via `atomicAdd`.
 //!
-//! The accumulator is cleared at dispatch time (one full-grid
-//! `atomicStore(0)` pass) before the splat — so the consumer
-//! reads a fresh frame each tick. Pair with
-//! [`crate::node_graph::primitives::ResolveAccumulator`] to lift
-//! the u32 grid into a float texture for downstream texture ops.
+//! Frame-to-frame zeroing of the accumulator is owned by the
+//! downstream `node.resolve_accumulator`'s self-clearing pass —
+//! same pattern as the 3D path (resolve_3d self-clears the
+//! 3D accumulator). Scatter just splats; resolve reads + zeros.
+//! Pair with [`crate::node_graph::primitives::ResolveAccumulator`]
+//! to lift the u32 grid into a float texture for downstream texture
+//! ops.
 
 use manifold_gpu::GpuBinding;
 
@@ -76,12 +78,9 @@ crate::primitive! {
             enum_values: SCATTER_BOUNDARY_MODES,
         },
     ],
-    composition_notes: "Output accumulator buffer is u32 fixed-point sized to the host canvas (width × height u32s) — re-allocated on `Generator::resize` so the splat coords always span the full output texture. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam.",
+    composition_notes: "Output accumulator buffer is u32 fixed-point sized to the host canvas (width × height u32s) — re-allocated on `Generator::resize` so the splat coords always span the full output texture. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam. Downstream node.resolve_accumulator self-clears the buffer after reading it — no scatter-side clear needed.",
     examples: [],
     picker: { label: "Scatter Particles", category: Atom },
-    extra_fields: {
-        splat_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
-    },
 }
 
 impl Primitive for ScatterParticles {
@@ -133,11 +132,11 @@ impl Primitive for ScatterParticles {
         let active_count = active_count.min(particle_capacity);
 
         let gpu = ctx.gpu_encoder();
-        let pipeline_clear = self.pipeline.get_or_insert_with(|| {
+        let pipeline_splat = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/scatter_particles.wgsl"),
-                "clear_main",
-                "node.scatter_particles.clear",
+                "splat_main",
+                "node.scatter_particles.splat",
             )
         });
 
@@ -152,38 +151,9 @@ impl Primitive for ScatterParticles {
             _pad2: 0,
         };
 
-        // Pass 1: zero the accumulator. 16×16 workgroups cover the grid.
-        gpu.native_enc.dispatch_compute(
-            pipeline_clear,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: particles,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: accum,
-                    offset: 0,
-                },
-            ],
-            [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.scatter_particles.clear",
-        );
-
-        let pipeline_splat = self.splat_pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/scatter_particles.wgsl"),
-                "splat_main",
-                "node.scatter_particles.splat",
-            )
-        });
-
-        // Pass 2: atomic-add splat. 256-particle workgroups along x.
+        // Atomic-add splat. 256-particle workgroups along x. The
+        // downstream node.resolve_accumulator self-clears the buffer
+        // after reading it, so no pre-clear is needed here.
         gpu.native_enc.dispatch_compute(
             pipeline_splat,
             &[

@@ -123,23 +123,6 @@ struct ProjectedUniforms {
 @group(0) @binding(1) var<storage, read_write> display_accum: array<atomic<u32>>;
 @group(0) @binding(2) var<uniform>             proj_params: ProjectedUniforms;
 
-// Pre-splat clear of the display accumulator. Mirrors `clear_main` in
-// scatter_particles.wgsl: the accumulator is reused frame-to-frame, so
-// without an explicit zero pass the atomicAdd values pile up and the
-// downstream tonemap saturates to white within a few seconds. The
-// legacy `resolve_display` self-cleared via atomicStore(0); when the
-// JSON path replaced it with the generic `node.resolve_accumulator`
-// (read-only storage), this clear became the responsibility of the
-// scatter side — matching the 2D sibling `node.scatter_particles`.
-@compute @workgroup_size(16, 16, 1)
-fn clear_display(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= proj_params.disp_w || id.y >= proj_params.disp_h {
-        return;
-    }
-    let idx = id.y * proj_params.disp_w + id.x;
-    atomicStore(&display_accum[idx], 0u);
-}
-
 // Project 3D particle to screen UV — matches ProjectParticle() in Unity scatter shader.
 fn project_particle(position: vec3<f32>) -> vec2<f32> {
     let world_pos = position - 0.5;
