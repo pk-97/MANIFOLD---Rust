@@ -74,6 +74,7 @@ crate::primitive! {
         disp_w: ScalarF32 optional,
         disp_h: ScalarF32 optional,
         scaled_energy: ScalarF32 optional,
+        mode: ScalarF32 optional,
     },
     outputs: {
         accum: Array(u32),
@@ -123,6 +124,9 @@ crate::primitive! {
     composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h.",
     examples: [],
     picker: { label: "Scatter Particles Camera", category: Atom },
+    extra_fields: {
+        clear_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+    },
 }
 
 // Legacy type-ID alias — projects authored before the rename from
@@ -138,21 +142,19 @@ inventory::submit! {
 }
 
 impl Primitive for ScatterParticlesCamera {
-    /// Display accumulator is `disp_w × disp_h` u32 cells.
-    fn array_output_capacity(
-        &self,
-        port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
-        _input_capacities: &[(&str, u32)],
-    ) -> Option<u32> {
-        if port_name != "accum" {
-            return None;
-        }
-        let read_dim = |name| match params.get(name) {
-            Some(ParamValue::Float(f)) => Some(f.round().max(1.0) as u32),
-            _ => None,
-        };
-        Some(read_dim("disp_w")?.saturating_mul(read_dim("disp_h")?))
+    /// Display accumulator is sized to the host canvas — same shape as
+    /// `scatter_particles` (2D). The chain builder allocates `canvas_w ×
+    /// canvas_h` u32 cells via `canvas_sized_array_outputs()` below;
+    /// the wires on `disp_w` / `disp_h` (typically from
+    /// `system.generator_input.output_width/height`) feed the dispatch
+    /// math so the per-frame splat indexes the same grid the buffer was
+    /// sized for. Without this override the buffer would size off the
+    /// node's inline param defaults (1920 × 1080) while the dispatch
+    /// would use the wired canvas dims — a 4K render writes past the
+    /// buffer end into adjacent GPU memory (the FluidSim3D white-out
+    /// root cause before this was added).
+    fn canvas_sized_array_outputs(&self) -> &'static [&'static str] {
+        &["accum"]
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -161,10 +163,22 @@ impl Primitive for ScatterParticlesCamera {
         let disp_h = ctx.scalar_or_param("disp_h", 1080.0).round().max(1.0) as u32;
         let scaled_energy =
             ctx.scalar_or_param("scaled_energy", 4096.0).round().max(0.0) as u32;
-        let ortho = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(n)) if *n == 1 => 1u32,
-            _ => 0,
-        };
+        // `mode` is port-shadows-param: wired Float wins (FluidSim3D
+        // computes `1 if container == 0 else 0` via a math chain so the
+        // outer `container` enum maps None → Ortho-toroidal vs Cube /
+        // Sphere / Torus → Perspective). Falls back to the inline Enum
+        // param for direct authoring.
+        let mode_value = ctx
+            .inputs
+            .scalar("mode")
+            .and_then(|v| v.as_scalar())
+            .map(|f| f.round().max(0.0) as u32)
+            .unwrap_or_else(|| match ctx.params.get("mode") {
+                Some(ParamValue::Enum(n)) => *n,
+                Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
+                _ => 0,
+            });
+        let ortho = if mode_value == 1 { 1u32 } else { 0u32 };
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
 
@@ -213,6 +227,43 @@ impl Primitive for ScatterParticlesCamera {
         };
 
         let gpu = ctx.gpu_encoder();
+        // Pre-splat clear of the accumulator. The display accumulator
+        // buffer is reused frame-to-frame, so without this zero pass
+        // the atomicAdd values pile up and the downstream tonemap
+        // saturates to white in a few seconds. Mirrors `clear_main` in
+        // node.scatter_particles (2D sibling); the legacy generator
+        // self-cleared inside `resolve_display`, but the JSON path
+        // replaced that with `node.resolve_accumulator` which only
+        // reads.
+        let clear_pipeline = self.clear_pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("../../generators/shaders/fluid_scatter_3d.wgsl"),
+                "clear_display",
+                "node.scatter_particles_camera.clear",
+            )
+        });
+        gpu.native_enc.dispatch_compute(
+            clear_pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: accum,
+                    offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 2,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+            ],
+            [disp_w.div_ceil(16), disp_h.div_ceil(16), 1],
+            "node.scatter_particles_camera.clear",
+        );
+
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("../../generators/shaders/fluid_scatter_3d.wgsl"),
