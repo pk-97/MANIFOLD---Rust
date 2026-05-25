@@ -379,6 +379,7 @@ JSON-defined generators live at [`assets/generator-presets/`](../crates/manifold
 | Preset | Topology shape |
 |---|---|
 | BasicShapes | `shape_2d` (single curated family primitive) |
+| BlackHole | Kerr black hole with relativistic geodesic lensing: 4× `wgsl_compute` (deflection bake → 3 tex out; Schwarzschild orbit integrator with aliased `Array<Particle>`; polar+hemisphere particle splat with dual atomic accums; cinematic compositor reading deflection + polar density + sky) + `seed_particles` (active_count=0 → simulate self-seeds) + `resolve_accumulator` ×2 + `gaussian_blur` ×10 (deflection H/V ×3 + polar density H/V ×2) + `affine_scalar` ×2 (deg→rad) + `math` (Reciprocal for scale→uv_scale). First consumer of the naga-introspected dynamic escape hatch. |
 | ComputeStrangeAttractor | particle sim: `seed_particles → integrate_particles_attractor → scatter_particles → resolve_accumulator → reinhard_tone_map` + brightness compensation |
 | ConcentricTunnel | mux'd polygon shape + ring stacker: `mux_scalar` ×many → `polygon_shape` → `concentric_outlines` → `render_lines` |
 | DigitalPlants | instanced 3D mesh with procedural layout: `grid_uv_field` → `simplex_per_instance` + `fbm_per_instance` → `cylinder_wrap_field` / `torus_wrap_field` → instance jitters → `neighbor_smooth` → `digital_plants_render` |

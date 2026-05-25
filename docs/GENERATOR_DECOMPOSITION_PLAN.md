@@ -16,8 +16,8 @@ Don't decompose for its own sake — see DECOMPOSING_GENERATORS §1 for the "mon
 
 ## State of play
 
-- **JSON-defined generators:** 17 (full list in [NODE_CATALOG.md §6.1](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, and volumetric-scrubbing families.
-- **Rust-defined generators:** 4 remaining (see §3 below). Register via `inventory::submit!` in [crates/manifold-renderer/src/generators/](../crates/manifold-renderer/src/generators/).
+- **JSON-defined generators:** 18 (full list in [NODE_CATALOG.md §6.1](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, volumetric-scrubbing, and relativistic-lensing families.
+- **Rust-defined generators:** 3 remaining (see §3 below). Register via `inventory::submit!` in [crates/manifold-renderer/src/generators/](../crates/manifold-renderer/src/generators/).
 - **Primitive vocabulary:** ~135 shipped — see NODE_CATALOG.md for the full inventory.
 - **Infra:** all the foundation work has shipped — `system.generator_input` boundary node, variadic mux primitives, per-slot texture format declaration on the backend, the JSON loader (`JsonGraphGenerator`), `paramAliases` migration support, and StateStore plumbing for stateful primitives inside generators.
 
@@ -47,6 +47,7 @@ See [NODE_CATALOG.md §6.1](NODE_CATALOG.md) for the topology shape of each. Eac
 | ComputeStrangeAttractor | Particle sim with attractor ODE + scatter + resolve + tone map |
 | FluidSim2D | Particle fluid sim with ping-pong feedback + force-field gradient + downsample/blur |
 | FluidSim3D | Volumetric fluid sim — 3D seed/simulate + per-axis separable blurs + curl/slope force field + camera-projected scatter for display |
+| BlackHole | Kerr black hole with relativistic geodesic lensing — first consumer of the naga-introspected `node.wgsl_compute` dynamic escape hatch. Four wgsl_compute kernels (deflection bake, Schwarzschild orbit integrator, polar+hemisphere splat, cinematic display compositor) + existing primitive vocabulary for blurs and resolves. |
 | OilyFluid | Screen-space surface with atomized PBR shading (Lambert + matcap + Fresnel + Blinn summed) |
 | MetallicGlass | 3D-mesh PBR-IBL on a displaced grid: feedback-displacement liquid surface + Cook-Torrance render + IBL env-map. First consumer of the new PBR-IBL atom family (cook_torrance_specular, equirect_envmap_sample, bake_equirect_envmap, render_3d_mesh_pbr_ibl, mirror_axis, pack_channels, clamp_texture). |
 | MriVolume | Image-folder scrubbing with mux'd slices |
@@ -60,7 +61,6 @@ The migration targets. Each lives at `crates/manifold-renderer/src/generators/<n
 
 | Generator | Migration notes |
 |---|---|
-| **BlackHole** | ~14-pass relativistic geodesic trace + particle/density blur chain. Genuinely §5-shaped: per-pass coupling with native-precision boundaries. Lift shaders into `wgsl_compute_*` nodes; close frame-to-frame loops through `feedback` / `array_feedback`. Reference: FluidSim2D / FluidSim3D for the wgsl_compute + feedback pattern. |
 | **OscilloscopeXY** | Two superposed Lissajous curves with axis-asymmetric phase scaling and a custom 10-row beat-driven ratio table with linear interpolation between adjacent beats. Not in the canonical fixture (zero layers); decomposition requires speculative-reuse primitives. **Status: deferred — revisit the visual goal before paying the migration tax.** |
 | **ParticleText** | CPU text rasterizer + fluid-sim seeded from text bitmap. Needs new `text_rasterize` primitive wrapping the existing CPU text path. Reference: FluidSim2D for the particle-sim downstream. |
 | **Text** | Glyph render via the CPU text rasterizer. Single-primitive wrap: lift the rasterizer into `text_rasterize`; preset is `system.generator_input → text_rasterize → final_output`. Pairs with the ParticleText work. |

@@ -525,12 +525,26 @@ impl EffectGraphDefExt for EffectGraphDef {
             if id_map.contains_key(&node_doc.id) {
                 return Err(LoadError::DuplicateNodeId(node_doc.id));
             }
-            let Some(boxed) = registry.construct(&node_doc.type_id) else {
-                return Err(LoadError::UnknownTypeId {
-                    node_id: node_doc.id,
-                    type_id: node_doc.type_id.clone(),
-                });
+            let mut boxed = match registry.construct(&node_doc.type_id) {
+                Some(b) => b,
+                None => {
+                    return Err(LoadError::UnknownTypeId {
+                        node_id: node_doc.id,
+                        type_id: node_doc.type_id.clone(),
+                    });
+                }
             };
+
+            // Install the WGSL source BEFORE snapshotting params + ports
+            // — dynamic-shape escape-hatch nodes (`node.wgsl_compute`)
+            // derive their port and parameter shape from the source via
+            // naga introspection, so the default-kernel shape we'd see
+            // pre-source-set won't match the JSON's wires or params.
+            // Static-shape primitives' set_wgsl_source is a no-op, so
+            // this is free for the common case.
+            if let Some(source) = node_doc.wgsl_source.as_deref() {
+                boxed.set_wgsl_source(source);
+            }
 
             // Find the static param names + types so we can validate
             // overrides against the declared shape and resolve the
@@ -589,13 +603,10 @@ impl EffectGraphDefExt for EffectGraphDef {
                     .expect("validated above");
             }
 
-            // Install the WGSL kernel source if the document carries one.
-            // No-op for every node whose shader is fixed at compile time.
-            if let Some(source) = node_doc.wgsl_source.as_deref() {
-                graph
-                    .set_wgsl_source(runtime_id, source)
-                    .expect("node was just added");
-            }
+            // (WGSL source already installed pre-`add_node` so that the
+            // chain compiler sees the source-derived port and parameter
+            // shape during wire validation — see the `set_wgsl_source`
+            // call right after `boxed` is constructed.)
 
             // Apply exposed_params from the document. Unknown param
             // names are silently ignored — a renamed param shouldn't

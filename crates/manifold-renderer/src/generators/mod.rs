@@ -1,4 +1,3 @@
-pub mod black_hole;
 pub mod bundled_generator_presets;
 pub mod clip_trigger;
 pub mod compute_common;

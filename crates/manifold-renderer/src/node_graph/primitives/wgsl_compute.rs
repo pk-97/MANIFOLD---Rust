@@ -43,7 +43,7 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
-    ArrayType, ItemKind, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    ArrayType, ItemKind, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
 };
 
 pub const TYPE_ID: &str = "node.wgsl_compute";
@@ -98,6 +98,12 @@ pub struct WgslCompute {
     /// `aliased_array_io` trait method. Rebuilt on every parse so
     /// references stay valid for `&self` borrows.
     aliased_view: Vec<(&'static str, &'static str)>,
+    /// Output port names that should be sized to canvas dims by the
+    /// chain pre-allocator. Currently every `Array<atomic<u32>>`
+    /// accumulator output gets this treatment, matching the convention
+    /// `node.scatter_particles` uses for its `accum` port. Returned
+    /// from `canvas_sized_array_outputs()`.
+    canvas_sized_outputs: Vec<&'static str>,
     /// String arena backing the leaked `&'static str`s used by port
     /// declarations and the aliased_view. Each parse leaks fresh
     /// strings; bounded by distinct port names across the process
@@ -213,6 +219,7 @@ impl WgslCompute {
             workgroup_size: [1, 1, 1],
             aliased_pairs: Vec::new(),
             aliased_view: Vec::new(),
+            canvas_sized_outputs: Vec::new(),
             _leaked_strings: Vec::new(),
             output_formats: AHashMap::new(),
             dispatch_port: None,
@@ -276,6 +283,24 @@ impl WgslCompute {
                 self._leaked_strings.push(la);
                 self._leaked_strings.push(lb);
                 (la, lb)
+            })
+            .collect();
+        // Atomic-u32 accumulator outputs default to canvas-sized
+        // allocation, matching node.scatter_particles' convention. The
+        // dynamic node has no way to express custom capacity yet —
+        // when that's needed, surface it as a JSON-side hint or per-port
+        // metadata. For BlackHole the canvas-sized default is exactly
+        // right (polar density grid sized to display canvas).
+        self.canvas_sized_outputs = self
+            .bindings
+            .iter()
+            .filter_map(|b| match &b.kind {
+                BindingKind::StorageAtomicAccumOut { port } => {
+                    let leaked: &'static str = Box::leak(port.clone().into_boxed_str());
+                    self._leaked_strings.push(leaked);
+                    Some(leaked)
+                }
+                _ => None,
             })
             .collect();
 
@@ -343,12 +368,21 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
 
         match gv.space {
             naga::AddressSpace::Uniform => {
-                let (layout, derived_params) = parse_uniform(&module, ty, &name)?;
+                let (layout, derived_params, derived_scalar_inputs) =
+                    parse_uniform(&module, ty, &name)?;
                 if uniform_layout.is_some() {
                     return Err("multiple uniform globals not supported".into());
                 }
                 uniform_layout = Some(layout);
                 params = derived_params;
+                // Port-shadow every non-pad uniform member: each becomes
+                // an OPTIONAL ScalarF32 input port with the same name as
+                // the param. evaluate() uses scalar_or_param(name) to
+                // read from the wire when present, falling back to the
+                // param value otherwise. Matches the §6.2 authoring
+                // rule that "every numeric scalar param ships as a
+                // port-shadowed optional input by default."
+                inputs.extend(derived_scalar_inputs);
                 bindings.push(BindingSlot {
                     binding: binding.binding,
                     kind: BindingKind::Uniform,
@@ -548,7 +582,7 @@ fn parse_uniform(
     module: &naga::Module,
     ty: &naga::Type,
     binding_name: &str,
-) -> Result<(UniformLayout, Vec<ParamDef>), String> {
+) -> Result<(UniformLayout, Vec<ParamDef>, Vec<NodeInput>), String> {
     let naga::TypeInner::Struct { members, span } = &ty.inner else {
         return Err(format!(
             "uniform binding '{binding_name}' is not a struct"
@@ -556,6 +590,7 @@ fn parse_uniform(
     };
     let mut layout_members = Vec::new();
     let mut params: Vec<ParamDef> = Vec::new();
+    let mut scalar_inputs: Vec<NodeInput> = Vec::new();
     for m in members {
         let Some(name) = m.name.clone() else {
             return Err("uniform struct member with no name".into());
@@ -608,6 +643,15 @@ fn parse_uniform(
             range: None,
             enum_values: &[],
         });
+        // Port-shadow each non-pad uniform member with an OPTIONAL
+        // ScalarF32 input. evaluate() prefers the wired value if
+        // present, falls back to the param value otherwise.
+        scalar_inputs.push(NodePort {
+            name: pname,
+            ty: PortType::Scalar(ScalarType::F32),
+            kind: PortKind::Input,
+            required: false,
+        });
     }
     Ok((
         UniformLayout {
@@ -615,6 +659,7 @@ fn parse_uniform(
             members: layout_members,
         },
         params,
+        scalar_inputs,
     ))
 }
 
@@ -709,6 +754,10 @@ impl EffectNode for WgslCompute {
         &self.aliased_view
     }
 
+    fn canvas_sized_array_outputs(&self) -> &[&str] {
+        &self.canvas_sized_outputs
+    }
+
     fn requires(&self) -> NodeRequires {
         NodeRequires {
             gpu_encoder: true,
@@ -752,7 +801,13 @@ impl EffectNode for WgslCompute {
                 Some(gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
         }
 
-        // Pack uniforms into the scratch buffer.
+        // Pack uniforms into the scratch buffer. Each non-pad member
+        // reads via scalar_or_param(name, 0.0) — port-shadows-param,
+        // so a wired generator_input.aspect / driver / LFO takes
+        // precedence over the static param value, which falls back to
+        // 0.0 if neither is set. Bool / Int members read the same
+        // float and cast at write time (Int storage was collapsed
+        // into Float — feedback_eliminate_bug_class_at_storage_layer).
         if let Some(layout) = &self.uniform_layout {
             for byte in self.uniform_scratch.iter_mut() {
                 *byte = 0;
@@ -761,19 +816,13 @@ impl EffectNode for WgslCompute {
                 if m.name.starts_with("_pad") {
                     continue;
                 }
-                let Some(val) = ctx.params.get(m.name.as_str()) else {
-                    continue;
-                };
-                let size = match m.ty {
-                    UniformMemberType::F32
-                    | UniformMemberType::I32
-                    | UniformMemberType::U32
-                    | UniformMemberType::Bool => 4,
-                };
+                let f = ctx.scalar_or_param(&m.name, 0.0);
+                let val = ParamValue::Float(f);
+                let size = 4;
                 let start = m.offset as usize;
                 let end = start + size;
                 if end <= self.uniform_scratch.len() {
-                    m.ty.write_to(&mut self.uniform_scratch[start..end], val);
+                    m.ty.write_to(&mut self.uniform_scratch[start..end], &val);
                 }
             }
         }
@@ -957,11 +1006,19 @@ fn hash_str(s: &str) -> u64 {
 mod tests {
     use super::*;
 
+    fn input_names(node: &WgslCompute) -> Vec<&str> {
+        node.inputs.iter().map(|i| i.name).collect()
+    }
+
     #[test]
     fn default_source_introspects_to_one_uniform_one_texture_out() {
         let node = WgslCompute::new();
         assert!(!node.compile_failed, "default WGSL must parse");
-        assert_eq!(node.inputs.len(), 0);
+        // The one uniform member `f0` port-shadows as an optional
+        // ScalarF32 input — wire OR param drives it.
+        assert_eq!(input_names(&node), vec!["f0"]);
+        assert_eq!(node.inputs[0].ty, PortType::Scalar(ScalarType::F32));
+        assert!(!node.inputs[0].required);
         assert_eq!(node.outputs.len(), 1);
         assert_eq!(node.outputs[0].name, "output_tex");
         assert_eq!(node.outputs[0].ty, PortType::Texture2D);
@@ -995,7 +1052,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let mut node = WgslCompute::new();
         node.set_wgsl_source(src);
         assert!(!node.compile_failed);
-        assert_eq!(node.inputs.len(), 0);
+        // Uniform members port-shadow as 3 optional ScalarF32 inputs;
+        // no texture inputs.
+        assert_eq!(input_names(&node), vec!["cam_dist", "tilt", "spin"]);
+        for inp in &node.inputs {
+            assert_eq!(inp.ty, PortType::Scalar(ScalarType::F32));
+            assert!(!inp.required);
+        }
         assert_eq!(node.outputs.len(), 3);
         assert_eq!(node.outputs[0].name, "defl_a");
         assert_eq!(node.outputs[1].name, "defl_b");
@@ -1028,16 +1091,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut node = WgslCompute::new();
         node.set_wgsl_source(src);
         assert!(!node.compile_failed);
-        // Aliased read_write storage = one input AND one output port,
-        // both named "particles".
-        assert_eq!(node.inputs.len(), 1);
-        assert_eq!(node.outputs.len(), 1);
-        assert_eq!(node.inputs[0].name, "particles");
-        assert_eq!(node.outputs[0].name, "particles");
+        // Inputs = [uniform port-shadow scalar "dt", aliased
+        // Array<Particle> "particles" (read_write storage maps to
+        // both an input and output port of the same name)].
+        assert_eq!(input_names(&node), vec!["dt", "particles"]);
+        assert_eq!(node.inputs[0].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(
-            node.inputs[0].ty,
+            node.inputs[1].ty,
             PortType::Array(ArrayType::of_known::<crate::generators::compute_common::Particle>())
         );
+        assert_eq!(node.outputs.len(), 1);
+        assert_eq!(node.outputs[0].name, "particles");
         let aliased = node.aliased_array_io();
         assert_eq!(aliased.len(), 1);
         assert_eq!(aliased[0], ("particles", "particles"));
@@ -1073,8 +1137,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut node = WgslCompute::new();
         node.set_wgsl_source(src);
         assert!(!node.compile_failed);
-        assert_eq!(node.inputs.len(), 1);
-        assert_eq!(node.inputs[0].name, "particles");
+        // Inputs: 2 uniform port-shadow scalars (disk_inner, disk_outer)
+        // + 1 read-only Array<Particle>.
+        assert_eq!(
+            input_names(&node),
+            vec!["disk_inner", "disk_outer", "particles"]
+        );
         assert_eq!(node.outputs.len(), 2);
         assert_eq!(node.outputs[0].name, "accum_top");
         assert_eq!(node.outputs[1].name, "accum_bot");
