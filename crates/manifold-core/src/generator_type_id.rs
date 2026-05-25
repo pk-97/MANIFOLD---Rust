@@ -53,7 +53,6 @@ impl GeneratorTypeId {
     pub const PLASMA: Self = Self(Cow::Borrowed("Plasma"));
     pub const LISSAJOUS: Self = Self(Cow::Borrowed("Lissajous"));
     pub const FRACTAL_ZOOM: Self = Self(Cow::Borrowed("FractalZoom"));
-    pub const OSCILLOSCOPE_XY: Self = Self(Cow::Borrowed("OscilloscopeXY"));
     pub const WIREFRAME_ZOO: Self = Self(Cow::Borrowed("WireframeZoo"));
     pub const REACTION_DIFFUSION: Self = Self(Cow::Borrowed("ReactionDiffusion"));
     pub const FLOWFIELD: Self = Self(Cow::Borrowed("Flowfield"));
@@ -88,7 +87,9 @@ impl GeneratorTypeId {
             6 => Self::PLASMA,
             7 => Self::LISSAJOUS,
             8 => Self::FRACTAL_ZOOM,
-            9 => Self::OSCILLOSCOPE_XY,
+            // Legacy discriminant 9 (OscilloscopeXY) → Lissajous: OscXY was a
+            // variant of Lissajous with worse param defaults, removed 2026-05-25.
+            9 => Self::LISSAJOUS,
             10 => Self::WIREFRAME_ZOO,
             11 => Self::REACTION_DIFFUSION,
             12 => Self::FLOWFIELD,

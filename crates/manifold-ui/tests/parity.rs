@@ -232,13 +232,6 @@ fn generator_param_count_wireframe_zoo() {
     );
 }
 #[test]
-fn generator_param_count_oscilloscope_xy() {
-    assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::OSCILLOSCOPE_XY).param_count,
-        9
-    );
-}
-#[test]
 fn generator_param_count_fluid_sim() {
     assert_eq!(
         generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count,

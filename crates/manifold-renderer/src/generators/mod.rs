@@ -7,7 +7,6 @@ pub mod json_graph_generator;
 pub mod line_pipeline;
 pub mod mesh_common;
 pub mod mesh_pipeline;
-pub mod oscilloscope_xy;
 pub mod particle_text;
 pub mod registration;
 pub mod registry;

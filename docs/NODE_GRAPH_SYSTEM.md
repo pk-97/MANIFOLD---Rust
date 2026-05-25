@@ -68,7 +68,7 @@ Three kinds of wire live in the graph today:
 - **Texture3D** — used by FluidSim3D and any future volume primitive.
 - **Scalar** — `F32`, `Vec2`, `Vec3`. Allows parameter-as-wire: an LFO node's `out` (Scalar(F32)) wires into a Bloom node's `threshold` (Scalar(F32) input port).
 
-**Buffer** ports (particles, mesh data, audio waveforms, blob lists) remain V2 — generators with internal Buffer state (oscilloscope, particle systems, mesh generators) still keep that state opaque inside the primitive.
+**Buffer** ports (particles, mesh data, audio waveforms, blob lists) remain V2 — generators with internal Buffer state (particle systems, mesh generators) still keep that state opaque inside the primitive.
 
 ### 4.1 Port-shadows-param convention
 

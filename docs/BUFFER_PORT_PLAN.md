@@ -24,7 +24,7 @@ Four families of primitives ride on the new port type, decomposing roughly 15 of
 
 **Meshes** — 3D geometry as triangles and vertices. Drives MetallicGlass's million-vertex grid, the four-dimensional wireframe family (Tesseract, Duocylinder, WireframeZoo), and the instanced generators (NestedCubes, DigitalPlants). Producers generate the mesh (grid, instance set, 4D shape vertices). Transformers move it (3D and 4D rotation). Renderers draw it with camera and lighting. The creative unlock: swap any stage. Run MetallicGlass's grid through Tesseract's 4D rotation, or vice versa.
 
-**Lines** — sequences of 2D points drawn as bright vector strokes. Lissajous (parametric curves) and OscilloscopeXY (audio waveforms). Producers compute the points; the renderer thickens and draws them. Unlocks routing audio into anything line-shaped, or driving non-line generators with line data.
+**Lines** — sequences of 2D points drawn as bright vector strokes. Lissajous (parametric curves). Producers compute the points; the renderer thickens and draws them. Unlocks routing audio into anything line-shaped, or driving non-line generators with line data.
 
 **3D volumes** — 3D grids of density. FluidSim3D and MriVolume. Deferred (see Phase D below) — only two generators use it, the user value of decomposing them is lower, and the Texture3D primitive infrastructure is more greenfield.
 

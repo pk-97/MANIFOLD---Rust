@@ -42,7 +42,6 @@ Helper file: [clip_trigger.rs](../crates/manifold-renderer/src/generators/clip_t
 **Rust generators owning a `clip_trigger_cycle: ClipTriggerCycle` extra-field:**
 - [plasma.rs:47](../crates/manifold-renderer/src/generators/plasma.rs#L47) — `step(trigger_count, PATTERN_COUNT)` at line 100
 - [mri_volume.rs:71](../crates/manifold-renderer/src/generators/mri_volume.rs#L71) — `step(trigger_count, 3)` at line 218
-- [oscilloscope_xy.rs:41](../crates/manifold-renderer/src/generators/oscilloscope_xy.rs#L41) — `step(trigger_count, RATIO_COUNT)` at line 122
 - [concentric_tunnel.rs:49](../crates/manifold-renderer/src/generators/concentric_tunnel.rs#L49) — `step(trigger_count, SHAPE_COUNT)` at line 114
 - [strange_attractor.rs:163](../crates/manifold-renderer/src/generators/strange_attractor.rs#L163) — `step(trigger_count, ATTRACTOR_COUNT)` at line 340
 
@@ -194,7 +193,6 @@ Triage call needed.
 | `mri_volume.rs` | Rust-only |
 | `nested_cubes.rs` | Rust-only |
 | `oily_fluid.rs` | Rust-only |
-| `oscilloscope_xy.rs` | Rust-only |
 | `particle_text.rs` | Rust-only |
 | `plasma.rs` | **superseded by `Plasma.json`** at runtime (registry prefers JSON) |
 | `star_field.rs` | Rust-only |

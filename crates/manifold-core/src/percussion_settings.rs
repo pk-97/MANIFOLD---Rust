@@ -164,7 +164,7 @@ pub struct HatSettings {
 impl Default for HatSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::OSCILLOSCOPE_XY,
+            generator: GeneratorTypeId::LISSAJOUS,
             layer_index: 4,
             clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
@@ -713,7 +713,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Hat,
             4,
             None,
-            GeneratorTypeId::OSCILLOSCOPE_XY,
+            GeneratorTypeId::LISSAJOUS,
             Beats(0.50),
             0.0,
         ));

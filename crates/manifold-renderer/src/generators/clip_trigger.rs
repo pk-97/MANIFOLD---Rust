@@ -24,8 +24,7 @@
 //!
 //! ## Lifecycle
 //!
-//! Each generator instance owns one cycle (or two — see
-//! [`crate::generators::oscilloscope_xy`]). When the generator is
+//! Each generator instance owns one cycle. When the generator is
 //! recreated (override graph edit, type swap), the cycle resets to
 //! its default; the paired fix to preserve
 //! `LayerGeneratorState::trigger_count` across recreate keeps the

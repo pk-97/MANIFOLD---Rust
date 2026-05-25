@@ -223,7 +223,7 @@ Channel plumbing + 4 primitives. ~6h once policy is settled.
 **Batch 9 — JSON migration (3-6 sessions)**
 - Decomposed compositions of procedural textures (with Batch 5.5 in place): Plasma, BasicShapesSnap, ConcentricTunnel, StarField — these are math-on-fields, NOT atomic wraps
 - Decomposed compositions: StrangeAttractor, ParticleText, DigitalPlants, MetallicGlass, FluidSim2D (the existing `atomic.fluid_sim_2d`), Watercolor, DepthOfField, AutoGain, BlobTracking, WireframeDepth
-- Re-author Tesseract / Duocylinder / WireframeZoo / Lissajous / OscilloscopeXY as GPU-side JSON compositions (current CPU implementations remain as reference for parity testing)
+- Re-author Tesseract / Duocylinder / WireframeZoo / Lissajous as GPU-side JSON compositions (current CPU implementations remain as reference for parity testing)
 - Wrap genuinely irreducible kernels (OilyFluid reaction-diffusion, BlackHole geodesic tracing) using `wgsl_compute_*` primitives embedding their existing shaders
 - FluidSim3D and MriVolume now decomposable since Texture3D backend exists
 - Audio-driven graphs once audio batch ships
