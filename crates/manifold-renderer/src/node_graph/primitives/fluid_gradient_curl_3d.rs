@@ -109,7 +109,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "FluidSim3D computes curl_strength = flow * 500 * sin(curl_angle) and slope_strength = flow * 500 * cos(curl_angle) on the CPU side, with ref_axis = normalize(rotating vector based on time × 0.3). The primitive exposes the precomputed values directly — drive them via Math nodes if you want angle/flow params.",
+    composition_notes: "FluidSim3D computes curl_strength = flow * 500 * sin(curl_angle) and slope_strength = flow * 500 * cos(curl_angle) on the CPU side, with ref_axis = (rotating vector based on time × 0.3). The primitive normalizes ref_axis internally before passing to the shader — graph wires can emit raw sin/cos components without worrying about unit length. Drive curl_strength / slope_strength via Math nodes if you want to expose angle/flow params.",
     examples: [],
     picker: { label: "Fluid Gradient Curl 3D", category: Atom },
 }
@@ -126,9 +126,26 @@ impl Primitive for FluidGradientCurl3D {
         };
         let curl_strength = ctx.scalar_or_param("curl_strength", 0.0);
         let slope_strength = ctx.scalar_or_param("slope_strength", -500.0);
-        let ref_axis_x = ctx.scalar_or_param("ref_axis_x", 0.0);
-        let ref_axis_y = ctx.scalar_or_param("ref_axis_y", 1.0);
-        let ref_axis_z = ctx.scalar_or_param("ref_axis_z", 0.0);
+        let raw_axis_x = ctx.scalar_or_param("ref_axis_x", 0.0);
+        let raw_axis_y = ctx.scalar_or_param("ref_axis_y", 1.0);
+        let raw_axis_z = ctx.scalar_or_param("ref_axis_z", 0.0);
+        // Shader contract: `ref_axis` is unit-length so curl magnitude
+        // tracks `curl_strength` exactly. Without this normalize,
+        // graph wires that produce sin/cos components let the axis
+        // length drift (e.g. FluidSim3D's `(sin(0.3t), cos(0.21t),
+        // sin(0.15t))` swings between ~1.0 and ~1.7) and the swirl
+        // strength secretly breathes by up to 70% on a slow phase
+        // cycle independent of the user-facing slider. Zero-length
+        // input falls back to (0, 1, 0) so the cross product stays
+        // well-defined instead of dropping to a degenerate axis.
+        let raw_len_sq =
+            raw_axis_x * raw_axis_x + raw_axis_y * raw_axis_y + raw_axis_z * raw_axis_z;
+        let (ref_axis_x, ref_axis_y, ref_axis_z) = if raw_len_sq < 1e-10 {
+            (0.0, 1.0, 0.0)
+        } else {
+            let inv_len = raw_len_sq.sqrt().recip();
+            (raw_axis_x * inv_len, raw_axis_y * inv_len, raw_axis_z * inv_len)
+        };
 
         let Some(density) = ctx.inputs.texture_3d("density") else {
             return;
