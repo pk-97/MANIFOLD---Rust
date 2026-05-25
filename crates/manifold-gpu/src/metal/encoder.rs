@@ -238,12 +238,30 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    let idx = slot.metal_index as usize;
                     unsafe {
                         enc.setBytes_length_atIndex(
                             NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
                             data.len(),
-                            slot.metal_index as usize,
+                            idx,
                         );
+                    }
+                    // Invalidate the buffer cache for this slot — `setBytes`
+                    // replaces the slot's active binding with inline data,
+                    // so a subsequent `GpuBinding::Buffer` at the same slot
+                    // MUST call `setBuffer` to restore the buffer binding.
+                    // Without this, the cache hit on `(buffer_identity,
+                    // offset)` from a prior frame's dispatch would skip the
+                    // `setBuffer` call and leave the slot still pointing at
+                    // these inline bytes — the shader then reads/writes
+                    // through inline data sized like uniforms instead of
+                    // the intended storage buffer, producing GPU page
+                    // faults at the next dispatch. The fluid sim chain
+                    // tripped this every frame: gaussian_blur's 32-byte
+                    // params at metal slot 0 left the cache stale for
+                    // fluid_simulate's particle buffer at the same slot.
+                    if idx < CACHE_SLOTS {
+                        self.compute_cache.buffers[idx] = (std::ptr::null(), 0);
                     }
                 }
             }
@@ -261,6 +279,15 @@ impl GpuEncoder {
                     buffer_sizes_len * 4,
                     slot_idx,
                 );
+            }
+            // Sizes-buffer slot index varies across pipelines (it's
+            // assigned after the user bindings). A pipeline with N user
+            // buffers uses slot N here; a subsequent pipeline that
+            // binds a real buffer at slot N would otherwise hit a
+            // stale-cache skip — same bug class as the user-side
+            // `Bytes` arm above.
+            if slot_idx < CACHE_SLOTS {
+                self.compute_cache.buffers[slot_idx] = (std::ptr::null(), 0);
             }
         }
 
@@ -870,6 +897,12 @@ impl GpuEncoder {
                         }
                         if idx < CACHE_SLOTS {
                             self.render_cache.buffers[idx] = (id, *offset);
+                            // setBuffer replaces any prior setBytes inline
+                            // data at this slot. Invalidate the bytes cache
+                            // so a later setBytes with the same (ptr, len)
+                            // is forced to re-execute. Same bug class as
+                            // the compute path's Bytes-clears-buffers fix.
+                            self.render_cache.bytes[idx] = (std::ptr::null(), 0);
                         }
                     }
                 }
@@ -944,6 +977,10 @@ impl GpuEncoder {
                         }
                         if idx < CACHE_SLOTS {
                             self.render_cache.bytes[idx] = id;
+                            // setBytes replaces any prior setBuffer at this
+                            // slot — invalidate the buffer cache so a later
+                            // setBuffer with the same (id, offset) re-fires.
+                            self.render_cache.buffers[idx] = (std::ptr::null(), 0);
                         }
                     }
                 }
