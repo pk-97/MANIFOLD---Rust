@@ -62,6 +62,8 @@ mod fresnel_rim;
 mod frequency_ratio;
 mod fluid_gradient_curl_3d;
 mod fluid_gradient_rotate;
+mod fluid_seed_3d;
+mod fluid_simulate_3d;
 mod scatter_particles_camera;
 mod fluid_seed;
 mod fluid_simulate;
@@ -231,6 +233,10 @@ pub use fresnel_rim::FresnelRim;
 pub use frequency_ratio::{FREQUENCY_RATIO_TABLE, FrequencyRatio};
 pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
 pub use fluid_gradient_rotate::FluidGradientRotate;
+pub use fluid_seed_3d::{
+    FLUID_SEED_3D_CONTAINER_MODES, FLUID_SEED_3D_PATTERNS, FluidSeed3D,
+};
+pub use fluid_simulate_3d::{FLUID_3D_CONTAINER_MODES, FluidSimulate3D};
 pub use scatter_particles_camera::{SCATTER_CAMERA_MODES, ScatterParticlesCamera};
 pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
 pub use fluid_simulate::FluidSimulate;
