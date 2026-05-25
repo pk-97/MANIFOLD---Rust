@@ -254,6 +254,24 @@ impl Graph {
         Ok(())
     }
 
+    /// Install a per-output-port canvas-relative scale override on a
+    /// node. Mirrors `set_output_format` — used by persistence to
+    /// apply JSON-declared `outputCanvasScales` entries. No-op on
+    /// nodes whose canvas scale is fixed at compile time.
+    pub fn set_output_canvas_scale(
+        &mut self,
+        id: NodeInstanceId,
+        port: &str,
+        scale: (u32, u32),
+    ) -> Result<(), GraphError> {
+        let inst = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
+        inst.node.set_output_canvas_scale(port, scale);
+        Ok(())
+    }
+
     /// Mark `name` as exposed (`true`) or unexposed (`false`) on the
     /// outer card. The graph is the single source of truth for this —
     /// the unified `ToggleNodeParamExposeCommand` flips entries via

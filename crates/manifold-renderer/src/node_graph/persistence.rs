@@ -457,9 +457,17 @@ impl EffectGraphDefExt for EffectGraphDef {
                 // author explicitly configured for native precision
                 // carry entries here.
                 let mut output_formats = BTreeMap::new();
+                let mut output_canvas_scales = BTreeMap::new();
                 for out in inst.node.outputs() {
                     if let Some(fmt) = inst.node.output_format(out.name) {
                         output_formats.insert(out.name.to_string(), format_to_str(fmt).to_string());
+                    }
+                    if let Some((num, denom)) =
+                        inst.node.output_canvas_scale(out.name, &inst.params)
+                    {
+                        // Persist only non-default scales (i.e. nodes
+                        // that actually report something — most won't).
+                        output_canvas_scales.insert(out.name.to_string(), [num, denom]);
                     }
                 }
                 EffectGraphNode {
@@ -475,6 +483,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                     editor_pos: None,
                     wgsl_source: inst.node.wgsl_source().map(|s| s.to_string()),
                     output_formats,
+                    output_canvas_scales,
                 }
             })
             .collect();
@@ -657,6 +666,19 @@ impl EffectGraphDefExt for EffectGraphDef {
                         format: fmt_str.clone(),
                     });
                 }
+            }
+
+            // Per-output canvas-relative scale overrides. The chain
+            // pre-allocator consults `output_canvas_scale(port)` during
+            // `compile()`, so the scale must be installed on the node
+            // before compile runs. Currently honored by
+            // `node.wgsl_compute` only; static-shape primitives' default
+            // `set_output_canvas_scale` is a no-op.
+            for (port_name, scale) in &node_doc.output_canvas_scales {
+                let &[num, denom] = scale;
+                graph
+                    .set_output_canvas_scale(runtime_id, port_name, (num, denom))
+                    .expect("node was just added");
             }
         }
 
@@ -1058,6 +1080,7 @@ mod tests {
     fn unknown_output_format_surfaces_as_load_error() {
         let mut output_formats = BTreeMap::new();
         output_formats.insert("out".to_string(), "made_up_format".to_string());
+        let output_canvas_scales = BTreeMap::new();
         let doc = GraphDocument {
             version: 1,
             name: None,
@@ -1072,6 +1095,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats,
+                output_canvas_scales,
             }],
             wires: vec![],
         };
@@ -1127,6 +1151,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: vec![],
         };
@@ -1167,6 +1192,7 @@ mod tests {
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
                 },
                 NodeDocument {
                     id: 1,
@@ -1177,6 +1203,7 @@ mod tests {
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
                 },
             ],
             wires: vec![WireDocument {
@@ -1211,6 +1238,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: vec![],
         };
@@ -1240,6 +1268,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: vec![],
         };

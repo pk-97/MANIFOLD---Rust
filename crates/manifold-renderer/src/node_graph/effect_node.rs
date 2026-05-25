@@ -711,6 +711,17 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Install a per-output-port canvas-relative scale override.
+    /// Called by persistence to apply JSON-declared `outputCanvasScales`
+    /// entries after a node is constructed. No-op on nodes whose scale
+    /// is fixed at compile time (the default for nearly every
+    /// primitive). Dynamic-shape primitives (`node.wgsl_compute`)
+    /// override to store the per-port scale and surface it via the
+    /// matching `output_canvas_scale` getter, recovering the legacy
+    /// quarter-res render trick for expensive ray-trace kernels
+    /// whose downstream sampler upscales.
+    fn set_output_canvas_scale(&mut self, _port: &str, _scale: (u32, u32)) {}
+
     /// How many items to pre-allocate for the named `Array<T>` output
     /// port. The chain build / JsonGraphGenerator pre-allocator calls
     /// this once after the node's params are set and all its input

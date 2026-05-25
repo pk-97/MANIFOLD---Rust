@@ -104,6 +104,16 @@ pub struct WgslCompute {
     /// `node.scatter_particles` uses for its `accum` port. Returned
     /// from `canvas_sized_array_outputs()`.
     canvas_sized_outputs: Vec<&'static str>,
+    /// JSON-installed per-output-port canvas-relative size as
+    /// `(numerator, denominator)`. Read back by
+    /// `output_canvas_scale()` so the chain pre-allocator can size
+    /// the persistent slot at `canvas × num / denom`. Recovers the
+    /// legacy quarter-res render trick for BlackHole's deflection
+    /// bake without baking it into the primitive's Rust shape.
+    /// Empty by default; populated via `set_output_canvas_scale()`.
+    /// Survives `reparse` — the JSON-side scale describes the
+    /// PORT, not the WGSL.
+    output_canvas_scales: AHashMap<String, (u32, u32)>,
     /// String arena backing the leaked `&'static str`s used by port
     /// declarations and the aliased_view. Each parse leaks fresh
     /// strings; bounded by distinct port names across the process
@@ -220,6 +230,7 @@ impl WgslCompute {
             aliased_pairs: Vec::new(),
             aliased_view: Vec::new(),
             canvas_sized_outputs: Vec::new(),
+            output_canvas_scales: AHashMap::new(),
             _leaked_strings: Vec::new(),
             output_formats: AHashMap::new(),
             dispatch_port: None,
@@ -748,6 +759,24 @@ impl EffectNode for WgslCompute {
         // Format is derived from the WGSL — JSON overrides are
         // ignored. Changing the output format means editing the
         // `texture_storage_2d<F, write>` declaration in the source.
+    }
+
+    fn output_canvas_scale(
+        &self,
+        port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        self.output_canvas_scales.get(port).copied()
+    }
+
+    fn set_output_canvas_scale(&mut self, port: &str, scale: (u32, u32)) {
+        // Honored — unlike `set_output_format`, the canvas scale is
+        // genuinely a JSON-side property (the WGSL can't express
+        // "allocate this output at canvas/4"). Lets the BlackHole
+        // preset run its deflection bake at quarter-res without
+        // shader changes.
+        self.output_canvas_scales
+            .insert(port.to_string(), scale);
     }
 
     fn aliased_array_io(&self) -> &[(&str, &str)] {

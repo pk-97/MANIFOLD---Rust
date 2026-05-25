@@ -211,6 +211,7 @@ impl Command for AddGraphNodeCommand {
                 editor_pos: pos,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             });
             id
         });
@@ -1947,6 +1948,7 @@ mod tests {
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 1,
@@ -1957,6 +1959,7 @@ mod tests {
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 2,
@@ -1967,6 +1970,7 @@ mod tests {
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
                 },
                 EffectGraphNode {
                     id: 3,
@@ -1977,6 +1981,7 @@ mod tests {
                     editor_pos: None,
                     wgsl_source: None,
                     output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
                 },
             ],
             wires: vec![
@@ -2541,6 +2546,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: vec![],
         };
@@ -2780,6 +2786,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: vec![],
         };
@@ -3156,6 +3163,7 @@ mod tests {
                 editor_pos: None,
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: vec![],
         };

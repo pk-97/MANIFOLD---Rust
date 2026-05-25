@@ -132,6 +132,25 @@ pub struct EffectGraphNode {
     /// numerical stability across multi-pass feedback chains.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub output_formats: BTreeMap<String, String>,
+    /// Per-output-port canvas-relative size as `[numerator,
+    /// denominator]`. `[1, 4]` means "allocate this output at
+    /// canvas / 4 in each dimension." Honored by dynamic-shape
+    /// primitives (`node.wgsl_compute`) where the JSON is the only
+    /// place this can be expressed; static-shape primitives that
+    /// already declare canvas-relative sizing in Rust (downsample,
+    /// upsample) ignore JSON-side overrides.
+    ///
+    /// Used to recover the legacy quarter-res render trick on
+    /// `node.wgsl_compute` outputs whose downstream sampler already
+    /// upscales — BlackHole's geodesic deflection bake, for instance,
+    /// runs ~16× cheaper at `[1, 4]` because the cost dominates as
+    /// pixels × ray-steps.
+    ///
+    /// Default (empty / missing) means "use whatever the node's own
+    /// `output_canvas_scale` reports" — typically `None`, falling
+    /// through to canvas-sized allocation.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_canvas_scales: BTreeMap<String, [u32; 2]>,
 }
 
 /// One wire inside an [`EffectGraphDef`]. Endpoint ids reference
@@ -504,6 +523,7 @@ mod tests {
                 editor_pos: Some((100.0, 200.0)),
                 wgsl_source: None,
                 output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
             }],
             wires: Vec::new(),
         };
