@@ -256,7 +256,9 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 | Sample Texture at Particles | `node.sample_texture_at_particles` | Per-particle bilinear sample of a Texture2D at `position.xy` → `Array<vec2<f32>>` of RG samples |
 | Euler Step Particles | `node.euler_step_particles` | Apply `position.xy += forces * speed * (delta * 60)` per live particle. Aliased in/out. |
 | Wrap Particles (Torus) | `node.wrap_particles_torus` | Per-particle toroidal wrap `position.xy = fract(position.xy + 1)`. Cyclic-boundary policy atom. |
-| Diffuse Particles | `node.array_diffuse_particles` | Hash-based random kick on `Particle.velocity` (generic Brownian noise) |
+| Diffuse Particles | `node.array_diffuse_particles` | Hash-based random kick on `Particle.velocity` (generic Brownian noise — ODE-state diffusion) |
+| Anti-Clump Particles | `node.anti_clump_particles` | Density-weighted hash kick on `Particle.position.xy` — concentrates the noise where particles clump together |
+| Radial Burst Force Field | `node.radial_burst_force_field` | Per-pixel vec2 force texture for a radial+tangent impulse around a point with falloff envelope. Sum into a velocity field for "impulse around a point" particle behaviour. |
 | Scatter Particles | `node.scatter_particles` | Atomic-add splat into 2D u32 accumulator (Wrap / Discard boundary) |
 | Scatter Particles 3D | `node.scatter_particles_3d` | Same shape for `Texture3D` accumulator |
 | Resolve Accumulator | `node.resolve_accumulator` | u32 grid → float Texture2D |

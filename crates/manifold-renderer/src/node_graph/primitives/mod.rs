@@ -8,6 +8,7 @@
 
 mod abs_texture;
 mod affine_transform;
+mod anti_clump_particles;
 mod array_diffuse_particles;
 mod array_feedback;
 mod array_math;
@@ -125,6 +126,7 @@ mod power_texture;
 mod project_3d;
 mod project_4d;
 mod quad_mirror;
+mod radial_burst_force_field;
 mod reinhard_tone_map;
 mod render_3d_mesh;
 mod render_instanced_3d_mesh;
@@ -185,6 +187,7 @@ mod wireframe_depth;
 
 pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
+pub use anti_clump_particles::AntiClumpParticles;
 pub use array_diffuse_particles::ArrayDiffuseParticles;
 pub use array_feedback::ArrayFeedback;
 pub use array_math::{ARRAY_MATH_OPS, ArrayMath};
@@ -318,6 +321,7 @@ pub use power_texture::PowerTexture;
 pub use project_3d::{PROJECT_3D_MODES, Project3D};
 pub use project_4d::Project4D;
 pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
+pub use radial_burst_force_field::RadialBurstForceField;
 pub use reinhard_tone_map::ReinhardToneMap;
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
