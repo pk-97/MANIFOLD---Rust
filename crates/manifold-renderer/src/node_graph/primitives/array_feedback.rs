@@ -22,24 +22,34 @@ use manifold_gpu::GpuBuffer;
 
 use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
 
 crate::primitive! {
     name: ArrayFeedback,
     type_id: "node.array_feedback",
-    purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state.",
+    purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op.",
     inputs: {
         in: Array(Particle) required,
         seed: Array(Particle) optional,
+        reset_trigger: ScalarF32 optional,
     },
     outputs: {
         out: Array(Particle),
     },
     params: [],
-    composition_notes: "Pair with SimulateParticles (Phase A.7) to build feedback-driven simulations. SeedParticles emits initial state; ArrayFeedback caches it for replay.",
+    composition_notes: "Pair with SimulateParticles (Phase A.7) to build feedback-driven simulations. SeedParticles emits initial state; ArrayFeedback caches it for replay. For FluidSim-style clip-trigger re-seeding: wire `system.generator_input.trigger_count` into `reset_trigger` and a seed-pattern producer (`seed_particles_from_texture` or `wgsl_compute`-driven density-rejection seed) into `seed` — every trigger edge clears the simulation and reloads the seed. First observation of `reset_trigger` arms without firing so the first-alloc seed isn't double-copied.",
     examples: [],
     picker: { label: "Array Feedback", category: Atom },
+    extra_fields: {
+        // Tracks the last `reset_trigger` integer value to detect
+        // edges. `None` until the first observation; subsequent
+        // integer changes fire the re-seed. First observation arms
+        // without firing so the first-alloc path's `seed` copy isn't
+        // immediately repeated on the same frame.
+        last_reset_trigger: Option<i32> = None,
+    },
 }
 
 /// Per-instance persistent state. One `GpuBuffer` holding the
@@ -156,6 +166,33 @@ impl Primitive for ArrayFeedback {
                 },
             );
         }
+
+        // Reset-on-trigger: if `reset_trigger` is wired and its
+        // integer value has advanced since last frame, copy `seed`
+        // into the state buffer before emitting. First observation
+        // arms without firing so the first-alloc seed (above) isn't
+        // immediately repeated. When `seed` is unwired the edge fires
+        // but there's nothing meaningful to reset from — degenerate
+        // no-op rather than copying the back-edge `in` over itself.
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
+            let current = v.round() as i32;
+            let edge = match self.last_reset_trigger {
+                Some(prev) => current != prev,
+                None => false,
+            };
+            self.last_reset_trigger = Some(current);
+            if edge && let Some(seed_buf) = ctx.inputs.array("seed") {
+                let state_mut = store
+                    .get::<ArrayFeedbackState>(node_id, owner_key)
+                    .expect("alloc path inserts state above");
+                let copy_size = seed_buf.size.min(state_mut.capacity_bytes);
+                if copy_size > 0 {
+                    gpu.native_enc
+                        .copy_buffer_to_buffer(seed_buf, &state_mut.prev, copy_size);
+                }
+            }
+        }
+
         let state = store
             .get::<ArrayFeedbackState>(node_id, owner_key)
             .expect("just inserted above");
@@ -163,7 +200,9 @@ impl Primitive for ArrayFeedback {
         // Emit `out` ← state.prev. state.prev holds last frame's
         // producer output (snapshotted by `late_capture` at end of
         // the previous frame), or — on the alloc frame — the in_buf
-        // passthrough seed copy above. Gives a true 1-frame delay.
+        // passthrough seed copy above, or — on a reset-trigger edge —
+        // a fresh copy of the wired `seed`. Gives a true 1-frame
+        // delay in steady state and a 1-frame reset on trigger.
         gpu.native_enc
             .copy_buffer_to_buffer(&state.prev, out_buf, size);
     }
@@ -215,13 +254,13 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn array_feedback_declares_required_in_optional_seed_and_one_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortKind, PortType};
+    fn array_feedback_declares_required_in_optional_seed_and_optional_reset_trigger() {
+        use crate::node_graph::ports::{ArrayType, PortKind, PortType, ScalarType};
 
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(ArrayFeedback::TYPE_ID, "node.array_feedback");
-        assert_eq!(ArrayFeedback::INPUTS.len(), 2);
+        assert_eq!(ArrayFeedback::INPUTS.len(), 3);
         assert_eq!(ArrayFeedback::INPUTS[0].name, "in");
         assert_eq!(ArrayFeedback::INPUTS[0].kind, PortKind::Input);
         assert_eq!(ArrayFeedback::INPUTS[0].ty, PortType::Array(particle_layout));
@@ -229,6 +268,12 @@ mod tests {
         assert_eq!(ArrayFeedback::INPUTS[1].name, "seed");
         assert!(!ArrayFeedback::INPUTS[1].required);
         assert_eq!(ArrayFeedback::INPUTS[1].ty, PortType::Array(particle_layout));
+        assert_eq!(ArrayFeedback::INPUTS[2].name, "reset_trigger");
+        assert!(!ArrayFeedback::INPUTS[2].required);
+        assert_eq!(
+            ArrayFeedback::INPUTS[2].ty,
+            PortType::Scalar(ScalarType::F32)
+        );
 
         assert_eq!(ArrayFeedback::OUTPUTS.len(), 1);
         assert_eq!(ArrayFeedback::OUTPUTS[0].name, "out");
