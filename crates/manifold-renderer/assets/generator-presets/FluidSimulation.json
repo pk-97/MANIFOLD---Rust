@@ -74,7 +74,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 0.01666,
-        "target": { "kind": "handleNode", "handle": "anti_clump_base", "param": "a" },
+        "target": { "kind": "handleNode", "handle": "anti_clump", "param": "strength" },
         "convert": { "type": "Float" } },
 
       { "id": "force",             "label": "Force",        "defaultValue": 0.005,
@@ -291,8 +291,38 @@
     { "id": 72, "typeId": "node.sample_and_hold", "handle": "mode_hold",
       "params": {} },
 
-    { "id": 100, "typeId": "node.math", "handle": "anti_clump_base",
-      "params": { "a": { "type": "Float", "value": 0.01666 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } }
+    { "id": 110, "typeId": "node.affine_scalar", "handle": "noise_z",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 111, "typeId": "node.simplex_field_2d", "handle": "noise_x_field",
+      "params": { "scale_x": { "type": "Float", "value": 2.0 }, "scale_y": { "type": "Float", "value": 2.0 }, "z": { "type": "Float", "value": 0.0 }, "offset_x": { "type": "Float", "value": 0.0 }, "offset_y": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 112, "typeId": "node.simplex_field_2d", "handle": "noise_y_field",
+      "params": { "scale_x": { "type": "Float", "value": 2.0 }, "scale_y": { "type": "Float", "value": 2.0 }, "z": { "type": "Float", "value": 0.0 }, "offset_x": { "type": "Float", "value": 100.0 }, "offset_y": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 113, "typeId": "node.pack_channels", "handle": "noise_vec2",
+      "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 114, "typeId": "node.scale_offset_texture", "handle": "one_plus_density",
+      "params": { "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 115, "typeId": "node.mix", "handle": "capped_density",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 7 } } },
+
+    { "id": 116, "typeId": "node.scale_offset_texture", "handle": "one_plus_weighted",
+      "params": { "scale": { "type": "Float", "value": 20.0 }, "offset": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 117, "typeId": "node.scale_offset_texture", "handle": "adaptive_amp",
+      "params": { "scale": { "type": "Float", "value": 0.001 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 118, "typeId": "node.pack_channels", "handle": "amp_broadcast",
+      "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 119, "typeId": "node.mix", "handle": "weighted_noise",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 4 } } },
+
+    { "id": 120, "typeId": "node.mix", "handle": "combined_with_noise",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } }
   ],
   "wires": [
     { "fromNode": 70, "fromPort": "out", "toNode": 80, "toPort": "pattern" },
@@ -305,12 +335,11 @@
     { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
 
     { "fromNode": 82, "fromPort": "out", "toNode": 83, "toPort": "particles" },
-    { "fromNode": 90, "fromPort": "out", "toNode": 83, "toPort": "in" },
+    { "fromNode": 120, "fromPort": "out", "toNode": 83, "toPort": "in" },
     { "fromNode": 20, "fromPort": "out", "toNode": 83, "toPort": "active_count" },
 
     { "fromNode": 82, "fromPort": "out", "toNode": 84, "toPort": "in" },
     { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "density" },
-    { "fromNode": 100, "fromPort": "out", "toNode": 84, "toPort": "strength" },
     { "fromNode": 21, "fromPort": "out", "toNode": 84, "toPort": "active_count" },
 
     { "fromNode": 84, "fromPort": "out", "toNode": 85, "toPort": "in" },
@@ -348,11 +377,31 @@
     { "fromNode": 11, "fromPort": "out", "toNode": 90, "toPort": "a" },
     { "fromNode": 91, "fromPort": "out", "toNode": 90, "toPort": "b" },
 
+    { "fromNode": 0,   "fromPort": "time", "toNode": 110, "toPort": "a" },
+    { "fromNode": 110, "fromPort": "out",  "toNode": 111, "toPort": "z" },
+    { "fromNode": 110, "fromPort": "out",  "toNode": 112, "toPort": "z" },
+    { "fromNode": 111, "fromPort": "out",  "toNode": 113, "toPort": "r" },
+    { "fromNode": 112, "fromPort": "out",  "toNode": 113, "toPort": "g" },
+
+    { "fromNode": 8,   "fromPort": "out", "toNode": 114, "toPort": "in" },
+    { "fromNode": 8,   "fromPort": "out", "toNode": 115, "toPort": "a" },
+    { "fromNode": 114, "fromPort": "out", "toNode": 115, "toPort": "b" },
+    { "fromNode": 115, "fromPort": "out", "toNode": 116, "toPort": "in" },
+    { "fromNode": 116, "fromPort": "out", "toNode": 117, "toPort": "in" },
+    { "fromNode": 44,  "fromPort": "out", "toNode": 117, "toPort": "scale" },
+    { "fromNode": 117, "fromPort": "out", "toNode": 118, "toPort": "r" },
+    { "fromNode": 117, "fromPort": "out", "toNode": 118, "toPort": "g" },
+
+    { "fromNode": 113, "fromPort": "out", "toNode": 119, "toPort": "a" },
+    { "fromNode": 118, "fromPort": "out", "toNode": 119, "toPort": "b" },
+
+    { "fromNode": 90,  "fromPort": "out", "toNode": 120, "toPort": "a" },
+    { "fromNode": 119, "fromPort": "out", "toNode": 120, "toPort": "b" },
+
     { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
 
     { "fromNode": 21, "fromPort": "out", "toNode": 23, "toPort": "a" },
 
-    { "fromNode": 44, "fromPort": "out", "toNode": 100, "toPort": "a" },
     { "fromNode": 42, "fromPort": "out", "toNode": 43, "toPort": "b" },
     { "fromNode": 43, "fromPort": "out", "toNode": 44, "toPort": "b" },
     { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "in_0" },
