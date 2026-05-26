@@ -134,7 +134,7 @@
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "clip_trigger_value", "param": "value" },
-        "convert": { "type": "BoolThreshold" } }
+        "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
