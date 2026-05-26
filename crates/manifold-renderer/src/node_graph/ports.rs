@@ -64,7 +64,7 @@ pub enum ItemKind {
     Anonymous,
     /// 2D point in origin-centered pre-aspect curve space. The contract
     /// every line-renderer (`node.render_lines`) consumes; produced by
-    /// `generate_lissajous`, `project_3d`, `project_4d`,
+    /// `pack_curve_xy`, `project_3d`, `project_4d`,
     /// `concentric_outlines`, `polygon_shape`. Origin is the visual
     /// centre; aspect correction + screen offset live in the consumer.
     CurvePoint,

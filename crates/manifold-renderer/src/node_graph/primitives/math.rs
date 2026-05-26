@@ -19,15 +19,17 @@ pub const MATH_OPS: &[&str] = &[
     "Min",        // 4
     "Max",        // 5
     "Atan2",      // 6
-    "Sin",        // 7 — unary, b ignored
-    "Cos",        // 8 — unary, b ignored
-    "Reciprocal", // 9 — unary, b ignored; 1/a with 0-clamp
+    "Sin",        // 7  — unary, b ignored
+    "Cos",        // 8  — unary, b ignored
+    "Reciprocal", // 9  — unary, b ignored; 1/a with 0-clamp
+    "Floor",      // 10 — unary, b ignored
+    "Ceil",       // 11 — unary, b ignored
 ];
 
 crate::primitive! {
     name: Math,
     type_id: "node.math",
-    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos). Composition glue for control wires. `b` is unused for unary ops (sin, cos). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
+    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
     inputs: {
         a: ScalarF32 required,
         b: ScalarF32 optional,
@@ -61,7 +63,7 @@ crate::primitive! {
             enum_values: MATH_OPS,
         },
     ],
-    composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate. Sin and Cos are unary ops that read `a` only (in radians) and ignore `b`; convenient for deriving rotation coefficients from time wires when composing rotating procedural fields.",
+    composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate. Sin and Cos are unary ops that read `a` only (in radians) and ignore `b`; convenient for deriving rotation coefficients from time wires when composing rotating procedural fields. Floor and Ceil are unary; the canonical use is bracket-interp scaffolding (a_lo = floor(freq), a_hi = ceil(freq), a_lerp = freq - a_lo) for graphs that morph smoothly between integer-parameter samples of a curve family (Lissajous, Rose, etc.).",
     examples: [],
     picker: { label: "Math", category: Driver },
 }
@@ -91,6 +93,14 @@ impl Primitive for Math {
         if op == 9 {
             let out = if a.abs() < 1e-9 { 0.0 } else { 1.0 / a };
             ctx.outputs.set_scalar("out", ParamValue::Float(out));
+            return;
+        }
+        if op == 10 {
+            ctx.outputs.set_scalar("out", ParamValue::Float(a.floor()));
+            return;
+        }
+        if op == 11 {
+            ctx.outputs.set_scalar("out", ParamValue::Float(a.ceil()));
             return;
         }
 
@@ -290,5 +300,49 @@ mod tests {
     fn cos_pi_is_negative_one() {
         let got = run_math(std::f32::consts::PI, 0.0, 8);
         assert!((got - -1.0).abs() < 1e-6, "cos(π) = -1, got {got}");
+    }
+
+    /// Floor / Ceil are unary; together with `Subtract` they let a
+    /// graph build the bracket-interp triple
+    /// `(floor(x), ceil(x), x - floor(x))` for any parametric curve
+    /// that wants to morph smoothly between integer-parameter samples.
+    #[test]
+    fn floor_negative_fraction_rounds_toward_minus_inf() {
+        // -2.3 floors to -3, not -2 — IEEE round-toward-negative.
+        assert_eq!(run_math(-2.3, 0.0, 10), -3.0);
+    }
+    #[test]
+    fn floor_positive_fraction_drops_fraction() {
+        assert_eq!(run_math(2.7, 0.0, 10), 2.0);
+    }
+    #[test]
+    fn floor_integer_is_identity() {
+        assert_eq!(run_math(3.0, 0.0, 10), 3.0);
+    }
+    #[test]
+    fn ceil_positive_fraction_rounds_up() {
+        assert_eq!(run_math(2.3, 0.0, 11), 3.0);
+    }
+    #[test]
+    fn ceil_negative_fraction_rounds_toward_zero() {
+        // -2.7 ceils to -2, not -3 — IEEE round-toward-positive.
+        assert_eq!(run_math(-2.7, 0.0, 11), -2.0);
+    }
+    #[test]
+    fn ceil_integer_is_identity() {
+        assert_eq!(run_math(3.0, 0.0, 11), 3.0);
+    }
+
+    /// The canonical bracket-interp triple: feeding any non-integer
+    /// `freq` through floor / ceil / (freq - floor) produces the
+    /// (a_lo, a_hi, a_lerp) numbers Lissajous and friends need.
+    #[test]
+    fn floor_and_ceil_together_produce_bracket_interp_triple() {
+        let freq = 2.7_f32;
+        let lo = run_math(freq, 0.0, 10);
+        let hi = run_math(freq, 0.0, 11);
+        assert_eq!(lo, 2.0);
+        assert_eq!(hi, 3.0);
+        assert!((freq - lo - 0.7).abs() < 1e-6);
     }
 }

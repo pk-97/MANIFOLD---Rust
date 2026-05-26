@@ -241,7 +241,8 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 
 | Display Name | Type ID | Purpose |
 |---|---|---|
-| Generate Lissajous | `node.generate_lissajous` | Sample a Lissajous curve into `Array<CurvePoint>` |
+| Generate Range | `node.generate_range` | Pattern-CHOP linspace: `Array<f32>` of N samples over `[start, end]` |
+| Pack Curve XY | `node.pack_curve_xy` | Zip two `Array<f32>` (x, y) into `Array<CurvePoint>`; folds the `PROJ_SCALE = 0.25` screen-fit constant. Curve-pipeline counterpart to `array_unpack_vec2` |
 
 ### 3.16 Particle / instance simulation
 
@@ -256,7 +257,7 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 | Resolve Accumulator | `node.resolve_accumulator` | u32 grid → float Texture2D |
 | Resolve 3D Accumulator | `node.resolve_3d_accumulator` | u32 grid → float Texture3D |
 | Scalar Array Accumulator | `node.scalar_array_accumulator` | Stateful running sum of an `Array<f32>` |
-| Array Math | `node.array_math` | Element-wise math on `Array<f32>` (Add/Sub/Mul/Div/Min/Max/ScaleOffset/Shape/MirrorRamp/Clamp01/Abs) |
+| Array Math | `node.array_math` | Element-wise math on `Array<f32>` (Add/Sub/Mul/Div/Min/Max/ScaleOffset/Shape/MirrorRamp/Clamp01/Abs/Sin/Cos/Mix) |
 | Instance Position Jitter | `node.instance_position_jitter` | Per-instance position offset from a noise field |
 | Instance Rotation Jitter | `node.instance_rotation_jitter` | Per-instance rotation jitter |
 | Lerp Instance Fields | `node.lerp_instance_fields` | Per-field interpolation between two `Array<InstanceTransform>` |
@@ -300,36 +301,36 @@ Reserved for genuinely irreducible kernels (see DECOMPOSING_GENERATORS §5 befor
 
 ## 4. Effects — named visual looks
 
-24 entries shipping as nodes in the effect palette. Implementation kind: **shader** (one WGSL kernel), **preset** (thin atom wrap), **composite** (multi-pass primitive — will atomize when its missing atoms ship), **monolith** (custom pipeline, CPU/native/DNN — stays monolithic forever).
+24 entries shipping as nodes in the effect palette. Implementation kind: **shader** (one WGSL kernel), **preset** (thin atom wrap), **composite** (multi-pass primitive — bundle awaiting atomization), **bundle** (fused legacy `PostProcessEffect` wrapped by the primitive — *all bundles are decomposition targets under the no-fused-monolith rule, see `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`*).
 
 | # | Display Name | Type ID | Impl |
 |---|---|---|---|
-| 1 | Auto Gain | `node.auto_gain` | monolith |
-| 2 | Blob Track | `node.blob_track` | monolith |
-| 3 | Bloom | `node.bloom` | composite |
+| 1 | Auto Gain | `node.auto_gain` | bundle (target — luminance + envelope_follower_ar + gain + character_color) |
+| 2 | Blob Track | `node.blob_track` | bundle (target — blob_detect_ffi + one_euro_filter + blob_overlay_render) |
+| 3 | Bloom | `node.bloom` | composite (target — mip_chain + separable_gaussian + mix) |
 | 4 | Chromatic Aberration | `node.chromatic_aberration` | shader |
 | 5 | Color Grade | `node.color_grade` | shader |
-| 6 | Depth of Field | `node.depth_of_field` | monolith (DNN depth) / composite (geometric) |
+| 6 | Depth of Field | `node.depth_of_field` | bundle (target — depth_estimate_midas / tilt_shift_mask / radial_mask + CoC + separable_gaussian + composite) |
 | 7 | Dither | `node.dither` | shader |
 | 8 | Edge Detect | `node.edge_detect` | shader |
 | 9 | Edge Stretch | `node.edge_stretch` | shader |
 | 10 | Glitch | `node.glitch` | shader |
-| 11 | Halation | `node.halation` | composite |
+| 11 | Halation | `node.halation` | composite (target — shares Bloom's atom set + spectral kernel shift) |
 | 12 | Highlight Boost | `node.highlight_boost` | shader |
-| 13 | Infrared | `node.infrared` | shader |
+| 13 | Infrared | `node.infrared` | shader (atomization candidate — single-pass, decomposable into existing atoms) |
 | 14 | Invert | `node.invert` | shader |
 | 15 | Kaleidoscope | `node.kaleidoscope` | shader |
 | 16 | Mirror | `node.mirror` | preset (one `transform` atom, fold=X) |
-| 17 | Quad Mirror | `node.quad_mirror` | shader |
+| 17 | Quad Mirror | `node.quad_mirror` | shader (atomization candidate — single-pass, decomposable) |
 | 18 | Soft Focus | `node.soft_focus` | preset (one `gaussian_blur` atom) |
 | 19 | Strobe | `node.strobe` | shader |
 | 20 | Stylized Feedback | `node.stylized_feedback` | preset (one `feedback` atom) |
 | 21 | Transform | `node.transform_effect` | shader (legacy semantics; the `transform` atom is the generic variant) |
 | 22 | Voronoi Prism | `node.voronoi_prism` | shader |
-| 23 | Watercolor | `node.watercolor` | composite |
-| 24 | Wireframe Depth | `node.wireframe_depth` | monolith |
+| 23 | Watercolor | `node.watercolor` | composite (target — flow_field_noise + uv_displace_by_flow + existing atoms) |
+| 24 | Wireframe Depth | `node.wireframe_depth` | bundle (target — depth_estimate_midas + edge_detect + wireframe primitives) |
 
-The four permanent monoliths (Auto Gain, Blob Track, Wireframe Depth, DoF-DNN) are first-class library members — their pipelines aren't blur/threshold/mix math.
+Note: the six bundles plus Infrared / Quad Mirror are decomposition targets, not permanent. The no-fused-monolith rule (`CLAUDE.md` hard rules) requires every effect to be a graph of single-purpose primitives, including DNN / FFI / CPU work. The DNN and FFI atoms (`depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`) already exist as registered primitives — they're starving on the shelf because the bundles internalize their work. Decomposition activates them.
 
 ---
 
@@ -371,9 +372,9 @@ JSON files at [`assets/effect-presets/`](../crates/manifold-renderer/assets/effe
 
 ---
 
-## 6. Generators — JSON-defined and Rust-defined
+## 6. Generators
 
-JSON-defined generators live at [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/). Each is a sub-graph from `system.generator_input` to `system.final_output`. Rust-defined generators register via `inventory::submit!` and are the migration targets.
+All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. Zero `inventory::submit!` generators remain; [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) is now runtime infrastructure only (loader, registry, mesh/line pipelines, math, stateful base).
 
 ### 6.1 JSON-defined
 
@@ -387,7 +388,7 @@ JSON-defined generators live at [`assets/generator-presets/`](../crates/manifold
 | Duocylinder | 4D wireframe: `generate_duocylinder_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
 | FluidSim2D | particle fluid sim: `fluid_seed` → `fluid_simulate` → `scatter_particles` → `resolve_accumulator` → `feedback` → `downsample` → `gaussian_blur` ×4 → `fluid_gradient_rotate` → `reinhard_tone_map` |
 | FluidSim3D | volumetric particle fluid sim: `fluid_seed_3d` → `scatter_particles_3d` → `resolve_3d_accumulator` → `blur_3d_separable` ×3 (density) → `fluid_gradient_curl_3d` → `blur_3d_separable` ×3 (field) → `fluid_simulate_3d` → `scatter_particles_camera` → `resolve_accumulator` → `reinhard_tone_map`, with `camera_orbit` + `inject_burst` + `clip_trigger_cycle` drivers |
-| Lissajous | parametric curve: `lfo` ×3 + `frequency_ratio` + `mux_scalar` ×2 → `generate_lissajous` → `render_lines` |
+| Lissajous | parametric curve, fully atomized: `lfo` ×3 + `frequency_ratio` + `mux_scalar` ×2 → per-axis `math(Floor/Ceil/Subtract)` bracket + `generate_range` → `array_math(ScaleOffset+Sin)` ×4 + `array_math(Mix)` ×2 → `pack_curve_xy` → `render_lines`. The TouchDesigner Pattern→Math→Function→Merge→To-SOP shape; bracket-interp is graph-visible. |
 | MetallicGlass | feedback-displacement metallic surface: `simplex_field_2d` + `scale_offset` → `feedback` ping-pong with `mix Difference`+`abs`+`mix Lerp` 0.98 → `gaussian_blur` H/V → split into height/levels chain and `mirror_axis`+`convolution_2d_9tap`×2+`pack_channels`+`length_vec2` Sobel chain → `pack_channels` packed material → temporal blend via `feedback`+`mix Lerp` 0.15 → `generate_grid_mesh` → `displace_mesh` → `triangulate_grid` → `render_3d_mesh_pbr_ibl` (with `bake_equirect_envmap`) |
 | MriVolume | volumetric scrubbing: `image_folder` ×3 → `mux_texture` → `sharpen` → `smoothstep_texture` → `invert` |
 | ParticleText | FluidSim2D base + text-force branch (`render_text → gaussian_blur H+V → gradient_central_diff → rotate_vec2_90 → gain → blend Add into the force chain`). The glyphs are baked into the force field as a perpendicular-curl flow, particles continuously stream along the text shape instead of being seeded at it |
@@ -400,9 +401,9 @@ JSON-defined generators live at [`assets/generator-presets/`](../crates/manifold
 | TrivialPassthrough | smoke test: `uv_field` |
 | WireframeZoo | 3D wireframe: `wireframe_shape` → `rotate_3d` → `project_3d` → `render_lines` |
 
-### 6.2 Rust-defined (migration targets)
+### 6.2 Rust-defined
 
-Walk [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) for the source of truth — every `inventory::submit!` entry there is a remaining migration target. See [GENERATOR_DECOMPOSITION_PLAN.md](GENERATOR_DECOMPOSITION_PLAN.md) for tier and order.
+Empty. The migration completed in May 2026 — see [GENERATOR_DECOMPOSITION_PLAN.md](GENERATOR_DECOMPOSITION_PLAN.md) for the per-generator history.
 
 ---
 
@@ -410,6 +411,5 @@ Walk [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/sr
 
 - After adding a new primitive: add a row to §3 under the right family and bump nothing else; the AI agent reads §3 to know what's available.
 - After adding a new preset: add a row to §5 or §6.1 with the topology shape; downstream readers learn the analogue from this entry.
-- After migrating a Rust generator: move its entry from §6.2 to §6.1 with the topology shape.
 - After deleting a primitive: remove the row; don't leave it as "deprecated."
 - Validate by running `cargo run -p manifold-renderer --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.

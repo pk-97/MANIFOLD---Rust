@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Lissajous",
-  "description": "Lissajous curve generator — decomposed from the legacy `LissajousGenerator` Rust struct into the curated primitive library.\n\nTwo modes share the same render path:\n\n- **Smooth**: the X and Y frequencies are continuously oscillating sines (`a = 2 + 1.5*sin(time*freq_x_rate)`, `b = 3 + 2*sin(time*freq_y_rate)`) producing a slowly morphing closed curve. Phase advances linearly at `time * phase_rate`.\n- **Clip Trigger**: on each clip retrigger the frequencies jump to the next row of a curated 10-row harmonic-ratio table (1:2, 1:3, 2:3, 3:4, …). Phase keeps evolving smoothly.\n\nThe outer-card `clip_trigger` toggle picks between the two via a pair of MuxScalar nodes; the table itself lives inside `node.frequency_ratio`. `node.generate_lissajous` always interpolates between the floor and ceil integer ratios so non-integer frequencies don't produce non-closing scribbles. `node.render_lines` carries the animation + dot rendering + beat-flash from the legacy `LineGeneratorHelper`.\n\nBit-perfect parity with the legacy generator at default params.",
+  "description": "Lissajous curve generator — decomposed from the legacy `LissajousGenerator` Rust struct into the curated atom library. The curve math is now visible as the graph itself (the TouchDesigner Pattern → Math → Function → Merge → To-SOP shape) rather than sealed inside a single `generate_lissajous` primitive.\n\nTwo modes share the same render path:\n\n- **Smooth**: the X and Y frequencies are continuously oscillating sines (`a = 2 + 1.5*sin(time*freq_x_rate)`, `b = 3 + 2*sin(time*freq_y_rate)`) producing a slowly morphing closed curve. Phase advances linearly at `time * phase_rate`.\n- **Clip Trigger**: on each clip retrigger the frequencies jump to the next row of a curated 10-row harmonic-ratio table (1:2, 1:3, 2:3, 3:4, …). Phase keeps evolving smoothly.\n\nThe outer-card `clip_trigger` toggle picks between the two via a pair of MuxScalar nodes; the table itself lives inside `node.frequency_ratio`.\n\nPer-axis curve construction:\n  freq → math(Floor)+math(Ceil)+math(Subtract) → (a_lo, a_hi, a_lerp) bracket\n  t = generate_range(0..2π)\n  t_lo = array_math(ScaleOffset, t, scale=a_lo, offset=phase)\n  t_hi = array_math(ScaleOffset, t, scale=a_hi, offset=phase)\n  x = array_math(Mix, sin(t_lo), sin(t_hi), scale=a_lerp)\n\nThis blends between the floor and ceil integer Lissajous curves so non-integer frequencies don't produce non-closing scribbles — instead, they morph smoothly between clean closed shapes. The two axis chains are zipped into `Array<CurvePoint>` by `node.pack_curve_xy` (which folds the legacy `generator_math::PROJ_SCALE = 0.25` screen-fit constant into the output). `node.render_lines` carries the animation + dot rendering + beat-flash from the legacy `LineGeneratorHelper`.\n\nBit-perfect parity with the legacy generator at default params.",
   "presetMetadata": {
     "id": "Lissajous",
     "displayName": "Lissajous",
@@ -152,7 +152,7 @@
         "target": { "kind": "handleNode", "handle": "render", "param": "window" },
         "convert": { "type": "Float" } },
       { "id": "scale",       "label": "Scale",       "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "curve", "param": "scale" },
+        "target": { "kind": "handleNode", "handle": "pack", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mux_x", "param": "selector" },
@@ -165,58 +165,133 @@
   },
   "nodes": [
     { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+
     {
       "id": 1, "typeId": "node.lfo", "handle": "lfo_x",
       "params": {
-        "rate_mode":     { "type": "Enum",  "value": 1 },
-        "shape":         { "type": "Enum",  "value": 0 },
-        "angular_rate":  { "type": "Float", "value": 0.13 },
-        "min":           { "type": "Float", "value": 0.5 },
-        "max":           { "type": "Float", "value": 3.5 }
+        "rate_mode":    { "type": "Enum",  "value": 1 },
+        "shape":        { "type": "Enum",  "value": 0 },
+        "angular_rate": { "type": "Float", "value": 0.13 },
+        "min":          { "type": "Float", "value": 0.5 },
+        "max":          { "type": "Float", "value": 3.5 }
       }
     },
     {
       "id": 2, "typeId": "node.lfo", "handle": "lfo_y",
       "params": {
-        "rate_mode":     { "type": "Enum",  "value": 1 },
-        "shape":         { "type": "Enum",  "value": 0 },
-        "angular_rate":  { "type": "Float", "value": 0.09 },
-        "min":           { "type": "Float", "value": 1.0 },
-        "max":           { "type": "Float", "value": 5.0 }
+        "rate_mode":    { "type": "Enum",  "value": 1 },
+        "shape":        { "type": "Enum",  "value": 0 },
+        "angular_rate": { "type": "Float", "value": 0.09 },
+        "min":          { "type": "Float", "value": 1.0 },
+        "max":          { "type": "Float", "value": 5.0 }
       }
     },
     {
       "id": 3, "typeId": "node.lfo", "handle": "lfo_phase",
       "params": {
-        "rate_mode":     { "type": "Enum",  "value": 1 },
-        "shape":         { "type": "Enum",  "value": 2 },
-        "angular_rate":  { "type": "Float", "value": 0.07 },
-        "min":           { "type": "Float", "value": 0.0 },
-        "max":           { "type": "Float", "value": 6.28318530718 }
+        "rate_mode":    { "type": "Enum",  "value": 1 },
+        "shape":        { "type": "Enum",  "value": 2 },
+        "angular_rate": { "type": "Float", "value": 0.07 },
+        "min":          { "type": "Float", "value": 0.0 },
+        "max":          { "type": "Float", "value": 6.28318530718 }
       }
     },
+
     { "id": 4, "typeId": "node.frequency_ratio", "handle": "ratio" },
+
     {
       "id": 5, "typeId": "node.mux_scalar", "handle": "mux_x",
-      "params": {
-        "selector": { "type": "Float", "value": 0.0 }
-      }
+      "params": { "selector": { "type": "Float", "value": 0.0 } }
     },
     {
       "id": 6, "typeId": "node.mux_scalar", "handle": "mux_y",
-      "params": {
-        "selector": { "type": "Float", "value": 0.0 }
-      }
+      "params": { "selector": { "type": "Float", "value": 0.0 } }
     },
+
     {
-      "id": 7, "typeId": "node.generate_lissajous", "handle": "curve",
+      "id": 7, "typeId": "node.generate_range", "handle": "t",
       "params": {
-        "scale":        { "type": "Float", "value": 1.0 },
+        "start":        { "type": "Float", "value": 0.0 },
+        "end":          { "type": "Float", "value": 6.28318530718 },
         "max_capacity": { "type": "Int",   "value": 256 }
       }
     },
+
     {
-      "id": 8, "typeId": "node.render_lines", "handle": "render",
+      "id": 8, "typeId": "node.math", "handle": "a_lo",
+      "params": { "op": { "type": "Enum", "value": 10 } }
+    },
+    {
+      "id": 9, "typeId": "node.math", "handle": "a_hi",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 10, "typeId": "node.math", "handle": "a_lerp",
+      "params": { "op": { "type": "Enum", "value": 1 } }
+    },
+
+    {
+      "id": 11, "typeId": "node.array_math", "handle": "t_lo_x",
+      "params": { "op": { "type": "Enum", "value": 6 } }
+    },
+    {
+      "id": 12, "typeId": "node.array_math", "handle": "x_lo",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 13, "typeId": "node.array_math", "handle": "t_hi_x",
+      "params": { "op": { "type": "Enum", "value": 6 } }
+    },
+    {
+      "id": 14, "typeId": "node.array_math", "handle": "x_hi",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 15, "typeId": "node.array_math", "handle": "x_mix",
+      "params": { "op": { "type": "Enum", "value": 13 } }
+    },
+
+    {
+      "id": 16, "typeId": "node.math", "handle": "b_lo",
+      "params": { "op": { "type": "Enum", "value": 10 } }
+    },
+    {
+      "id": 17, "typeId": "node.math", "handle": "b_hi",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 18, "typeId": "node.math", "handle": "b_lerp",
+      "params": { "op": { "type": "Enum", "value": 1 } }
+    },
+
+    {
+      "id": 19, "typeId": "node.array_math", "handle": "t_lo_y",
+      "params": { "op": { "type": "Enum", "value": 6 } }
+    },
+    {
+      "id": 20, "typeId": "node.array_math", "handle": "y_lo",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 21, "typeId": "node.array_math", "handle": "t_hi_y",
+      "params": { "op": { "type": "Enum", "value": 6 } }
+    },
+    {
+      "id": 22, "typeId": "node.array_math", "handle": "y_hi",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 23, "typeId": "node.array_math", "handle": "y_mix",
+      "params": { "op": { "type": "Enum", "value": 13 } }
+    },
+
+    {
+      "id": 24, "typeId": "node.pack_curve_xy", "handle": "pack",
+      "params": { "scale": { "type": "Float", "value": 1.0 } }
+    },
+
+    {
+      "id": 25, "typeId": "node.render_lines", "handle": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.002 },
         "closed_loop":       { "type": "Bool",  "value": true  },
@@ -232,7 +307,8 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 9, "typeId": "system.final_output", "handle": "final_output" }
+
+    { "id": 26, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "index"   },
@@ -243,12 +319,47 @@
     { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "in_0" },
     { "fromNode": 4, "fromPort": "b",   "toNode": 6, "toPort": "in_1" },
 
-    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "freq_x" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "freq_y" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 7, "toPort": "phase"  },
+    { "fromNode": 5, "fromPort": "out", "toNode": 8,  "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 9,  "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "b" },
 
-    { "fromNode": 7, "fromPort": "points", "toNode": 8, "toPort": "points" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 11, "toPort": "a"      },
+    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "scale"  },
+    { "fromNode": 3, "fromPort": "out", "toNode": 11, "toPort": "offset" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "a" },
 
-    { "fromNode": 8, "fromPort": "color", "toNode": 9, "toPort": "in" }
+    { "fromNode": 7, "fromPort": "out", "toNode": 13, "toPort": "a"      },
+    { "fromNode": 9, "fromPort": "out", "toNode": 13, "toPort": "scale"  },
+    { "fromNode": 3, "fromPort": "out", "toNode": 13, "toPort": "offset" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "a" },
+
+    { "fromNode": 12, "fromPort": "out", "toNode": 15, "toPort": "a"     },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b"     },
+    { "fromNode": 10, "fromPort": "out", "toNode": 15, "toPort": "scale" },
+
+    { "fromNode": 6, "fromPort": "out", "toNode": 16, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 17, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 18, "toPort": "a" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 18, "toPort": "b" },
+
+    { "fromNode": 7,  "fromPort": "out", "toNode": 19, "toPort": "a"     },
+    { "fromNode": 16, "fromPort": "out", "toNode": 19, "toPort": "scale" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "a" },
+
+    { "fromNode": 7,  "fromPort": "out", "toNode": 21, "toPort": "a"     },
+    { "fromNode": 17, "fromPort": "out", "toNode": 21, "toPort": "scale" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 22, "toPort": "a" },
+
+    { "fromNode": 20, "fromPort": "out", "toNode": 23, "toPort": "a"     },
+    { "fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "b"     },
+    { "fromNode": 18, "fromPort": "out", "toNode": 23, "toPort": "scale" },
+
+    { "fromNode": 15, "fromPort": "out", "toNode": 24, "toPort": "x" },
+    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "y" },
+
+    { "fromNode": 24, "fromPort": "out",   "toNode": 25, "toPort": "points" },
+
+    { "fromNode": 25, "fromPort": "color", "toNode": 26, "toPort": "in" }
   ]
 }

@@ -20,7 +20,8 @@ use crate::node_graph::primitive::Primitive;
 
 /// Op enum labels — order MUST match the `switch u.op` block in
 /// `shaders/array_math.wgsl`. Adding a variant means adding the
-/// shader case in the same commit.
+/// shader case in the same commit. **Indices are public API** — saved
+/// in JSON presets — never reorder; append new ops at the end.
 pub const ARRAY_MATH_OPS: &[&str] = &[
     "Add",          // 0  binary: out = a + b
     "Subtract",     // 1  binary: out = a - b
@@ -33,11 +34,25 @@ pub const ARRAY_MATH_OPS: &[&str] = &[
     "MirrorRamp",   // 8  unary:  out = smoothstep(0, 1, 1 - |2a - 1|)
     "Clamp01",      // 9  unary:  out = clamp(a, 0, 1)
     "Abs",          // 10 unary:  out = |a|
+    "Sin",          // 11 unary:  out = sin(a)
+    "Cos",          // 12 unary:  out = cos(a)
+    "Mix",          // 13 binary: out = a + (b - a) * scale  (lerp; `scale` is t)
 ];
 
-/// First op index that does NOT read `b`. Binary ops are
-/// `[0, FIRST_UNARY_OP)`; unary ops are `[FIRST_UNARY_OP, …)`.
+/// First op index that does NOT read `b` in the original
+/// 0..=10 contiguous block. Ops appended past index 10 may be binary
+/// or unary on a per-op basis — see [`op_is_binary`].
 const FIRST_UNARY_OP: u32 = 6;
+
+/// Whether op `code` reads the `b` input (and therefore needs the
+/// dispatch truncated to `min(a, b, out)` capacity). Replaces the
+/// single-threshold partition once non-contiguous binary ops (Mix)
+/// were appended after the unary block. WGSL mirror lives in
+/// `shaders/array_math.wgsl`'s analogous `op_is_binary` helper —
+/// keep the two in sync.
+fn op_is_binary(code: u32) -> bool {
+    code < FIRST_UNARY_OP || code == 13
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -55,7 +70,7 @@ struct Uniforms {
 crate::primitive! {
     name: ArrayMath,
     type_id: "node.array_math",
-    purpose: "Element-wise math over Array<f32>. One bundled primitive (op enum) covering the common shaping vocabulary: binary (Add/Subtract/Multiply/Divide/Min/Max read `a` + `b`); unary (ScaleOffset, ShapePowClip, MirrorRamp, Clamp01, Abs — read `a` only, ignore `b`). Op-specific scalars (scale / offset / exp / bias) are port-shadow-param so they can be modulated by control wires. Divide-by-near-zero clamps to 0 to keep NaN/Inf out of downstream shaders.",
+    purpose: "Element-wise math over Array<f32>. One bundled primitive (op enum) covering the common shaping vocabulary: binary (Add/Subtract/Multiply/Divide/Min/Max/Mix read `a` + `b`); unary (ScaleOffset, ShapePowClip, MirrorRamp, Clamp01, Abs, Sin, Cos — read `a` only, ignore `b`). Op-specific scalars (scale / offset / exp / bias) are port-shadow-param so they can be modulated by control wires. Divide-by-near-zero clamps to 0 to keep NaN/Inf out of downstream shaders.",
     inputs: {
         a: Array(f32) required,
         b: Array(f32) optional,
@@ -109,7 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Each op uses a subset of (scale, offset, exp, bias) — only the relevant scalars are read per op. ScaleOffset uses scale + offset; ShapePowClip uses bias + exp + scale (captures the DigitalPlants stem displacement pow(max(x, 0), 2) * 0.3 shape with bias=0, exp=2, scale=0.3); MirrorRamp / Clamp01 / Abs read none. Binary ops require both `a` and `b` wired; unary ops only require `a` (the `b` slot is ignored — internally the primitive falls back to binding `a` to the `b` slot to satisfy Metal's all-bindings-present rule).",
+    composition_notes: "Each op uses a subset of (scale, offset, exp, bias) — only the relevant scalars are read per op. ScaleOffset uses scale + offset; ShapePowClip uses bias + exp + scale (captures the DigitalPlants stem displacement pow(max(x, 0), 2) * 0.3 shape with bias=0, exp=2, scale=0.3); Mix uses scale as the lerp factor t (out = a + (b - a) * scale; the port-shadowed `scale` input drives the morph from a wire); Sin / Cos / MirrorRamp / Clamp01 / Abs read none. Binary ops (Add/Sub/Mul/Div/Min/Max/Mix) require both `a` and `b` wired; unary ops only require `a` (the `b` slot is ignored — internally the primitive falls back to binding `a` to the `b` slot to satisfy Metal's all-bindings-present rule).",
     examples: [],
     picker: { label: "Array Math", category: Atom },
 }
@@ -159,7 +174,7 @@ impl Primitive for ArrayMath {
         let a_capacity = (a_buf.size / f32_size) as u32;
         let b_capacity = (b_buf.size / f32_size) as u32;
         let out_capacity = (out_buf.size / f32_size) as u32;
-        let count = if op < FIRST_UNARY_OP {
+        let count = if op_is_binary(op) {
             // Binary: dispatch across the smaller of a, b, out so the
             // shader never reads past either input.
             a_capacity.min(b_capacity).min(out_capacity)
@@ -267,8 +282,31 @@ mod tests {
         assert_eq!(ARRAY_MATH_OPS[8], "MirrorRamp");
         assert_eq!(ARRAY_MATH_OPS[9], "Clamp01");
         assert_eq!(ARRAY_MATH_OPS[10], "Abs");
-        assert_eq!(FIRST_UNARY_OP, 6, "binary ops must precede unary ops");
-        assert_eq!(ARRAY_MATH_OPS.len(), 11);
+        assert_eq!(ARRAY_MATH_OPS[11], "Sin");
+        assert_eq!(ARRAY_MATH_OPS[12], "Cos");
+        assert_eq!(ARRAY_MATH_OPS[13], "Mix");
+        assert_eq!(
+            FIRST_UNARY_OP, 6,
+            "the original 0..=10 contiguous block keeps the binary/unary threshold",
+        );
+        assert_eq!(ARRAY_MATH_OPS.len(), 14);
+    }
+
+    /// Per-op binary classification. The original `op < FIRST_UNARY_OP`
+    /// threshold only worked while binary ops formed a contiguous prefix
+    /// — Mix (appended at index 13 to preserve JSON op-index API) is
+    /// binary but lives past the threshold, so the classifier must be
+    /// per-op now. Guards against accidentally letting Mix dispatch
+    /// without truncating to `min(a, b, out)`.
+    #[test]
+    fn op_is_binary_classifies_each_op_correctly() {
+        for code in 0..6 {
+            assert!(op_is_binary(code), "{} (idx {code}) is binary", ARRAY_MATH_OPS[code as usize]);
+        }
+        for code in 6..=12 {
+            assert!(!op_is_binary(code), "{} (idx {code}) is unary", ARRAY_MATH_OPS[code as usize]);
+        }
+        assert!(op_is_binary(13), "Mix (idx 13) is binary");
     }
 
     #[test]

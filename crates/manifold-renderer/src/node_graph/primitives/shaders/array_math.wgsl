@@ -17,6 +17,9 @@
 //   8 MirrorRamp   out = smoothstep(0, 1, 1 - abs(a * 2 - 1))
 //   9 Clamp01      out = clamp(a, 0.0, 1.0)
 //  10 Abs          out = abs(a)
+//  11 Sin          out = sin(a)
+//  12 Cos          out = cos(a)
+//  13 Mix          out = a + (b - a) * scale     (lerp; scale = t)
 
 struct Uniforms {
     count:   u32,
@@ -64,6 +67,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         case 9u: { result = clamp(av, 0.0, 1.0); }
         case 10u: { result = abs(av); }
+        case 11u: { result = sin(av); }
+        case 12u: { result = cos(av); }
+        case 13u: { result = av + (bv - av) * u.scale; }
         default: { result = av; }
     }
     out[idx] = result;

@@ -4,8 +4,8 @@
 // shader evaluates a capsule SDF with fwidth() AA.
 //
 // Input positions are in pre-aspect curve space centred at the
-// origin (the natural output of `node.generate_lissajous` and the
-// other curve generators); this shader applies the aspect
+// origin (the natural output of `node.pack_curve_xy` and the
+// other curve-emitting primitives); this shader applies the aspect
 // correction + centre offset before line-thickness math. That
 // matches the legacy `LineGeneratorHelper::prepare_instances` path
 // where the generator's projected_x/y values are post-PROJ_SCALE

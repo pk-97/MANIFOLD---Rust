@@ -31,6 +31,7 @@ mod cook_torrance_specular;
 mod equirect_envmap_sample;
 mod mirror_axis;
 mod pack_channels;
+mod pack_curve_xy;
 mod render_3d_mesh_pbr_ibl;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
@@ -73,7 +74,7 @@ mod generate_cube_mesh;
 mod generate_duocylinder_vertices;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
-mod generate_lissajous;
+mod generate_range;
 mod wireframe_shape;
 mod generate_tesseract_vertices;
 mod glitch;
@@ -201,6 +202,7 @@ pub use cook_torrance_specular::CookTorranceSpecular;
 pub use equirect_envmap_sample::EquirectEnvmapSample;
 pub use mirror_axis::MirrorAxis;
 pub use pack_channels::PackChannels;
+pub use pack_curve_xy::PackCurveXy;
 pub use render_3d_mesh_pbr_ibl::Render3DMeshPbrIbl;
 pub use color::{
     BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
@@ -252,7 +254,7 @@ pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
-pub use generate_lissajous::GenerateLissajous;
+pub use generate_range::GenerateRange;
 pub use polygon_shape::{
     POLYGON_CYCLE_SIDES, POLYGON_MAX_MESH_VERTS, POLYGON_MAX_SIDES, POLYGON_MIN_SIDES,
     PolygonShape,

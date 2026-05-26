@@ -74,7 +74,7 @@ impl KnownItem for InstanceTransform {
 
 /// A 2D point in **origin-centered pre-aspect curve space** — the
 /// canonical wire type between every curve / wireframe producer
-/// (`generate_lissajous`, `project_3d`, `project_4d`,
+/// (`pack_curve_xy`, `project_3d`, `project_4d`,
 /// `polygon_shape`, `concentric_outlines`) and `node.render_lines`.
 /// 8 bytes.
 ///
