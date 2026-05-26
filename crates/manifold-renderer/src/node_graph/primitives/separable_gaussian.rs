@@ -586,7 +586,7 @@ mod gpu_tests {
         while j <= radius_int {
             let fj = j as f32;
             let w_a = (-(fj * fj) * inv_two_sigma_sq).exp();
-            if j + 1 <= radius_int {
+            if j < radius_int {
                 let fj1 = (j + 1) as f32;
                 let w_b = (-(fj1 * fj1) * inv_two_sigma_sq).exp();
                 let w_ab = w_a + w_b;

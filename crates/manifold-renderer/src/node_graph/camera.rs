@@ -229,12 +229,12 @@ mod tests {
             4.0 * 0.3_f32.sin(),
             4.0 * 0.7_f32.sin() * 0.3_f32.cos(),
         ];
-        for axis in 0..3 {
+        for (axis, &expected) in expected_pos.iter().enumerate() {
             assert!(
-                (cam.pos[axis] - expected_pos[axis]).abs() < 1e-6,
+                (cam.pos[axis] - expected).abs() < 1e-6,
                 "axis {axis}: got {} expected {}",
                 cam.pos[axis],
-                expected_pos[axis],
+                expected,
             );
         }
     }

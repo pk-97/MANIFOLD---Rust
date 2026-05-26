@@ -249,9 +249,9 @@ mod gpu_tests {
     fn above_max_clamps_to_max() {
         let src = [1.5_f32, 2.0, 3.0, 1.0];
         let out = run_clamp_at(src, 0.0, 1.0);
-        for c in 0..3 {
-            assert!(out[c] <= 1.01, "ch {c} above max: {}", out[c]);
-            assert!(out[c] >= 0.99, "ch {c} clamped to max: {}", out[c]);
+        for (c, &v) in out.iter().take(3).enumerate() {
+            assert!(v <= 1.01, "ch {c} above max: {v}");
+            assert!(v >= 0.99, "ch {c} clamped to max: {v}");
         }
     }
 

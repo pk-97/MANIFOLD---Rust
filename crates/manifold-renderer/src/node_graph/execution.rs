@@ -1134,6 +1134,7 @@ mod tests {
     /// → FinalOutput`, mark mux as selecting `selected`, and return
     /// the graph plus the shared selector handle (for tests that
     /// flip the selection between frames) and the evaluation log.
+    #[allow(clippy::type_complexity)]
     fn build_three_branch_mux_graph(
         selected: Option<&'static str>,
     ) -> (

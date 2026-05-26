@@ -348,7 +348,7 @@ mod tests {
         let r = m.tick(1, 1.0, dt, 1, duration);
         assert!(r.0 == 1.0);
         let (px, py) = (r.2, r.3);
-        assert!(px >= 0.1 && px <= 0.9 && py >= 0.1 && py <= 0.9);
+        assert!((0.1..=0.9).contains(&px) && (0.1..=0.9).contains(&py));
 
         // Burst plays through frames 1..29 (elapsed climbs from 1/60
         // to 29/60 ≈ 0.483). On the 30th frame elapsed hits 0.5 and

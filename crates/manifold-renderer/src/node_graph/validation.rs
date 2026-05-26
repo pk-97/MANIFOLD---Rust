@@ -706,6 +706,7 @@ mod tests {
         // returning a specific error), or (b) connect would have
         // rejected if we tried — `validate_wire_endpoints` called
         // directly returns the same error.
+        #[allow(clippy::type_complexity)]
         let cases: Vec<(&str, fn() -> (Graph, (NodeInstanceId, &'static str), (NodeInstanceId, &'static str), &'static str))> = vec![
             ("type mismatch", || {
                 let mut g = Graph::new();
