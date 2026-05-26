@@ -8,6 +8,7 @@
 
 mod abs_texture;
 mod affine_transform;
+mod array_diffuse_particles;
 mod array_feedback;
 mod array_math;
 mod array_replicate_polyline_rings;
@@ -90,7 +91,6 @@ mod instance_position_jitter;
 mod instance_rotation_jitter;
 mod inject_burst;
 mod integrate_particles;
-mod integrate_particles_attractor;
 mod invert;
 mod kaleido_fold;
 mod lambert_directional;
@@ -180,6 +180,7 @@ mod wireframe_depth;
 
 pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
+pub use array_diffuse_particles::ArrayDiffuseParticles;
 pub use array_feedback::ArrayFeedback;
 pub use array_math::{ARRAY_MATH_OPS, ArrayMath};
 pub use array_replicate_polyline_rings::{
@@ -275,7 +276,6 @@ pub use instance_position_jitter::InstancePositionJitter;
 pub use instance_rotation_jitter::InstanceRotationJitter;
 pub use inject_burst::{INJECT_BURST_TYPE_ID, InjectBurst};
 pub use integrate_particles::IntegrateParticles;
-pub use integrate_particles_attractor::{ATTRACTOR_TYPES, IntegrateParticlesAttractor};
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
 pub use lambert_directional::LambertDirectional;

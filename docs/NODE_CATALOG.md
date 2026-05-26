@@ -252,7 +252,7 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 | Seed Particles | `node.seed_particles` | Wang-hash uniform `Array<Particle>` seed (EveryFrame or OnceOnReset) |
 | Seed Particles from Texture | `node.seed_particles_from_texture` | Seed particles weighted by an input texture's brightness |
 | Integrate Particles | `node.integrate_particles` | Generic particle integrator |
-| Integrate Attractor | `node.integrate_particles_attractor` | RK2 strange-attractor ODE (Lorenz/Rössler/Aizawa/Thomas/Halvorsen) |
+| Diffuse Particles | `node.array_diffuse_particles` | Hash-based random kick on `Particle.velocity` (generic Brownian noise) |
 | Scatter Particles | `node.scatter_particles` | Atomic-add splat into 2D u32 accumulator (Wrap / Discard boundary) |
 | Scatter Particles 3D | `node.scatter_particles_3d` | Same shape for `Texture3D` accumulator |
 | Resolve Accumulator | `node.resolve_accumulator` | u32 grid → float Texture2D |
@@ -383,7 +383,7 @@ All shipping generators are JSON-defined sub-graphs at [`assets/generator-preset
 |---|---|
 | BasicShapes | `shape_2d` (single curated family primitive) |
 | BlackHole | Kerr black hole with relativistic geodesic lensing: 4× `wgsl_compute` (deflection bake → 3 tex out; Schwarzschild orbit integrator with aliased `Array<Particle>`; polar+hemisphere particle splat with dual atomic accums; cinematic compositor reading deflection + polar density + sky) + `seed_particles` (active_count=0 → simulate self-seeds) + `resolve_accumulator` ×2 + `gaussian_blur` ×10 (deflection H/V ×3 + polar density H/V ×2) + `affine_scalar` ×2 (deg→rad) + `math` (Reciprocal for scale→uv_scale). First consumer of the naga-introspected dynamic escape hatch. |
-| ComputeStrangeAttractor | particle sim: `seed_particles → integrate_particles_attractor → scatter_particles → resolve_accumulator → reinhard_tone_map` + brightness compensation |
+| ComputeStrangeAttractor | particle sim, atomized onto `wgsl_compute`: `seed_particles(OnceOnReset) → wgsl_compute(attractor_simulate — switch on attractor_type for Lorenz/Rössler/Aizawa/Thomas/Halvorsen, RK2 substeps + first-frame init/warmup + NaN guard, integrate + project bundled in one dispatch) → array_diffuse_particles → scatter_particles(Discard) → resolve_accumulator → reinhard_tone_map`. Adding a new attractor is a JSON edit (append a `case` to the switch + entries to the per-attractor center/scale/dt tables). clip_trigger via `clip_trigger_cycle` + `mux_scalar` (manual vs trigger-driven). Brightness compensated by canvas_area_scale. |
 | ConcentricTunnel | mux'd polygon + ring stacker, fully atomized: `mux_scalar` ×many (N selection + trigger-mode gating + cycle [3,4,5,6,8,12]) → `generate_range(end_inclusive=false, active_count=N)` → `array_math(Cos/Sin + ScaleOffset)` ×4 → `pack_curve_xy(scale=4.0 cancels PROJ_SCALE)` → outline; `consecutive_edges(closed=true, count=N)` → edges; per-ring scales via `generate_range(0..15) → math(Floor/Sub/Mul)` + `array_math(ScaleOffset)` → `array_replicate_polyline_rings` → `render_lines`. Polygon math is graph-visible; the shipped atoms are reusable for any closed parametric curve. |
 | DigitalPlants | instanced 3D mesh with procedural layout: `grid_uv_field` → `simplex_per_instance` + `fbm_per_instance` → `cylinder_wrap_field` / `torus_wrap_field` → instance jitters → `neighbor_smooth` → `digital_plants_render` |
 | Duocylinder | 4D wireframe: `generate_duocylinder_vertices` → `rotate_4d` → `project_4d` → `render_lines` |

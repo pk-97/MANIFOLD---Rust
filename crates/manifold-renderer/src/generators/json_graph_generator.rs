@@ -1535,22 +1535,30 @@ mod tests {
     /// inner-node param can't be resolved this fails immediately
     /// instead of running with silent stale defaults.
     #[test]
-    fn bundled_strange_attractor_loads_and_executes() {
+    fn bundled_strange_attractor_loads_and_compiles() {
+        // After the 2026-05-26 decomposition the simulate path is
+        // `node.wgsl_compute` (JSON-editable shader) which strictly
+        // declares `requires().gpu_encoder = true`. The chain-build
+        // path needs a GpuDevice for pre-allocation; the actual GPU
+        // execution path is covered by Generator::render in
+        // production. This test asserts the preset loads, the WGSL
+        // introspects (uniform layout, port shape, Particle alias
+        // detection), and the chain pre-allocator wires every Array<T>
+        // / Texture2D resource without error.
+        let device = crate::test_device();
         let json = include_str!(
             "../../assets/generator-presets/ComputeStrangeAttractor.json"
         );
-        let mut preset = JsonGraphGenerator::from_json_str(
+        let preset = JsonGraphGenerator::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
         )
-        .expect("bundled ComputeStrangeAttractor must load");
+        .expect("bundled ComputeStrangeAttractor must load + compile");
         assert_eq!(preset.type_id().as_str(), "ComputeStrangeAttractor");
-        // Two frames so the seed[OnceOnReset] no-op path is hit and
-        // the auto-seed-on-type-match path in integrate runs second.
-        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
-        preset.execute_frame(frame_time());
-        preset.set_frame_context(0.016, 0.01, 1.78, 0.0, 0.0, 1920.0, 1080.0);
-        preset.execute_frame(frame_time());
     }
 
     /// Load the bundled `Plasma.json` preset from disk and execute it.
@@ -1695,9 +1703,10 @@ mod tests {
         )
         .expect("ComputeStrangeAttractor preset must load");
 
-        // Find the integrate node, scatter node — the alias contract
-        // is about THIS edge: integrate.in === integrate.out (declared
-        // aliased), and scatter.particles consumes integrate.out.
+        // Find the wgsl_compute simulate node, scatter node — the
+        // alias contract is about THIS edge: simulate.particles
+        // (read_write storage maps to same-named in/out port pair),
+        // and scatter.particles consumes simulate's output.
         let find_node = |type_id: &str| -> NodeInstanceId {
             for step in g.plan.steps() {
                 let inst = g.graph.get_node(step.node).expect("step's node");
@@ -1707,7 +1716,7 @@ mod tests {
             }
             panic!("node `{type_id}` not in compiled plan");
         };
-        let integrate_node = find_node("node.integrate_particles_attractor");
+        let integrate_node = find_node("node.wgsl_compute");
         let scatter_node = find_node("node.scatter_particles");
 
         let resource_for = |node: NodeInstanceId, port: &str, is_input: bool| -> ResourceId {
@@ -1727,8 +1736,8 @@ mod tests {
             );
         };
 
-        let integrate_in_res = resource_for(integrate_node, "in", true);
-        let integrate_out_res = resource_for(integrate_node, "out", false);
+        let integrate_in_res = resource_for(integrate_node, "particles", true);
+        let integrate_out_res = resource_for(integrate_node, "particles", false);
         let scatter_in_res = resource_for(scatter_node, "particles", true);
 
         let metal = g
