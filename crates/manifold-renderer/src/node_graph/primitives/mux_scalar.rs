@@ -12,7 +12,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: MuxScalar,
     type_id: "node.mux_scalar",
-    purpose: "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Useful for trigger-driven parameter switching.",
+    purpose: "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Every input is port-shadows-param — wire dynamic sources into the ports, or set the inline `in_N` params for static option tables (curated frequency rates, side counts, gate constants). Useful for trigger-driven parameter switching.",
     inputs: {
         selector: ScalarF32 required,
         in_0: ScalarF32 optional,
@@ -36,8 +36,16 @@ crate::primitive! {
             range: Some((0.0, 7.0)),
             enum_values: &[],
         },
+        ParamDef { name: "in_0", label: "In 0", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_1", label: "In 1", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_2", label: "In 2", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_3", label: "In 3", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_4", label: "In 4", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_5", label: "In 5", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_6", label: "In 6", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: "in_7", label: "In 7", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
-    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Selector is port-shadows-param: inline param value drives the choice when no wire is connected. Unwired data inputs (in_N) default to 0.0. No GPU dispatch. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert; the unwired-selected-slot case is a graph-editor authoring concern (separate work).",
+    composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Both `selector` and every `in_N` data input is port-shadows-param: wire dynamic sources when needed, otherwise set the static fallback inline on the param. This lets a 5-option curated mux ship as ONE node with five inline params rather than six nodes (mux + five `node.value` constants feeding it); the future node UI surfaces the inline values on the node body. No GPU dispatch. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert.",
     examples: [],
     picker: { label: "Mux (scalar)", category: Atom },
 }
@@ -66,19 +74,15 @@ impl Primitive for MuxScalar {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let selector = match ctx.inputs.scalar("selector") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("selector") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 0.0,
-            },
-        };
+        let selector = ctx.scalar_or_param("selector", 0.0);
         let raw_idx = selector.round().clamp(0.0, 7.0) as usize;
-
-        let value = match ctx.inputs.scalar(MUX_SCALAR_INPUT_PORT_NAMES[raw_idx]) {
-            Some(ParamValue::Float(f)) => f,
-            _ => 0.0,
-        };
+        // Port-shadows-param on every data input: wired source wins,
+        // otherwise the inline `in_N` param value (defaults to 0.0)
+        // drives the selected slot. Collapses static option tables
+        // from "mux + N node.value constants + N wires" down to "mux
+        // with N inline params" — the same UX as a curated enum mux
+        // but without the param-list explosion of a sealed primitive.
+        let value = ctx.scalar_or_param(MUX_SCALAR_INPUT_PORT_NAMES[raw_idx], 0.0);
         ctx.outputs.set_scalar("out", ParamValue::Float(value));
     }
 }

@@ -26,7 +26,9 @@ use crate::node_graph::primitive::Primitive;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RangeUniforms {
     count: u32,
-    _pad0: u32,
+    // 1 = end-inclusive (denom = max(count - 1, 1)); 0 = end-exclusive
+    // (denom = count). Carries the param-side toggle into the shader.
+    end_inclusive: u32,
     start: f32,
     end: f32,
 }
@@ -34,10 +36,11 @@ struct RangeUniforms {
 crate::primitive! {
     name: GenerateRange,
     type_id: "node.generate_range",
-    purpose: "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. Output capacity is `max_capacity`.",
+    purpose: "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`.",
     inputs: {
         start: ScalarF32 optional,
         end: ScalarF32 optional,
+        active_count: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
@@ -67,8 +70,23 @@ crate::primitive! {
             range: Some((2.0, 4096.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "end_inclusive",
+            label: "End Inclusive",
+            ty: ParamType::Bool,
+            // Default true preserves the conventional [start, end] sampling
+            // for closed parametric curves (Lissajous and friends rely on
+            // `out[0]=start`, `out[count-1]=end` so vertex 0 and vertex
+            // count-1 land on the same point of the cycle). Set false for
+            // end-exclusive sampling that's the right shape for regular
+            // N-gons (linspace(0, 2π, N) end-exclusive → angles
+            // [0, 2π/N, 4π/N, …, (N-1)·2π/N], no duplicated wrap vertex).
+            default: ParamValue::Bool(true),
+            range: None,
+            enum_values: &[],
+        },
     ],
-    composition_notes: "The default end-inclusive linspace (`out[0]=start`, `out[count-1]=end`) is the conventional sampling for parametric curves where the start and end angles are meant to meet (e.g. `[0, 2π]` for a closed Lissajous — `points[0]` and `points[count-1]` both sample `sin(0)` and `sin(2π)`, the closed-loop wrap is correct). If you want exclusive-end sampling instead, wire `end - (end - start) / count` upstream or use a slightly larger `count` and ignore the last sample. `max_capacity` doubles as the count and the pre-allocated buffer size — the chain build reads it via the default `array_output_capacity` impl.",
+    composition_notes: "End-inclusive (default): `out[0]=start`, `out[count-1]=end` — conventional for closed parametric curves where the start and end of the cycle are meant to land on the same point (Lissajous). End-exclusive: `out[0]=start`, `out[count-1]=end - (end-start)/count` — the right shape for regular N-gons sampled around a circle, where vertex 0 and vertex count-1 must be distinct points. `active_count` (input-only port-shadow) sets the runtime sample count when wired; when unwired the count is `max_capacity` so old graphs (Lissajous) work bit-identically. `max_capacity` is the pre-allocated buffer size — the chain build reads it via the default `array_output_capacity` impl, so `active_count` cannot exceed it. Slots beyond `active_count` retain their previous-frame values, which is harmless when downstream topology (consecutive_edges / explicit EdgePair sentinels) refuses to reference them.",
     examples: [],
     picker: { label: "Generate Range", category: Atom },
 }
@@ -77,10 +95,22 @@ impl Primitive for GenerateRange {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let start = ctx.scalar_or_param("start", 0.0);
         let end = ctx.scalar_or_param("end", 1.0);
-        let count = match ctx.params.get("max_capacity") {
+        let max_count = match ctx.params.get("max_capacity") {
             Some(ParamValue::Float(f)) => f.round().max(2.0) as u32,
             _ => 256,
         };
+        // Port-shadow: when `active_count` is wired, it overrides
+        // `max_capacity` as the sample count. Rounded + clamped to
+        // [2, max_capacity]; default (unwired) is max_capacity so old
+        // graphs (Lissajous) dispatch identically.
+        let count = match ctx.inputs.scalar("active_count").and_then(|v| v.as_scalar()) {
+            Some(n) => (n.round().max(2.0) as u32).min(max_count),
+            None => max_count,
+        };
+        let end_inclusive = matches!(
+            ctx.params.get("end_inclusive"),
+            Some(ParamValue::Bool(true)) | None
+        );
 
         let Some(out_buf) = ctx.outputs.array("out") else {
             log::warn!(
@@ -106,7 +136,7 @@ impl Primitive for GenerateRange {
 
         let uniforms = RangeUniforms {
             count: active_count,
-            _pad0: 0,
+            end_inclusive: end_inclusive as u32,
             start,
             end,
         };
@@ -137,17 +167,17 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn declares_two_optional_scalar_inputs_and_one_f32_output() {
+    fn declares_three_optional_scalar_inputs_and_one_f32_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
         assert_eq!(GenerateRange::TYPE_ID, "node.generate_range");
-        assert_eq!(GenerateRange::INPUTS.len(), 2);
+        assert_eq!(GenerateRange::INPUTS.len(), 3);
         for port in GenerateRange::INPUTS {
             assert!(!port.required, "{} must be optional (port-shadow)", port.name);
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
         }
         let input_names: Vec<&str> = GenerateRange::INPUTS.iter().map(|p| p.name).collect();
-        assert_eq!(input_names, vec!["start", "end"]);
+        assert_eq!(input_names, vec!["start", "end", "active_count"]);
 
         let f32_layout = ArrayType::of_known::<f32>();
         assert_eq!(GenerateRange::OUTPUTS.len(), 1);
@@ -156,9 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn params_cover_start_end_and_max_capacity() {
+    fn params_cover_start_end_capacity_and_end_inclusive() {
         let names: Vec<&str> = GenerateRange::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["start", "end", "max_capacity"]);
+        assert_eq!(names, vec!["start", "end", "max_capacity", "end_inclusive"]);
     }
 
     #[test]

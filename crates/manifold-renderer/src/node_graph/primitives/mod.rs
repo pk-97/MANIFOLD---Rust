@@ -10,6 +10,7 @@ mod abs_texture;
 mod affine_transform;
 mod array_feedback;
 mod array_math;
+mod array_replicate_polyline_rings;
 mod array_unpack_vec2;
 mod auto_gain;
 mod auto_gain_apply;
@@ -39,7 +40,7 @@ mod color;
 mod color_grade;
 mod color_sample;
 mod compose;
-mod concentric_outlines;
+mod consecutive_edges;
 mod convolution_2d_9tap;
 mod cycle_table_row;
 mod cylinder_wrap_field;
@@ -114,7 +115,6 @@ mod optical_flow_estimate;
 mod peak;
 mod perlin_noise_2d;
 mod polar_field;
-mod polygon_shape;
 mod power_texture;
 mod project_3d;
 mod project_4d;
@@ -181,6 +181,9 @@ pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
 pub use array_feedback::ArrayFeedback;
 pub use array_math::{ARRAY_MATH_OPS, ArrayMath};
+pub use array_replicate_polyline_rings::{
+    ArrayReplicatePolylineRings, REPLICATE_MAX_RINGS,
+};
 pub use array_unpack_vec2::ArrayUnpackVec2;
 pub use auto_gain::{AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID, AutoGain};
 pub use auto_gain_apply::AutoGainApply;
@@ -210,7 +213,7 @@ pub use color::{
 pub use color_grade::ColorGrade;
 pub use color_sample::ColorSample;
 pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
-pub use concentric_outlines::{CONCENTRIC_MAX_RING_COUNT, ConcentricOutlines};
+pub use consecutive_edges::{CONSECUTIVE_EDGES_MAX_CAPACITY, ConsecutiveEdges};
 pub use convolution_2d_9tap::Convolution2D9Tap;
 pub use cycle_table_row::CycleTableRow;
 pub use cylinder_wrap_field::CylinderWrapField;
@@ -255,10 +258,6 @@ pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
 pub use generate_range::GenerateRange;
-pub use polygon_shape::{
-    POLYGON_CYCLE_SIDES, POLYGON_MAX_MESH_VERTS, POLYGON_MAX_SIDES, POLYGON_MIN_SIDES,
-    PolygonShape,
-};
 pub use wireframe_shape::{
     WIREFRAME_MAX_EDGES, WIREFRAME_MAX_VERTS, WIREFRAME_SHAPE_COUNT, WIREFRAME_SHAPES,
     WireframeShape,

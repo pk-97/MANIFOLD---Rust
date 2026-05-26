@@ -222,9 +222,7 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 | Generate Tesseract Vertices | `node.generate_tesseract_vertices` | 16 4D corners + 32 edges for 4D wireframe |
 | Generate Duocylinder Vertices | `node.generate_duocylinder_vertices` | 4D torus surface grid + uv-neighbor edges |
 | Generate Instance Transforms | `node.generate_instance_transforms` | Procedural `Array<InstanceTransform>` (grid/ring/spiral/random) |
-| Polygon Shape | `node.polygon_shape` | Regular N-gon — outline curve + edges + fan-triangulated mesh |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Curated instanced-cube layout for NestedCubes preset |
-| Concentric Outlines | `node.concentric_outlines` | Stack scaled copies of a polygon outline into one ring-stack |
 | Displace Mesh | `node.displace_mesh` | Perturb mesh Y from a heightmap texture, per-vertex UV sample |
 | Triangulate Grid | `node.triangulate_grid` | NxM positions → triangle-list with finite-difference normals |
 | Rotate 3D / 4D | `node.rotate_3d`, `node.rotate_4d` | Euler XYZ; stereo XY/ZW/XW for 4D |
@@ -241,8 +239,10 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 
 | Display Name | Type ID | Purpose |
 |---|---|---|
-| Generate Range | `node.generate_range` | Pattern-CHOP linspace: `Array<f32>` of N samples over `[start, end]` |
+| Generate Range | `node.generate_range` | Pattern-CHOP linspace: `Array<f32>` of N samples over `[start, end]`. `end_inclusive` toggles between closed (Lissajous) and exclusive (regular N-gons) sampling; `active_count` port-shadows the runtime sample count for variable-N curves |
 | Pack Curve XY | `node.pack_curve_xy` | Zip two `Array<f32>` (x, y) into `Array<CurvePoint>`; folds the `PROJ_SCALE = 0.25` screen-fit constant. Curve-pipeline counterpart to `array_unpack_vec2` |
+| Consecutive Edges | `node.consecutive_edges` | Synthesise polyline edge topology `[(0,1), (1,2), …]` from a vertex count; optional closing `(N-1, 0)` edge. Inactive tail is `EdgePair::SENTINEL` for variable-N polygons |
+| Replicate Polyline Rings | `node.array_replicate_polyline_rings` | Stack K transformed copies of a polyline (outline + edges) — per-ring uniform scale on points, per-ring index shift on edges (sentinel-preserving). The concentric / stacked-curve atom |
 
 ### 3.16 Particle / instance simulation
 
@@ -383,7 +383,7 @@ All shipping generators are JSON-defined sub-graphs at [`assets/generator-preset
 | BasicShapes | `shape_2d` (single curated family primitive) |
 | BlackHole | Kerr black hole with relativistic geodesic lensing: 4× `wgsl_compute` (deflection bake → 3 tex out; Schwarzschild orbit integrator with aliased `Array<Particle>`; polar+hemisphere particle splat with dual atomic accums; cinematic compositor reading deflection + polar density + sky) + `seed_particles` (active_count=0 → simulate self-seeds) + `resolve_accumulator` ×2 + `gaussian_blur` ×10 (deflection H/V ×3 + polar density H/V ×2) + `affine_scalar` ×2 (deg→rad) + `math` (Reciprocal for scale→uv_scale). First consumer of the naga-introspected dynamic escape hatch. |
 | ComputeStrangeAttractor | particle sim: `seed_particles → integrate_particles_attractor → scatter_particles → resolve_accumulator → reinhard_tone_map` + brightness compensation |
-| ConcentricTunnel | mux'd polygon shape + ring stacker: `mux_scalar` ×many → `polygon_shape` → `concentric_outlines` → `render_lines` |
+| ConcentricTunnel | mux'd polygon + ring stacker, fully atomized: `mux_scalar` ×many (N selection + trigger-mode gating + cycle [3,4,5,6,8,12]) → `generate_range(end_inclusive=false, active_count=N)` → `array_math(Cos/Sin + ScaleOffset)` ×4 → `pack_curve_xy(scale=4.0 cancels PROJ_SCALE)` → outline; `consecutive_edges(closed=true, count=N)` → edges; per-ring scales via `generate_range(0..15) → math(Floor/Sub/Mul)` + `array_math(ScaleOffset)` → `array_replicate_polyline_rings` → `render_lines`. Polygon math is graph-visible; the shipped atoms are reusable for any closed parametric curve. |
 | DigitalPlants | instanced 3D mesh with procedural layout: `grid_uv_field` → `simplex_per_instance` + `fbm_per_instance` → `cylinder_wrap_field` / `torus_wrap_field` → instance jitters → `neighbor_smooth` → `digital_plants_render` |
 | Duocylinder | 4D wireframe: `generate_duocylinder_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
 | FluidSim2D | particle fluid sim: `fluid_seed` → `fluid_simulate` → `scatter_particles` → `resolve_accumulator` → `feedback` → `downsample` → `gaussian_blur` ×4 → `fluid_gradient_rotate` → `reinhard_tone_map` |

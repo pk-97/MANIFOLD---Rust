@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ConcentricTunnel",
-  "description": "Concentric polygon rings expanding outward from the centre — decomposed from the legacy `ConcentricTunnelGenerator` Rust struct into the curated primitive library.\n\n`node.polygon_shape` produces one polygon outline (Circle = 64-gon, Triangle, Square, Pentagon, or Hexagon — the legacy Star variant is removed); `node.concentric_outlines` stacks K=16 scaled copies driven by an `expansion` scalar so the stack drifts outward over time and new rings emerge from the centre at radius 0; `node.render_lines` draws the stack with the legacy line + dot semantics.\n\nThe legacy three-state `clip_trigger_mode` is restored as the outer-card `trigger_mode` param. With `clip_trigger` on:\n- **Shape**: each retrigger cycles the polygon through [3, 4, 5, 6, 8, 12]; no new ring spawn.\n- **Spawn**: each retrigger spawns a new ring from the centre; shape stays at the user's `shape` selection.\n- **Both**: both.\n\nShape cycling is done entirely in the graph: `node.clip_trigger_index` (modulus 6) advances on each retrigger; `mux_cycle_sides` maps that index through the [3, 4, 5, 6, 8, 12] table; `mux_final_n_sides` switches between the user-selected `mux_n_sides.out` and the cycled value based on `clip_trigger × mode_shape_enable`. The same `clip_trigger × mode_*_enable` gating pattern feeds `spawn_gate.b` for ring-spawn. `polygon_shape.clip_trigger` is left off — its internal cycle is unused because the mode-gated external cycle replaces it (and only one ClipTriggerCycle is in play, inside `clip_trigger_index`).\n\nMux inputs are wired through explicit `node.value` constants so the graph editor shows every input that drives the mux selection — the inline-param shortcut on mux_scalar was reverted in favour of visual clarity (matches the Lissajous precedent). Legacy outer-card `scale` is renamed to `ring_spacing` with a different scale; old projects will need to retune.",
+  "description": "Concentric polygon rings expanding outward from the centre — fully decomposed onto the curated atom library. The polyline-construction pattern is now visible as graph nodes (TouchDesigner Pattern → Math → Function → Merge shape) rather than sealed inside `node.polygon_shape` and `node.concentric_outlines` (both deleted in this pass).\n\nPer-frame outline construction:\n  mux_final_n_sides → generate_range(0, 2π, active_count=N, end_inclusive=false) → cos / sin via `array_math` → pack_curve_xy → outline[64]\n  mux_final_n_sides → consecutive_edges(closed=true) → edges[64]\n\nThe edge topology uses `EdgePair::SENTINEL` for the inactive tail (slots N..64), so a triangle drawn from a 64-slot buffer doesn't smear lines through 61 padding vertices. `pack_curve_xy.scale = 4.0` cancels the atom's internal `PROJ_SCALE = 0.25` Lissajous-screen-fit factor so the polygon's final radius matches `size = 1.0` directly (legacy parity).\n\nPer-frame ring stack:\n  i_array = generate_range(0, K-1, K=16, end_inclusive=true) → [0, 1, …, 15]\n  frac_exp = expansion − floor(expansion)\n  frac_offset = frac_exp × ring_spacing\n  scales = i_array × ring_spacing + frac_offset → [(frac_exp + i) × ring_spacing]\n  array_replicate_polyline_rings(outline, edges, scales) → outline[1024], edges[1024]\n  render_lines\n\nThe trigger-mode scaffolding (Shape / Spawn / Both via `clip_trigger_index` + `mux_cycle_sides` + `mux_final_n_sides` + `mode_*_enable` + `shape_active` / `spawn_active`) is unchanged from the previous bundled version — it was already in the graph, and it stays. Mux option tables (n-side choices, beat-rate choices, cycle sequence, mode gates) live as inline `in_N` params on the mux nodes themselves, not as a constellation of `node.value` constants wired in — the future node UI surfaces those inline values on the node body. The replicator atom inherits the sentinel-preserving edge propagation contract from the deleted `concentric_outlines` bundle: inactive input edges stay inactive in every output ring.",
   "presetMetadata": {
     "id": "ConcentricTunnel",
     "displayName": "Concentric Tunnel",
@@ -96,7 +96,10 @@
         "target": { "kind": "handleNode", "handle": "mux_ring_freq", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
-        "target": { "kind": "handleNode", "handle": "stack", "param": "ring_spacing" },
+        "target": { "kind": "handleNode", "handle": "frac_offset", "param": "b" },
+        "convert": { "type": "Float" } },
+      { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
+        "target": { "kind": "handleNode", "handle": "scales", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "shape_active", "param": "a" },
@@ -116,30 +119,31 @@
   "nodes": [
     { "id": 0, "typeId": "system.generator_input", "handle": "input" },
 
-    { "id": 1,  "typeId": "node.value", "handle": "n_circle",   "params": { "value": { "type": "Float", "value": 64.0 } } },
-    { "id": 2,  "typeId": "node.value", "handle": "n_triangle", "params": { "value": { "type": "Float", "value": 3.0  } } },
-    { "id": 3,  "typeId": "node.value", "handle": "n_square",   "params": { "value": { "type": "Float", "value": 4.0  } } },
-    { "id": 4,  "typeId": "node.value", "handle": "n_pentagon", "params": { "value": { "type": "Float", "value": 5.0  } } },
-    { "id": 5,  "typeId": "node.value", "handle": "n_hexagon",  "params": { "value": { "type": "Float", "value": 6.0  } } },
-
     {
-      "id": 6, "typeId": "node.mux_scalar", "handle": "mux_n_sides",
-      "params": { "selector": { "type": "Float", "value": 0.0 } }
+      "id": 1, "typeId": "node.mux_scalar", "handle": "mux_n_sides",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 64.0 },
+        "in_1":     { "type": "Float", "value": 3.0  },
+        "in_2":     { "type": "Float", "value": 4.0  },
+        "in_3":     { "type": "Float", "value": 5.0  },
+        "in_4":     { "type": "Float", "value": 6.0  }
+      }
+    },
+    {
+      "id": 2, "typeId": "node.mux_scalar", "handle": "mux_ring_freq",
+      "params": {
+        "selector": { "type": "Float", "value": 2.0 },
+        "in_0":     { "type": "Float", "value": 4.0  },
+        "in_1":     { "type": "Float", "value": 2.0  },
+        "in_2":     { "type": "Float", "value": 1.0  },
+        "in_3":     { "type": "Float", "value": 0.5  },
+        "in_4":     { "type": "Float", "value": 0.25 }
+      }
     },
 
-    { "id": 7,  "typeId": "node.value", "handle": "freq_4hz", "params": { "value": { "type": "Float", "value": 4.0  } } },
-    { "id": 8,  "typeId": "node.value", "handle": "freq_2hz", "params": { "value": { "type": "Float", "value": 2.0  } } },
-    { "id": 9,  "typeId": "node.value", "handle": "freq_1hz", "params": { "value": { "type": "Float", "value": 1.0  } } },
-    { "id": 10, "typeId": "node.value", "handle": "freq_05hz","params": { "value": { "type": "Float", "value": 0.5  } } },
-    { "id": 11, "typeId": "node.value", "handle": "freq_025hz","params":{ "value": { "type": "Float", "value": 0.25 } } },
-
     {
-      "id": 12, "typeId": "node.mux_scalar", "handle": "mux_ring_freq",
-      "params": { "selector": { "type": "Float", "value": 2.0 } }
-    },
-
-    {
-      "id": 13, "typeId": "node.math", "handle": "base_expansion",
+      "id": 3, "typeId": "node.math", "handle": "base_expansion",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 1.0 },
@@ -147,7 +151,7 @@
       }
     },
     {
-      "id": 14, "typeId": "node.math", "handle": "spawn_gate",
+      "id": 4, "typeId": "node.math", "handle": "spawn_gate",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -155,7 +159,7 @@
       }
     },
     {
-      "id": 15, "typeId": "node.math", "handle": "expansion",
+      "id": 5, "typeId": "node.math", "handle": "expansion",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -164,25 +168,7 @@
     },
 
     {
-      "id": 16, "typeId": "node.polygon_shape", "handle": "shape",
-      "params": {
-        "n_sides":       { "type": "Int",   "value": 64 },
-        "size":          { "type": "Float", "value": 1.0 },
-        "rotation":      { "type": "Float", "value": 0.0 },
-        "clip_trigger":  { "type": "Bool",  "value": false },
-        "trigger_count": { "type": "Float", "value": 0.0 }
-      }
-    },
-    {
-      "id": 17, "typeId": "node.concentric_outlines", "handle": "stack",
-      "params": {
-        "expansion":    { "type": "Float", "value": 0.0 },
-        "ring_count":   { "type": "Int",   "value": 16 },
-        "ring_spacing": { "type": "Float", "value": 0.12 }
-      }
-    },
-    {
-      "id": 18, "typeId": "node.render_lines", "handle": "render",
+      "id": 6, "typeId": "node.render_lines", "handle": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.008 },
         "closed_loop":       { "type": "Bool",  "value": false },
@@ -198,37 +184,46 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 19, "typeId": "system.final_output", "handle": "final_output" },
+    { "id": 7, "typeId": "system.final_output", "handle": "final_output" },
 
     {
-      "id": 20, "typeId": "node.clip_trigger_index", "handle": "shape_cycle_idx",
+      "id": 8, "typeId": "node.clip_trigger_index", "handle": "shape_cycle_idx",
       "params": { "modulus": { "type": "Int", "value": 6 } }
     },
-    { "id": 21, "typeId": "node.value", "handle": "cycle_n3",  "params": { "value": { "type": "Float", "value": 3.0  } } },
-    { "id": 22, "typeId": "node.value", "handle": "cycle_n4",  "params": { "value": { "type": "Float", "value": 4.0  } } },
-    { "id": 23, "typeId": "node.value", "handle": "cycle_n5",  "params": { "value": { "type": "Float", "value": 5.0  } } },
-    { "id": 24, "typeId": "node.value", "handle": "cycle_n6",  "params": { "value": { "type": "Float", "value": 6.0  } } },
-    { "id": 25, "typeId": "node.value", "handle": "cycle_n8",  "params": { "value": { "type": "Float", "value": 8.0  } } },
-    { "id": 26, "typeId": "node.value", "handle": "cycle_n12", "params": { "value": { "type": "Float", "value": 12.0 } } },
     {
-      "id": 27, "typeId": "node.mux_scalar", "handle": "mux_cycle_sides",
-      "params": { "selector": { "type": "Float", "value": 0.0 } }
-    },
-
-    { "id": 28, "typeId": "node.value", "handle": "gate_zero", "params": { "value": { "type": "Float", "value": 0.0 } } },
-    { "id": 29, "typeId": "node.value", "handle": "gate_one",  "params": { "value": { "type": "Float", "value": 1.0 } } },
-
-    {
-      "id": 30, "typeId": "node.mux_scalar", "handle": "mode_shape_enable",
-      "params": { "selector": { "type": "Float", "value": 2.0 } }
-    },
-    {
-      "id": 31, "typeId": "node.mux_scalar", "handle": "mode_spawn_enable",
-      "params": { "selector": { "type": "Float", "value": 2.0 } }
+      "id": 9, "typeId": "node.mux_scalar", "handle": "mux_cycle_sides",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 3.0  },
+        "in_1":     { "type": "Float", "value": 4.0  },
+        "in_2":     { "type": "Float", "value": 5.0  },
+        "in_3":     { "type": "Float", "value": 6.0  },
+        "in_4":     { "type": "Float", "value": 8.0  },
+        "in_5":     { "type": "Float", "value": 12.0 }
+      }
     },
 
     {
-      "id": 32, "typeId": "node.math", "handle": "shape_active",
+      "id": 10, "typeId": "node.mux_scalar", "handle": "mode_shape_enable",
+      "params": {
+        "selector": { "type": "Float", "value": 2.0 },
+        "in_0":     { "type": "Float", "value": 1.0 },
+        "in_1":     { "type": "Float", "value": 0.0 },
+        "in_2":     { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 11, "typeId": "node.mux_scalar", "handle": "mode_spawn_enable",
+      "params": {
+        "selector": { "type": "Float", "value": 2.0 },
+        "in_0":     { "type": "Float", "value": 0.0 },
+        "in_1":     { "type": "Float", "value": 1.0 },
+        "in_2":     { "type": "Float", "value": 1.0 }
+      }
+    },
+
+    {
+      "id": 12, "typeId": "node.math", "handle": "shape_active",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -236,7 +231,7 @@
       }
     },
     {
-      "id": 33, "typeId": "node.math", "handle": "spawn_active",
+      "id": 13, "typeId": "node.math", "handle": "spawn_active",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -245,67 +240,151 @@
     },
 
     {
-      "id": 34, "typeId": "node.mux_scalar", "handle": "mux_final_n_sides",
+      "id": 14, "typeId": "node.mux_scalar", "handle": "mux_final_n_sides",
       "params": { "selector": { "type": "Float", "value": 0.0 } }
+    },
+
+    {
+      "id": 15, "typeId": "node.generate_range", "handle": "angles",
+      "params": {
+        "start":         { "type": "Float", "value": 0.0 },
+        "end":           { "type": "Float", "value": 6.28318530718 },
+        "max_capacity":  { "type": "Int",   "value": 64 },
+        "end_inclusive": { "type": "Bool",  "value": false }
+      }
+    },
+    {
+      "id": 16, "typeId": "node.array_math", "handle": "cos_t",
+      "params": { "op": { "type": "Enum", "value": 12 } }
+    },
+    {
+      "id": 17, "typeId": "node.array_math", "handle": "cos_x",
+      "params": {
+        "op":     { "type": "Enum",  "value": 6 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 18, "typeId": "node.array_math", "handle": "sin_t",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 19, "typeId": "node.array_math", "handle": "sin_y",
+      "params": {
+        "op":     { "type": "Enum",  "value": 6 },
+        "scale":  { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 20, "typeId": "node.pack_curve_xy", "handle": "pack",
+      "params": { "scale": { "type": "Float", "value": 4.0 } }
+    },
+    {
+      "id": 21, "typeId": "node.consecutive_edges", "handle": "edges_topology",
+      "params": {
+        "count":        { "type": "Int",  "value": 4 },
+        "closed":       { "type": "Bool", "value": true },
+        "max_capacity": { "type": "Int",  "value": 64 }
+      }
+    },
+
+    {
+      "id": 22, "typeId": "node.generate_range", "handle": "i_array",
+      "params": {
+        "start":         { "type": "Float", "value": 0.0 },
+        "end":           { "type": "Float", "value": 15.0 },
+        "max_capacity":  { "type": "Int",   "value": 16 },
+        "end_inclusive": { "type": "Bool",  "value": true }
+      }
+    },
+    {
+      "id": 23, "typeId": "node.math", "handle": "floor_exp",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 10 }
+      }
+    },
+    {
+      "id": 24, "typeId": "node.math", "handle": "frac_exp",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 1 }
+      }
+    },
+    {
+      "id": 25, "typeId": "node.math", "handle": "frac_offset",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.12 },
+        "op": { "type": "Enum",  "value": 2 }
+      }
+    },
+    {
+      "id": 26, "typeId": "node.array_math", "handle": "scales",
+      "params": {
+        "op":     { "type": "Enum",  "value": 6 },
+        "scale":  { "type": "Float", "value": 0.12 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 27, "typeId": "node.array_replicate_polyline_rings", "handle": "stack",
+      "params": { "max_rings": { "type": "Int", "value": 16 } }
     }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "in_0" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "in_1" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "in_2" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "in_3" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in_4" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 8,  "toPort": "trigger_count" },
+    { "fromNode": 8,  "fromPort": "out",           "toNode": 9,  "toPort": "selector" },
 
-    { "fromNode": 7,  "fromPort": "out", "toNode": 12, "toPort": "in_0" },
-    { "fromNode": 8,  "fromPort": "out", "toNode": 12, "toPort": "in_1" },
-    { "fromNode": 9,  "fromPort": "out", "toNode": 12, "toPort": "in_2" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "in_3" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in_4" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "b" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "b" },
 
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 20, "toPort": "trigger_count" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "selector" },
+    { "fromNode": 1,  "fromPort": "out", "toNode": 14, "toPort": "in_0" },
+    { "fromNode": 9,  "fromPort": "out", "toNode": 14, "toPort": "in_1" },
 
-    { "fromNode": 21, "fromPort": "out", "toNode": 27, "toPort": "in_0" },
-    { "fromNode": 22, "fromPort": "out", "toNode": 27, "toPort": "in_1" },
-    { "fromNode": 23, "fromPort": "out", "toNode": 27, "toPort": "in_2" },
-    { "fromNode": 24, "fromPort": "out", "toNode": 27, "toPort": "in_3" },
-    { "fromNode": 25, "fromPort": "out", "toNode": 27, "toPort": "in_4" },
-    { "fromNode": 26, "fromPort": "out", "toNode": 27, "toPort": "in_5" },
-    { "fromNode": 20, "fromPort": "out", "toNode": 27, "toPort": "selector" },
+    { "fromNode": 0,  "fromPort": "beat", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2,  "fromPort": "out",  "toNode": 3, "toPort": "b" },
 
-    { "fromNode": 29, "fromPort": "out", "toNode": 30, "toPort": "in_0" },
-    { "fromNode": 28, "fromPort": "out", "toNode": 30, "toPort": "in_1" },
-    { "fromNode": 29, "fromPort": "out", "toNode": 30, "toPort": "in_2" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 4, "toPort": "a" },
+    { "fromNode": 13, "fromPort": "out",           "toNode": 4, "toPort": "b" },
 
-    { "fromNode": 28, "fromPort": "out", "toNode": 31, "toPort": "in_0" },
-    { "fromNode": 29, "fromPort": "out", "toNode": 31, "toPort": "in_1" },
-    { "fromNode": 29, "fromPort": "out", "toNode": 31, "toPort": "in_2" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
 
-    { "fromNode": 30, "fromPort": "out", "toNode": 32, "toPort": "b" },
-    { "fromNode": 31, "fromPort": "out", "toNode": 33, "toPort": "b" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "active_count" },
 
-    { "fromNode": 32, "fromPort": "out", "toNode": 34, "toPort": "selector" },
-    { "fromNode": 6,  "fromPort": "out", "toNode": 34, "toPort": "in_0" },
-    { "fromNode": 27, "fromPort": "out", "toNode": 34, "toPort": "in_1" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "a" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "a" },
 
-    { "fromNode": 34, "fromPort": "out", "toNode": 16, "toPort": "n_sides" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 18, "toPort": "a" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 19, "toPort": "a" },
 
-    { "fromNode": 0,  "fromPort": "beat", "toNode": 13, "toPort": "a" },
-    { "fromNode": 12, "fromPort": "out",  "toNode": 13, "toPort": "b" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 20, "toPort": "x" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "y" },
 
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 14, "toPort": "a" },
-    { "fromNode": 33, "fromPort": "out",           "toNode": 14, "toPort": "b" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 21, "toPort": "count" },
 
-    { "fromNode": 13, "fromPort": "out", "toNode": 15, "toPort": "a" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b" },
+    { "fromNode": 5,  "fromPort": "out", "toNode": 23, "toPort": "a" },
+    { "fromNode": 5,  "fromPort": "out", "toNode": 24, "toPort": "a" },
+    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "b" },
 
-    { "fromNode": 15, "fromPort": "out", "toNode": 17, "toPort": "expansion" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 25, "toPort": "a" },
 
-    { "fromNode": 16, "fromPort": "outline", "toNode": 17, "toPort": "outline" },
-    { "fromNode": 16, "fromPort": "edges",   "toNode": 17, "toPort": "edges"   },
+    { "fromNode": 22, "fromPort": "out", "toNode": 26, "toPort": "a"      },
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "offset" },
 
-    { "fromNode": 17, "fromPort": "outline", "toNode": 18, "toPort": "points" },
-    { "fromNode": 17, "fromPort": "edges",   "toNode": 18, "toPort": "edges"  },
+    { "fromNode": 20, "fromPort": "out",   "toNode": 27, "toPort": "outline" },
+    { "fromNode": 21, "fromPort": "edges", "toNode": 27, "toPort": "edges"   },
+    { "fromNode": 26, "fromPort": "out",   "toNode": 27, "toPort": "scales"  },
 
-    { "fromNode": 18, "fromPort": "color", "toNode": 19, "toPort": "in" }
+    { "fromNode": 27, "fromPort": "outline", "toNode": 6, "toPort": "points" },
+    { "fromNode": 27, "fromPort": "edges",   "toNode": 6, "toPort": "edges"  },
+
+    { "fromNode": 6, "fromPort": "color", "toNode": 7, "toPort": "in" }
   ]
 }
