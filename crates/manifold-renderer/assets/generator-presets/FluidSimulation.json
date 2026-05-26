@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Fluid Sim 2D",
-  "description": "Density-displacement particle compute fluid simulation — decomposed from `FluidSimulationGenerator` + `FluidSimCore` into the curated primitive library. Per-frame pipeline: the persistent particle buffer (allocated by fluid_seed, mutated in-place by fluid_simulate via aliased in→out) flows simulate → scatter → resolve → density_feedback (one-frame delay to break the cycle) → downsample 2x + separable Gaussian blur → blur_density; fluid_gradient_rotate computes a vec2 force field (toroidal central-difference gradient scaled by slope_strength, rotated by rotation_angle, density_area_scale baked in via reference_area=1920×1080); another separable blur produces field_blurred; fluid_simulate consumes (in particles, blurred field, blurred density-from-previous-frame) and mutates positions in-place. The display path taps the full-res density off resolve and runs the legacy extended-Reinhard tone curve (intensity * area_scale * 3.0, contrast user-controlled) followed by an affine_transform UV zoom.\n\nClip-trigger envelope: `trigger_gate` gates raw trigger_count by `clip_trigger > 0.5`; `envelope_decay` (rate 12.0) produces a one-shot 0→1 envelope per gated edge. `sample_and_hold` latches the mode slider at trigger time so the active modulation doesn't change if the performer wiggles the mode slider mid-decay (matches legacy `active_clip_trigger_mode`). Five modes are dispatched via mux:\n- mode 0 (noise burst): noise_amplitude *= 1 + 9*env\n- mode 1 (rotation flip): rotation_angle += π*env\n- mode 2 (slope sign-flip): slope_strength *= 1 - 2*env\n- mode 3 (re-seed): trigger_gate(clip_trigger AND mode==3) → fluid_seed.trigger, fires a fresh seed dispatch; `clip_trigger_cycle` (modulus=7) drives fluid_seed.pattern so consecutive re-seeds cycle through all 7 patterns with the uniqueness invariant\n- mode 4 (inject point): `inject_burst` runs a 0.5s state machine producing (active, point_x, point_y, phase) that drives fluid_simulate's inject port-shadows\n\nKnown parity deltas vs legacy:\n(1) gaussian_blur uses node.gaussian_blur's fixed 17-tap kernel + `step` scaled from outer `blur_radius` slider — legacy uses a dynamic sigma `max(radius/3, 1.0)` with bilinear tap-pair. Density softness will visibly differ; outer `blur_radius` slider has a roughly proportional effect.\n(2) display tone curve composes reinhard_tone_map (intensity * extended Reinhard, bit-exact wrap of the legacy fused shader's tone math) + affine_transform (uv_scale) — mathematically equivalent to legacy but not byte-exact because the UV recenter is now a separate pass instead of fused into the tone shader.\n(3) clip-trigger mode-3 pattern cycle advances on every trigger_count edge regardless of mode — legacy only steps the cycle when active_mode == 3. Both still cycle through all 7 patterns; only the starting pattern on a mode-3 fire differs based on prior cross-mode trigger history.\n(4) clip-trigger mode-3 re-seed will produce a ~16ms GPU pipeline hitch on each fire — legacy skips the full pipeline on seed frames to avoid this; the graph runtime lacks per-frame sub-graph gating. Hitch is intrinsic until that runtime feature lands.",
+  "description": "Density-displacement particle compute fluid simulation — atom-decomposed from the bundled `fluid_seed` + `fluid_simulate` + `fluid_gradient_rotate` primitives into the curated library.\n\nPer-frame pipeline:\n1. **Seed branch** (open family — pattern math is JSON-editable WGSL): `wgsl_compute(seed_pattern_density)` writes a single-channel density Texture2D selecting one of 7 patterns (cluster / h-lines / v-lines / rings / cross / spiral / edge-ring) via `pattern` uniform. `seed_particles_from_texture` rejection-samples that density into an Array<Particle>. Output flows into `array_feedback.seed`.\n2. **Particle loop** (closes via state, no graph cycle): `array_feedback` holds last frame's sim state, emits as `out`. On `reset_trigger` integer-edge (gated by clip_trigger AND mode==3), reloads from the seed input — the graph-level clear+reseed shape.\n3. **Force-field assembly** (texture-domain math through atoms): `density → gradient_central_diff(scale=UV, wrap=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` replaces the legacy fused gradient/rotate dispatch. `→ gaussian_blur H/V → blurred_force_field`. `radial_burst_force_field` (driven by `inject_burst`'s active/phase/point outputs) produces an impulse force texture for clip-trigger mode 4. `mix(blurred_field, inject_force, Add) → combined_force`.\n4. **Per-particle dispatch chain**: `sample_texture_at_particles(particles, combined_force) → forces` → `anti_clump_particles(particles, density=blurred_density, strength=anti_clump_slider × turbulence_burst)` (density-weighted Brownian kick) → `euler_step_particles(particles, forces, speed)` (frame-rate-normalised step) → `wrap_particles_torus(particles)` (cyclic boundary).\n5. **Splat**: `scatter_particles → resolve_accumulator → density` (full-res for display, fed back through downsample+blur for the next-frame force-field assembly).\n6. **Display**: `density → reinhard_tone_map (intensity = area_scale × 3) → affine_transform (uv_scale = 1/scale) → final_output`.\n\nClip-trigger modes (same outer-card surface as legacy):\n- mode 0 (Turbulence): repurposed to **anti-clump strength burst** — `anti_clump.strength *= 1 + 9*env`. Legacy's noise-advection branch is dropped in the decomposition (its anti-clumping role is now covered explicitly by `anti_clump_particles`). Slider still has an audible effect; underlying mechanism changed.\n- mode 1 (Rot Flip): `rotation_angle += π * env`\n- mode 2 (Flow Inv): `slope_strength *= 1 - 2*env`\n- mode 3 (Pattern): `array_feedback.reset_trigger` edges on clip_trigger AND mode==3 — clear and reseed from the (newly cycled) pattern density texture\n- mode 4 (Inject): `inject_burst` 0.5s state machine drives `radial_burst_force_field` (point, force, envelope, phase)\n\nKnown parity deltas vs legacy:\n(1) Density-adaptive simplex noise advection inside the integrator is dropped — its anti-clumping role is covered by `anti_clump_particles`; visual flow becomes more deterministic (less organic wobble). `turbulence` slider re-targets to anti-clump strength burst on mode 0 rather than noise-amplitude scaling.\n(2) Seed patterns are produced as density textures rejection-sampled by `seed_particles_from_texture` rather than per-particle pattern placement. Particles concentrate in bright regions of the density rather than landing on exact pattern coordinates — visually similar but statistically distributed.\n(3) `visible_count`/excess-particle dead-at-center behaviour is dropped; `fill` slider now multiplies `count_m` to scale `active_count`. Fewer alive particles ↔ smaller buffer ↔ less GPU work.\n(4) Mode-3 pattern cycle still advances on every trigger regardless of mode (legacy did this too).\n(5) Injection burst is added as a force-field texture summed into the velocity field BEFORE Euler integration, rather than as a post-integration position perturbation. Mathematically near-equivalent for small steps.\n\nWhat the decomposition unlocks:\n- Pattern math is JSON-editable WGSL: add an 8th pattern by appending a `case` to the seed_pattern shader switch. AI agents can author novel seed shapes.\n- Each integrator stage (sample, anti-clump, euler, wrap) is a separate atom — swap Euler for Verlet (future sibling atom), or insert a new force-field contribution by wiring into the `mix` upstream of `sample_texture_at_particles`.\n- The radial-burst impulse, gradient, and rotation are reusable building blocks for any future flow-field particle sim.",
   "presetMetadata": {
     "id": "FluidSimulation",
     "displayName": "Fluid Sim 2D",
@@ -20,14 +20,12 @@
       { "id": "count_m",           "name": "Particle Count",    "min": 0.1,   "max": 8.0,    "defaultValue": 2.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
       { "id": "clip_trigger",      "name": "Clip Trigger",      "min": 0.0,   "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": true,  "formatString": "F0" },
       { "id": "clip_trigger_mode", "name": "Clip Trigger Mode", "min": 0.0,   "max": 4.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": false, "valueLabels": ["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"] },
-      { "id": "size",              "name": "Size",              "min": 1.0,   "max": 8.0,    "defaultValue": 3.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
-      { "id": "anti_clump",        "name": "Anti-Clump",        "min": 0.0,   "max": 60.0,   "defaultValue": 20.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
-      { "id": "force",             "name": "Force",             "min": 0.0,   "max": 0.1,    "defaultValue": 0.005,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "fill",              "name": "Fill",              "min": 0.0,   "max": 1.0,    "defaultValue": 1.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" }
+      { "id": "anti_clump",        "name": "Anti-Clump",        "min": 0.0,   "max": 0.05,   "defaultValue": 0.01666,"wholeNumbers": false, "isToggle": false, "formatString": "F4" },
+      { "id": "force",             "name": "Force",             "min": 0.0,   "max": 0.1,    "defaultValue": 0.005,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" }
     ],
     "bindings": [
       { "id": "speed",             "label": "Speed",        "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "speed" },
+        "target": { "kind": "handleNode", "handle": "euler", "param": "speed" },
         "convert": { "type": "Float" } },
 
       { "id": "flow",              "label": "Flow",         "defaultValue": -0.01,
@@ -46,7 +44,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "turbulence",        "label": "Turbulence",   "defaultValue": 0.001,
-        "target": { "kind": "handleNode", "handle": "noise_final", "param": "a" },
+        "target": { "kind": "handleNode", "handle": "turbulence_base", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "contrast",          "label": "Contrast",     "defaultValue": 3.5,
@@ -59,9 +57,6 @@
 
       { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
         "target": { "kind": "handleNode", "handle": "particle_count_calc", "param": "a" },
-        "convert": { "type": "Float" } },
-      { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "size_per_pm", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
@@ -78,52 +73,53 @@
         "target": { "kind": "handleNode", "handle": "mode_value", "param": "value" },
         "convert": { "type": "Float" } },
 
-      { "id": "size",              "label": "Size",         "defaultValue": 3.0,
-        "target": { "kind": "handleNode", "handle": "size_per_pm", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "density_noise_gain" },
-        "convert": { "type": "Float" } },
-      { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
-        "target": { "kind": "handleNode", "handle": "diffusion_calc", "param": "a" },
+      { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 0.01666,
+        "target": { "kind": "handleNode", "handle": "anti_clump_base", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "force",             "label": "Force",        "defaultValue": 0.005,
         "target": { "kind": "handleNode", "handle": "inject_force_gated", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "fill",              "label": "Fill",         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "visible_count_calc", "param": "b" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
     { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
+    { "id": 14, "typeId": "system.final_output",    "handle": "final_output" },
 
-    { "id": 1,  "typeId": "node.fluid_seed", "handle": "seed",
+    { "id": 80, "typeId": "node.wgsl_compute", "handle": "seed_pattern",
+      "wgslSource": "// FluidSim2D seed pattern — open family.\n// Writes a single-channel density Texture2D selecting one of 7\n// curated geometric patterns (or extend by appending a `case` to\n// the switch). The downstream `seed_particles_from_texture`\n// rejection-samples this density to place particles where it is\n// bright (R > 0.1).\n//\n// Patterns:\n//   0 — Center cluster (Gaussian)\n//   1 — Horizontal lines (6 lines)\n//   2 — Vertical lines (6 lines)\n//   3 — Concentric rings (3 rings)\n//   4 — Diagonal cross\n//   5 — Archimedean spiral\n//   6 — Edge ring\n\nstruct U {\n    pattern: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var output_tex: texture_storage_2d<r32float, write>;\n\nconst PI: f32 = 3.14159265;\nconst TAU: f32 = 6.28318530718;\n\nfn line_gauss(d: f32, thickness: f32) -> f32 {\n    return exp(-(d * d) / (2.0 * thickness * thickness));\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    let delta = uv - vec2<f32>(0.5, 0.5);\n    let dist = length(delta);\n\n    var d: f32 = 0.0;\n\n    switch u.pattern {\n        case 0u: {\n            // Center cluster — Gaussian, sigma ~0.052 (matches legacy spread)\n            d = exp(-(dist * dist) / (2.0 * 0.052 * 0.052));\n        }\n        case 1u: {\n            // Horizontal lines (6 lines), Gaussian thickness 0.012\n            var best: f32 = 0.0;\n            for (var i = 0; i < 6; i++) {\n                let line_y = (f32(i) + 0.5) / 6.0;\n                best = max(best, line_gauss(uv.y - line_y, 0.012));\n            }\n            d = best;\n        }\n        case 2u: {\n            // Vertical lines (6 lines)\n            var best: f32 = 0.0;\n            for (var i = 0; i < 6; i++) {\n                let line_x = (f32(i) + 0.5) / 6.0;\n                best = max(best, line_gauss(uv.x - line_x, 0.012));\n            }\n            d = best;\n        }\n        case 3u: {\n            // Concentric rings (3 rings) at radii 0.1, 0.2, 0.3\n            var best: f32 = 0.0;\n            for (var i = 0; i < 3; i++) {\n                let r = 0.1 + f32(i) * 0.1;\n                best = max(best, line_gauss(dist - r, 0.01));\n            }\n            d = best;\n        }\n        case 4u: {\n            // Diagonal cross (X-shape)\n            let d1 = abs(uv.x - uv.y);\n            let d2 = abs(uv.x + uv.y - 1.0);\n            d = max(line_gauss(d1, 0.015), line_gauss(d2, 0.015));\n        }\n        case 5u: {\n            // Archimedean spiral — 4 turns, max radius 0.4.\n            // For each pixel, find the closest spiral radius for any\n            // angle wrap, accept if dist is near it.\n            let angle_norm = (atan2(delta.y, delta.x) + PI) / TAU; // [0, 1]\n            var best: f32 = 0.0;\n            for (var turn = 0; turn < 4; turn++) {\n                let theta_norm = angle_norm + f32(turn);\n                let spiral_r = (theta_norm / 4.0) * 0.4;\n                if spiral_r > 0.0 && spiral_r < 0.42 {\n                    best = max(best, line_gauss(dist - spiral_r, 0.012));\n                }\n            }\n            d = best;\n        }\n        case 6u: {\n            // Edge ring at radius 0.45\n            d = line_gauss(dist - 0.45, 0.012);\n        }\n        default: {\n            d = 0.0;\n        }\n    }\n\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(d, 0.0, 0.0, 1.0));\n}\n",
+      "params": { "pattern": { "type": "Float", "value": 3.0 } } },
+
+    { "id": 81, "typeId": "node.seed_particles_from_texture", "handle": "seed_particles",
       "params": {
-        "max_capacity":  { "type": "Int",  "value": 8000000 },
-        "active_count":  { "type": "Int",  "value": 2000000 },
-        "visible_count": { "type": "Int",  "value": 2000000 },
-        "pattern":       { "type": "Enum", "value": 3 },
-        "trigger_count": { "type": "Int",  "value": 42 }
+        "max_capacity":  { "type": "Int",   "value": 8000000 },
+        "active_count":  { "type": "Int",   "value": 2000000 },
+        "output_width":  { "type": "Float", "value": 1920.0 },
+        "output_height": { "type": "Float", "value": 1080.0 },
+        "frame_seed":    { "type": "Int",   "value": 42 }
       } },
 
-    { "id": 3,  "typeId": "node.fluid_simulate", "handle": "simulate",
+    { "id": 82, "typeId": "node.array_feedback", "handle": "particles_feedback",
+      "params": {} },
+
+    { "id": 83, "typeId": "node.sample_texture_at_particles", "handle": "sample_forces",
+      "params": { "active_count": { "type": "Int", "value": 2000000 } } },
+
+    { "id": 84, "typeId": "node.anti_clump_particles", "handle": "anti_clump",
       "params": {
-        "active_count":       { "type": "Int",   "value": 2000000 },
-        "visible_count":      { "type": "Int",   "value": 2000000 },
-        "speed":              { "type": "Float", "value": 1.0 },
-        "noise_amplitude":    { "type": "Float", "value": 0.001 },
-        "density_noise_gain": { "type": "Float", "value": 20.0 },
-        "diffusion":          { "type": "Float", "value": 0.01666 },
-        "inject_point_x":     { "type": "Float", "value": 0.5 },
-        "inject_point_y":     { "type": "Float", "value": 0.5 },
-        "inject_force":       { "type": "Float", "value": 0.0 },
-        "inject_phase":       { "type": "Float", "value": 0.0 }
+        "strength":     { "type": "Float", "value": 0.01666 },
+        "active_count": { "type": "Int",   "value": 2000000 }
       } },
+
+    { "id": 85, "typeId": "node.euler_step_particles", "handle": "euler",
+      "params": {
+        "active_count": { "type": "Int",   "value": 2000000 },
+        "speed":        { "type": "Float", "value": 1.0 }
+      } },
+
+    { "id": 86, "typeId": "node.wrap_particles_torus", "handle": "wrap",
+      "params": { "active_count": { "type": "Int", "value": 2000000 } } },
 
     { "id": 4,  "typeId": "node.scatter_particles", "handle": "splat",
       "params": {
@@ -144,18 +140,37 @@
     { "id": 8,  "typeId": "node.gaussian_blur", "handle": "density_blur_v",
       "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
-    { "id": 9,  "typeId": "node.fluid_gradient_rotate", "handle": "grad_rot",
+    { "id": 87, "typeId": "node.gradient_central_diff", "handle": "grad",
       "params": {
-        "slope_strength":  { "type": "Float", "value": -0.01 },
-        "rotation_angle":  { "type": "Float", "value": 1.4835 },
-        "reference_area":  { "type": "Float", "value": 2073600.0 }
+        "channel":    { "type": "Enum", "value": 0 },
+        "scale_mode": { "type": "Enum", "value": 1 },
+        "wrap_mode":  { "type": "Enum", "value": 1 }
       } },
+
+    { "id": 88, "typeId": "node.scale_offset_texture", "handle": "grad_scaled",
+      "params": { "scale": { "type": "Float", "value": -0.01 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 89, "typeId": "node.rotate_vec2_by_angle", "handle": "grad_rotate",
+      "params": { "angle": { "type": "Float", "value": 1.4835 } } },
 
     { "id": 10, "typeId": "node.gaussian_blur", "handle": "field_blur_h",
       "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
     { "id": 11, "typeId": "node.gaussian_blur", "handle": "field_blur_v",
       "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
+
+    { "id": 91, "typeId": "node.radial_burst_force_field", "handle": "inject_force",
+      "params": {
+        "point_x":   { "type": "Float", "value": 0.5 },
+        "point_y":   { "type": "Float", "value": 0.5 },
+        "amplitude": { "type": "Float", "value": 0.0 },
+        "envelope":  { "type": "Float", "value": 0.0 },
+        "radius":    { "type": "Float", "value": 0.25 },
+        "time":      { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 90, "typeId": "node.mix", "handle": "combined_force",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
 
     { "id": 12, "typeId": "node.reinhard_tone_map", "handle": "display_tone",
       "params": {
@@ -171,19 +186,14 @@
         "rotation":    { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 14, "typeId": "system.final_output", "handle": "final_output" },
-
     { "id": 20, "typeId": "node.affine_scalar", "handle": "particle_count_calc",
       "params": { "a": { "type": "Float", "value": 2.0 }, "scale": { "type": "Float", "value": 1000000.0 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 21, "typeId": "node.math", "handle": "visible_count_calc",
+    { "id": 21, "typeId": "node.math", "handle": "active_count_calc",
       "params": { "a": { "type": "Float", "value": 2000000.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 22, "typeId": "node.math", "handle": "size_per_pm",
-      "params": { "a": { "type": "Float", "value": 3.0 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 3 } } },
-
     { "id": 23, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc",
-      "params": { "a": { "type": "Float", "value": 1.5 }, "scale": { "type": "Float", "value": 6.8266667 }, "offset": { "type": "Float", "value": 0.5 } } },
+      "params": { "a": { "type": "Float", "value": 2000000.0 }, "scale": { "type": "Float", "value": 0.000004096 }, "offset": { "type": "Float", "value": 0.5 } } },
 
     { "id": 24, "typeId": "node.affine_scalar", "handle": "rotation_rad_base",
       "params": { "a": { "type": "Float", "value": 85.0 }, "scale": { "type": "Float", "value": 0.017453293 }, "offset": { "type": "Float", "value": 0.0 } } },
@@ -196,9 +206,6 @@
 
     { "id": 27, "typeId": "node.math", "handle": "uv_scale_inv",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
-
-    { "id": 28, "typeId": "node.affine_scalar", "handle": "diffusion_calc",
-      "params": { "a": { "type": "Float", "value": 20.0 }, "scale": { "type": "Float", "value": 0.0008333333 }, "offset": { "type": "Float", "value": 0.0 } } },
 
     { "id": 60, "typeId": "node.math", "handle": "blur_radius_x_width",
       "params": { "a": { "type": "Float", "value": 1920.0 }, "b": { "type": "Float", "value": 20.0 }, "op": { "type": "Enum", "value": 2 } } },
@@ -239,13 +246,13 @@
     { "id": 41, "typeId": "node.math", "handle": "env_x9",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 9.0 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 42, "typeId": "node.mux_scalar", "handle": "mux_noise",
+    { "id": 42, "typeId": "node.mux_scalar", "handle": "mux_turbulence",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 43, "typeId": "node.math", "handle": "noise_factor",
+    { "id": 43, "typeId": "node.math", "handle": "turbulence_factor",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
 
-    { "id": 44, "typeId": "node.math", "handle": "noise_final",
+    { "id": 44, "typeId": "node.math", "handle": "turbulence_base",
       "params": { "a": { "type": "Float", "value": 0.001 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
 
     { "id": 45, "typeId": "node.math", "handle": "env_x_pi",
@@ -282,55 +289,84 @@
       "params": { "value": { "type": "Float", "value": 0.0 } } },
 
     { "id": 72, "typeId": "node.sample_and_hold", "handle": "mode_hold",
-      "params": {} }
+      "params": {} },
+
+    { "id": 100, "typeId": "node.math", "handle": "anti_clump_base",
+      "params": { "a": { "type": "Float", "value": 0.01666 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } }
   ],
   "wires": [
-    { "fromNode": 1,  "fromPort": "particles", "toNode": 3,  "toPort": "in" },
-    { "fromNode": 11, "fromPort": "out",       "toNode": 3,  "toPort": "field" },
-    { "fromNode": 8,  "fromPort": "out",       "toNode": 3,  "toPort": "density" },
+    { "fromNode": 70, "fromPort": "out", "toNode": 80, "toPort": "pattern" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 70, "toPort": "trigger_count" },
 
-    { "fromNode": 1,  "fromPort": "particles", "toNode": 4,  "toPort": "particles" },
-    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 4,  "toPort": "width" },
-    { "fromNode": 0,  "fromPort": "output_height", "toNode": 4,  "toPort": "height" },
-    { "fromNode": 20, "fromPort": "out",       "toNode": 4,  "toPort": "active_count" },
-    { "fromNode": 23, "fromPort": "out",       "toNode": 4,  "toPort": "scaled_energy" },
+    { "fromNode": 80, "fromPort": "output_tex", "toNode": 81, "toPort": "mask" },
 
-    { "fromNode": 4,  "fromPort": "accum",     "toNode": 5,  "toPort": "accum" },
+    { "fromNode": 81, "fromPort": "particles", "toNode": 82, "toPort": "seed" },
+    { "fromNode": 86, "fromPort": "out",       "toNode": 82, "toPort": "in" },
+    { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
 
-    { "fromNode": 5,  "fromPort": "density",   "toNode": 6,  "toPort": "in" },
-    { "fromNode": 6,  "fromPort": "out",       "toNode": 7,  "toPort": "in" },
-    { "fromNode": 7,  "fromPort": "out",       "toNode": 8,  "toPort": "in" },
+    { "fromNode": 82, "fromPort": "out", "toNode": 83, "toPort": "particles" },
+    { "fromNode": 90, "fromPort": "out", "toNode": 83, "toPort": "in" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 83, "toPort": "active_count" },
 
-    { "fromNode": 8,  "fromPort": "out",       "toNode": 9,  "toPort": "density" },
-    { "fromNode": 51, "fromPort": "out",       "toNode": 9,  "toPort": "slope_strength" },
-    { "fromNode": 47, "fromPort": "out",       "toNode": 9,  "toPort": "rotation_angle" },
+    { "fromNode": 82, "fromPort": "out", "toNode": 84, "toPort": "in" },
+    { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "density" },
+    { "fromNode": 100, "fromPort": "out", "toNode": 84, "toPort": "strength" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 84, "toPort": "active_count" },
 
-    { "fromNode": 9,  "fromPort": "force",     "toNode": 10, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out",       "toNode": 11, "toPort": "in" },
+    { "fromNode": 84, "fromPort": "out", "toNode": 85, "toPort": "in" },
+    { "fromNode": 83, "fromPort": "out", "toNode": 85, "toPort": "forces" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 85, "toPort": "active_count" },
 
-    { "fromNode": 20, "fromPort": "out",       "toNode": 3,  "toPort": "active_count" },
-    { "fromNode": 21, "fromPort": "out",       "toNode": 3,  "toPort": "visible_count" },
-    { "fromNode": 20, "fromPort": "out",       "toNode": 21, "toPort": "a" },
-    { "fromNode": 20, "fromPort": "out",       "toNode": 1,  "toPort": "active_count" },
-    { "fromNode": 21, "fromPort": "out",       "toNode": 1,  "toPort": "visible_count" },
+    { "fromNode": 85, "fromPort": "out", "toNode": 86, "toPort": "in" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 86, "toPort": "active_count" },
 
-    { "fromNode": 22, "fromPort": "out",       "toNode": 23, "toPort": "a" },
+    { "fromNode": 82, "fromPort": "out", "toNode": 4,  "toPort": "particles" },
+    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 4, "toPort": "width" },
+    { "fromNode": 0,  "fromPort": "output_height", "toNode": 4, "toPort": "height" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 4, "toPort": "active_count" },
+    { "fromNode": 23, "fromPort": "out", "toNode": 4, "toPort": "scaled_energy" },
 
-    { "fromNode": 44, "fromPort": "out",       "toNode": 3,  "toPort": "noise_amplitude" },
-    { "fromNode": 42, "fromPort": "out",       "toNode": 43, "toPort": "b" },
-    { "fromNode": 43, "fromPort": "out",       "toNode": 44, "toPort": "b" },
-    { "fromNode": 41, "fromPort": "out",       "toNode": 42, "toPort": "in_0" },
-    { "fromNode": 40, "fromPort": "out",       "toNode": 41, "toPort": "a" },
+    { "fromNode": 4,  "fromPort": "accum",   "toNode": 5,  "toPort": "accum" },
+    { "fromNode": 5,  "fromPort": "density", "toNode": 6,  "toPort": "in" },
+    { "fromNode": 6,  "fromPort": "out",     "toNode": 7,  "toPort": "in" },
+    { "fromNode": 7,  "fromPort": "out",     "toNode": 8,  "toPort": "in" },
 
-    { "fromNode": 24, "fromPort": "out",       "toNode": 47, "toPort": "a" },
-    { "fromNode": 46, "fromPort": "out",       "toNode": 47, "toPort": "b" },
-    { "fromNode": 45, "fromPort": "out",       "toNode": 46, "toPort": "in_1" },
-    { "fromNode": 40, "fromPort": "out",       "toNode": 45, "toPort": "a" },
+    { "fromNode": 8,  "fromPort": "out", "toNode": 87, "toPort": "in" },
+    { "fromNode": 87, "fromPort": "out", "toNode": 88, "toPort": "in" },
+    { "fromNode": 51, "fromPort": "out", "toNode": 88, "toPort": "scale" },
+    { "fromNode": 88, "fromPort": "out", "toNode": 89, "toPort": "in" },
+    { "fromNode": 47, "fromPort": "out", "toNode": 89, "toPort": "angle" },
+    { "fromNode": 89, "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
 
-    { "fromNode": 49, "fromPort": "out",       "toNode": 50, "toPort": "b" },
-    { "fromNode": 50, "fromPort": "out",       "toNode": 51, "toPort": "b" },
-    { "fromNode": 48, "fromPort": "out",       "toNode": 49, "toPort": "in_2" },
-    { "fromNode": 40, "fromPort": "out",       "toNode": 48, "toPort": "a" },
+    { "fromNode": 0,  "fromPort": "time", "toNode": 91, "toPort": "time" },
+    { "fromNode": 52, "fromPort": "point_x", "toNode": 91, "toPort": "point_x" },
+    { "fromNode": 52, "fromPort": "point_y", "toNode": 91, "toPort": "point_y" },
+    { "fromNode": 52, "fromPort": "active",  "toNode": 91, "toPort": "envelope" },
+    { "fromNode": 53, "fromPort": "out",     "toNode": 91, "toPort": "amplitude" },
+
+    { "fromNode": 11, "fromPort": "out", "toNode": 90, "toPort": "a" },
+    { "fromNode": 91, "fromPort": "out", "toNode": 90, "toPort": "b" },
+
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 23, "toPort": "a" },
+
+    { "fromNode": 44, "fromPort": "out", "toNode": 100, "toPort": "a" },
+    { "fromNode": 42, "fromPort": "out", "toNode": 43, "toPort": "b" },
+    { "fromNode": 43, "fromPort": "out", "toNode": 44, "toPort": "b" },
+    { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "in_0" },
+    { "fromNode": 40, "fromPort": "out", "toNode": 41, "toPort": "a" },
+
+    { "fromNode": 24, "fromPort": "out", "toNode": 47, "toPort": "a" },
+    { "fromNode": 46, "fromPort": "out", "toNode": 47, "toPort": "b" },
+    { "fromNode": 45, "fromPort": "out", "toNode": 46, "toPort": "in_1" },
+    { "fromNode": 40, "fromPort": "out", "toNode": 45, "toPort": "a" },
+
+    { "fromNode": 49, "fromPort": "out", "toNode": 50, "toPort": "b" },
+    { "fromNode": 50, "fromPort": "out", "toNode": 51, "toPort": "b" },
+    { "fromNode": 48, "fromPort": "out", "toNode": 49, "toPort": "in_2" },
+    { "fromNode": 40, "fromPort": "out", "toNode": 48, "toPort": "a" },
 
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 30, "toPort": "trigger_count" },
     { "fromNode": 30, "fromPort": "out",       "toNode": 40, "toPort": "trigger" },
@@ -339,51 +375,39 @@
     { "fromNode": 31, "fromPort": "out",       "toNode": 32, "toPort": "a" },
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 33, "toPort": "trigger_count" },
     { "fromNode": 32, "fromPort": "out",       "toNode": 33, "toPort": "enable" },
-    { "fromNode": 33, "fromPort": "out",       "toNode": 1,  "toPort": "trigger" },
-    { "fromNode": 33, "fromPort": "out",       "toNode": 3,  "toPort": "trigger" },
 
     { "fromNode": 36, "fromPort": "out",       "toNode": 34, "toPort": "in_4" },
     { "fromNode": 34, "fromPort": "out",       "toNode": 35, "toPort": "a" },
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 52, "toPort": "trigger" },
     { "fromNode": 35, "fromPort": "out",       "toNode": 52, "toPort": "enable" },
 
-    { "fromNode": 52, "fromPort": "active",    "toNode": 53, "toPort": "a" },
-    { "fromNode": 53, "fromPort": "out",       "toNode": 3,  "toPort": "inject_force" },
-    { "fromNode": 52, "fromPort": "point_x",   "toNode": 3,  "toPort": "inject_point_x" },
-    { "fromNode": 52, "fromPort": "point_y",   "toNode": 3,  "toPort": "inject_point_y" },
-    { "fromNode": 52, "fromPort": "phase",     "toNode": 3,  "toPort": "inject_phase" },
-
-    { "fromNode": 28, "fromPort": "out",       "toNode": 3,  "toPort": "diffusion" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 1,  "toPort": "trigger_count" },
+    { "fromNode": 52, "fromPort": "active", "toNode": 53, "toPort": "a" },
 
     { "fromNode": 0,  "fromPort": "output_width",  "toNode": 60, "toPort": "a" },
     { "fromNode": 0,  "fromPort": "output_height", "toNode": 62, "toPort": "a" },
-    { "fromNode": 60, "fromPort": "out",       "toNode": 61, "toPort": "a" },
-    { "fromNode": 62, "fromPort": "out",       "toNode": 63, "toPort": "a" },
-    { "fromNode": 61, "fromPort": "out",       "toNode": 7,  "toPort": "radius" },
-    { "fromNode": 63, "fromPort": "out",       "toNode": 8,  "toPort": "radius" },
-    { "fromNode": 61, "fromPort": "out",       "toNode": 10, "toPort": "radius" },
-    { "fromNode": 63, "fromPort": "out",       "toNode": 11, "toPort": "radius" },
+    { "fromNode": 60, "fromPort": "out", "toNode": 61, "toPort": "a" },
+    { "fromNode": 62, "fromPort": "out", "toNode": 63, "toPort": "a" },
+    { "fromNode": 61, "fromPort": "out", "toNode": 7,  "toPort": "radius" },
+    { "fromNode": 63, "fromPort": "out", "toNode": 8,  "toPort": "radius" },
+    { "fromNode": 61, "fromPort": "out", "toNode": 10, "toPort": "radius" },
+    { "fromNode": 63, "fromPort": "out", "toNode": 11, "toPort": "radius" },
 
     { "fromNode": 0,  "fromPort": "output_width",  "toNode": 25, "toPort": "width" },
     { "fromNode": 0,  "fromPort": "output_height", "toNode": 25, "toPort": "height" },
-    { "fromNode": 25, "fromPort": "out",       "toNode": 26, "toPort": "a" },
-    { "fromNode": 26, "fromPort": "out",       "toNode": 12, "toPort": "intensity" },
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "a" },
+    { "fromNode": 26, "fromPort": "out", "toNode": 12, "toPort": "intensity" },
 
-    { "fromNode": 5,  "fromPort": "density",   "toNode": 13, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out",       "toNode": 12, "toPort": "in" },
-    { "fromNode": 27, "fromPort": "out",       "toNode": 13, "toPort": "scale" },
-    { "fromNode": 12, "fromPort": "out",       "toNode": 14, "toPort": "in" },
+    { "fromNode": 5,  "fromPort": "density", "toNode": 13, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 27, "fromPort": "out", "toNode": 13, "toPort": "scale" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "in" },
 
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 70, "toPort": "trigger_count" },
-    { "fromNode": 70, "fromPort": "out",       "toNode": 1,  "toPort": "pattern" },
-
-    { "fromNode": 71, "fromPort": "out",       "toNode": 72, "toPort": "value" },
+    { "fromNode": 71, "fromPort": "out", "toNode": 72, "toPort": "value" },
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 72, "toPort": "trigger" },
-    { "fromNode": 72, "fromPort": "out",       "toNode": 31, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out",       "toNode": 34, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out",       "toNode": 42, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out",       "toNode": 46, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out",       "toNode": 49, "toPort": "selector" }
+    { "fromNode": 72, "fromPort": "out", "toNode": 31, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out", "toNode": 34, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out", "toNode": 42, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out", "toNode": 46, "toPort": "selector" },
+    { "fromNode": 72, "fromPort": "out", "toNode": 49, "toPort": "selector" }
   ]
 }
