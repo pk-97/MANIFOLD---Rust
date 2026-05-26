@@ -1,7 +1,7 @@
 //! `node.generate_range` — emit an `Array<f32>` of `N` samples
 //! linearly spaced over `[start, end]`. The Pattern-CHOP atom: the
 //! source of an evenly-sampled parameter sweep that downstream
-//! `array_math` / `array_trig` / curve-pack primitives consume.
+//! `array_math` / curve-pack primitives consume.
 //!
 //! Canonical use: build a `t` array spanning `[0, 2π]` to drive a
 //! parametric curve (Lissajous, Rose, hypocycloid, audio waveform).
@@ -9,34 +9,30 @@
 //! axis chain + `pack_curve_xy` for a fully-decomposed parametric
 //! curve graph.
 //!
-//! Sample i (for i in `[0, count)`):
+//! End-inclusive (default):
 //!   `out[i] = start + i * (end - start) / max(count - 1, 1)`
+//!   `out[0] = start`, `out[count - 1] = end`. The conventional shape
+//!   for closed parametric curves where the cycle's start and end
+//!   meet on the same point (Lissajous).
+//! End-exclusive:
+//!   `out[i] = start + i * (end - start) / count`
+//!   The right shape for regular N-gons sampled around a circle, where
+//!   vertex 0 and vertex N-1 must be distinct points.
 //!
-//! So `out[0] = start`, `out[count - 1] = end`, evenly spaced. Matches
-//! numpy / TouchDesigner `linspace` semantics. For `count == 1` the
-//! divisor floors to `1` and the single sample emitted is `start`.
-
-use manifold_gpu::GpuBinding;
+//! CPU-only: the per-frame compute is at most a few hundred f32s,
+//! which is faster on CPU than the GPU dispatch overhead. Writes a
+//! shared-memory MTLBuffer that downstream CPU primitives can read
+//! via `mapped_ptr` without a frame-boundary GPU fence — that's the
+//! whole point of moving the curve-math atoms to CPU.
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct RangeUniforms {
-    count: u32,
-    // 1 = end-inclusive (denom = max(count - 1, 1)); 0 = end-exclusive
-    // (denom = count). Carries the param-side toggle into the shader.
-    end_inclusive: u32,
-    start: f32,
-    end: f32,
-}
-
 crate::primitive! {
     name: GenerateRange,
     type_id: "node.generate_range",
-    purpose: "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`.",
+    purpose: "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`. CPU-only — the curve-math atom family runs on the content thread so downstream CPU readers (replicators, polyline stackers) see same-frame writes without a GPU→CPU fence.",
     inputs: {
         start: ScalarF32 optional,
         end: ScalarF32 optional,
@@ -74,19 +70,12 @@ crate::primitive! {
             name: "end_inclusive",
             label: "End Inclusive",
             ty: ParamType::Bool,
-            // Default true preserves the conventional [start, end] sampling
-            // for closed parametric curves (Lissajous and friends rely on
-            // `out[0]=start`, `out[count-1]=end` so vertex 0 and vertex
-            // count-1 land on the same point of the cycle). Set false for
-            // end-exclusive sampling that's the right shape for regular
-            // N-gons (linspace(0, 2π, N) end-exclusive → angles
-            // [0, 2π/N, 4π/N, …, (N-1)·2π/N], no duplicated wrap vertex).
             default: ParamValue::Bool(true),
             range: None,
             enum_values: &[],
         },
     ],
-    composition_notes: "End-inclusive (default): `out[0]=start`, `out[count-1]=end` — conventional for closed parametric curves where the start and end of the cycle are meant to land on the same point (Lissajous). End-exclusive: `out[0]=start`, `out[count-1]=end - (end-start)/count` — the right shape for regular N-gons sampled around a circle, where vertex 0 and vertex count-1 must be distinct points. `active_count` (input-only port-shadow) sets the runtime sample count when wired; when unwired the count is `max_capacity` so old graphs (Lissajous) work bit-identically. `max_capacity` is the pre-allocated buffer size — the chain build reads it via the default `array_output_capacity` impl, so `active_count` cannot exceed it. Slots beyond `active_count` retain their previous-frame values, which is harmless when downstream topology (consecutive_edges / explicit EdgePair sentinels) refuses to reference them.",
+    composition_notes: "End-inclusive (default): `out[0]=start`, `out[count-1]=end` — conventional for closed parametric curves where the start and end of the cycle are meant to land on the same point (Lissajous). End-exclusive: `out[0]=start`, `out[count-1]=end - (end-start)/count` — the right shape for regular N-gons sampled around a circle, where vertex 0 and vertex count-1 must be distinct points. `active_count` (input-only port-shadow) sets the runtime sample count when wired; when unwired the count is `max_capacity` so old graphs (Lissajous) work bit-identically. `max_capacity` is the pre-allocated buffer size; `active_count` cannot exceed it. Slots beyond `active_count` retain their previous-frame values, which is harmless when downstream topology (consecutive_edges / explicit EdgePair sentinels) refuses to reference them.",
     examples: [],
     picker: { label: "Generate Range", category: Atom },
 }
@@ -124,39 +113,33 @@ impl Primitive for GenerateRange {
         let f32_size = std::mem::size_of::<f32>() as u64;
         let capacity = (out_buf.size / f32_size) as u32;
         let active_count = count.min(capacity);
+        if active_count == 0 {
+            return;
+        }
 
-        let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/generate_range.wgsl"),
-                "cs_main",
-                "node.generate_range",
-            )
-        });
-
-        let uniforms = RangeUniforms {
-            count: active_count,
-            end_inclusive: end_inclusive as u32,
-            start,
-            end,
+        let denom = if end_inclusive {
+            (active_count - 1).max(1) as f32
+        } else {
+            active_count.max(1) as f32
         };
+        let span = end - start;
 
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: out_buf,
-                    offset: 0,
-                },
-            ],
-            [active_count.div_ceil(64), 1, 1],
-            "node.generate_range",
-        );
+        // Stack scratch sized to the documented max (matches the param
+        // range upper bound). Avoids per-frame Vec allocation on this
+        // hot-path atom — the chain build runs this every frame.
+        const SCRATCH_LEN: usize = 4096;
+        let mut scratch = [0.0_f32; SCRATCH_LEN];
+        let write_count = (active_count as usize).min(SCRATCH_LEN);
+        for (i, slot) in scratch.iter_mut().take(write_count).enumerate() {
+            *slot = start + (i as f32) * span / denom;
+        }
+
+        // Safety: shared-memory MTLBuffer pre-bound by the chain build;
+        // write count clamped to the buffer capacity; sequential
+        // executor on the content thread means no concurrent writer.
+        unsafe {
+            out_buf.write(0, bytemuck::cast_slice(&scratch[..write_count]));
+        }
     }
 }
 

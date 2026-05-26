@@ -11,22 +11,25 @@
 //! is conditional param semantics (each op only uses a subset of
 //! the param surface); the benefit is one entry in the registry
 //! that covers the common Array<f32> shaping vocabulary.
-
-use manifold_gpu::GpuBinding;
+//!
+//! CPU-only: small array sizes (curve sources ship at most a few
+//! hundred f32s per frame), CPU dispatch is faster than the GPU
+//! pipeline overhead and — critically — keeps the curve-math chain
+//! on the content thread so downstream CPU primitives (replicators,
+//! polyline stackers) can read same-frame writes via `mapped_ptr`
+//! without a GPU→CPU fence.
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Op enum labels — order MUST match the `switch u.op` block in
-/// `shaders/array_math.wgsl`. Adding a variant means adding the
-/// shader case in the same commit. **Indices are public API** — saved
-/// in JSON presets — never reorder; append new ops at the end.
+/// Op enum labels. **Indices are public API** — saved in JSON presets —
+/// never reorder; append new ops at the end.
 pub const ARRAY_MATH_OPS: &[&str] = &[
     "Add",          // 0  binary: out = a + b
     "Subtract",     // 1  binary: out = a - b
     "Multiply",     // 2  binary: out = a * b
-    "Divide",       // 3  binary: out = a / b  (b == 0 → 0)
+    "Divide",       // 3  binary: out = a / b  (|b| < eps → 0)
     "Min",          // 4  binary: out = min(a, b)
     "Max",          // 5  binary: out = max(a, b)
     "ScaleOffset",  // 6  unary:  out = a * scale + offset
@@ -45,32 +48,51 @@ pub const ARRAY_MATH_OPS: &[&str] = &[
 const FIRST_UNARY_OP: u32 = 6;
 
 /// Whether op `code` reads the `b` input (and therefore needs the
-/// dispatch truncated to `min(a, b, out)` capacity). Replaces the
-/// single-threshold partition once non-contiguous binary ops (Mix)
-/// were appended after the unary block. WGSL mirror lives in
-/// `shaders/array_math.wgsl`'s analogous `op_is_binary` helper —
-/// keep the two in sync.
+/// processing range truncated to `min(a, b, out)` capacity). Replaces
+/// the single-threshold partition once non-contiguous binary ops (Mix)
+/// were appended after the unary block.
 fn op_is_binary(code: u32) -> bool {
     code < FIRST_UNARY_OP || code == 13
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Uniforms {
-    count: u32,
-    op: u32,
-    scale: f32,
-    offset: f32,
-    exp: f32,
-    bias: f32,
-    _pad0: u32,
-    _pad1: u32,
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn eval_op(op: u32, a: f32, b: f32, scale: f32, offset: f32, exp: f32, bias: f32) -> f32 {
+    match op {
+        0 => a + b,
+        1 => a - b,
+        2 => a * b,
+        3 => {
+            if b.abs() < 1e-6 {
+                0.0
+            } else {
+                a / b
+            }
+        }
+        4 => a.min(b),
+        5 => a.max(b),
+        6 => a * scale + offset,
+        7 => (a + bias).max(0.0).powf(exp) * scale,
+        8 => smoothstep(0.0, 1.0, 1.0 - (2.0 * a - 1.0).abs()),
+        9 => a.clamp(0.0, 1.0),
+        10 => a.abs(),
+        11 => a.sin(),
+        12 => a.cos(),
+        13 => a + (b - a) * scale,
+        // Unknown op codes resolve to passthrough rather than panic;
+        // a stale preset referencing a renamed op shouldn't crash the
+        // content thread.
+        _ => a,
+    }
 }
 
 crate::primitive! {
     name: ArrayMath,
     type_id: "node.array_math",
-    purpose: "Element-wise math over Array<f32>. One bundled primitive (op enum) covering the common shaping vocabulary: binary (Add/Subtract/Multiply/Divide/Min/Max/Mix read `a` + `b`); unary (ScaleOffset, ShapePowClip, MirrorRamp, Clamp01, Abs, Sin, Cos — read `a` only, ignore `b`). Op-specific scalars (scale / offset / exp / bias) are port-shadow-param so they can be modulated by control wires. Divide-by-near-zero clamps to 0 to keep NaN/Inf out of downstream shaders.",
+    purpose: "Element-wise math over Array<f32>. One bundled primitive (op enum) covering the common shaping vocabulary: binary (Add/Subtract/Multiply/Divide/Min/Max/Mix read `a` + `b`); unary (ScaleOffset, ShapePowClip, MirrorRamp, Clamp01, Abs, Sin, Cos — read `a` only, ignore `b`). Op-specific scalars (scale / offset / exp / bias) are port-shadow-param so they can be modulated by control wires. Divide-by-near-zero clamps to 0 to keep NaN/Inf out of downstream consumers. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
     inputs: {
         a: Array(f32) required,
         b: Array(f32) optional,
@@ -124,7 +146,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Each op uses a subset of (scale, offset, exp, bias) — only the relevant scalars are read per op. ScaleOffset uses scale + offset; ShapePowClip uses bias + exp + scale (captures the DigitalPlants stem displacement pow(max(x, 0), 2) * 0.3 shape with bias=0, exp=2, scale=0.3); Mix uses scale as the lerp factor t (out = a + (b - a) * scale; the port-shadowed `scale` input drives the morph from a wire); Sin / Cos / MirrorRamp / Clamp01 / Abs read none. Binary ops (Add/Sub/Mul/Div/Min/Max/Mix) require both `a` and `b` wired; unary ops only require `a` (the `b` slot is ignored — internally the primitive falls back to binding `a` to the `b` slot to satisfy Metal's all-bindings-present rule).",
+    composition_notes: "Each op uses a subset of (scale, offset, exp, bias) — only the relevant scalars are read per op. ScaleOffset uses scale + offset; ShapePowClip uses bias + exp + scale (captures the DigitalPlants stem displacement pow(max(x, 0), 2) * 0.3 shape with bias=0, exp=2, scale=0.3); Mix uses scale as the lerp factor t (out = a + (b - a) * scale; the port-shadowed `scale` input drives the morph from a wire); Sin / Cos / MirrorRamp / Clamp01 / Abs read none. Binary ops (Add/Sub/Mul/Div/Min/Max/Mix) require both `a` and `b` wired; unary ops only require `a`. CPU dispatch reads inputs via `mapped_ptr` and writes the output via `write()` on the shared MTLBuffer.",
     examples: [],
     picker: { label: "Array Math", category: Atom },
 }
@@ -139,10 +161,6 @@ impl Primitive for ArrayMath {
         if port_name != "out" {
             return None;
         }
-        // Output sized to `a` — for binary ops, run() truncates the
-        // dispatch to min(a, b) so trailing elements stay at whatever
-        // the buffer held (typically zero from chain-build allocation).
-        // Sizing to `a` is the consistent shape across binary + unary.
         input_capacities
             .iter()
             .find(|(p, _)| *p == "a")
@@ -165,74 +183,74 @@ impl Primitive for ArrayMath {
         let Some(a_buf) = ctx.inputs.array("a") else {
             return;
         };
-        let b_buf = ctx.inputs.array("b").unwrap_or(a_buf);
+        let b_buf_opt = ctx.inputs.array("b");
         let Some(out_buf) = ctx.outputs.array("out") else {
             return;
         };
 
         let f32_size = std::mem::size_of::<f32>() as u64;
         let a_capacity = (a_buf.size / f32_size) as u32;
-        let b_capacity = (b_buf.size / f32_size) as u32;
+        let b_capacity = b_buf_opt
+            .map(|buf| (buf.size / f32_size) as u32)
+            .unwrap_or(a_capacity);
         let out_capacity = (out_buf.size / f32_size) as u32;
         let count = if op_is_binary(op) {
-            // Binary: dispatch across the smaller of a, b, out so the
-            // shader never reads past either input.
+            // Binary: process across the smaller of a, b, out so we
+            // never read past either input.
             a_capacity.min(b_capacity).min(out_capacity)
         } else {
-            // Unary: only `a` matters. `b` is aliased to `a` for the
-            // Metal-binding-present requirement; its content is unread.
+            // Unary: only `a` matters; `b` is unread.
             a_capacity.min(out_capacity)
         };
         if count == 0 {
             return;
         }
 
-        let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/array_math.wgsl"),
-                "cs_main",
-                "node.array_math",
-            )
-        });
-
-        let uniforms = Uniforms {
-            count,
-            op,
-            scale,
-            offset,
-            exp,
-            bias,
-            _pad0: 0,
-            _pad1: 0,
+        // ── Read inputs via mapped_ptr ──
+        // Shared-memory MTLBuffers; sequential executor on the content
+        // thread means upstream writes (also CPU) are visible by the
+        // time we run.
+        let a_ptr = a_buf
+            .mapped_ptr()
+            .expect("array_math: `a` input must be shared-memory");
+        let a_slice: &[f32] = unsafe {
+            std::slice::from_raw_parts(a_ptr as *const f32, a_capacity as usize)
+        };
+        // For unary ops the `b` slot is unread — pass an empty slice
+        // and `eval_op` ignores the value. For binary ops we require
+        // a real `b` source: when not wired, fall back to `a` so the
+        // primitive behaves like the GPU version did with the
+        // `b_buf.unwrap_or(a_buf)` aliasing (Mix without a wired `b`
+        // becomes identity).
+        let b_slice: &[f32] = match b_buf_opt {
+            Some(buf) => {
+                let ptr = buf
+                    .mapped_ptr()
+                    .expect("array_math: `b` input must be shared-memory");
+                unsafe { std::slice::from_raw_parts(ptr as *const f32, b_capacity as usize) }
+            }
+            None => a_slice,
         };
 
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: a_buf,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: b_buf,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: out_buf,
-                    offset: 0,
-                },
-            ],
-            [count.div_ceil(256), 1, 1],
-            "node.array_math",
-        );
+        // ── Compute into stack scratch then bulk-write ──
+        // Output bursts at most 4096 f32s in practice (matches the
+        // generate_range capacity cap); stack-allocate to avoid a
+        // per-frame Vec.
+        const SCRATCH_LEN: usize = 4096;
+        let mut scratch = [0.0_f32; SCRATCH_LEN];
+        let write_count = (count as usize).min(SCRATCH_LEN);
+        for (i, slot) in scratch.iter_mut().take(write_count).enumerate() {
+            let a = a_slice[i];
+            let b = if op_is_binary(op) { b_slice[i] } else { 0.0 };
+            *slot = eval_op(op, a, b, scale, offset, exp, bias);
+        }
+
+        // Safety: shared-memory MTLBuffer pre-bound by the chain build;
+        // write count clamped to the buffer capacity above; sequential
+        // executor on the content thread means no concurrent writer.
+        unsafe {
+            out_buf.write(0, bytemuck::cast_slice(&scratch[..write_count]));
+        }
     }
 }
 
@@ -292,12 +310,6 @@ mod tests {
         assert_eq!(ARRAY_MATH_OPS.len(), 14);
     }
 
-    /// Per-op binary classification. The original `op < FIRST_UNARY_OP`
-    /// threshold only worked while binary ops formed a contiguous prefix
-    /// — Mix (appended at index 13 to preserve JSON op-index API) is
-    /// binary but lives past the threshold, so the classifier must be
-    /// per-op now. Guards against accidentally letting Mix dispatch
-    /// without truncating to `min(a, b, out)`.
     #[test]
     fn op_is_binary_classifies_each_op_correctly() {
         for code in 0..6 {
@@ -318,7 +330,7 @@ mod tests {
         assert_eq!(
             Primitive::array_output_capacity(&prim, "out", &params, &inputs),
             Some(160_000),
-            "output sized to `a`; binary ops truncate dispatch at run time",
+            "output sized to `a`; binary ops truncate processing at run time",
         );
     }
 

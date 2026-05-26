@@ -3,9 +3,8 @@
 //!
 //! The inverse of `node.array_unpack_vec2` for the curve-rendering
 //! pipeline. Takes axis-separated channels (built independently by
-//! array_math / array_trig / generate_range chains) and assembles
-//! them into the typed `Array<CurvePoint>` wire that `node.render_lines`
-//! consumes.
+//! array_math / generate_range chains) and assembles them into the
+//! typed `Array<CurvePoint>` wire that `node.render_lines` consumes.
 //!
 //! Per-element math:
 //!   `out[i].xy = vec2(x[i] * scale * PROJ_SCALE, y[i] * scale * PROJ_SCALE)`
@@ -16,31 +15,21 @@
 //! render_lines"). The user-facing `scale` param (port-shadowed,
 //! default 1.0) is the visible knob; the 0.25 lives where it
 //! semantically belongs.
-
-use manifold_gpu::GpuBinding;
+//!
+//! CPU-only: small array sizes (curves ship at most a few hundred
+//! points per frame), CPU is faster than the GPU dispatch overhead
+//! and keeps downstream CPU readers (replicators, polyline stackers)
+//! on the same-frame-coherent path.
 
 use crate::generators::mesh_common::CurvePoint;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct PackUniforms {
-    count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-    scale: f32,
-    _pad3: f32,
-    _pad4: f32,
-    _pad5: f32,
-}
-
 crate::primitive! {
     name: PackCurveXy,
     type_id: "node.pack_curve_xy",
-    purpose: "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.array_unpack_vec2; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical.",
+    purpose: "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.array_unpack_vec2; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
     inputs: {
         x: Array(f32) required,
         y: Array(f32) required,
@@ -59,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the `x` input (mirrors how node.array_math sizes its `out` to its `a` input) so the pack auto-sizes to whatever the upstream curve length is — no separate `max_capacity` knob to keep in sync. Dispatch truncates to min(x_capacity, y_capacity, out_capacity) so a shorter axis channel naturally clips the curve length. The internal PROJ_SCALE = 0.25 is intentionally not a user param — it's the screen-fit factor baked into the curve-space contract render_lines expects. Pair with node.generate_range + node.array_math (ScaleOffset + Sin) per axis to build any parametric curve (Lissajous, Rose, hypocycloid, audio waveform).",
+    composition_notes: "Output capacity follows the `x` input (mirrors how node.array_math sizes its `out` to its `a` input) so the pack auto-sizes to whatever the upstream curve length is — no separate `max_capacity` knob to keep in sync. Processing truncates to min(x_capacity, y_capacity, out_capacity) so a shorter axis channel naturally clips the curve length. The internal PROJ_SCALE = 0.25 is intentionally not a user param — it's the screen-fit factor baked into the curve-space contract render_lines expects. Pair with node.generate_range + node.array_math (ScaleOffset + Sin) per axis to build any parametric curve (Lissajous, Rose, hypocycloid, audio waveform). To cancel the PROJ_SCALE factor (e.g. when the upstream axis chain already encodes the desired screen-fractional radius), set `scale = 4.0` — this is the documented pattern for polygon outlines whose `size` param is already in screen-fractional units.",
     examples: [],
     picker: { label: "Pack Curve XY", category: Atom },
 }
@@ -85,7 +74,7 @@ impl Primitive for PackCurveXy {
             return None;
         }
         // Output is one-to-one with the x channel. run() truncates the
-        // dispatch to min(x, y, out) at frame time, so a shorter y
+        // processing to min(x, y, out) at frame time, so a shorter y
         // input naturally clips the curve length.
         input_capacities
             .iter()
@@ -121,52 +110,35 @@ impl Primitive for PackCurveXy {
             return;
         }
 
-        let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/pack_curve_xy.wgsl"),
-                "cs_main",
-                "node.pack_curve_xy",
-            )
-        });
+        // ── Read inputs via mapped_ptr ──
+        let x_ptr = x_buf
+            .mapped_ptr()
+            .expect("pack_curve_xy: `x` input must be shared-memory");
+        let y_ptr = y_buf
+            .mapped_ptr()
+            .expect("pack_curve_xy: `y` input must be shared-memory");
+        let x_slice: &[f32] =
+            unsafe { std::slice::from_raw_parts(x_ptr as *const f32, x_capacity as usize) };
+        let y_slice: &[f32] =
+            unsafe { std::slice::from_raw_parts(y_ptr as *const f32, y_capacity as usize) };
 
-        let uniforms = PackUniforms {
-            count,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            scale,
-            _pad3: 0.0,
-            _pad4: 0.0,
-            _pad5: 0.0,
-        };
+        // ── Pack into stack scratch then bulk-write ──
+        const SCRATCH_LEN: usize = 4096;
+        let mut scratch = [CurvePoint { xy: [0.0, 0.0] }; SCRATCH_LEN];
+        let write_count = (count as usize).min(SCRATCH_LEN);
+        let k = scale * Self::PROJ_SCALE;
+        for (i, slot) in scratch.iter_mut().take(write_count).enumerate() {
+            *slot = CurvePoint {
+                xy: [x_slice[i] * k, y_slice[i] * k],
+            };
+        }
 
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: x_buf,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: y_buf,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: out_buf,
-                    offset: 0,
-                },
-            ],
-            [count.div_ceil(64), 1, 1],
-            "node.pack_curve_xy",
-        );
+        // Safety: shared-memory MTLBuffer pre-bound by the chain build;
+        // write count clamped to the buffer capacity above; sequential
+        // executor on the content thread means no concurrent writer.
+        unsafe {
+            out_buf.write(0, bytemuck::cast_slice(&scratch[..write_count]));
+        }
     }
 }
 
@@ -218,7 +190,7 @@ mod tests {
         assert_eq!(
             Primitive::array_output_capacity(&prim, "out", &params, &mismatched),
             Some(128),
-            "output sizes to x; run() truncates to min(x, y, out) at dispatch time",
+            "output sizes to x; run() truncates to min(x, y, out) at processing time",
         );
     }
 
