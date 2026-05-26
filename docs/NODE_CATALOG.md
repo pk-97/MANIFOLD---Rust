@@ -205,10 +205,8 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 |---|---|---|
 | Texture Advect | `node.texture_advect` | Backward semi-Lagrangian advection by a velocity field |
 | LIC Integrate | `node.lic_integrate` | Line Integral Convolution — flow visualisation streamlines |
-| Fluid Gradient Rotate (2D) | `node.fluid_gradient_rotate` | Fused central-diff gradient + 2D rotation — FluidSim2D force field |
 | Fluid Gradient Curl (3D) | `node.fluid_gradient_curl_3d` | Fused 3D gradient + curl — FluidSim3D force field |
-| Fluid Seed | `node.fluid_seed` | Seed `Array<Particle>` with one of 7 geometric patterns |
-| Fluid Simulate | `node.fluid_simulate` | Per-frame integrator — advection + diffusion + injection |
+| Apply Radial Burst (Particles) | `node.apply_radial_burst_to_particles` | Per-particle radial+tangent impulse around a point — FluidSim2D inject path |
 | Scatter Particles Camera | `node.scatter_particles_camera` (alias `node.fluid_project_scatter_2d`) | 3D particles → 2D u32 accumulator via Camera projection. Sibling to `scatter_particles` / `scatter_particles_3d` |
 | Sample Volume 2D | `node.sample_volume_2d` | Sample a Texture3D as 2D slice/projection |
 

@@ -1221,11 +1221,11 @@ mod tests {
     #[test]
     fn wire_audit_errors_when_array_resource_has_no_bound_buffer() {
         use crate::node_graph::Graph;
-        use crate::node_graph::primitives::FluidSeed;
+        use crate::node_graph::primitives::SeedParticles;
 
         let device = GpuDevice::new();
         let mut graph = Graph::new();
-        graph.add_node(Box::new(FluidSeed::new()));
+        graph.add_node(Box::new(SeedParticles::new()));
         let plan = compile(&graph).expect("seed-only graph compiles");
 
         // Construct a backend but deliberately DON'T call
@@ -1241,7 +1241,7 @@ mod tests {
                 producer_node_type, ..
             } => {
                 assert!(
-                    producer_node_type.contains("fluid_seed"),
+                    producer_node_type.contains("seed_particles"),
                     "error must name the offending producer; got {producer_node_type}"
                 );
             }
@@ -1255,11 +1255,11 @@ mod tests {
     #[test]
     fn wire_audit_accepts_fully_pre_allocated_plan() {
         use crate::node_graph::Graph;
-        use crate::node_graph::primitives::FluidSeed;
+        use crate::node_graph::primitives::SeedParticles;
 
         let device = GpuDevice::new();
         let mut graph = Graph::new();
-        graph.add_node(Box::new(FluidSeed::new()));
+        graph.add_node(Box::new(SeedParticles::new()));
         let plan = compile(&graph).expect("seed-only graph compiles");
 
         let mut backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
