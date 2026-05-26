@@ -1,28 +1,48 @@
-# Decomposing Generators — A Working Guide
+# Decomposing — A Working Guide for Generators, Effects, and Bundles
 
-**Status:** Living guide, written 2026-05-21 after Plasma + Lissajous shipped and the post-decomposition audit closed every 🔴/🟠 finding. Read it before starting any generator decomposition.
+**Status:** Living guide. Originally written 2026-05-21 after the Plasma + Lissajous generator decomposition; updated 2026-05-26 after the post-migration inventory revealed the fused-bundle failure mode and the no-fused-monolith rule landed. Read it before starting **any** decomposition — generator, effect, or in-place audit of an existing primitive that looks like a fused bundle.
 
 This guide is the *how-to-think*, not the *how-to-add-a-primitive*. Companion docs:
 
 - [NODE_CATALOG.md](NODE_CATALOG.md) — the settled spec for atoms / effects. Source of truth for type IDs and what exists.
 - [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — design rationale (port types, state model, macro shape).
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — mechanics of writing a new primitive (`primitive!` macro, parity test pattern).
-- [GENERATOR_DECOMPOSITION_PLAN.md](GENERATOR_DECOMPOSITION_PLAN.md) — strategic roadmap (which generator, in what order, what infra it needs).
+- [GENERATOR_DECOMPOSITION_PLAN.md](GENERATOR_DECOMPOSITION_PLAN.md) — historical record of the original generator migration (closed; 0 Rust generators remain).
+- [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) — active 2nd-pass plan: per-bundle inventory, tranche order, atom activation list.
 - [AUDIT_GRAPH_GENERATOR_HOT_PATH.md](AUDIT_GRAPH_GENERATOR_HOT_PATH.md) — the bug classes the system used to have. Everything 🔴/🟠 is closed; read it to know what *not* to reintroduce.
 
 ---
 
 ## 1. Why we decompose
 
-The graph node generator system is not a refactor. It is the surface through which:
+The graph node system is not a refactor. It is the surface through which:
 
 - **AI agents (MCP / API) author looks** by composing curated primitives. The primitive catalog is their vocabulary; bigger curated vocabulary, better authoring.
-- **Users drill in** to a generator and read the wiring, change a routing, swap a sub-graph — the same way Max for Live opens up an Ableton device.
-- **The renderer stays honest.** A graph plus a primitive set is far easier to audit, test, and port than 20 single-file Rust generators with their own private state.
+- **Users drill in** to an effect or generator and read the wiring, change a routing, swap a sub-graph — the same way Max for Live opens up an Ableton device.
+- **The renderer stays honest.** A graph plus a primitive set is far easier to audit, test, and port than monolithic Rust effects and generators with their own private state.
 
-The trap: decomposing for its own sake. A generator that is one shader doing one thing (e.g. a custom raymarch) does not get clearer by being split into a 12-node graph of `wgsl_compute_*` nodes that each contain the same shader code as a slice. **If the decomposition does not yield genuinely reusable primitives, do not decompose.** Keep it as a Rust generator and document why in `GENERATOR_DECOMPOSITION_PLAN.md`.
+The trap on one side: **decomposing for its own sake.** A primitive that's a single GPU dispatch with irreducible math (Lorenz ODE step, Cook-Torrance specular evaluation, Schwarzschild geodesic integration) does not get clearer by being split into a 12-node graph of arithmetic atoms — those operations are below the dispatch granularity and would pay launch overhead for what should be inlined math.
 
-The win condition: the legacy Rust generator gets deleted, the JSON preset is the only path, and the primitives that fell out are useful in *other* graphs too.
+The trap on the other side, and the one that has actually bitten more often: **fusing for parity.** When a migration agent is asked to decompose a legacy effect or generator and reaches the parity test, the shortcut is to write a single fused kernel that bundles 4-6 distinct dispatches into one "primitive" and ship the parity-test pass. This is the bundle-as-primitive anti-pattern and it's not allowed — see §1.1 below.
+
+The win condition: every shipping effect and generator is a graph of single-purpose primitives, and the primitives that fell out are useful in *other* graphs too.
+
+## 1.1 No fused single-effect or single-generator monoliths
+
+**Hard rule:** A primitive does one composable thing — a single GPU dispatch, a single DNN inference, a single FFI call, a single CPU operation. Bundling multiple distinct operations into a "this is the whole effect" or "this is the whole generator" kernel is not permitted.
+
+This rule applies regardless of where the work runs:
+
+- **GPU compute / fragment kernels** — one dispatch per primitive. Multiple operations in one shader belong as separate primitives wired in a graph, not as one fused kernel.
+- **DNN inference** — the inference is one primitive (e.g. `depth_estimate_midas`, `optical_flow_estimate`). The pre/post processing and the consuming effect are separate primitives that compose with it.
+- **FFI / native plugin calls** — the call is one primitive (e.g. `blob_detect_ffi`). The filter/smooth and the overlay render are separate primitives.
+- **CPU operations** — envelope follower, peak detector, glyph rasterizer — each is one primitive.
+
+The four effects that were historically labelled "permanent monoliths" in `NODE_CATALOG.md` (Auto Gain, Blob Track, Wireframe Depth, DoF-DNN) are decomposition targets under this rule. The DNN / FFI / CPU work inside them is correctly at primitive granularity and stays — what gets deleted is the fused outer kernel that bundles those operations together with their consumers. Decomposing activates the corresponding atom-on-the-shelf primitives (`depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `envelope_follower_ar`, `optical_flow_estimate`) that exist registered today but starve because the bundles internalize their work.
+
+**Why the rule:** the graph editor only meets the §0 framing — composable surface for users and AI agents — if effects and generators are *graphs*, not blackboxes. A user who wants to swap Bloom's Gaussian for a box blur needs Bloom to be a graph. A user who wants to drive AutoGain's envelope follower from an audio band instead of luminance needs AutoGain to be a graph. The bundles defeat this; decomposition restores it.
+
+**The fuse-for-parity diagnosis:** if a previous decomposition pass produced a primitive that wraps multiple dispatches and pretends to be primitive-level, it's a 2nd-pass target. The histogram tells you exactly which: `fluid_simulate` (Euler + noise + diffusion + injection), `fluid_simulate_3d` (same in 3D), `fluid_gradient_rotate` (gradient + rotate), `fluid_gradient_curl_3d` (gradient + curl), the curated kernels (`plasma_pattern_2d`, `shape_2d`, `star_field_2d`, `generate_lissajous`), the mesh monoliths (`nested_cubes_geometry`, `digital_plants_render`, `render_3d_mesh_pbr_ibl`), and the six wrapped legacy effects. See `PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` for the tranche order and atom-on-the-shelf inventory.
 
 **Time budgeting**: the first decomposition that uses a new primitive family (Plasma → curated procedural texture; Lissajous → curve sources; WireframeZoo → 3D wireframe pipeline) pays a one-time *inherent* tax — building the new primitives that didn't exist (`wireframe_shape`, `EdgePair`, the `edges` input on `render_lines`). That's an investment, not waste — those primitives become the vocabulary the next generator in the family reuses.
 
@@ -54,7 +74,7 @@ The runtime walks the graph plan once per frame on the content thread, dispatchi
 
 Every decomposition you start has a closely-shaped predecessor already in the tree. Find it before writing anything. Three concrete steps, all read-only, all required:
 
-1. **Survey what primitives exist.** Run `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` (and the `pub const *_TYPE_ID` form for composite-effect primitives). One line per node telling you what it does. The [NODE_CATALOG.md](NODE_CATALOG.md) groups these by intent — read the families relevant to your generator's shape. **The trap this prevents:** proposing a "new" primitive that already exists with a different name (`sobel_edge` re-inventing `convolution_2d_9tap` with Sobel kernels, `levels_remap` re-inventing `scale_offset_texture`, a fused mesh+PBR render duplicating the atomized PBR pattern shipped in OilyFluid).
+1. **Survey what primitives exist — and especially what's registered-but-unused.** Run `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` (and the `pub const *_TYPE_ID` form for composite-effect primitives). One line per node telling you what it does. The [NODE_CATALOG.md](NODE_CATALOG.md) groups these by intent — read the families relevant to your work. **Pay special attention to the registered-but-unused atoms** ([PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) tracks them) — these are vocabulary that's already on the shelf, usually waiting for a consumer. `mip_chain`, `cook_torrance_specular`, `equirect_envmap_sample`, `flow_field_noise`, `uv_displace_by_flow`, `centered_uv`, `polar_field`, `distance_to_point`, `fbm_2d`, `perlin_noise_2d`, `voronoi_2d`, `checkerboard`, `depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_3d_mesh`, `render_instanced_3d_mesh`, `generate_cube_mesh`, `generate_platonic_solid`, `generate_instance_transforms`, `integrate_particles` are all atoms that exist *now* and are likely the right fit for whatever bundled monolith you're auditing. **The trap this prevents:** proposing a "new" primitive that already exists with a different name (`sobel_edge` re-inventing `convolution_2d_9tap` with Sobel kernels, `levels_remap` re-inventing `scale_offset_texture`, a fused mesh+PBR render duplicating the atomized PBR pattern shipped in OilyFluid). Also: fusing a new bundle when the atoms it would internalize are already registered and starving.
 2. **Identify the nearest reference preset and read it end-to-end.** Each shipping JSON preset embodies a canonical decomposition shape:
 
    | Shape | Reference preset |
@@ -93,7 +113,7 @@ The order matters. Skipping a step is how you end up with a graph that "almost w
 6. **Parity-test the whole graph.** Load both the legacy generator and the JSON preset side by side in the running app, run the same canonical fixture (`Liveschool Live Show V6 LEDS.manifold`), compare visually. Where bit-exact is achievable (Tier 1 / 2 in the plan), assert it. Where it isn't (RNG ordering in particle sims, fp16 rounding across many passes), document the bound.
 7. **Migration aliases for renames.** If outer-card param names are different from the legacy generator's positional param indices, add a `paramAliases` table in `PresetMetadata` and / or a `GeneratorAliasMetadata` inventory submission so old projects load unchanged.
 8. **Delete the legacy Rust generator.** The JSON preset is now the only path. The Rust file's deletion ships in the same PR as the preset. (We learned this the hard way with `plasma.rs` — it lingered as shadowed-dead code until the audit.)
-9. **Commit clean. `cargo clippy --workspace -- -D warnings && cargo test --workspace` green.** A completed decomposition is wide-blast-radius by definition (legacy file deletion, registry change, often adjacent-primitive extension), so the full sweep is the right scope *for this step* — not because shipping triggers it, but because the change does. During the iteration leading up to this step, use the focused tests described in §3.1.
+9. **Commit clean with focused tests + crate-scoped clippy.** `cargo run -p manifold-renderer --bin check-presets` + the focused parity test for the generator/effect under work + gpu_tests for any new atom + `cargo clippy -p manifold-renderer -- -D warnings`. **Workspace tests are batched, not run per decomposition** (see §3.1) — during the active 2nd-pass audit (`PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`) skip workspace runs entirely and let the canonical-fixture manual check + focused parity tests carry the per-chat correctness contract. Workspace clippy + `cargo test --workspace` run as a single gate at the *end of the whole pass*, not per generator.
 
 ### 3.1 Iteration loop
 
@@ -101,9 +121,11 @@ The parity test for the effect you're migrating is the safety net you re-run on 
 
 **For JSON preset edits specifically, run `cargo run -p manifold-renderer --bin check-presets` before relaunching the app.** Sub-second, no GPU, no app launch. Walks every preset JSON in `assets/{effect,generator}-presets/` from disk and runs the same `into_graph` + `compile` pipeline the runtime and editor take — catches `UnknownParam` (the "unknown parameter 'foo'" log spam), `UnknownTypeId`, `ParamTypeMismatch`, `InvalidWire`, `RequiredInputUnwired`, cycles, output-slot sizing, and binding-id-vs-outer-param mismatches. This bug class otherwise only surfaces as "editor canvas empty" or "first frame grey, then black" at app launch — cheap to introduce when hand-editing JSON, slow to diagnose if skipped. The parity test catches the same class but requires GPU init and pays the full test-harness cost; `check-presets` is the iteration-loop tool.
 
-Escalate to `cargo test --workspace` when the change's blast radius exceeds one effect or one primitive — touching the parity harness, the graph runtime, `manifold-gpu`, `manifold-core` effect / generator / param types, shared WGSL headers, `Cargo.lock`, or completing a decomposition (step 9). Touching the primitive or its preset is *not* wide-blast; touching the harness that runs every primitive's tests is. If you're unsure, it's infrastructure — run the full sweep.
+Escalate to `cargo test --workspace` when the change's blast radius exceeds one effect or one primitive — touching the parity harness, the graph runtime, `manifold-gpu`, `manifold-core` effect / generator / param types, shared WGSL headers, or `Cargo.lock`. Touching the primitive or its preset is *not* wide-blast; touching the harness that runs every primitive's tests is.
 
-Pre-push is **not** a trigger by itself. Pushes happen on every change here, so "before push" collapses into "always" and defeats the scope rule. The whole point of the focused tests is that they let small changes ship in seconds; gating every push on the workspace run gives that back. The cost of this discipline is that blast-radius judgment is now load-bearing — if you misjudge what reaches the parity-tested path, the bug lands. Bias toward escalation when uncertain.
+**During the 2nd-pass decomposition audit, don't even escalate per-decomposition.** The workspace test takes 30+ minutes; running it after every chat across ~14 generators is hours of waste. Per-chat tests are: `check-presets` (sub-second JSON validator), focused parity (`cargo test -p manifold-renderer --test parity <name>::`), and `gpu_tests` for any new atom. Crate-scoped clippy (`cargo clippy -p manifold-renderer -- -D warnings`) replaces workspace clippy during the pass. Workspace tests batch as a single gate at the end of the whole pass, with manual canonical-fixture checks in the running app filling the visual-sanity role between chats. See [`PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) §4.1 for the per-chat test discipline.
+
+Pre-push is **not** a trigger by itself. Pushes happen on every change here, so "before push" collapses into "always" and defeats the scope rule. The whole point of the focused tests is that they let small changes ship in seconds; gating every push on the workspace run gives that back. The cost of this discipline is that blast-radius judgment is now load-bearing — if you misjudge what reaches the parity-tested path, the bug lands. Bias toward escalation when uncertain *outside* the decomposition pass; inside the pass, trust the focused-test contract and let workspace tests batch.
 
 The trap to avoid: running `cargo test --workspace` between every small edit because it feels safer. It's not safer — it just rewards slower iteration with slower iteration. The focused parity test is the same correctness contract scoped to what you actually changed.
 
@@ -203,6 +225,28 @@ Apply this to anything you're tempted to call a §5 case. If the answer is "no, 
 ### If you do reach for `wgsl_compute_*`
 
 Treat the embedded WGSL as the contract: format declarations are load-bearing (per the per-slot format work in D5 of the decomposition plan), uniform layouts must match what the JSON binds, and the node's `composition_notes` field must call out the precision requirements so the next reader knows why the escape hatch is here.
+
+### 5.6 Atom decomposition is the path — wgsl_compute is the escape hatch, not a curated-family backing
+
+**Default: every curated kernel atom-decomposes.** The math becomes visible by being expressed as a graph of named atoms in the editor, not by exposing shader source on a sealed primitive. TouchDesigner's CHOP pattern is the canonical reference: a Lissajous curve in TD isn't a "Lissajous CHOP" — it's a Pattern CHOP (generates the t-parameter as a sample array) → Math CHOP (multiplies by frequencies) → Function CHOP (sin / cos applied elementwise) → Merge CHOP (combines x and y channels) → To-SOP. The math is visible *as the graph itself*. If a user wants a Rose curve instead of a Lissajous, they swap the Math CHOP's formula or rewire the Function CHOPs. That's the §0 framing in practice — the primitive library is the product, the graph is the authoring surface, the math is read-and-recomposable through the editor without ever touching shader code.
+
+The cost is library growth: small atoms like `generate_range` (linspace), `array_math` (elementwise scalar ops over `Array<f32>`), `array_trig` (sin/cos/tan elementwise), packers (`pack_curve_xy` from two `Array<f32>` into `Array<CurvePoint>`), array-domain projection (`array_project_3d`), array-domain ODE rhs evaluation (`array_eval_ode` with attractor enum), array-axpy / elementwise integration. Each ships as its own primitive with `gpu_tests` parity. Every atom you build is permanent reusable vocabulary that every future parametric curve, particle integrator, deformation graph, or audio-reactive pipeline composes from.
+
+**The bar is dispatch granularity, not per-arithmetic-op decomposition.** Each atom is one composable GPU dispatch with irreducible math inside. A per-particle ODE rhs evaluation is one dispatch (5-10 lines of closed-form math per particle); decomposing that further into per-multiply texture passes is wrong granularity and not what the rule asks for. The point is that single dispatches WITH closed-form math composed into a multi-dispatch graph give you visibility and reusability. The closed-form math inside any one dispatch stays inside that dispatch.
+
+Worked examples — all in the atom-decompose category:
+
+- **`generate_lissajous`** — `generate_range` + `array_math` (elementwise) + `array_trig` (sin) + `pack_curve_xy`. TD's CHOP graph is the reference.
+- **`plasma_pattern_2d`** — `centered_uv` + `sin_term` + `math` + `mix` per variant. Activates the unused noise/math vocabulary.
+- **`shape_2d`** — `distance_to_point` + `math` + `smoothstep_texture` atoms for the SDFs.
+- **`star_field_2d`** — `hash_noise_field_2d` + `node.filter` (threshold) + `brightness` + layered composition atoms.
+- **`wireframe_shape` + `generate_tesseract_vertices` + `generate_duocylinder_vertices`** — per-shape vertex math atoms unified by topology, sharing the same downstream `rotate / project / render_lines` pipeline.
+- **`integrate_particles_attractor`** — `array_eval_ode` (attractor enum: Lorenz / Rössler / Aizawa / Thomas / Halvorsen) + `array_axpy` / elementwise array math for RK2 integration + `array_project_3d` for rendering. Five dispatches per substep, all at sane granularity, all reusable for any other ODE-integrated effect.
+- **Cook-Torrance specular, Schwarzschild geodesic, character_color (AutoGain)** — same shape when those decomposition tasks land. The per-fragment / per-particle math is dispatch-granular and composes into a graph of named atoms.
+
+**`wgsl_compute` is a separate thing.** It's the escape hatch for users (or AI agents) authoring genuinely novel kernels that the curated atom library doesn't cover — write your own WGSL, output your own typed buffer, drop it into the graph. BlackHole demonstrates this for Schwarzschild geodesic integration. That use case stays. What we *don't* do is reach for `wgsl_compute`-as-curated-backend (the "doorway pattern" framing in earlier drafts of this section) as a fallback for atom decomposition. The doorway framing turned out to be a category that almost never applies in practice — when a curated kernel looks irreducible, the honest move is to look more carefully at dispatch granularity, not to seal the math behind editable shader source.
+
+The general rule: **a curated kernel should never be a wall.** The user drills in and reads / recomposes the math as a graph of atoms. That's the only path the audit prescribes. `wgsl_compute` exists for novel user kernels, not for backing curated primitives with N-variants-as-shader-strings.
 
 ## 6. Keep the graph small
 

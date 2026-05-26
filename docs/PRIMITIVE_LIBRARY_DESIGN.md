@@ -2,14 +2,16 @@
 
 **Status:** Draft 1, 2026-05-11. Implements §0 of [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md).
 
+> **Update 2026-05-26:** Principles 1, 3, and 4 below are partially superseded by the no-fused-monolith rule. The original plan tolerated fused composites and monolithic remainders pending a future fusion compiler; the post-migration inventory revealed that this carve-out produced the bundle-as-primitive anti-pattern at scale, and the rule has been tightened. The authoritative spec is now `CLAUDE.md` (hard rules) + `DECOMPOSING_GENERATORS.md` §1.1 + [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). This doc is kept as historical record of the Phase 4a thinking; per-principle deltas inlined below.
+
 **Goal:** A primitive library that humans and AI agents compose into custom visuals (TouchDesigner-style creative surface), while preserving pixel-exact reproduction of every existing effect and generator. The library is the product.
 
 ## 1. Design principles
 
-1. **Pixel-perfect mathematically exact.** Every existing effect and generator must round-trip bit-identical bytes through its decomposed form. Where multi-pass decomposition introduces intermediate `Rgba16Float` rounding that the legacy single-pass shader doesn't have, the primitive is shipped as a *fused composite primitive* (one shader, one pass) rather than split. When the future fusion compiler (Phase 5) can re-merge adjacent primitives into one dispatch, those composites split into atomics.
+1. **Pixel-perfect mathematically exact.** Every existing effect and generator must round-trip bit-identical bytes through its decomposed form. ~~Where multi-pass decomposition introduces intermediate `Rgba16Float` rounding that the legacy single-pass shader doesn't have, the primitive is shipped as a *fused composite primitive* (one shader, one pass) rather than split.~~ **Superseded 2026-05-26:** the fp16-rounding fusion exception turned out to be the migration-shortcut justification more often than a real precision constraint. Decompose into atoms; spec the intermediate texture format as `Rgba32Float` (or whatever the legacy shader's register precision was) so the round-trip is bit-exact. The "future fusion compiler" the original principle waited on has not shipped; the cost of waiting is the bundle-as-primitive pile we're now auditing out. See `DECOMPOSING_GENERATORS.md` §5 for the residual irreducible-chain exception (multi-pass + per-pass format choices both load-bearing) — that remains a real category but it's narrow.
 2. **≥2-use filter for atomics, single-use OK for "the effect IS the primitive".** Don't build `BoxBlur` because nothing uses it. Do build `KaleidoFold` even though only Kaleidoscope uses it — because the effect itself becomes that primitive.
-3. **Generators stay mostly monolithic.** Each generator is an algorithm-unique sim or procedural source; their decomposition value is in extracting *shared 3D infra* (camera, projection, line rasterizer, particle scatter/resolve), not in shattering each generator's algorithm.
-4. **Monolithic remainders are first-class library members.** `BlobTrack`, `WireframeDepth`, `AutoGain`, `DoF-Depth` (the DNN variant), and most generators are custom `EffectNode`s in the same library, exposed with typed ports + named parameters. TouchDesigner does this too (DNN TOPs).
+3. **~~Generators stay mostly monolithic.~~** **Superseded:** all generators are JSON-defined graphs as of May 2026 (`docs/GENERATOR_DECOMPOSITION_PLAN.md`); zero Rust `inventory::submit!` generators remain. The "mostly monolithic" framing came from the original Phase 4a planning when the unknown was how far decomposition would reach; the answer turned out to be "all of them," and the per-generator history is documented case-by-case.
+4. **~~Monolithic remainders are first-class library members.~~** **Superseded by the no-fused-monolith rule:** DNN / FFI / CPU work is correctly at primitive granularity (`depth_estimate_midas`, `blob_detect_ffi`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_text` — all single-purpose primitives), but the fused outer kernel that bundles them with their consumers is a decomposition target, not a permanent shape. The four effects originally carved out as permanent monoliths (AutoGain, BlobTrack, WireframeDepth, DoF-DNN) are all 2nd-pass decomposition targets — see [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). TouchDesigner does *not* ship DNN TOPs as monolithic blackboxes either — it ships them as nodes you compose with, which is the same shape the no-monolith rule produces here.
 5. **AI-readable metadata.** Each primitive declares: semantic purpose docstring, typed ports, named parameters with ranges and units, an example preset graph that uses it. Without this metadata the AI composition surface is unusable.
 
 ## 2. Primitive catalog (43 primitives)
@@ -303,12 +305,14 @@ All three ship as fused composite primitives (same pattern as Glitch, Strobe, Ed
 20. Split `DoFGeometric` from `DoFDepth`: geometric variants decompose via Sobel/Gaussian; depth variant stays as monolithic node.
 21. New monolithic `DoFDepth` node wrapping the DNN path.
 
-### 6.5 Monolithic remainders as custom nodes (4 commits)
+### 6.5 Monolithic remainders as custom nodes (4 commits) — *superseded 2026-05-26*
 
-22. `AutoGainNode` — CPU envelope + GPU apply pass wrapped as a single `EffectNode`.
-23. `BlobTrackNode` — native plugin + One-Euro + overlay render.
-24. `WireframeDepthNode` — full 15-pass pipeline + DNN workers.
-25. `DoFDepthNode` — MiDaS-based DoF (already #21, just confirms).
+> **Status:** This subsection captures the original Phase 4a plan, where the four DNN/FFI/envelope-state effects (`AutoGain`, `BlobTrack`, `WireframeDepth`, `DoFDepth`) were planned to ship as monolithic custom nodes that wrapped their legacy pipelines wholesale. **This carve-out is retired.** The no-fused-monolith rule (`CLAUDE.md` hard rules, `DECOMPOSING_GENERATORS.md` §1.1) requires every effect to be a graph of single-purpose primitives, including DNN / FFI / CPU work. DNN inference, FFI calls, CPU envelope follows, and CPU peak detection are correctly at primitive granularity — they stay — but the fused outer kernel that bundles them with their consumers is a decomposition target. See [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) for the current per-bundle decomposition plan; the atoms each effect activates (`depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `envelope_follower_ar`) are already registered as primitives today.
+
+22. ~~`AutoGainNode` — CPU envelope + GPU apply pass wrapped as a single `EffectNode`.~~ → decomposes into `luminance` + `envelope_follower_ar` + `gain` + `character_color` (the 5-variant character coloration becomes a curated-via-wgsl_compute family per `DECOMPOSING_GENERATORS.md` §5.6).
+23. ~~`BlobTrackNode` — native plugin + One-Euro + overlay render.~~ → decomposes into `blob_detect_ffi` + `one_euro_filter` (new primitive) + `blob_overlay_render`.
+24. ~~`WireframeDepthNode` — full 15-pass pipeline + DNN workers.~~ → decomposes into `depth_estimate_midas` + `edge_detect` + wireframe rendering primitives.
+25. ~~`DoFDepthNode` — MiDaS-based DoF.~~ → decomposes per branch: DNN branch (`depth_estimate_midas` + CoC + separable Gaussian + composite), tilt-shift branch (`tilt_shift_mask` + CoC + …), radial branch (`radial_mask` + CoC + …).
 
 ### 6.6 Effect-only runtime cutover + persistence (~6 commits — early play point)
 

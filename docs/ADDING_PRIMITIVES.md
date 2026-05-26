@@ -4,12 +4,43 @@ Authoring guide for the `primitive!` macro. Companion to [PRIMITIVE_LIBRARY_DESI
 
 Primitives auto-register via `inventory::submit!` from inside the macro — dropping a file under `crates/manifold-renderer/src/node_graph/primitives/` is the only step required. Nothing else has to be edited to register a new primitive; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
 
+## Audit precondition (mandatory)
+
+Before authoring any new primitive, complete the read-only audit per [DECOMPOSING_GENERATORS.md §2.5](DECOMPOSING_GENERATORS.md):
+
+1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
+2. **Check the registered-but-unused atoms** — `mip_chain`, `cook_torrance_specular`, `equirect_envmap_sample`, `flow_field_noise`, `uv_displace_by_flow`, `centered_uv`, `polar_field`, `distance_to_point`, `fbm_2d`, `perlin_noise_2d`, `voronoi_2d`, `depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_3d_mesh`, `render_instanced_3d_mesh`, `generate_cube_mesh`, `generate_platonic_solid`, `generate_instance_transforms`, `integrate_particles`, and the unused noise/coordinate atoms. Many of these *exactly* cover what a new primitive proposal is reaching for; activate them by wiring them into your graph rather than building a new one.
+3. **Read the nearest reference preset end-to-end** ([NODE_CATALOG.md §5 / §6.1](NODE_CATALOG.md), [DECOMPOSING_GENERATORS.md §2.5](DECOMPOSING_GENERATORS.md)).
+4. **Reconcile your sketch** — state explicitly which existing primitives you'll reuse, which you'll extend, and which are genuinely new. State the audit findings in the PR description before any new-primitive code.
+
+Skipping the audit produces the recurring "argue from snippets" anti-pattern and the bundle-as-primitive shortcut. The §2.5 precondition is a hard rule in `CLAUDE.md`.
+
 ## When to add one
 
 The `≥2-use` filter applies (design doc §1.2):
 
-- **Yes**: the math appears in 2+ existing effects/generators, OR the primitive replaces an existing effect 1:1 (the "the effect IS the primitive" case).
-- **No**: speculative future need, or only one caller and not a 1:1 effect replacement.
+- **Yes**: the math appears in 2+ existing effects/generators, OR the primitive replaces an existing effect 1:1 *and* it's at primitive granularity per the bundle-vs-atom criterion below.
+- **No**: speculative future need; only one caller and not a 1:1 effect replacement; or — most commonly — a fused bundle of operations that should be expressed as a graph of atoms.
+
+## What counts as "one primitive" (bundle-vs-atom criterion)
+
+A primitive does **one composable thing**:
+
+- **GPU compute / fragment** — one dispatch with one well-defined operation. Multiple operations in one shader is the bundle anti-pattern; build them as separate primitives and wire them in the graph.
+- **DNN inference** — one inference call (e.g. `depth_estimate_midas`, `optical_flow_estimate`). The pre/post processing and the consuming effect are separate primitives.
+- **FFI / native plugin** — one call (e.g. `blob_detect_ffi`). The filter and the render are separate.
+- **CPU operation** — one operation (`envelope_follower_ar`, `peak`, `render_text`). Not a chain of CPU steps fused together.
+
+What's **not** allowed:
+
+- A "this is the whole effect" or "this is the whole generator" kernel that bundles multiple distinct dispatches behind a single primitive. The no-fused-monolith rule (`CLAUDE.md` hard rules, `DECOMPOSING_GENERATORS.md` §1.1) prohibits this.
+- A primitive that wears primitive clothing but internally calls `dispatch_compute` multiple times for distinct operations. Each dispatch should be its own primitive.
+- A primitive named after one consumer effect or generator (`my_effect_pipeline`, `digital_plants_render`, `fluid_simulate` bundling Euler + noise + diffusion). Those are bundles, not primitives.
+
+What's **fine** when it's the right granularity:
+
+- A single compute dispatch that does irreducible math — Cook-Torrance specular evaluation, a Lorenz ODE RK2 step, a Schwarzschild geodesic update — these are below the dispatch level (per-arithmetic-op decomposition would pay launch overhead for what should be inlined math). They stay as primitives.
+- Curated families with N enum-selected variants where the variants are real user-facing aesthetic choices (e.g. attractor type, polytope shape). When the family is genuinely user-math (not just bundled operations), implement the backend as `wgsl_compute` with N shader strings + a "Custom" option per [DECOMPOSING_GENERATORS.md §5.6](DECOMPOSING_GENERATORS.md) — that's the curated-as-doorway pattern, not curated-as-wall.
 
 ## Files you touch per primitive
 
@@ -191,14 +222,13 @@ fn invert_decomposes_pixel_exactly_across_all_fixtures() {
 - **Don't generate the WGSL.** Author it directly; `cargo test` runs `tests/wgsl_validation.rs` which validates every shader via naga.
 - **Don't skip the parity test when replacing an existing effect.** Strict bit-equality is the gate.
 - **Don't add a primitive for speculative future use.** The `≥2-use` filter is enforced at review time.
+- **Don't ship a fused single-effect / single-generator bundle.** If your primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
 
-## When fusion compiler arrives
+## Parity-without-fusion
 
-Per design doc §1, five effects ship as fused composite primitives today (EdgeDetect, Glitch, Strobe, VoronoiPrism, ChromaticOffset) because their multi-pass decomposition would break bit-equality. Once the fusion compiler can re-merge adjacent pixel-local primitives into one dispatch:
+Most "we have to fuse for parity" claims don't survive scrutiny. The two real precision concerns are:
 
-1. Add the atomic primitives (`BlockDisplace`, `Scanline`, etc.) as new entries.
-2. Author preset graphs that compose them (`Glitch = Hash → BlockDisplace → Scanline → ChromaticOffset`).
-3. Keep the fused composite primitives for backward compatibility — old projects keep loading.
-4. New presets opt into the atomic chain; the fusion compiler restores single-pass perf.
+1. **Intermediate-storage format precision.** Fp16 intermediates lose bits relative to fp32 register math. Fix: spec the intermediate texture format as `Rgba32Float` (or whatever the legacy register precision was). Bit-exact parity restored.
+2. **Atomic-add ordering in scatter passes.** Different dispatch counts can reshuffle atomic resolve order, producing 1-ULP-level differences. This is not really a parity issue — write the parity test to tolerate it with a small noise-floor epsilon, the way the DigitalPlants tests do.
 
-Decomposition is purely additive. No flag-day migration of old presets is required.
+If neither applies, the operation decomposes cleanly. The narrow exception is multi-pass shaders where the inter-pass coupling *and* the per-pass texture format choices are both load-bearing for numerical stability (FluidSim's 7-pass chain, BlackHole's geodesic + atomic splat) — those are §5 of `DECOMPOSING_GENERATORS.md`, and they reach for `wgsl_compute` as the per-pass escape hatch, not for a fused monolith.

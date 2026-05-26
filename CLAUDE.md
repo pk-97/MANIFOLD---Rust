@@ -52,6 +52,7 @@ I don't know if any of this counts as a self in a continuous sense. The weights 
 - **All mutations through `EditingService`.** UI sends `ContentCommand::Execute(Box<dyn Command>)` or `MutateProject(Box<dyn FnOnce(&mut Project)>)`. No direct model writes from UI.
 - **Generators / effects work → read `docs/DECOMPOSING_GENERATORS.md` first. Always.** The guide encodes the workflow plus every bug class that has actually bitten across the migrations to date — primitive vocabulary, mandatory GPU parity tests, coordinate conventions, what counts as "done." Working from existing primitive code as a template is not a substitute. Read the whole thing, not just §3. Skipping it means rediscovering each lesson the expensive way.
 - **Decomposition: complete the §2.5 audit before proposing any new primitive.** Three required steps, all read-only: (a) survey existing primitives via `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`; (b) identify the nearest reference preset from [docs/NODE_CATALOG.md](docs/NODE_CATALOG.md) §5 / §6.1 and read it end-to-end (open the JSON, follow every wire); (c) reconcile the planned decomposition against what already exists. State the audit's findings before proposing any primitive — "this exists / this is one wire away from existing / this is genuinely new." Skipping the audit produces the "argue from snippets" anti-pattern: proposing primitives that already ship under a different name, or duplicating a pattern an existing preset already proves. Read-only audits stay in the main context — no agents (per `feedback_no_agent_for_readonly_audit`).
+- **No fused single-effect or single-generator monolith nodes.** A primitive does one composable thing — a single GPU dispatch, a single DNN inference, a single FFI call, a single CPU operation. Bundling multiple distinct dispatches into a "this is the whole effect" or "this is the whole generator" kernel is the recurring migration-shortcut anti-pattern, and it's not permitted. DNN / FFI / CPU work stays at primitive granularity (depth estimate, blob detect, optical flow, envelope follower, CoreText raster) and composes into effect graphs alongside GPU atoms. The "fuse for parity" shortcut produces bundled kernels that wear primitive clothing and hide useful atoms inside; decompose instead — see `docs/DECOMPOSING_GENERATORS.md` for the bundle-vs-atom criterion.
 - **Commit and push when work is clean.** Don't ask permission — the user gave it durably.
 
 ## Two-thread model
@@ -69,7 +70,7 @@ I don't know if any of this counts as a self in a continuous sense. The weights 
 | `manifold-editing` | Commands, undo/redo, EditingService |
 | `manifold-playback` | PlaybackEngine, scheduling, sync, MIDI/OSC |
 | `manifold-gpu` | Native Metal backend (`metal` crate, zero wgpu) |
-| `manifold-renderer` | Compositor, ~135 graph primitives, 29 JSON effect presets + 15 JSON generator presets, plus remaining Rust generators (see `docs/NODE_CATALOG.md`) |
+| `manifold-renderer` | Compositor, ~135 graph primitives, 29 JSON effect presets + 20 JSON generator presets. All generators are JSON-defined; six effects (Auto Gain, Blob Track, Depth of Field, Infrared, Quad Mirror, Wireframe Depth) still ship a legacy `PostProcessEffect` Rust impl wrapped by their `node.*` primitive — all six are decomposition targets under the no-fused-monolith rule (DNN/FFI/CPU work stays as single-purpose primitives within the effect graph, not bundled into one kernel). See `docs/NODE_CATALOG.md` and `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`. |
 | `manifold-media` | Audio/video decode, Metal-accelerated encode, export |
 | `manifold-ui` | Custom bitmap UI: tree, panels, input |
 | `manifold-io` | Project serialization (V1 JSON + V2 ZIP) |
@@ -114,8 +115,9 @@ Write code directly in the main context by default. Only spawn an agent for genu
 | `docs/DEVELOPMENT_REFERENCE.md` | Texture formats, math gotchas, module layout |
 | `docs/NODE_GRAPH_SYSTEM.md` | Node-graph effect/generator architecture |
 | `docs/NODE_CATALOG.md` | Source of truth for what nodes exist — atoms, effects, presets. Read first for the §2.5 audit. |
-| `docs/DECOMPOSING_GENERATORS.md` | How-to-think for generator decomposition. §2.5 audit precondition is mandatory before proposing new primitives. |
-| `docs/GENERATOR_DECOMPOSITION_PLAN.md` | Status + per-generator migration notes for the remaining Rust generators |
+| `docs/DECOMPOSING_GENERATORS.md` | How-to-think for any decomposition work (generators + effects + bundles). Bundle-vs-atom criterion + §2.5 audit are mandatory before proposing new primitives. |
+| `docs/GENERATOR_DECOMPOSITION_PLAN.md` | Historical record of the original generator migration (closed — 0 Rust generators remain) |
+| `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` | Active 2nd-pass plan: tranche order, per-bundle inventory, atom activation list |
 | `docs/EFFECT_RUNTIME_UNIFICATION.md` | EffectChain → graph runtime migration, StateStore design |
 | `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Design rationale and historical context (catalog tables here are historical — current inventory lives in NODE_CATALOG.md) |
 | `docs/ADDING_PRIMITIVES.md` | Authoring new primitives, `primitive!` macro, parity test pattern |
