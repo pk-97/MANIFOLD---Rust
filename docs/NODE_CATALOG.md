@@ -143,7 +143,7 @@ Compose these for arbitrary procedural fields.
 
 | Display Name | Type ID | Purpose |
 |---|---|---|
-| Mix | `node.compose` (id `node.mix`) | Blend two textures — Lerp/Screen/Add/Max/Multiply/Difference/Overlay |
+| Mix | `node.compose` (id `node.mix`) | Blend two textures — Lerp/Screen/Add/Max/Multiply/Difference/Overlay/Divide. Divide guards against b≈0. |
 | Masked Mix | `node.masked_mix` | Per-pixel weighted blend driven by mask.r |
 | Wet/Dry | `node.wet_dry_mix` (id `node.wet_dry`) | Crossfade processed against original |
 | Texture Sum 5 | `node.texture_sum_5` | Weighted sum of 5 textures — collapses long Mix(Add) chains |
@@ -175,11 +175,11 @@ One-frame readback latency. Pair with `Gain`, `Math`, `Feedback.amount`, etc. fo
 
 | Display Name | Type ID | Purpose |
 |---|---|---|
-| Gradient (central diff) | `node.gradient_central_diff` | Half-difference gradient `(dx, dy)` of a single channel |
+| Gradient (central diff) | `node.gradient_central_diff` | Half-difference gradient `(dx, dy)` of a single channel. `scale_mode`: Texel (default) or UV (multiplies by dim/2 per axis). `wrap_mode`: Clamp (default) or Repeat (toroidal — fluid sims). |
 | Heightmap to Normal | `node.heightmap_to_normal` | Scalar height → tangent-space normal map via central-diff |
 | Length (vec2) | `node.length_vec2` | `length(in.rg)` as a scalar field — vec2 magnitude atom |
 | Normalize (vec2) | `node.normalize_vec2` | Safe-normalize RG as a 2D direction field |
-| Rotate vec2 90° | `node.rotate_vec2_90` | Curl-from-gradient atom (±90° rotation per pixel) |
+| Rotate vec2 (Angle) | `node.rotate_vec2_by_angle` | Per-pixel vec2 rotation by an arbitrary port-shadowed angle (radians); default PI/2. Legacy `node.rotate_vec2_90` type-ID aliases here. |
 | Array Unpack vec2 | `node.array_unpack_vec2` | Decompose `Array<vec2<f32>>` into two `Array<f32>` channels |
 | Canvas Area Scale | `node.canvas_area_scale` | `(width * height) / reference_area` — resolution-aware brightness compensation |
 
@@ -394,7 +394,7 @@ All shipping generators are JSON-defined sub-graphs at [`assets/generator-preset
 | Lissajous | parametric curve, fully atomized: `lfo` ×3 + `frequency_ratio` + `mux_scalar` ×2 → per-axis `math(Floor/Ceil/Subtract)` bracket + `generate_range` → `array_math(ScaleOffset+Sin)` ×4 + `array_math(Mix)` ×2 → `pack_curve_xy` → `render_lines`. The TouchDesigner Pattern→Math→Function→Merge→To-SOP shape; bracket-interp is graph-visible. |
 | MetallicGlass | feedback-displacement metallic surface: `simplex_field_2d` + `scale_offset` → `feedback` ping-pong with `mix Difference`+`abs`+`mix Lerp` 0.98 → `gaussian_blur` H/V → split into height/levels chain and `mirror_axis`+`convolution_2d_9tap`×2+`pack_channels`+`length_vec2` Sobel chain → `pack_channels` packed material → temporal blend via `feedback`+`mix Lerp` 0.15 → `generate_grid_mesh` → `displace_mesh` → `triangulate_grid` → `render_3d_mesh_pbr_ibl` (with `bake_equirect_envmap`) |
 | MriVolume | volumetric scrubbing: `image_folder` ×3 → `mux_texture` → `sharpen` → `smoothstep_texture` → `invert` |
-| ParticleText | FluidSim2D base + text-force branch (`render_text → gaussian_blur H+V → gradient_central_diff → rotate_vec2_90 → gain → blend Add into the force chain`). The glyphs are baked into the force field as a perpendicular-curl flow, particles continuously stream along the text shape instead of being seeded at it |
+| ParticleText | FluidSim2D base + text-force branch (`render_text → gaussian_blur H+V → gradient_central_diff → rotate_vec2_by_angle → gain → blend Add into the force chain`). The glyphs are baked into the force field as a perpendicular-curl flow, particles continuously stream along the text shape instead of being seeded at it |
 | NestedCubes | instanced mesh with cycled poses: `trigger_gate` → `scalar_array_accumulator` → `cycle_table_row` → `mux_array` → `nested_cubes_geometry` |
 | OilyFluid | screen-space fluid + atomized PBR: `feedback` ×2 + gradient atoms + `texture_advect` + `simplex_field_2d` → `heightmap_to_normal` → `lambert_directional` + `matcap_two_tone` + `fresnel_rim` + `blinn_specular` summed via `mix` |
 | Plasma | single curated family primitive: `plasma_pattern_2d` |

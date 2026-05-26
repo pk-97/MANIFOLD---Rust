@@ -25,7 +25,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize_vec2 → (sum two of these) → node.gain → node.rotate_vec2_90`.",
+    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize_vec2 → (sum two of these) → node.gain → node.rotate_vec2_by_angle`.",
     examples: [],
     picker: { label: "Normalize Vec2", category: Atom },
 }

@@ -17,6 +17,7 @@
 //   4 = Multiply    — blend = a * b
 //   5 = Difference  — blend = abs(a - b)
 //   6 = Overlay     — per-channel: a<0.5 → 2ab; else → 1-2(1-a)(1-b)
+//   7 = Divide      — per-channel a/b, guarded: |b|<1e-6 → 0 (avoid NaN/Inf)
 //
 // Bindings:
 //   @binding(0) uniforms (amount + mode + 8 bytes pad → 16-byte aligned)
@@ -45,6 +46,13 @@ fn overlay_channel(a: f32, b: f32) -> f32 {
     return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
 }
 
+fn safe_div(a: f32, b: f32) -> f32 {
+    if abs(b) < 1.0e-6 {
+        return 0.0;
+    }
+    return a / b;
+}
+
 fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
     switch mode {
         case 0u: { return b; }
@@ -58,6 +66,13 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
                 overlay_channel(a.x, b.x),
                 overlay_channel(a.y, b.y),
                 overlay_channel(a.z, b.z),
+            );
+        }
+        case 7u: {
+            return vec3<f32>(
+                safe_div(a.x, b.x),
+                safe_div(a.y, b.y),
+                safe_div(a.z, b.z),
             );
         }
         default: { return b; }

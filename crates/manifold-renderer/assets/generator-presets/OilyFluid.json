@@ -91,8 +91,8 @@
     { "id": 8,  "typeId": "node.mix", "handle": "grad_sum",
       "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
     { "id": 9,  "typeId": "node.gain", "handle": "curl_gain", "params": { "gain": { "type": "Float", "value": 0.2 } } },
-    { "id": 10, "typeId": "node.rotate_vec2_90", "handle": "curl_rotate",
-      "params": { "direction": { "type": "Enum", "value": 0 } } },
+    { "id": 10, "typeId": "node.rotate_vec2_by_angle", "handle": "curl_rotate",
+      "params": { "angle": { "type": "Float", "value": 1.5707963 } } },
 
     { "id": 41, "typeId": "node.downsample", "handle": "vel_downsample",
       "params": { "factor": { "type": "Enum", "value": 1 } } },

@@ -30,7 +30,7 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 // =====================================================================
 
 /// Display labels for [`Mix`]'s `mode` enum. Index = enum value:
-/// 0=Lerp, 1=Screen, 2=Add, 3=Max, 4=Multiply, 5=Difference, 6=Overlay.
+/// 0=Lerp, 1=Screen, 2=Add, 3=Max, 4=Multiply, 5=Difference, 6=Overlay, 7=Divide.
 ///
 /// `Lerp` collapses the crossfade to pure linear interpolation —
 /// `out = mix(a, b, amount)` — and is the default. Every other mode
@@ -44,12 +44,13 @@ pub const MIX_MODES: &[&str] = &[
     "Multiply",
     "Difference",
     "Overlay",
+    "Divide",
 ];
 
 crate::primitive! {
     name: Mix,
     type_id: "node.mix",
-    purpose: "Combine two textures with one of 7 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay), crossfaded back against A by `amount`. At amount=0 returns A unchanged; at amount=1 returns the full blended result. Lerp mode is a pure linear crossfade.",
+    purpose: "Combine two textures with one of 8 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay, Divide), crossfaded back against A by `amount`. At amount=0 returns A unchanged; at amount=1 returns the full blended result. Lerp mode is a pure linear crossfade. Divide mode is per-channel `a / b`, guarded against divide-by-near-zero (returns 0 when `b` is below epsilon — same convention as `node.array_math` Divide).",
     inputs: {
         a: Texture2D required,
         b: Texture2D required,
@@ -71,11 +72,11 @@ crate::primitive! {
             label: "Blend Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
-            range: Some((0.0, 6.0)),
+            range: Some((0.0, 7.0)),
             enum_values: MIX_MODES,
         },
     ],
-    composition_notes: "Use Lerp for pure crossfades; Add/Screen for additive bloom-style merges; Multiply for darkening masks; Max for tonemap-safe brightening; Overlay for contrast-preserving combines.",
+    composition_notes: "Use Lerp for pure crossfades; Add/Screen for additive bloom-style merges; Multiply for darkening masks; Max for tonemap-safe brightening; Overlay for contrast-preserving combines; Divide for per-channel `a/b` (useful for normalising one field by another — e.g. density-driven scaling fields in fluid sims). Divide guards against divide-by-near-zero by returning 0 when `b` is below 1e-6.",
     examples: ["composite.bloom", "composite.halation"],
     picker: { label: "Mix", category: Atom },
 }
@@ -98,8 +99,8 @@ impl Primitive for Mix {
             _ => 0.5,
         };
         let mode = match ctx.params.get("mode") {
-            Some(ParamValue::Enum(v)) => (*v).min(6),
-            Some(ParamValue::Float(f)) => (f.round() as u32).min(6),
+            Some(ParamValue::Enum(v)) => (*v).min(7),
+            Some(ParamValue::Float(f)) => (f.round() as u32).min(7),
             _ => 0,
         };
 
@@ -518,7 +519,7 @@ mod gpu_tests {
         let a = [0.4, 0.6, 0.2, 1.0];
         let b = [0.3, 0.5, 0.8, 1.0];
         let tol = 0.01;
-        for mode in 0u32..=6 {
+        for mode in 0u32..=7 {
             let out = run_mix_at(a, b, mode, 0.0);
             for c in 0..4 {
                 assert!(
@@ -531,6 +532,23 @@ mod gpu_tests {
         }
     }
 
+    /// Divide mode guards against divide-by-near-zero — when `b` is below
+    /// the 1e-6 epsilon, the channel returns 0 rather than producing NaN/Inf.
+    #[test]
+    fn mix_divide_guards_against_near_zero_b() {
+        let a = [0.4, 0.6, 0.2, 1.0];
+        let b = [0.0, 0.0, 0.0, 1.0];
+        let tol = 0.01;
+        let out = run_mix_at(a, b, 7, 1.0);
+        for c in 0..3 {
+            assert!(
+                out[c].abs() < tol,
+                "Divide channel {c}: got {} expected 0.0 (b near zero)",
+                out[c]
+            );
+        }
+    }
+
     /// At amount = 1, each mode computes the pure blend of A and B.
     /// The expected values below are hand-derived from the per-mode
     /// formulas documented in `shaders/mix.wgsl`.
@@ -539,7 +557,7 @@ mod gpu_tests {
         let a = [0.4, 0.6, 0.2, 1.0];
         let b = [0.3, 0.5, 0.8, 1.0];
         let tol = 0.01;
-        let expected: [(u32, &str, [f32; 3]); 7] = [
+        let expected: [(u32, &str, [f32; 3]); 8] = [
             (0, "Lerp", [0.3, 0.5, 0.8]),
             (1, "Screen", [0.58, 0.8, 0.84]),
             (2, "Add", [0.7, 1.1, 1.0]),
@@ -547,6 +565,8 @@ mod gpu_tests {
             (4, "Multiply", [0.12, 0.3, 0.16]),
             (5, "Difference", [0.1, 0.1, 0.6]),
             (6, "Overlay", [0.24, 0.6, 0.32]),
+            // Divide: a / b per-channel — 0.4/0.3=1.333, 0.6/0.5=1.2, 0.2/0.8=0.25
+            (7, "Divide", [1.333, 1.2, 0.25]),
         ];
         for (mode, label, want_rgb) in expected {
             let out = run_mix_at(a, b, mode, 1.0);

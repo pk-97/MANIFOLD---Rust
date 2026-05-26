@@ -6,8 +6,16 @@
 // height-to-normal pipelines (for the tangent part), and any per-pixel
 // finite-difference math.
 //
-// Formula: dx = (R - L) * 0.5; dy = (U - D) * 0.5, where L/R/U/D are
-// the chosen channel sampled at uv ± (texel_x, 0) / ± (0, texel_y).
+// `scale_mode` selects the output scaling:
+//   0 = Texel — dx = (R - L) * 0.5; dy = (U - D) * 0.5
+//               (default; matches oily-fluid / heightmap-to-normal usage)
+//   1 = UV    — dx = (R - L) * W * 0.5; dy = (U - D) * H * 0.5
+//               (per-axis multiplied by half the dimension so output is
+//                in per-UV-unit space; matches the legacy
+//                fluid_gradient_rotate's `grad / (2 * texel)` math)
+//
+// Boundary policy is the sampler's address mode (host-side): Clamp
+// (default) or Repeat (toroidal — for cyclic fluid-sim density fields).
 //
 // Bindings:
 //   @binding(0) uniforms (16 bytes)
@@ -16,10 +24,10 @@
 //   @binding(3) output_tex (rgba16float storage)
 
 struct Uniforms {
-    channel: u32,   // 0=R, 1=G, 2=B, 3=A
+    channel: u32,    // 0=R, 1=G, 2=B, 3=A
+    scale_mode: u32, // 0=Texel, 1=UV
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -50,8 +58,20 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let cD = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(0.0, -inv.y), 0.0);
     let cU = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(0.0,  inv.y), 0.0);
 
-    let dx = (select_channel(cR, uniforms.channel) - select_channel(cL, uniforms.channel)) * 0.5;
-    let dy = (select_channel(cU, uniforms.channel) - select_channel(cD, uniforms.channel)) * 0.5;
+    let diff_x = select_channel(cR, uniforms.channel) - select_channel(cL, uniforms.channel);
+    let diff_y = select_channel(cU, uniforms.channel) - select_channel(cD, uniforms.channel);
+
+    // scale_mode = 0 (Texel): factor = 0.5 on both axes.
+    // scale_mode = 1 (UV):    factor = W*0.5 on x, H*0.5 on y so the
+    //                         output is per-UV-unit (matches legacy
+    //                         fluid_gradient_rotate's `grad / (2 * texel)`).
+    let scale_xy = select(
+        vec2<f32>(0.5, 0.5),
+        vec2<f32>(f32(dims.x) * 0.5, f32(dims.y) * 0.5),
+        uniforms.scale_mode == 1u,
+    );
+    let dx = diff_x * scale_xy.x;
+    let dy = diff_y * scale_xy.y;
 
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(dx, dy, 0.0, 1.0));
 }
