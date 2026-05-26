@@ -28,6 +28,7 @@ mod chromatic_displace;
 mod chromatic_offset;
 mod clamp_stretch;
 mod bake_equirect_envmap;
+mod cast_array;
 mod clamp_texture;
 mod cook_torrance_specular;
 mod equirect_envmap_sample;
@@ -204,6 +205,10 @@ pub use chromatic_displace::ChromaticDisplace;
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use bake_equirect_envmap::BakeEquirectEnvmap;
+pub use cast_array::{
+    CastAsCurvePoint, CastAsEdgePair, CastAsInstanceTransform, CastAsMeshVertex, CastAsParticle,
+    CastAsU32,
+};
 pub use clamp_texture::ClampTexture;
 pub use cook_torrance_specular::CookTorranceSpecular;
 pub use equirect_envmap_sample::EquirectEnvmapSample;

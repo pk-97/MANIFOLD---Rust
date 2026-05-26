@@ -211,6 +211,23 @@ When the whole pass is done (all bundles in §1 cleared), one workspace run + wo
 
 These are noted here as future-me reminders, not blocking — they get resolved when their tranche lands.
 
-## 6. `wgsl_compute` infrastructure (deferred indefinitely)
+## 6. `wgsl_compute` generic outputs + `node.cast_as_*` atoms (done 2026-05-26)
 
-The agent that explored the Lissajous-as-`wgsl_compute`-backend path surfaced two real generalizations the `wgsl_compute` primitive would need to host non-particle typed buffers: a kind-by-name registry (replacing the stride-based Particle detection) and a read_write usage disambiguation pass (telling apart aliased read+write from declared-read_write-but-write-only). **This work is deferred indefinitely.** The audit framework converged on "every curated kernel atom-decomposes" — there's no curated kernel in the inventory that genuinely needs the `wgsl_compute`-backed-curated-family pattern. `wgsl_compute` remains the escape hatch for novel user-authored kernels (BlackHole's existing use), and that use case doesn't need these generalizations because it's been working with Particle buffers and aliased read+write. If a future situation actually demands non-Particle typed output from `wgsl_compute` (a user authoring a custom curve generator who doesn't want to compose from atoms), these generalizations land then. Not as part of any audit chat.
+**Status:** Shipped. `wgsl_compute` is now truly generic — emits `Array<Anonymous>` for every struct array output (including 64-byte Particle layouts and atomic-u32 accumulators). Six per-type cast atoms (`cast_as_particle`, `cast_as_u32`, `cast_as_mesh_vertex`, `cast_as_curve_point`, `cast_as_edge_pair`, `cast_as_instance_transform`) live in [`crates/manifold-renderer/src/node_graph/primitives/cast_array.rs`](../crates/manifold-renderer/src/node_graph/primitives/cast_array.rs) as explicit type-discipline nodes for users who want visible type-conversion boundaries in their graphs.
+
+**Architectural decisions that actually shipped:**
+
+- **Per-type cast atoms, not a configurable primitive with `target_type` enum.** The enum approach would have required dynamic output port types (param-driven), which the existing static `primitive!` macro doesn't support; adding that infra was disproportionate to the benefit. Each cast atom is ~30 lines, mostly boilerplate. Adding a new typed buffer is a ~30-line copy-paste block in `cast_array.rs`, same workload as the alternative would have been (one enum entry there vs. one block here).
+
+- **Wire validator relaxation, not strict cast-everywhere.** The validator now accepts `Array(Anonymous, size, align)` ↔ `Array(KnownKind, same_size, same_align)` in either direction (see [`validation.rs::port_types_compatible`](../crates/manifold-renderer/src/node_graph/validation.rs#L216)). This means existing presets (BlackHole, ComputeStrangeAttractor) keep working without inserted cast atoms — wgsl_compute's Anonymous outputs transparently flow into typed downstream pipelines that match in size+align. **Cast atoms exist for explicit discipline, not as a forced requirement.** Two typed kinds (Particle ↔ MeshVertex) still don't connect — those are semantic mismatches the validator catches.
+
+- **`ArrayAnonymous(T)` macro arm added** to `__primitive_port_type!` — expands to `ArrayType::of::<T>()` (Anonymous-kinded, sized from T's layout). Used by the cast atoms to declare their input ports as Anonymous-of-specific-size via stub `Blob4` / `Blob8` / `Blob32` / `Blob64` Pod types. Lets cast atoms stay inside the `primitive!` macro instead of hand-writing the `EffectNode` trait impl.
+
+**Migration impact:** Zero. The relaxed validator means BlackHole.json and ComputeStrangeAttractor.json work unchanged. Future presets can use cast atoms for explicit type discipline at wgsl_compute boundaries, or rely on implicit coercion.
+
+**What's now unblocked:** any open-family `wgsl_compute` preset that wants to write a non-Particle typed buffer — wireframe-attractor extension (`Array<MeshVertex>`), parametric curve generators (`Array<CurvePoint>`), topology generators (`Array<EdgePair>`), instance-layout generators (`Array<InstanceTransform>`) — has the bridge it needs. Either the implicit-coercion path or the explicit cast-atom path works.
+
+**Deferred (genuinely don't need yet):**
+
+- **read_write usage disambiguation pass** — distinguishing aliased read+write from declared-read_write-but-write-only at the binding level. Separate concern; not part of this work. If a future case demands it, it lands then.
+- **Dynamic-output-type infra** — would let one `cast_array` primitive carry all 6 type variants. Not built; the per-type-atom shape covers the same UX (each atom shows its target type in the palette and node title).

@@ -667,6 +667,14 @@ macro_rules! __primitive_port_type {
             $crate::node_graph::ports::ArrayType::of_known::<$T>()
         )
     };
+    // `ArrayAnonymous(T)` — same size/align as T but `ItemKind::Anonymous`.
+    // Used by cast atoms whose input is a raw byte buffer (typical
+    // wgsl_compute output) of a specific shape but no declared semantic.
+    (ArrayAnonymous, $T:ty) => {
+        $crate::node_graph::ports::PortType::Array(
+            $crate::node_graph::ports::ArrayType::of::<$T>()
+        )
+    };
     (Camera) => {
         $crate::node_graph::ports::PortType::Camera
     };

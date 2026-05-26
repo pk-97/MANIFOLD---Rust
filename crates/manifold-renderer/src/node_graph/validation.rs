@@ -7,7 +7,7 @@ use ahash::{AHashMap, AHashSet};
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
-use crate::node_graph::ports::{PortKind, PortType};
+use crate::node_graph::ports::{ItemKind, PortKind, PortType};
 
 /// Errors produced by graph mutation and validation.
 #[derive(Debug, Clone, PartialEq)]
@@ -192,7 +192,7 @@ pub(super) fn validate_wire_endpoints(
         });
     }
 
-    if from_port.ty != to_port.ty {
+    if !port_types_compatible(from_port.ty, to_port.ty) {
         return Err(GraphError::PortTypeMismatch {
             from: from_port.ty,
             to: to_port.ty,
@@ -211,6 +211,35 @@ pub(super) fn validate_wire_endpoints(
     }
 
     Ok(())
+}
+
+/// Port-type compatibility for the wire validator. Exact equality
+/// for most cases, with one relaxation: an `Array(Anonymous)` matches
+/// a typed `Array(KnownKind)` of the same `(item_size, item_align)`,
+/// in either direction. This is what makes `node.wgsl_compute`'s raw
+/// byte outputs flow into typed cast atoms (`cast_as_particle`,
+/// `cast_as_mesh_vertex`, …) and what lets typed upstream producers
+/// (`seed_particles` → `Array<Particle>`) feed into a wgsl_compute
+/// shader that declared its storage as a generic struct.
+///
+/// The point of the Anonymous boundary is to be **explicitly a
+/// byte-level escape hatch** — the wgsl_compute owns the per-byte
+/// interpretation inside the shader, and the cast atom on the other
+/// side carries the type label downstream. Two typed kinds (Particle
+/// ↔ MeshVertex) STILL don't connect — those are semantic mismatches
+/// the validator must catch.
+fn port_types_compatible(from: PortType, to: PortType) -> bool {
+    if from == to {
+        return true;
+    }
+    if let (PortType::Array(a), PortType::Array(b)) = (from, to)
+        && a.item_size == b.item_size
+        && a.item_align == b.item_align
+        && (a.item_kind == ItemKind::Anonymous || b.item_kind == ItemKind::Anonymous)
+    {
+        return true;
+    }
+    false
 }
 
 /// Whole-graph validation. Checks structural invariants:

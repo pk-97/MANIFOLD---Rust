@@ -495,13 +495,20 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
 
                 if is_atomic_u32 {
                     // Atomic accumulator — always declared as an
-                    // OUTPUT Array(u32) port. Read-only atomic accums
-                    // would be unusual but we still surface them as
-                    // outputs so the chain pre-allocates.
+                    // OUTPUT Array(Anonymous, item_size=4) port.
+                    // Downstream consumers that need typed u32 buffers
+                    // (resolve_accumulator, etc.) wire through
+                    // `node.cast_as_u32` to relabel the wire. wgsl_compute
+                    // itself is type-agnostic: the WGSL kernel owns the
+                    // per-byte interpretation.
                     let port_name = leak_str(&name);
                     outputs.push(NodePort {
                         name: port_name,
-                        ty: PortType::Array(ArrayType::of_known::<u32>()),
+                        ty: PortType::Array(ArrayType {
+                            item_size: 4,
+                            item_align: 4,
+                            item_kind: ItemKind::Anonymous,
+                        }),
                         kind: PortKind::Output,
                         required: false,
                     });
@@ -513,8 +520,15 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                         kind: BindingKind::StorageAtomicAccumOut { port: name },
                     });
                 } else {
-                    // Non-atomic struct array. Map to Array(Particle)
-                    // if span matches; otherwise Array(Anonymous).
+                    // Non-atomic struct array. Always Array(Anonymous)
+                    // with the struct's byte span + align — the wgsl_compute
+                    // primitive is the generic byte-buffer escape hatch, and
+                    // typed downstream consumers wire through `node.cast_as_*`
+                    // atoms to relabel the wire (cast_as_particle for the
+                    // 64-byte integrator pattern, cast_as_mesh_vertex for
+                    // 32-byte vertex producers, etc.). The Particle special
+                    // case here was removed 2026-05-26 — type discipline
+                    // lives at the cast-atom boundary, not at the introspection.
                     let item = element_to_array_type(element, stride)?;
                     let port_name = leak_str(&name);
                     if read && write {
@@ -675,28 +689,24 @@ fn parse_uniform(
 }
 
 fn element_to_array_type(element: &naga::Type, _stride: u32) -> Result<ArrayType, String> {
-    // Map by struct span to the canonical ItemKind we have. For
-    // anything that doesn't match a known span, fall back to
-    // Anonymous (the deliberate opt-out for raw-buffer escape-hatch
-    // wires — matching only other Anonymous of the same size/align).
+    // wgsl_compute is the byte-buffer escape hatch — every struct
+    // array output (including 64-byte Particle layouts) ships as
+    // Anonymous with size+align metadata. Typed downstream consumers
+    // wire through `node.cast_as_*` atoms (cast_as_particle for the
+    // integrator pattern, cast_as_mesh_vertex for vertex producers,
+    // etc.) to relabel the wire. Type discipline lives at the cast-
+    // atom boundary, not at the introspection.
+    //
+    // align=4 not naga's vec3-padded alignment of 16 — matches the
+    // Rust-side layout convention every other primitive uses.
     let naga::TypeInner::Struct { span, .. } = element.inner else {
-        // Non-struct element arrays would be unusual outside the
-        // atomic case (handled separately).
         return Err("storage array element is not a struct".into());
     };
-    // Particle is 64 bytes (compute_common::Particle). Use the
-    // canonical Rust-side layout (align=4) — NOT naga's vec3-padded
-    // alignment of 16 — so wire validation matches the convention
-    // every other primitive uses via `ArrayType::of_known::<Particle>()`.
-    if span == 64 {
-        Ok(ArrayType::of_known::<crate::generators::compute_common::Particle>())
-    } else {
-        Ok(ArrayType {
-            item_size: span,
-            item_align: 4,
-            item_kind: ItemKind::Anonymous,
-        })
-    }
+    Ok(ArrayType {
+        item_size: span,
+        item_align: 4,
+        item_kind: ItemKind::Anonymous,
+    })
 }
 
 fn storage_format_to_gpu(f: naga::StorageFormat) -> Option<GpuTextureFormat> {
@@ -1121,13 +1131,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         node.set_wgsl_source(src);
         assert!(!node.compile_failed);
         // Inputs = [uniform port-shadow scalar "dt", aliased
-        // Array<Particle> "particles" (read_write storage maps to
-        // both an input and output port of the same name)].
+        // Array(Anonymous, size=64) "particles" (read_write storage
+        // maps to both an input and output port of the same name).
+        // The Particle special case was removed 2026-05-26 — typed
+        // downstream consumers wire through `node.cast_as_particle`.
         assert_eq!(input_names(&node), vec!["dt", "particles"]);
         assert_eq!(node.inputs[0].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(
             node.inputs[1].ty,
-            PortType::Array(ArrayType::of_known::<crate::generators::compute_common::Particle>())
+            PortType::Array(ArrayType {
+                item_size: 64,
+                item_align: 4,
+                item_kind: ItemKind::Anonymous,
+            })
         );
         assert_eq!(node.outputs.len(), 1);
         assert_eq!(node.outputs[0].name, "particles");
@@ -1175,9 +1191,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(node.outputs.len(), 2);
         assert_eq!(node.outputs[0].name, "accum_top");
         assert_eq!(node.outputs[1].name, "accum_bot");
+        // Atomic-u32 outputs are Anonymous-4 since the u32 special
+        // case was removed 2026-05-26. Downstream consumers wire
+        // through `node.cast_as_u32` for typed `Array<u32>` access.
         assert_eq!(
             node.outputs[0].ty,
-            PortType::Array(ArrayType::of_known::<u32>())
+            PortType::Array(ArrayType {
+                item_size: 4,
+                item_align: 4,
+                item_kind: ItemKind::Anonymous,
+            })
         );
         assert!(node.aliased_array_io().is_empty());
         // No texture output; dispatch port falls back to the first
