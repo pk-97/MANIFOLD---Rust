@@ -73,9 +73,9 @@ pub enum ItemKind {
     /// consumed by the `node.render_3d_mesh` family and `project_3d`.
     MeshVertex,
     /// 4D vertex in homogeneous hypercube space, before 4D rotation
-    /// and projection-to-3D. Produced by
-    /// `generate_tesseract_vertices` / `generate_duocylinder_vertices`;
-    /// consumed by `rotate_4d` / `project_4d`.
+    /// and projection-to-3D. Produced by `generate_tesseract_vertices`
+    /// (closed polytope) or `pack_vec4` (parametric-surface authoring,
+    /// see Duocylinder); consumed by `rotate_4d` / `project_4d`.
     Vec4Vertex,
     /// Explicit `(a, b)` edge between two vertices in a sibling
     /// `Array<CurvePoint>` or `Array<MeshVertex>` buffer. The topology

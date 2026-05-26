@@ -72,12 +72,14 @@ mod fluid_seed;
 mod fluid_simulate;
 mod gain;
 mod gaussian_blur_variable_width;
+mod edges_from_grid_uv;
 mod generate_cube_mesh;
-mod generate_duocylinder_vertices;
 mod generate_grid_mesh;
+mod generate_grid_uv;
 mod generate_instance_transforms;
 mod generate_range;
 mod generate_tesseract_vertices;
+mod pack_vec4;
 mod glitch;
 mod gradient_central_diff;
 mod grid_uv_field;
@@ -251,11 +253,12 @@ pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
 pub use fluid_simulate::FluidSimulate;
 pub use gain::Gain;
 pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
+pub use edges_from_grid_uv::EdgesFromGridUv;
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
-pub use generate_duocylinder_vertices::{
-    DUOCYLINDER_DEFAULT_GRID_SIZE, GenerateDuocylinderVertices,
-};
 pub use generate_grid_mesh::GenerateGridMesh;
+pub use generate_grid_uv::{
+    GRID_UV_DEFAULT_SIZE, GRID_UV_MAX_SIZE, GenerateGridUv,
+};
 pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
@@ -263,6 +266,7 @@ pub use generate_range::GenerateRange;
 pub use generate_tesseract_vertices::{
     GenerateTesseractVertices, TESSERACT_VERTEX_COUNT,
 };
+pub use pack_vec4::PackVec4;
 pub use glitch::Glitch;
 pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
 pub use grid_uv_field::GridUvField;
