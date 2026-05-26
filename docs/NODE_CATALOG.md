@@ -218,7 +218,8 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 |---|---|---|
 | Generate Grid Mesh | `node.generate_grid_mesh` | NxM grid of `MeshVertex` in XZ plane — heightmap-displaced surfaces |
 | Generate Cube Mesh | `node.generate_cube_mesh` | Unit cube as 36 `MeshVertex` triangle-list |
-| Wireframe Shape | `node.wireframe_shape` (alias `node.generate_platonic_solid`) | Five Platonic solids as `MeshVertex` + `EdgePair`, scaled to 0.25 |
+| Polytope Vertices | `node.polytope_vertices` | One of the five Platonic solids as `Array<MeshVertex>`, baked to magnitude 0.25 (curated-enum GPU dispatch) |
+| Polytope Edges | `node.polytope_edges` | Wireframe edge topology of the selected Platonic solid as `Array<EdgePair>` (curated CPU lookup) — pair with `polytope_vertices` on the same `shape` scalar |
 | Generate Tesseract Vertices | `node.generate_tesseract_vertices` | 16 4D corners + 32 edges for 4D wireframe |
 | Generate Duocylinder Vertices | `node.generate_duocylinder_vertices` | 4D torus surface grid + uv-neighbor edges |
 | Generate Instance Transforms | `node.generate_instance_transforms` | Procedural `Array<InstanceTransform>` (grid/ring/spiral/random) |
@@ -399,7 +400,7 @@ All shipping generators are JSON-defined sub-graphs at [`assets/generator-preset
 | Tesseract | 4D wireframe: `generate_tesseract_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
 | Text | single-primitive wrap of the CoreText glyph rasterizer: `node.render_text` |
 | TrivialPassthrough | smoke test: `uv_field` |
-| WireframeZoo | 3D wireframe: `wireframe_shape` → `rotate_3d` → `project_3d` → `render_lines` |
+| WireframeZoo | 3D wireframe (atom-decomposed): `clip_trigger_cycle` + `value` → `mux_scalar` → (`polytope_vertices` + `polytope_edges`) → `rotate_3d` → `project_3d` → `render_lines` |
 
 ### 6.2 Rust-defined
 

@@ -3,7 +3,7 @@
 //! 32-edge wireframe topology, as paired `Array<Vec4Vertex>` +
 //! `Array<EdgePair>` outputs.
 //!
-//! The 4D-side counterpart of [`crate::node_graph::primitives::WireframeShape`].
+//! The 4D-side counterpart of [`crate::node_graph::primitives::PolytopeVertices`].
 //! Vertex positions are `(±1, ±1, ±1, ±1) * 0.125` — the sign pattern
 //! follows `(sign(i&1), sign(i&2), sign(i&4), sign(i&8))` and the
 //! 0.125 = 0.25 / 2 scaling normalises the corner magnitude (sqrt(4)
@@ -21,7 +21,7 @@
 //! pixels bit-exactly — accepted trade-off.
 //!
 //! Edges live in a CPU-written shared MTLBuffer alongside vertices to
-//! match the [`WireframeShape`] pattern — the downstream consumer
+//! match the [`crate::node_graph::primitives::PolytopeEdges`] pattern — the downstream consumer
 //! (`node.render_lines`) reads the edges buffer CPU-side to build its
 //! per-instance EdgeInstance buffer, and a same-frame GPU write would
 //! not be visible to that CPU read without a fence.
@@ -47,7 +47,7 @@ struct Uniforms {
 crate::primitive! {
     name: GenerateTesseractVertices,
     type_id: "node.generate_tesseract_vertices",
-    purpose: "Emit the 16 corner vertices of a 4D hypercube (tesseract) scaled to magnitude 0.25 plus its 32-edge wireframe topology as paired Array<Vec4Vertex> + Array<EdgePair>. Feed both into node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired) to reproduce the legacy Tesseract generator's pipeline. The 4D counterpart of node.wireframe_shape.",
+    purpose: "Emit the 16 corner vertices of a 4D hypercube (tesseract) scaled to magnitude 0.25 plus its 32-edge wireframe topology as paired Array<Vec4Vertex> + Array<EdgePair>. Feed both into node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired) to reproduce the legacy Tesseract generator's pipeline. The 4D counterpart of node.polytope_vertices + node.polytope_edges.",
     inputs: {},
     outputs: {
         vertices: Array(Vec4Vertex),

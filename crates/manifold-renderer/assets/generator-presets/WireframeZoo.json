@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Wireframe",
-  "description": "Wireframe shapes — five 3D polyhedra (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) rotated continuously around three axes and drawn as line wireframes. Decomposed from the legacy `WireframeZooGenerator` Rust struct into the curated primitive library.\n\n`node.wireframe_shape` produces the matched vertex + edge buffers for the selected shape; three `node.math` nodes turn `time × rate` into per-axis Euler angles fed into `node.rotate_3d`; `node.project_3d` flattens to screen space; `node.render_lines` (with its new optional `edges` input wired) renders the wireframe with the legacy line + dot semantics.\n\nClip-trigger mode cycles the shape through the ClipTriggerCycle uniqueness invariant on each retrigger.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size`) are aliased to the new general-user names (`rotate_x_speed` / `rotate_y_speed` / `rotate_z_speed` / `show_verts` / `vert_size`) for save-file backward compatibility.",
+  "description": "Wireframe shapes — five 3D Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) rotated continuously around three axes and drawn as line wireframes. Atom-decomposed in tranche 5 of the 2nd-pass audit: the bundled `node.wireframe_shape` split into `node.polytope_vertices` (curated-enum GPU dispatch — Platonic vertex coordinates) + `node.polytope_edges` (curated-enum CPU write — wireframe adjacency table). Both atoms read a shared `shape` scalar so vertices and edges agree per frame; the scalar comes from a `node.mux_scalar` that swaps between an inline static shape and a `node.clip_trigger_cycle` output when Clip Trigger is enabled. The downstream `rotate_3d → project_3d → render_lines` chain is unchanged and reusable across every Array<MeshVertex> + Array<EdgePair> producer (future loaded meshes, geodesic spheres, parametric prisms).\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size`) are aliased to the new general-user names (`rotate_x_speed` / `rotate_y_speed` / `rotate_z_speed` / `show_verts` / `vert_size`) for save-file backward compatibility.",
   "presetMetadata": {
     "id": "WireframeZoo",
     "displayName": "Wireframe",
@@ -121,8 +121,8 @@
         "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
         "convert": { "type": "Float" } },
       { "id": "shape", "label": "Shape", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "shape" },
-        "convert": { "type": "EnumRound" } },
+        "target": { "kind": "handleNode", "handle": "shape_mux", "param": "in_0" },
+        "convert": { "type": "Float" } },
       { "id": "show_verts", "label": "Show Vertices", "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "render", "param": "show_verts" },
         "convert": { "type": "BoolThreshold" } },
@@ -133,7 +133,7 @@
         "target": { "kind": "handleNode", "handle": "project", "param": "proj_scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
+        "target": { "kind": "handleNode", "handle": "clip_trigger_value", "param": "value" },
         "convert": { "type": "BoolThreshold" } }
     ],
     "skipMode": { "kind": "never" }
@@ -165,16 +165,39 @@
       }
     },
     {
-      "id": 4, "typeId": "node.wireframe_shape", "handle": "shape",
+      "id": 4, "typeId": "node.value", "handle": "clip_trigger_value",
       "params": {
-        "shape":         { "type": "Enum",  "value": 0 },
-        "clip_trigger":  { "type": "Bool",  "value": false },
-        "trigger_count": { "type": "Float", "value": 0.0 }
+        "value": { "type": "Float", "value": 0.0 }
       }
     },
-    { "id": 5, "typeId": "node.rotate_3d", "handle": "rotate" },
     {
-      "id": 6, "typeId": "node.project_3d", "handle": "project",
+      "id": 5, "typeId": "node.clip_trigger_cycle", "handle": "shape_cycle",
+      "params": {
+        "modulus": { "type": "Int", "value": 5 }
+      }
+    },
+    {
+      "id": 6, "typeId": "node.mux_scalar", "handle": "shape_mux",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 7, "typeId": "node.polytope_vertices", "handle": "polytope_verts",
+      "params": {
+        "shape": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 8, "typeId": "node.polytope_edges", "handle": "polytope_edges",
+      "params": {
+        "shape": { "type": "Enum", "value": 0 }
+      }
+    },
+    { "id": 9, "typeId": "node.rotate_3d", "handle": "rotate" },
+    {
+      "id": 10, "typeId": "node.project_3d", "handle": "project",
       "params": {
         "mode":       { "type": "Enum",  "value": 0 },
         "proj_scale": { "type": "Float", "value": 1.0 },
@@ -182,7 +205,7 @@
       }
     },
     {
-      "id": 7, "typeId": "node.render_lines", "handle": "render",
+      "id": 11, "typeId": "node.render_lines", "handle": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.003 },
         "closed_loop":       { "type": "Bool",  "value": false },
@@ -198,26 +221,32 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 12, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },
     { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
     { "fromNode": 0, "fromPort": "time", "toNode": 3, "toPort": "a" },
 
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "trigger_count" },
+    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 5, "toPort": "trigger_count" },
 
-    { "fromNode": 4, "fromPort": "vertices", "toNode": 5, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out",  "toNode": 6, "toPort": "selector" },
+    { "fromNode": 5, "fromPort": "out",  "toNode": 6, "toPort": "in_1" },
 
-    { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "angle_x" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "angle_y" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "angle_z" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "shape" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "shape" },
 
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "vertices", "toNode": 9, "toPort": "in" },
 
-    { "fromNode": 6, "fromPort": "out",   "toNode": 7, "toPort": "points" },
-    { "fromNode": 4, "fromPort": "edges", "toNode": 7, "toPort": "edges"  },
+    { "fromNode": 1, "fromPort": "out", "toNode": 9, "toPort": "angle_x" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 9, "toPort": "angle_y" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 9, "toPort": "angle_z" },
 
-    { "fromNode": 7, "fromPort": "color", "toNode": 8, "toPort": "in" }
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
+
+    { "fromNode": 10, "fromPort": "out",   "toNode": 11, "toPort": "points" },
+    { "fromNode": 8,  "fromPort": "edges", "toNode": 11, "toPort": "edges"  },
+
+    { "fromNode": 11, "fromPort": "color", "toNode": 12, "toPort": "in" }
   ]
 }

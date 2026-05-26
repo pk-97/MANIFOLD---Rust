@@ -13,7 +13,7 @@
 //! Edges: each (iu, iv) emits two edges — one toward the next u (with
 //! wrap) and one toward the next v (with wrap). Total = grid_size² × 2.
 //! Edges live in a CPU-written shared MTLBuffer alongside vertices to
-//! match the [`crate::node_graph::primitives::WireframeShape`] pattern.
+//! match the [`crate::node_graph::primitives::PolytopeEdges`] pattern.
 //!
 //! The 0.25 magnitude lives inside this primitive (not as a graph-side
 //! math node) so downstream `project_4d.proj_scale` defaults to 1.0 —
@@ -43,7 +43,7 @@ struct Uniforms {
 crate::primitive! {
     name: GenerateDuocylinderVertices,
     type_id: "node.generate_duocylinder_vertices",
-    purpose: "Emit a parametric 4D torus (duocylinder surface) grid scaled to magnitude 0.25 plus its u/v neighbor wireframe topology as paired Array<Vec4Vertex> + Array<EdgePair>. Vertex positions are (cos u, sin u, cos v, sin v) * (0.25 / sqrt(2)) for (u, v) sampled at grid_size steps each across [0, 2π). Feed both outputs through node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired) to reproduce the legacy Duocylinder generator's pipeline. The 4D parametric-surface counterpart of node.wireframe_shape.",
+    purpose: "Emit a parametric 4D torus (duocylinder surface) grid scaled to magnitude 0.25 plus its u/v neighbor wireframe topology as paired Array<Vec4Vertex> + Array<EdgePair>. Vertex positions are (cos u, sin u, cos v, sin v) * (0.25 / sqrt(2)) for (u, v) sampled at grid_size steps each across [0, 2π). Feed both outputs through node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired) to reproduce the legacy Duocylinder generator's pipeline. The 4D parametric-surface counterpart of node.polytope_vertices + node.polytope_edges.",
     inputs: {},
     outputs: {
         vertices: Array(Vec4Vertex),
