@@ -214,20 +214,29 @@ pub(super) fn validate_wire_endpoints(
 }
 
 /// Port-type compatibility for the wire validator. Exact equality
-/// for most cases, with one relaxation: an `Array(Anonymous)` matches
-/// a typed `Array(KnownKind)` of the same `(item_size, item_align)`,
-/// in either direction. This is what makes `node.wgsl_compute`'s raw
-/// byte outputs flow into typed cast atoms (`cast_as_particle`,
-/// `cast_as_mesh_vertex`, …) and what lets typed upstream producers
-/// (`seed_particles` → `Array<Particle>`) feed into a wgsl_compute
-/// shader that declared its storage as a generic struct.
+/// by default, with one **asymmetric** relaxation at the Anonymous
+/// boundary: a typed `Array(KnownKind)` source can flow into an
+/// `Array(Anonymous)` consumer of matching `(item_size, item_align)`,
+/// but not the other way around.
 ///
-/// The point of the Anonymous boundary is to be **explicitly a
-/// byte-level escape hatch** — the wgsl_compute owns the per-byte
-/// interpretation inside the shader, and the cast atom on the other
-/// side carries the type label downstream. Two typed kinds (Particle
-/// ↔ MeshVertex) STILL don't connect — those are semantic mismatches
-/// the validator must catch.
+/// Why asymmetric: the typed→Anonymous direction is **safe** — the
+/// downstream consumer is treating the buffer as raw bytes anyway
+/// (typical `wgsl_compute` reading a `var<storage>` declaration),
+/// and the upstream's bytes are still what they are regardless of
+/// the label. The Anonymous→typed direction is **dangerous** — it
+/// silently reinterprets raw bytes as a specific struct layout, and
+/// the user gets no error when the bytes mean something else
+/// (`MyCustomVertex` getting read as `Particle`). That direction
+/// MUST go through a cast atom (`cast_as_particle`, `cast_as_u32`,
+/// `cast_as_mesh_vertex`, …) so the type assertion is explicit and
+/// visible in the graph.
+///
+/// Two typed kinds (Particle ↔ MeshVertex) still don't connect —
+/// that's a semantic mismatch the validator must catch regardless
+/// of size+align.
+///
+/// Postel's-law shape: liberal in (typed → Anonymous accepted),
+/// conservative out (Anonymous → typed requires explicit cast).
 fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if from == to {
         return true;
@@ -235,8 +244,12 @@ fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if let (PortType::Array(a), PortType::Array(b)) = (from, to)
         && a.item_size == b.item_size
         && a.item_align == b.item_align
-        && (a.item_kind == ItemKind::Anonymous || b.item_kind == ItemKind::Anonymous)
+        && a.item_kind != ItemKind::Anonymous
+        && b.item_kind == ItemKind::Anonymous
     {
+        // Typed source → Anonymous consumer: the typed bytes are
+        // still the same bytes; the consumer just treats them
+        // generically. Safe direction.
         return true;
     }
     false

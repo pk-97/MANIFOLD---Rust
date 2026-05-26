@@ -299,7 +299,10 @@
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
         "in_1":     { "type": "Float", "value": 0.0 }
-      } }
+      } },
+
+    { "id": 19, "typeId": "node.cast_as_particle", "handle": "cast_particle",
+      "params": {} }
   ],
   "wires": [
     { "fromNode": 0,  "fromPort": "time",          "toNode": 10, "toPort": "a" },
@@ -328,7 +331,8 @@
     { "fromNode": 16, "fromPort": "out",           "toNode": 7,  "toPort": "intensity" },
 
     { "fromNode": 2,  "fromPort": "particles",     "toNode": 3,  "toPort": "particles" },
-    { "fromNode": 3,  "fromPort": "particles",     "toNode": 4,  "toPort": "in" },
+    { "fromNode": 3,  "fromPort": "particles",     "toNode": 19, "toPort": "in" },
+    { "fromNode": 19, "fromPort": "out",           "toNode": 4,  "toPort": "in" },
     { "fromNode": 4,  "fromPort": "out",           "toNode": 5,  "toPort": "particles" },
     { "fromNode": 5,  "fromPort": "accum",         "toNode": 6,  "toPort": "accum" },
     { "fromNode": 6,  "fromPort": "density",       "toNode": 7,  "toPort": "in" },
