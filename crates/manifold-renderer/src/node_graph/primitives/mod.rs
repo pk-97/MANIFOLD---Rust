@@ -9,6 +9,7 @@
 mod abs_texture;
 mod affine_transform;
 mod anti_clump_particles;
+mod apply_radial_burst_to_particles;
 mod array_diffuse_particles;
 mod array_feedback;
 mod array_math;
@@ -188,6 +189,7 @@ mod wireframe_depth;
 pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
 pub use anti_clump_particles::AntiClumpParticles;
+pub use apply_radial_burst_to_particles::ApplyRadialBurstToParticles;
 pub use array_diffuse_particles::ArrayDiffuseParticles;
 pub use array_feedback::ArrayFeedback;
 pub use array_math::{ARRAY_MATH_OPS, ArrayMath};

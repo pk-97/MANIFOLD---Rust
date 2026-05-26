@@ -159,14 +159,14 @@
     { "id": 11, "typeId": "node.gaussian_blur", "handle": "field_blur_v",
       "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
 
-    { "id": 91, "typeId": "node.radial_burst_force_field", "handle": "inject_force",
+    { "id": 91, "typeId": "node.apply_radial_burst_to_particles", "handle": "apply_inject",
       "params": {
-        "point_x":   { "type": "Float", "value": 0.5 },
-        "point_y":   { "type": "Float", "value": 0.5 },
-        "amplitude": { "type": "Float", "value": 0.0 },
-        "envelope":  { "type": "Float", "value": 0.0 },
-        "radius":    { "type": "Float", "value": 0.25 },
-        "time":      { "type": "Float", "value": 0.0 }
+        "point_x":      { "type": "Float", "value": 0.5 },
+        "point_y":      { "type": "Float", "value": 0.5 },
+        "amplitude":    { "type": "Float", "value": 0.0 },
+        "envelope":     { "type": "Float", "value": 0.0 },
+        "radius":       { "type": "Float", "value": 0.25 },
+        "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
     { "id": 90, "typeId": "node.mix", "handle": "combined_force",
@@ -319,10 +319,7 @@
       "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
 
     { "id": 119, "typeId": "node.mix", "handle": "weighted_noise",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 4 } } },
-
-    { "id": 120, "typeId": "node.mix", "handle": "combined_with_noise",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } }
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 4 } } }
   ],
   "wires": [
     { "fromNode": 70, "fromPort": "out", "toNode": 80, "toPort": "pattern" },
@@ -331,11 +328,11 @@
     { "fromNode": 80, "fromPort": "output_tex", "toNode": 81, "toPort": "mask" },
 
     { "fromNode": 81, "fromPort": "particles", "toNode": 82, "toPort": "seed" },
-    { "fromNode": 86, "fromPort": "out",       "toNode": 82, "toPort": "in" },
+    { "fromNode": 91, "fromPort": "out",       "toNode": 82, "toPort": "in" },
     { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
 
     { "fromNode": 82, "fromPort": "out", "toNode": 83, "toPort": "particles" },
-    { "fromNode": 120, "fromPort": "out", "toNode": 83, "toPort": "in" },
+    { "fromNode": 90, "fromPort": "out", "toNode": 83, "toPort": "in" },
     { "fromNode": 20, "fromPort": "out", "toNode": 83, "toPort": "active_count" },
 
     { "fromNode": 82, "fromPort": "out", "toNode": 84, "toPort": "in" },
@@ -348,6 +345,8 @@
 
     { "fromNode": 85, "fromPort": "out", "toNode": 86, "toPort": "in" },
     { "fromNode": 21, "fromPort": "out", "toNode": 86, "toPort": "active_count" },
+
+    { "fromNode": 86, "fromPort": "out", "toNode": 91, "toPort": "in" },
 
     { "fromNode": 82, "fromPort": "out", "toNode": 4,  "toPort": "particles" },
     { "fromNode": 0,  "fromPort": "output_width",  "toNode": 4, "toPort": "width" },
@@ -368,14 +367,14 @@
     { "fromNode": 89, "fromPort": "out", "toNode": 10, "toPort": "in" },
     { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
 
-    { "fromNode": 0,  "fromPort": "time", "toNode": 91, "toPort": "time" },
     { "fromNode": 52, "fromPort": "point_x", "toNode": 91, "toPort": "point_x" },
     { "fromNode": 52, "fromPort": "point_y", "toNode": 91, "toPort": "point_y" },
     { "fromNode": 52, "fromPort": "active",  "toNode": 91, "toPort": "envelope" },
     { "fromNode": 53, "fromPort": "out",     "toNode": 91, "toPort": "amplitude" },
+    { "fromNode": 21, "fromPort": "out",     "toNode": 91, "toPort": "active_count" },
 
-    { "fromNode": 11, "fromPort": "out", "toNode": 90, "toPort": "a" },
-    { "fromNode": 91, "fromPort": "out", "toNode": 90, "toPort": "b" },
+    { "fromNode": 11, "fromPort": "out",  "toNode": 90, "toPort": "a" },
+    { "fromNode": 119, "fromPort": "out", "toNode": 90, "toPort": "b" },
 
     { "fromNode": 0,   "fromPort": "time", "toNode": 110, "toPort": "a" },
     { "fromNode": 110, "fromPort": "out",  "toNode": 111, "toPort": "z" },
@@ -394,9 +393,6 @@
 
     { "fromNode": 113, "fromPort": "out", "toNode": 119, "toPort": "a" },
     { "fromNode": 118, "fromPort": "out", "toNode": 119, "toPort": "b" },
-
-    { "fromNode": 90,  "fromPort": "out", "toNode": 120, "toPort": "a" },
-    { "fromNode": 119, "fromPort": "out", "toNode": 120, "toPort": "b" },
 
     { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
 
