@@ -80,13 +80,13 @@
 
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "modulus_table", "param": "selector" },
-        "convert": { "type": "EnumRound" } },
+        "convert": { "type": "Float" } },
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "is_wireframe_on", "param": "selector" },
-        "convert": { "type": "EnumRound" } },
+        "convert": { "type": "Float" } },
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
         "target": { "kind": "handleNode", "handle": "off_wireframe", "param": "selector" },
-        "convert": { "type": "EnumRound" } },
+        "convert": { "type": "Float" } },
 
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "gated_shape_idx", "param": "selector" },
