@@ -309,6 +309,21 @@ impl GpuEncoder {
         }
     }
 
+    /// Insert a buffer-scope memory barrier on the active compute encoder.
+    /// Required when a subsequent dispatch in the same encoder must observe
+    /// the writes (storage buffers, atomics) from a preceding dispatch.
+    /// Metal does NOT implicitly serialize dispatch-to-dispatch resource
+    /// access within a single MTLComputeCommandEncoder — without this, a
+    /// downstream compact→consume pattern can read partially-written data.
+    /// No-op when no compute encoder is active.
+    pub fn compute_memory_barrier_buffers(&mut self) {
+        if let EncoderState::Compute(ref enc) = self.state {
+            unsafe {
+                enc.memoryBarrierWithScope(objc2_metal::MTLBarrierScope::Buffers);
+            }
+        }
+    }
+
     /// Draw a fullscreen triangle with a render pipeline.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_fullscreen(
