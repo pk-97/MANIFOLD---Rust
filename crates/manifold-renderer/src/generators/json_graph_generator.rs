@@ -1481,9 +1481,14 @@ mod tests {
 
     /// Integration smoke test for the infra session as a whole: a
     /// generator graph that exercises `system.generator_input`,
-    /// `node.mux_texture` (variadic ports), and an `outputFormats`
-    /// override (per-slot format) on a `node.wgsl_compute_0in_1tex`
-    /// branch — D1 + D2 + D5 wired together in one preset.
+    /// `node.mux_texture` (variadic ports), and two `node.wgsl_compute`
+    /// branches — D1 + D2 wired together in one preset.
+    ///
+    /// (The original third axis here was an `outputFormats` override
+    /// on a legacy `node.wgsl_compute_0in_1tex` branch; with the
+    /// legacy variants deleted in Phase 4b and the generic
+    /// `node.wgsl_compute` deriving its format from its WGSL source,
+    /// that capability surface no longer applies to this test.)
     #[test]
     fn infra_session_integration_smoke_test() {
         let json = r#"{
@@ -1499,51 +1504,29 @@ mod tests {
             },
             "nodes": [
                 { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-                {
-                    "id": 1,
-                    "typeId": "node.wgsl_compute_0in_1tex",
-                    "handle": "branch_a",
-                    "outputFormats": { "out": "rgba32float" }
-                },
-                { "id": 2, "typeId": "node.wgsl_compute_0in_1tex", "handle": "branch_b" },
+                { "id": 1, "typeId": "node.wgsl_compute", "handle": "branch_a" },
+                { "id": 2, "typeId": "node.wgsl_compute", "handle": "branch_b" },
                 { "id": 3, "typeId": "node.mux_texture", "handle": "mux" },
                 { "id": 4, "typeId": "system.final_output", "handle": "final_output" }
             ],
             "wires": [
                 { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "selector" },
-                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in_0" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in_1" },
+                { "fromNode": 1, "fromPort": "output_tex", "toNode": 3, "toPort": "in_0" },
+                { "fromNode": 2, "fromPort": "output_tex", "toNode": 3, "toPort": "in_1" },
                 { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
             ]
         }"#;
 
-        let mut preset = JsonGraphGenerator::from_json_str(
+        let preset = JsonGraphGenerator::from_json_str(
             json,
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("infra smoke preset must load");
         assert_eq!(preset.type_id().as_str(), "InfraSmoke");
-
-        // Verify the per-format propagation reached the compiled plan.
-        // Resource ordering is topological-by-node, so we search for
-        // a resource declaring rgba32float rather than hardcoding the
-        // index (which would break if anyone reorders the JSON).
-        let mut found_rgba32 = false;
-        for i in 0..preset.plan.resource_count() {
-            if preset.plan.resource_format(ResourceId(i as u32))
-                == Some(manifold_gpu::GpuTextureFormat::Rgba32Float)
-            {
-                found_rgba32 = true;
-                break;
-            }
-        }
-        assert!(
-            found_rgba32,
-            "branch_a's rgba32float output_format override must reach the plan",
-        );
-
-        preset.set_frame_context(0.0, 0.0, 1.78, 1.0, 0.0, 1920.0, 1080.0);
-        preset.execute_frame(frame_time());
+        // `node.wgsl_compute` requires a GpuEncoder for dispatch, so
+        // the original `execute_frame` step here is dropped — the
+        // legacy variant this test originally used was CPU-only. The
+        // load + compile validation above is the load-bearing piece.
     }
 
     /// Load the bundled `ComputeStrangeAttractor.json` preset from

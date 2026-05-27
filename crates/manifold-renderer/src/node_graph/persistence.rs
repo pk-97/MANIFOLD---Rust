@@ -1093,21 +1093,20 @@ mod tests {
     /// `into_graph` re-installs it via `Graph::set_wgsl_source`.
     #[test]
     fn wgsl_compute_source_field_round_trips_through_json() {
-        use crate::node_graph::primitives::{
-            DEFAULT_WGSL_1TEX_1TEX, WgslCompute1Tex1Tex,
-        };
+        use crate::node_graph::primitives::{DEFAULT_WGSL_COMPUTE, WgslCompute};
 
         let mut g = Graph::new();
-        let src = g.add_node(Box::new(Source::new()));
-        let wgsl = g.add_node_named("kernel", Box::new(WgslCompute1Tex1Tex::new()));
+        let wgsl = g.add_node_named("kernel", Box::new(WgslCompute::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.connect((src, "out"), (wgsl, "in")).unwrap();
-        g.connect((wgsl, "out"), (out, "in")).unwrap();
+        // DEFAULT_WGSL_COMPUTE exposes its texture output as `output_tex`
+        // (named for the WGSL `var<storage>` binding identifier).
+        g.connect((wgsl, "output_tex"), (out, "in")).unwrap();
 
-        // Install a custom source. (Any valid WGSL kernel matching the
-        // 1tex_1tex contract.)
-        let custom_source = "// agent-authored kernel\n".to_string()
-            + DEFAULT_WGSL_1TEX_1TEX;
+        // Install a custom source. Any valid WGSL kernel matching the
+        // wgsl_compute contract works; using DEFAULT_WGSL_COMPUTE keeps
+        // the test self-contained — the point is round-tripping the
+        // source string through JSON, not exercising a specific shader.
+        let custom_source = "// agent-authored kernel\n".to_string() + DEFAULT_WGSL_COMPUTE;
         g.set_wgsl_source(wgsl, &custom_source).unwrap();
 
         // Round-trip through JSON.
@@ -1130,42 +1129,16 @@ mod tests {
         );
     }
 
-    /// `outputFormats` on a `node.wgsl_compute_*` node carries through
-    /// `from_graph` → JSON → `into_graph` and lands on the rebuilt
-    /// node's `output_format(port)` accessor. Validates the full D5
-    /// path end to end at the persistence layer.
-    #[test]
-    fn output_format_override_round_trips_through_json() {
-        use crate::node_graph::primitives::WgslCompute1Tex1Tex;
-
-        let mut g = Graph::new();
-        let src = g.add_node(Box::new(Source::new()));
-        let wgsl = g.add_node_named("kernel", Box::new(WgslCompute1Tex1Tex::new()));
-        let out = g.add_node(Box::new(FinalOutput::new()));
-        g.connect((src, "out"), (wgsl, "in")).unwrap();
-        g.connect((wgsl, "out"), (out, "in")).unwrap();
-
-        // Configure native-precision output.
-        g.set_output_format(wgsl, "out", manifold_gpu::GpuTextureFormat::Rgba32Float)
-            .unwrap();
-
-        let doc = GraphDocument::from_graph(&g);
-        let json = serde_json::to_string(&doc).unwrap();
-        assert!(
-            json.contains("outputFormats") && json.contains("rgba32float"),
-            "JSON must carry the outputFormats map with the format string; got: {json}"
-        );
-
-        let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g2 = parsed.into_graph(&registry()).unwrap();
-        let kernel_id = g2.node_id_by_handle("kernel").expect("handle survived");
-        let inst = g2.get_node(kernel_id).unwrap();
-        assert_eq!(
-            inst.node.output_format("out"),
-            Some(manifold_gpu::GpuTextureFormat::Rgba32Float),
-            "output format override must round-trip through into_graph",
-        );
-    }
+    // Note: `output_format_override_round_trips_through_json` and
+    // `declared_output_format_lands_in_compiled_plan` previously
+    // exercised the legacy `wgsl_compute_0in_1tex` / `_1tex_1tex` /
+    // `_2tex_1tex` variants' `set_output_format` shim. The generic
+    // `node.wgsl_compute` derives its output format from the WGSL
+    // source's `texture_storage_2d<F, write>` declaration and ignores
+    // JSON overrides — so the round-trip story for that mechanism no
+    // longer applies. Schema-level validation of the `outputFormats`
+    // map is still gated by `unknown_output_format_surfaces_as_load_error`
+    // below.
 
     /// An unknown format string surfaces as a clean `LoadError` rather
     /// than silently falling back to the default — defends against
@@ -1173,7 +1146,7 @@ mod tests {
     #[test]
     fn unknown_output_format_surfaces_as_load_error() {
         let mut output_formats = BTreeMap::new();
-        output_formats.insert("out".to_string(), "made_up_format".to_string());
+        output_formats.insert("output_tex".to_string(), "made_up_format".to_string());
         let output_canvas_scales = BTreeMap::new();
         let doc = GraphDocument {
             version: 1,
@@ -1182,7 +1155,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
-                type_id: "node.wgsl_compute_0in_1tex".to_string(),
+                type_id: "node.wgsl_compute".to_string(),
                 handle: None,
                 params: BTreeMap::new(),
                 exposed_params: Default::default(),
@@ -1197,37 +1170,14 @@ mod tests {
         match err {
             LoadError::UnknownOutputFormat { format, port, .. } => {
                 assert_eq!(format, "made_up_format");
-                assert_eq!(port, "out");
+                assert_eq!(port, "output_tex");
             }
             other => panic!("expected UnknownOutputFormat, got {other:?}"),
         }
     }
 
     /// The producer's declared format propagates through `compile()` and
-    /// is queryable via `plan.resource_format(id)`. This is the
-    /// compile-time piece — the runtime piece (backend allocates at
-    /// that format) is exercised by the backend's
-    /// `texture2d_pools_separately_by_format` test.
-    #[test]
-    fn declared_output_format_lands_in_compiled_plan() {
-        use crate::node_graph::primitives::WgslCompute0In1Tex;
-
-        let mut g = Graph::new();
-        let producer = g.add_node(Box::new(WgslCompute0In1Tex::new()));
-        let out = g.add_node(Box::new(FinalOutput::new()));
-        g.connect((producer, "out"), (out, "in")).unwrap();
-        g.set_output_format(producer, "out", manifold_gpu::GpuTextureFormat::R32Float)
-            .unwrap();
-
-        let plan = crate::node_graph::compile(&g).unwrap();
-        // Two outputs in the graph: WgslCompute0In1Tex.out (Texture2D,
-        // declared r32float) and FinalOutput's outputs (none — it's a
-        // sink). The first resource is the generator's `out`.
-        assert_eq!(
-            plan.resource_format(crate::node_graph::execution_plan::ResourceId(0)),
-            Some(manifold_gpu::GpuTextureFormat::R32Float),
-        );
-    }
+    // (See note above re: legacy-variant set_output_format mechanism.)
 
     #[test]
     fn unknown_type_id_is_a_clean_error() {

@@ -31,7 +31,6 @@ mod chromatic_offset;
 mod clamp_stretch;
 mod bake_equirect_envmap;
 mod basic_shape;
-mod cast_array;
 mod clamp_texture;
 mod cook_torrance_specular;
 mod equirect_envmap_sample;
@@ -181,9 +180,6 @@ mod vignette;
 mod voronoi_2d;
 mod voronoi_prism;
 mod wgsl_compute;
-mod wgsl_compute_0in_1tex;
-mod wgsl_compute_1tex_1tex;
-mod wgsl_compute_2tex_1tex;
 mod watercolor;
 mod wet_dry_mix;
 mod wireframe_depth;
@@ -215,10 +211,6 @@ pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use bake_equirect_envmap::BakeEquirectEnvmap;
 pub use basic_shape::{BASIC_SHAPE_SHAPES, BasicShape};
-pub use cast_array::{
-    CastAsCurvePoint, CastAsEdgePair, CastAsInstanceTransform, CastAsMeshVertex, CastAsParticle,
-    CastAsU32,
-};
 pub use clamp_texture::ClampTexture;
 pub use cook_torrance_specular::CookTorranceSpecular;
 pub use equirect_envmap_sample::EquirectEnvmapSample;
@@ -387,9 +379,6 @@ pub use vignette::{VIGNETTE_SHAPES, Vignette};
 pub use voronoi_2d::Voronoi2D;
 pub use voronoi_prism::VoronoiPrism;
 pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
-pub use wgsl_compute_0in_1tex::{DEFAULT_WGSL_0IN_1TEX, WgslCompute0In1Tex};
-pub use wgsl_compute_1tex_1tex::{DEFAULT_WGSL_1TEX_1TEX, WgslCompute1Tex1Tex};
-pub use wgsl_compute_2tex_1tex::{DEFAULT_WGSL_2TEX_1TEX, WgslCompute2Tex1Tex};
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 pub use wireframe_depth::{
@@ -744,21 +733,15 @@ mod tests {
         let mut violations: Vec<String> = Vec::new();
         for type_id in registry.known_type_ids() {
             // Carve-outs:
-            //   - `node.wgsl_compute_*` — escape-hatch primitives whose
-            //     wire shape is whatever the user's WGSL declares.
-            //   - `node.cast_as_*` — relabel atoms whose entire purpose
-            //     is to bridge Array<Anonymous, sized blob> inputs from
-            //     wgsl_compute into typed Array<T> outputs. The
-            //     Anonymous-typed input is intrinsic to the atom's
-            //     contract; see crates/manifold-renderer/src/node_graph/
-            //     primitives/cast_array.rs.
+            //   - `node.wgsl_compute*` — escape-hatch primitives whose
+            //     wire shape is derived from the user's WGSL via naga
+            //     (see `docs/CHANNEL_TYPE_SYSTEM.md` §8).
             //   - `node.__smoke_test_*` — macro-system test fixtures
             //     that exist purely to exercise authoring scaffolding.
             //   - `system.*` — boundary nodes (source, final_output,
             //     generator_input) whose wires are texture/scalar, not
             //     Array, but the carve-out is cheap defensive depth.
-            if type_id.starts_with("node.wgsl_compute_")
-                || type_id.starts_with("node.cast_as_")
+            if type_id.starts_with("node.wgsl_compute")
                 || type_id.starts_with("node.__smoke_test_")
                 || type_id.starts_with("system.")
             {

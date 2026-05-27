@@ -1341,19 +1341,23 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(node.outputs.len(), 2);
         assert_eq!(node.outputs[0].name, "accum_top");
         assert_eq!(node.outputs[1].name, "accum_bot");
-        // Atomic-u32 outputs are Anonymous-4 since the u32 special
-        // case was removed 2026-05-26. Downstream consumers wire
-        // through `node.cast_as_u32` for typed `Array<u32>` access.
-        assert_eq!(
-            node.outputs[0].ty,
-            PortType::Array(ArrayType {
-                item_size: 4,
-                item_align: 4,
-                item_kind: ItemKind::Anonymous,
-                specs: &[],
-                match_mode: crate::node_graph::ports::MatchMode::Exact,
-            })
-        );
+        // Atomic-u32 outputs carry the single-channel [value: U32]
+        // signature matching u32's KnownItem impl, so downstream
+        // typed consumers (resolve_accumulator etc.) wire directly
+        // without a cast atom in between.
+        match node.outputs[0].ty {
+            PortType::Array(at) => {
+                assert_eq!(at.item_size, 4);
+                assert_eq!(at.item_align, 4);
+                assert_eq!(at.item_kind, ItemKind::Anonymous);
+                assert_eq!(at.specs.len(), 1);
+                assert_eq!(at.specs[0].name.debug_name(), Some("value"));
+                use crate::node_graph::ports::ChannelElementType as CET;
+                assert_eq!(at.specs[0].ty, CET::U32);
+                assert_eq!(at.match_mode, crate::node_graph::ports::MatchMode::Exact);
+            }
+            _ => panic!("expected Array port"),
+        }
         assert!(node.aliased_array_io().is_empty());
         // No texture output; dispatch port falls back to the first
         // array output.
