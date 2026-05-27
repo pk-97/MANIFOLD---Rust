@@ -1221,12 +1221,19 @@ mod tests {
     #[test]
     fn wire_audit_errors_when_array_resource_has_no_bound_buffer() {
         use crate::node_graph::Graph;
-        use crate::node_graph::primitives::SeedParticles;
+        use crate::node_graph::primitives::{EulerStepParticles, SeedParticles};
 
         let device = GpuDevice::new();
         let mut graph = Graph::new();
-        graph.add_node(Box::new(SeedParticles::new()));
-        let plan = compile(&graph).expect("seed-only graph compiles");
+        let seed = graph.add_node(Box::new(SeedParticles::new()));
+        let step = graph.add_node(Box::new(EulerStepParticles::new()));
+        // Wire seed → step so the planner allocates a resource for
+        // seed.particles. (Unconsumed outputs are skipped by the
+        // planner, so unwiring would mean no Array<T> resource exists
+        // for the audit to catch — see the
+        // `unread_outputs_are_not_allocated_resources` plan test.)
+        graph.connect((seed, "particles"), (step, "in")).unwrap();
+        let plan = compile(&graph).expect("seed → step graph compiles");
 
         // Construct a backend but deliberately DON'T call
         // `pre_allocate_array_buffers`. The audit should see the
@@ -1241,8 +1248,9 @@ mod tests {
                 producer_node_type, ..
             } => {
                 assert!(
-                    producer_node_type.contains("seed_particles"),
-                    "error must name the offending producer; got {producer_node_type}"
+                    producer_node_type.contains("seed_particles")
+                        || producer_node_type.contains("euler_step_particles"),
+                    "error must name a particle-pipeline producer; got {producer_node_type}"
                 );
             }
             other => panic!("expected UnboundArrayResource, got {other:?}"),

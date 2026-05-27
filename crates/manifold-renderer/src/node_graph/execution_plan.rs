@@ -241,6 +241,19 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         wire_by_target.insert(w.to, w);
     }
 
+    // Set of (node, output_port) pairs that have at least one downstream
+    // consumer. Used to skip per-step output bindings (and therefore the
+    // backing texture / array allocation + the primitive's per-pass work)
+    // for outputs nobody reads. Optional outputs on multi-output primitives
+    // (e.g. `render_3d_mesh`'s G-buffer attachments) only pay their cost
+    // when actually wired. Primitive `run()` code that handles `texture_2d`
+    // returning None for unused outputs gets the skip for free.
+    let mut consumed_outputs: ahash::AHashSet<(NodeInstanceId, &'static str)> =
+        ahash::AHashSet::default();
+    for w in graph.wires() {
+        consumed_outputs.insert(w.from);
+    }
+
     // First pass: assign a fresh ResourceId to every output port of every
     // node, in topological order. Walking in topo order gives deterministic
     // resource IDs even when the underlying node map is unordered.
@@ -330,6 +343,16 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         }
 
         for output_port in inst.node.outputs() {
+            // Skip outputs with no downstream consumer: the resource
+            // never appears in the plan, so no `pre_bind_*` allocation,
+            // no per-step output binding, no post-build audit hit. The
+            // primitive's `texture_2d` / `array` lookup for that port
+            // returns None — gated passes inside the primitive's
+            // `run()` are skipped naturally. This is the source-of-truth
+            // for "don't pay for what nobody reads."
+            if !consumed_outputs.contains(&(node_id, output_port.name)) {
+                continue;
+            }
             let id = ResourceId(resource_types.len() as u32);
             output_resources.insert((node_id, output_port.name), id);
             resource_types.push(output_port.ty);
@@ -485,6 +508,15 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
 
         let mut step_outputs = Vec::new();
         for output_port in inst.node.outputs() {
+            // Skip outputs with no downstream consumer — the primitive's
+            // `texture_2d("name")` / `array("name")` will return None and
+            // any pass gated on that output won't run. Reclaims wasted
+            // render passes / compute dispatches when a multi-output
+            // primitive's optional outputs aren't wired (G-buffer outputs
+            // on `render_3d_mesh` for shaded-only consumers, e.g.).
+            if !consumed_outputs.contains(&(node_id, output_port.name)) {
+                continue;
+            }
             let res_id = *output_resources
                 .get(&(node_id, output_port.name))
                 .expect("output resource was assigned in the first pass");
@@ -747,8 +779,11 @@ mod tests {
     }
 
     #[test]
-    fn unread_output_freed_at_producing_step() {
-        // A has two outputs, neither wired. Both should free immediately.
+    fn unread_outputs_are_not_allocated_resources() {
+        // A has two outputs, neither wired. The planner skips both —
+        // unread outputs cost nothing: no resource, no per-step binding,
+        // no backing texture / array allocation downstream. Replaces
+        // the old "create-then-immediately-free" semantics.
         let mut g = Graph::new();
         let _ = g.add_node(Box::new(TestNode::new(
             "a",
@@ -760,16 +795,18 @@ mod tests {
         )));
         let plan = compile(&g).unwrap();
         assert_eq!(plan.steps().len(), 1);
-        assert_eq!(plan.resource_count(), 2);
-        // Both resources free after step 0.
-        assert_eq!(plan.steps()[0].free_after.len(), 2);
+        assert_eq!(plan.resource_count(), 0);
+        assert!(plan.steps()[0].outputs.is_empty());
+        assert!(plan.steps()[0].free_after.is_empty());
     }
 
     #[test]
-    fn resource_types_match_output_port_types() {
-        // Mix Texture2D and Texture3D outputs; ensure resource_types is correct.
+    fn resource_types_match_consumed_output_port_types() {
+        // Mix Texture2D and Texture3D outputs, both consumed downstream.
+        // (Unconsumed outputs are skipped by the planner — see
+        // `unread_outputs_are_not_allocated_resources` for that contract.)
         let mut g = Graph::new();
-        let _ = g.add_node(Box::new(TestNode::new(
+        let a = g.add_node(Box::new(TestNode::new(
             "a",
             vec![],
             vec![
@@ -777,7 +814,19 @@ mod tests {
                 output("volume", PortType::Texture3D),
             ],
         )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "b",
+            vec![
+                input("color_in", PortType::Texture2D, true),
+                input("volume_in", PortType::Texture3D, true),
+            ],
+            vec![],
+        )));
+        g.connect((a, "color"), (b, "color_in")).unwrap();
+        g.connect((a, "volume"), (b, "volume_in")).unwrap();
         let plan = compile(&g).unwrap();
+        // Step 0 is `a` (topological order). Resources are listed in
+        // declaration order on the producer.
         let color_id = plan.steps()[0].outputs[0].1;
         let volume_id = plan.steps()[0].outputs[1].1;
         assert_eq!(plan.resource_type(color_id), Some(PortType::Texture2D));
@@ -1011,6 +1060,14 @@ mod tests {
         )));
         g.connect((a_explicit, "out"), (b, "a")).unwrap();
         g.connect((a_canvas, "out"), (b, "b")).unwrap();
+        // Sink consuming `b.out` so the planner allocates a resource
+        // for it (post-A unread outputs are skipped entirely).
+        let sink = g.add_node(Box::new(TestNode::new(
+            "sink",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((b, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
         // The explicit-dim node should still resolve to quarter-res...
         let r_explicit = plan.steps().iter()
@@ -1093,6 +1150,12 @@ mod tests {
         )));
         g.connect((q, "out"), (a, "in")).unwrap();
         g.connect((a, "out"), (b, "in")).unwrap();
+        let sink = g.add_node(Box::new(TestNode::new(
+            "sink",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((b, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
         let r_q = plan.steps().iter().find(|s| s.node == q).unwrap().outputs[0].1;
@@ -1168,6 +1231,12 @@ mod tests {
         )));
         g.connect((q, "out"), (mix, "a")).unwrap();
         g.connect((canvas_src, "out"), (mix, "b")).unwrap();
+        let sink = g.add_node(Box::new(TestNode::new(
+            "sink",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((mix, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
         let r_mix = plan.steps().iter().find(|s| s.node == mix).unwrap().outputs[0].1;

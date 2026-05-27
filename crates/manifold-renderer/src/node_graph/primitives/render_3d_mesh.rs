@@ -151,13 +151,19 @@ impl Primitive for Render3DMesh {
         let Some(vertices) = ctx.inputs.array("vertices") else {
             return;
         };
-        let Some(target) = ctx.outputs.texture_2d("color") else {
-            return;
-        };
+        let color_target = ctx.outputs.texture_2d("color");
         let world_pos_target = ctx.outputs.texture_2d("world_pos");
         let world_normal_target = ctx.outputs.texture_2d("world_normal");
-        let width = target.width;
-        let height = target.height;
+        // If no downstream consumes any output, the planner skipped all
+        // bindings and there's nothing to do — bail before any GPU work.
+        let dims_source = color_target
+            .or(world_pos_target)
+            .or(world_normal_target);
+        let Some(dims_tex) = dims_source else {
+            return;
+        };
+        let width = dims_tex.width;
+        let height = dims_tex.height;
         if width == 0 || height == 0 {
             return;
         }
@@ -167,9 +173,11 @@ impl Primitive for Render3DMesh {
         // Round down to a multiple of 3 — trailing partial triangle is skipped.
         let vertex_count = (vertex_capacity / 3) * 3;
         if vertex_count == 0 {
-            // No geometry — emit a clear pass so the output isn't garbage.
+            // No geometry — emit a clear pass so wired outputs aren't garbage.
             let gpu = ctx.gpu_encoder();
-            gpu.native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            if let Some(c) = color_target {
+                gpu.native_enc.clear_texture(c, 0.0, 0.0, 0.0, 0.0);
+            }
             if let Some(wp) = world_pos_target {
                 gpu.native_enc.clear_texture(wp, 0.0, 0.0, 0.0, 0.0);
             }
@@ -192,42 +200,6 @@ impl Primitive for Render3DMesh {
 
         let gpu = ctx.gpu_encoder();
 
-        if self.render_pipeline.is_none() {
-            self.render_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                include_str!("shaders/render_3d_mesh.wgsl"),
-                "vs_main",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.render_3d_mesh",
-            ));
-        }
-        if self.world_pos_pipeline.is_none() {
-            self.world_pos_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                include_str!("shaders/render_3d_mesh.wgsl"),
-                "vs_main",
-                "fs_world_pos",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.render_3d_mesh.world_pos",
-            ));
-        }
-        if self.world_normal_pipeline.is_none() {
-            self.world_normal_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                include_str!("shaders/render_3d_mesh.wgsl"),
-                "vs_main",
-                "fs_world_normal",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.render_3d_mesh.world_normal",
-            ));
-        }
         if self.depth_stencil.is_none() {
             self.depth_stencil = Some(
                 gpu.device
@@ -239,9 +211,6 @@ impl Primitive for Render3DMesh {
         }
         self.ensure_depth_texture(gpu.device, width, height);
 
-        let pipeline = self.render_pipeline.as_ref().expect("just inserted");
-        let world_pos_pipeline = self.world_pos_pipeline.as_ref().expect("just inserted");
-        let world_normal_pipeline = self.world_normal_pipeline.as_ref().expect("just inserted");
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
 
@@ -257,25 +226,56 @@ impl Primitive for Render3DMesh {
             },
         ];
 
-        gpu.native_enc.draw_instanced_depth(
-            pipeline,
-            target,
-            depth_tex,
-            depth_stencil,
-            &bindings,
-            vertex_count,
-            1,
-            GpuLoadAction::Clear,
-            "node.render_3d_mesh",
-        );
+        // Each fragment-shader entry point gets its own pipeline, lazily
+        // compiled only when its output is wired. MetallicGlass and any
+        // other consumer that only reads world_pos avoids compiling /
+        // running the Lambert color pipeline at all — the per-frame cost
+        // collapses to the passes whose outputs are downstream-consumed.
+        if let Some(target) = color_target {
+            if self.render_pipeline.is_none() {
+                self.render_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                    include_str!("shaders/render_3d_mesh.wgsl"),
+                    "vs_main",
+                    "fs_main",
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    manifold_gpu::GpuTextureFormat::Depth32Float,
+                    None,
+                    1,
+                    "node.render_3d_mesh",
+                ));
+            }
+            let pipeline = self.render_pipeline.as_ref().expect("just inserted");
+            gpu.native_enc.draw_instanced_depth(
+                pipeline,
+                target,
+                depth_tex,
+                depth_stencil,
+                &bindings,
+                vertex_count,
+                1,
+                GpuLoadAction::Clear,
+                "node.render_3d_mesh",
+            );
+        }
 
-        // G-buffer passes. Each is a Clear of its color attachment + depth,
-        // followed by a re-rasterization of the same geometry. Depth is
-        // deterministic across passes — the rasterizer produces the same
-        // depth values from the same vertex buffer + view_proj, so the
-        // depth-Less test admits identical fragments and the outputs align
-        // pixel-perfect with the color pass.
+        // G-buffer passes. Each rasterises the same geometry into its own
+        // color attachment with a fresh depth clear — depth is deterministic
+        // from the vertex buffer + view_proj, so the depth-Less test admits
+        // identical fragments and outputs align pixel-perfect.
         if let Some(wp_target) = world_pos_target {
+            if self.world_pos_pipeline.is_none() {
+                self.world_pos_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                    include_str!("shaders/render_3d_mesh.wgsl"),
+                    "vs_main",
+                    "fs_world_pos",
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    manifold_gpu::GpuTextureFormat::Depth32Float,
+                    None,
+                    1,
+                    "node.render_3d_mesh.world_pos",
+                ));
+            }
+            let world_pos_pipeline = self.world_pos_pipeline.as_ref().expect("just inserted");
             gpu.native_enc.draw_instanced_depth(
                 world_pos_pipeline,
                 wp_target,
@@ -289,6 +289,19 @@ impl Primitive for Render3DMesh {
             );
         }
         if let Some(wn_target) = world_normal_target {
+            if self.world_normal_pipeline.is_none() {
+                self.world_normal_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                    include_str!("shaders/render_3d_mesh.wgsl"),
+                    "vs_main",
+                    "fs_world_normal",
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    manifold_gpu::GpuTextureFormat::Depth32Float,
+                    None,
+                    1,
+                    "node.render_3d_mesh.world_normal",
+                ));
+            }
+            let world_normal_pipeline = self.world_normal_pipeline.as_ref().expect("just inserted");
             gpu.native_enc.draw_instanced_depth(
                 world_normal_pipeline,
                 wn_target,

@@ -136,17 +136,18 @@ mod tests {
     #[test]
     fn fluid_sim_alone_is_valid_and_runs() {
         // All inputs optional → FluidSim is a legal standalone graph.
-        // Allocates 4 output slots (composited + 3 auxiliary).
+        // Outputs with no downstream consumer are skipped by the
+        // planner (since A — "don't pay for what nobody reads"), so
+        // a lone FluidSim allocates zero resources and zero slots.
         let mut g = Graph::new();
         g.add_node(Box::new(FluidSim2D::new()));
         validate(&g).unwrap();
         let plan = compile(&g).unwrap();
         assert_eq!(plan.steps().len(), 1);
-        assert_eq!(plan.resource_count(), 4); // 4 output ports = 4 resources
+        assert_eq!(plan.resource_count(), 0);
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
-        // Each unread output occupies its own slot — 4 slots high-water mark.
-        assert_eq!(exec.backend().slot_count(), 4);
+        assert_eq!(exec.backend().slot_count(), 0);
     }
 
     /// Hero test: FluidSim's auxiliary output (density) wired through
