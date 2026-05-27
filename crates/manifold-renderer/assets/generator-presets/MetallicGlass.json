@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Metallic Glass",
-  "description": "Y2K-aesthetic feedback-displacement metallic surface generator, decomposed from the legacy MetallicGlassGenerator into curated primitives.\n\nUpstream pipeline: 3D simplex noise drives a feedback-blend loop (mix Difference + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result. The smoothed height feeds (a) a levels-shaped height channel and (b) a mirror_axis → Sobel-magnitude chain that produces an edge / roughness modulation texture. Both channels then go through their own second-stage temporal blend (node.feedback + node.mix Lerp at 0.15) that matches the legacy bundle's packed-material smoothing pass.\n\nTerminal (decomposed 2026-05-27 from the fused node.render_3d_mesh_pbr_ibl bundle): the geometry pass (node.render_3d_mesh, extended with G-buffer outputs) rasterises the displaced mesh and writes world_pos + world_normal alongside its Lambert color (the color output is unused here — only the G-buffer is consumed). A full-resolution world-space surface normal is recomputed from the smoothed height texture via node.heightmap_to_normal (coord_space=WorldYUp, aspect-corrected). The z_scale param is computed in the graph as `aspect / output_width` (matches the legacy `2 * aspect * texel` formula after the helper's built-in 0.5 half-difference). A per-pixel roughness map is derived from the smoothed edge texture via node.scale_offset_texture, mapping edge ∈ [0,1] to roughness ∈ [0.05, 0.20]. node.cook_torrance_specular + node.equirect_envmap_sample then shade per pixel in 3D-mesh mode (world_pos wired from render_3d_mesh.world_pos, view/light wired from camera_orbit.pos_xyz / light_pos params), the two terms are summed via node.mix mode=Add, and node.reinhard_tone_map produces the final SDR output. The env_map upstream stays node.bake_equirect_envmap (the procedural HDR studio).\n\nParity vs legacy bundle: math-equivalent within ≤1 ULP per pixel from atom-decomposition reassociation. The outer-card `displace` slider drives a node.gain on the height feeding heightmap_to_normal, preserving the legacy displacement-coupled normal steepness; inverse-square attenuation scale matches the legacy's 25.0; the second temporal-blend smoothing pass is applied per-channel (height and edge separately) since the decomposed graph no longer has a packed material. z_scale is driven from canvas dimensions matching the legacy texel-based formula.\n\nAtom activations and extensions shipped alongside this decomposition (all reusable for any future PBR-on-3D-mesh preset):\n  - render_3d_mesh: added world_pos + world_normal G-buffer outputs (additive — Lambert color path unchanged)\n  - cook_torrance_specular: added optional world_pos + roughness_map inputs + attenuation_scale param; 3D-mesh mode when world_pos wired\n  - equirect_envmap_sample: added optional world_pos + roughness_map inputs + roughness/metallic/base_color/roughness_scale params (Fresnel + roughness coupling folded into the atom)\n  - heightmap_to_normal: added coord_space enum (TangentZ default | WorldYUp new) + aspect input\n  - camera_orbit: added pos_x/pos_y/pos_z scalar outputs",
+  "description": "Y2K-aesthetic feedback-displacement metallic surface generator.\n\nUpstream pipeline (unchanged): 3D simplex noise drives a feedback-blend loop (mix Difference + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result. The smoothed height feeds (a) a levels-shaped height channel and (b) a mirror_axis → Sobel-magnitude chain that produces an edge / roughness modulation texture. Both channels then go through their own second-stage temporal blend (node.feedback + node.mix Lerp at 0.15) that matches the legacy bundle's packed-material smoothing pass. The smoothed height drives node.displace_mesh per-vertex, and node.heightmap_to_normal (WorldYUp) builds a world-space normal map at full canvas resolution.\n\nTerminal (refactored 2026-05-27 to the bundled PBR pipeline + mesh-UV sampling): node.render_3d_mesh draws the displaced grid in one forward pass — Cook-Torrance D_GGX × G_Smith × F_Schlick + IBL reflection — taking the world-space normal_map and the edge-derived roughness_map as per-pixel inputs sampled at each fragment's mesh UV. The envmap stays node.bake_equirect_envmap (the procedural HDR studio). All scattered cook_torrance_specular / equirect_envmap_sample / mix / reinhard_tone_map nodes are gone; the renderer handles shading internally and writes linear color straight to the final_output.\n\nWhy the rewrite: the legacy chain sampled the normal_map and world_pos at SCREEN UV in deferred-shading style, which silently broke as soon as render_3d_mesh became a true 3D forward renderer (texture pattern locked to the screen instead of the surface). The bundled PBR pipeline samples surface textures at MESH UV — the per-vertex parameterization interpolated through the rasterizer — so the lit pattern follows the geometry as the camera orbits, matching every production engine (Blender, Unreal, Unity, TouchDesigner). See docs/MESH_UV_AND_RENDERER_TEXTURE_PLAN.md.",
   "presetMetadata": {
     "id": "MetallicGlass",
     "displayName": "Metallic Glass",
@@ -17,7 +17,7 @@
       { "id": "mirror",      "name": "Mirror",           "min": 0.0,    "max": 90.0,   "defaultValue": 45.0,  "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
       { "id": "displace",    "name": "Displace",         "min": 0.0,    "max": 0.5,    "defaultValue": 0.2,   "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
       { "id": "roughness",   "name": "Roughness",        "min": 0.01,   "max": 1.0,    "defaultValue": 0.05,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "light_int",   "name": "Light Intensity",  "min": 0.1,    "max": 10.0,   "defaultValue": 3.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
+      { "id": "light_int",   "name": "Light Intensity",  "min": 0.1,    "max": 10.0,   "defaultValue": 1.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
       { "id": "cam_dist",    "name": "Camera Distance",  "min": 0.5,    "max": 10.0,   "defaultValue": 2.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
       { "id": "cam_orbit",   "name": "Camera Orbit",     "min": -180.0, "max": 180.0,  "defaultValue": 0.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
       { "id": "cam_tilt",    "name": "Camera Tilt",      "min": -90.0,  "max": 90.0,   "defaultValue": -10.0, "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
@@ -53,14 +53,14 @@
         "convert": { "type": "Float" } },
 
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "direct_specular", "param": "roughness" },
+        "target": { "kind": "handleNode", "handle": "pbr_material", "param": "roughness" },
         "convert": { "type": "Float" } },
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "ibl_specular", "param": "roughness" },
+        "target": { "kind": "handleNode", "handle": "roughness_from_edge", "param": "offset" },
         "convert": { "type": "Float" } },
 
-      { "id": "light_int",   "label": "Light Intensity", "defaultValue": 3.5,
-        "target": { "kind": "handleNode", "handle": "direct_specular", "param": "intensity" },
+      { "id": "light_int",   "label": "Light Intensity", "defaultValue": 1.5,
+        "target": { "kind": "handleNode", "handle": "key_light", "param": "intensity" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",    "label": "Camera Distance", "defaultValue": 2.5,
@@ -243,12 +243,39 @@
 
     { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass" },
 
-    { "id": 62, "typeId": "node.unlit_material", "handle": "material_stub",
+    { "id": 62, "typeId": "node.pbr_material", "handle": "pbr_material",
       "params": {
-        "color_r": { "type": "Float", "value": 0.0 },
-        "color_g": { "type": "Float", "value": 0.0 },
-        "color_b": { "type": "Float", "value": 0.0 },
-        "color_a": { "type": "Float", "value": 1.0 }
+        "color_r":            { "type": "Float", "value": 0.8 },
+        "color_g":            { "type": "Float", "value": 0.8 },
+        "color_b":            { "type": "Float", "value": 0.82 },
+        "color_a":            { "type": "Float", "value": 1.0 },
+        "ambient":            { "type": "Float", "value": 0.0 },
+        "metallic":           { "type": "Float", "value": 1.0 },
+        "roughness":          { "type": "Float", "value": 0.05 },
+        "emission_r":         { "type": "Float", "value": 0.0 },
+        "emission_g":         { "type": "Float", "value": 0.0 },
+        "emission_b":         { "type": "Float", "value": 0.0 },
+        "emission_intensity": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 63, "typeId": "node.light", "handle": "key_light",
+      "params": {
+        "mode":              { "type": "Enum",  "value": 0 },
+        "pos_x":             { "type": "Float", "value": -2.0 },
+        "pos_y":             { "type": "Float", "value": 2.0 },
+        "pos_z":             { "type": "Float", "value": 5.0 },
+        "aim_x":             { "type": "Float", "value": 0.0 },
+        "aim_y":             { "type": "Float", "value": 0.0 },
+        "aim_z":             { "type": "Float", "value": 0.0 },
+        "color_r":           { "type": "Float", "value": 1.0 },
+        "color_g":           { "type": "Float", "value": 1.0 },
+        "color_b":           { "type": "Float", "value": 1.0 },
+        "intensity":         { "type": "Float", "value": 1.5 },
+        "range":             { "type": "Float", "value": 30.0 },
+        "cast_shadows":      { "type": "Float", "value": 0.0 },
+        "shadow_softness":   { "type": "Enum",  "value": 1 },
+        "shadow_bias":       { "type": "Float", "value": 0.003 },
+        "shadow_resolution": { "type": "Int",   "value": 2048 }
       } },
 
     { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal",
@@ -260,39 +287,6 @@
 
     { "id": 52, "typeId": "node.scale_offset_texture", "handle": "roughness_from_edge",
       "params": { "scale": { "type": "Float", "value": 0.15 }, "offset": { "type": "Float", "value": 0.05 } } },
-
-    { "id": 53, "typeId": "node.cook_torrance_specular", "handle": "direct_specular",
-      "params": {
-        "light_x":           { "type": "Float", "value": -2.0 },
-        "light_y":           { "type": "Float", "value": 2.0 },
-        "light_z":           { "type": "Float", "value": 5.0 },
-        "view_x":            { "type": "Float", "value": 0.0 },
-        "view_y":            { "type": "Float", "value": 0.0 },
-        "view_z":            { "type": "Float", "value": 1.0 },
-        "roughness":         { "type": "Float", "value": 0.05 },
-        "metallic":          { "type": "Float", "value": 1.0 },
-        "intensity":         { "type": "Float", "value": 3.5 },
-        "attenuation_scale": { "type": "Float", "value": 25.0 },
-        "light_color":       { "type": "Color", "value": [1.0, 1.0, 1.0, 1.0] },
-        "base_color":        { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
-      } },
-
-    { "id": 54, "typeId": "node.equirect_envmap_sample", "handle": "ibl_specular",
-      "params": {
-        "view_x":          { "type": "Float", "value": 0.0 },
-        "view_y":          { "type": "Float", "value": 0.0 },
-        "view_z":          { "type": "Float", "value": 1.0 },
-        "roughness":       { "type": "Float", "value": 0.05 },
-        "metallic":        { "type": "Float", "value": 1.0 },
-        "roughness_scale": { "type": "Float", "value": 0.7 },
-        "base_color":      { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
-      } },
-
-    { "id": 55, "typeId": "node.mix", "handle": "direct_plus_ibl",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-
-    { "id": 56, "typeId": "node.reinhard_tone_map", "handle": "tone_map",
-      "params": { "curve": { "type": "Enum", "value": 1 } } },
 
     { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
   ],
@@ -359,10 +353,6 @@
     { "fromNode": 37, "fromPort": "out",  "toNode": 43, "toPort": "tilt" },
     { "fromNode": 38, "fromPort": "out",  "toNode": 43, "toPort": "fov_y" },
 
-    { "fromNode": 35, "fromPort": "out", "toNode": 50, "toPort": "vertices" },
-    { "fromNode": 43, "fromPort": "out", "toNode": 50, "toPort": "camera" },
-    { "fromNode": 62, "fromPort": "out", "toNode": 50, "toPort": "material" },
-
     { "fromNode": 58, "fromPort": "out", "toNode": 49, "toPort": "in" },
     { "fromNode": 49, "fromPort": "out", "toNode": 51, "toPort": "in" },
     { "fromNode": 0,  "fromPort": "aspect", "toNode": 51, "toPort": "aspect" },
@@ -373,25 +363,14 @@
 
     { "fromNode": 60, "fromPort": "out", "toNode": 52, "toPort": "in" },
 
-    { "fromNode": 51, "fromPort": "out",       "toNode": 53, "toPort": "normal" },
-    { "fromNode": 50, "fromPort": "world_pos", "toNode": 53, "toPort": "world_pos" },
-    { "fromNode": 52, "fromPort": "out",       "toNode": 53, "toPort": "roughness_map" },
-    { "fromNode": 43, "fromPort": "pos_x",     "toNode": 53, "toPort": "view_x" },
-    { "fromNode": 43, "fromPort": "pos_y",     "toNode": 53, "toPort": "view_y" },
-    { "fromNode": 43, "fromPort": "pos_z",     "toNode": 53, "toPort": "view_z" },
+    { "fromNode": 35, "fromPort": "out",    "toNode": 50, "toPort": "vertices" },
+    { "fromNode": 43, "fromPort": "out",    "toNode": 50, "toPort": "camera" },
+    { "fromNode": 62, "fromPort": "out",    "toNode": 50, "toPort": "material" },
+    { "fromNode": 63, "fromPort": "out",    "toNode": 50, "toPort": "light" },
+    { "fromNode": 32, "fromPort": "envmap", "toNode": 50, "toPort": "envmap" },
+    { "fromNode": 51, "fromPort": "out",    "toNode": 50, "toPort": "normal_map" },
+    { "fromNode": 52, "fromPort": "out",    "toNode": 50, "toPort": "roughness_map" },
 
-    { "fromNode": 51, "fromPort": "out",       "toNode": 54, "toPort": "normal" },
-    { "fromNode": 32, "fromPort": "envmap",    "toNode": 54, "toPort": "env_map" },
-    { "fromNode": 50, "fromPort": "world_pos", "toNode": 54, "toPort": "world_pos" },
-    { "fromNode": 52, "fromPort": "out",       "toNode": 54, "toPort": "roughness_map" },
-    { "fromNode": 43, "fromPort": "pos_x",     "toNode": 54, "toPort": "view_x" },
-    { "fromNode": 43, "fromPort": "pos_y",     "toNode": 54, "toPort": "view_y" },
-    { "fromNode": 43, "fromPort": "pos_z",     "toNode": 54, "toPort": "view_z" },
-
-    { "fromNode": 53, "fromPort": "out", "toNode": 55, "toPort": "a" },
-    { "fromNode": 54, "fromPort": "out", "toNode": 55, "toPort": "b" },
-
-    { "fromNode": 55, "fromPort": "out", "toNode": 56, "toPort": "in" },
-    { "fromNode": 56, "fromPort": "out", "toNode": 40, "toPort": "in" }
+    { "fromNode": 50, "fromPort": "color", "toNode": 40, "toPort": "in" }
   ]
 }
