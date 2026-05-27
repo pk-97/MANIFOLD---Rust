@@ -26,9 +26,10 @@ struct BlinnUniforms {
 crate::primitive! {
     name: BlinnSpecular,
     type_id: "node.blinn_specular",
-    purpose: "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint).",
+    purpose: "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint). Wire a `node.light` into `light` to drive direction + colour from one source instead of scattered scalars; the wired light's colour multiplies the `color` tint param.",
     inputs: {
         normal: Texture2D required,
+        light: Light optional,
         light_x: ScalarF32 optional,
         light_y: ScalarF32 optional,
         light_z: ScalarF32 optional,
@@ -106,7 +107,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Both light and view are normalised in-shader. Color alpha is ignored; output alpha = spec weight. For audio-reactive sparkle, wire a beat-driven LFO into `power` (lower power = broader highlight; higher = pinpoint).",
+    composition_notes: "Both light and view are normalised in-shader. Color alpha is ignored; output alpha = spec weight. For audio-reactive sparkle, wire a beat-driven LFO into `power` (lower power = broader highlight; higher = pinpoint). When `light` is wired, the light's direction overrides `light_x/y/z`; the light's pre-multiplied colour multiplies into the `color` tint (so a yellow light through a magenta surface gives a yellow×magenta highlight).",
     examples: [],
     picker: { label: "Blinn Specular", category: Atom },
 }
@@ -122,17 +123,33 @@ impl Primitive for BlinnSpecular {
                 },
             }
         };
-        let light_x = read("light_x", 0.35);
-        let light_y = read("light_y", 0.55);
-        let light_z = read("light_z", 0.75);
+        let mut light_x = read("light_x", 0.35);
+        let mut light_y = read("light_y", 0.55);
+        let mut light_z = read("light_z", 0.75);
         let view_x = read("view_x", 0.0);
         let view_y = read("view_y", 0.0);
         let view_z = read("view_z", 1.0);
         let power = read("power", 48.0);
-        let color = match ctx.params.get("color") {
+        let mut color = match ctx.params.get("color") {
             Some(ParamValue::Color(c)) => *c,
             _ => [1.0, 0.95, 1.0, 1.0],
         };
+
+        // Wired `node.light` overrides direction (negate `light.dir`
+        // to match the existing scalar convention) and multiplies into
+        // the colour tint. No world_pos mode on blinn — point lights
+        // collapse to their forward direction at every pixel.
+        if let Some(light) = ctx.inputs.light("light") {
+            light_x = -light.dir[0];
+            light_y = -light.dir[1];
+            light_z = -light.dir[2];
+            color = [
+                color[0] * light.color[0],
+                color[1] * light.color[1],
+                color[2] * light.color[2],
+                color[3],
+            ];
+        }
 
         let Some(normal) = ctx.inputs.texture_2d("normal") else {
             return;

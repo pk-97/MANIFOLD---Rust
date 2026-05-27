@@ -59,11 +59,12 @@ const PBR_BRDF: &str = include_str!("shaders/pbr_brdf.wgsl");
 crate::primitive! {
     name: CookTorranceSpecular,
     type_id: "node.cook_torrance_specular",
-    purpose: "Physically-based microfacet specular (D_GGX × G_Smith × F_Schlick) from a tangent-space normal map + directional light + view + material. Outputs the ADDITIVE specular contribution. Sibling to node.blinn_specular — more accurate for metals; pair with node.lambert_directional for the diffuse term and sum via node.compose mode=Add. F0 interpolates between dielectric (0.04) and base_color by metallic.",
+    purpose: "Physically-based microfacet specular (D_GGX × G_Smith × F_Schlick) from a tangent-space normal map + directional light + view + material. Outputs the ADDITIVE specular contribution. Sibling to node.blinn_specular — more accurate for metals; pair with node.lambert_directional for the diffuse term and sum via node.compose mode=Add. F0 interpolates between dielectric (0.04) and base_color by metallic. Wire a `node.light` into `light` to drive direction (Sun) or position (Point, when world_pos is also wired) + colour from one source instead of scattered scalars.",
     inputs: {
         normal: Texture2D required,
         world_pos: Texture2D optional,
         roughness_map: Texture2D optional,
+        light: Light optional,
         light_x: ScalarF32 optional,
         light_y: ScalarF32 optional,
         light_z: ScalarF32 optional,
@@ -192,17 +193,17 @@ impl Primitive for CookTorranceSpecular {
                 },
             }
         };
-        let light_x = read("light_x", 0.35);
-        let light_y = read("light_y", 0.55);
-        let light_z = read("light_z", 0.75);
+        let mut light_x = read("light_x", 0.35);
+        let mut light_y = read("light_y", 0.55);
+        let mut light_z = read("light_z", 0.75);
         let view_x = read("view_x", 0.0);
         let view_y = read("view_y", 0.0);
         let view_z = read("view_z", 1.0);
         let roughness = read("roughness", 0.3);
         let metallic = read("metallic", 1.0);
-        let intensity = read("intensity", 1.0);
-        let attenuation_scale = read("attenuation_scale", 25.0);
-        let light_color = match ctx.params.get("light_color") {
+        let mut intensity = read("intensity", 1.0);
+        let mut attenuation_scale = read("attenuation_scale", 25.0);
+        let mut light_color = match ctx.params.get("light_color") {
             Some(ParamValue::Color(c)) => *c,
             _ => [1.0, 1.0, 1.0, 1.0],
         };
@@ -216,6 +217,34 @@ impl Primitive for CookTorranceSpecular {
         };
         let world_pos = ctx.inputs.texture_2d("world_pos");
         let roughness_map = ctx.inputs.texture_2d("roughness_map");
+
+        // Wired `node.light` overrides direction/position + colour. In
+        // flat-screen mode (world_pos not wired) we feed `light_x/y/z`
+        // as DIRECTION (negate `light.dir` to match the existing
+        // convention: scalars point FROM scene TOWARD light). In
+        // 3D-mesh mode (world_pos wired) we feed them as world POSITION
+        // (the WGSL switches on `use_world_pos` and recomputes L per
+        // pixel as `normalize(light_pos - world_pos)`). `light.color` is
+        // pre-multiplied with intensity by the producer, so we set
+        // intensity=1 to avoid double-multiplying. `light.range` maps
+        // to attenuation_scale (Point light → the 1/(1+d²/scale)
+        // falloff; Sun light is parallel rays so attenuation_scale
+        // doesn't affect output in flat-screen mode but is harmlessly
+        // passed through).
+        if let Some(light) = ctx.inputs.light("light") {
+            if world_pos.is_some() {
+                light_x = light.pos[0];
+                light_y = light.pos[1];
+                light_z = light.pos[2];
+            } else {
+                light_x = -light.dir[0];
+                light_y = -light.dir[1];
+                light_z = -light.dir[2];
+            }
+            light_color = [light.color[0], light.color[1], light.color[2], 1.0];
+            intensity = 1.0;
+            attenuation_scale = light.range;
+        }
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;
         };

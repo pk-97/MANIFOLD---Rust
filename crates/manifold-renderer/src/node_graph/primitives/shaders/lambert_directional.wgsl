@@ -5,9 +5,11 @@
 //   n = sample(normal, uv).rgb
 //   lambert = max(dot(n, light_dir), 0.0)
 //   lit = lambert * (1.0 - ambient) + ambient
-//   out.rgb = vec3(lit); out.a = 1.0
+//   out.rgb = vec3(lit) * light_color; out.a = 1.0
 //
-// Output is grayscale [0, 1] in RGB — caller tints with downstream
+// Output is grayscale [0, 1] when light_color = (1, 1, 1) (the
+// scalar-driven default), tinted by light_color otherwise (the
+// `node.light`-wired path). Caller tints further with downstream
 // `node.color_grade` / `node.color_ramp` if needed.
 //
 // Bindings:
@@ -17,12 +19,10 @@
 //   @binding(3) output_tex (rgba16float storage)
 
 struct Uniforms {
-    light_dir: vec3<f32>,   // unit vector, world-ish; will be normalised in-shader
+    light_dir: vec3<f32>,    // unit vector, world-ish; normalised in-shader
+    _pad: f32,
+    light_color: vec3<f32>,  // pre-multiplied with intensity by the producer
     ambient: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -43,5 +43,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let l = normalize(uniforms.light_dir + vec3<f32>(1e-8));
     let lambert = max(dot(n, l), 0.0);
     let lit = lambert * (1.0 - uniforms.ambient) + uniforms.ambient;
-    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(lit, lit, lit, 1.0));
+    let rgb = vec3<f32>(lit) * uniforms.light_color;
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(rgb, 1.0));
 }
