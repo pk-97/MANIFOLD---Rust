@@ -315,17 +315,19 @@ pub(super) fn validate_wire_endpoints(
         });
     }
 
-    // Channels path (specs-aware): if both endpoints declare a
-    // non-empty Channels signature, the new validator runs and surfaces
-    // a structured `ChannelMismatch` on disagreement (per
-    // `docs/CHANNEL_TYPE_SYSTEM.md` §5). Wires where either side has an
-    // empty `specs` fall through to the legacy `item_kind` + size +
-    // align check below, which keeps the Anonymous coercion and the
-    // existing typed-family wires working through Phase 3.
+    // Channels path (specs-aware): routes through `channels_compatible`
+    // when (a) both endpoints declare a non-empty Channels signature,
+    // OR (b) the consumer is Permissive (generic transform operators
+    // accept any Channels producer regardless of their own specs).
+    // Surfaces a structured `ChannelMismatch` on disagreement per
+    // `docs/CHANNEL_TYPE_SYSTEM.md` §5. Wires that match neither
+    // condition fall through to the legacy `item_kind` + size + align
+    // check below, which keeps the Anonymous coercion and the existing
+    // typed-family wires working through Phase 3.
     if let (PortType::Array(producer), PortType::Array(consumer)) =
         (from_port.ty, to_port.ty)
-        && !producer.specs.is_empty()
-        && !consumer.specs.is_empty()
+        && (consumer.match_mode == MatchMode::Permissive
+            || (!producer.specs.is_empty() && !consumer.specs.is_empty()))
     {
         if let Err(reason) = channels_compatible(producer, consumer) {
             return Err(GraphError::ChannelMismatch(Box::new(
