@@ -92,24 +92,20 @@
     { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
     { "id": 14, "typeId": "system.final_output",    "handle": "final_output" },
 
-    { "id": 81, "typeId": "node.seed_particles", "handle": "seed_alloc",
+    { "id": 80, "typeId": "node.wgsl_compute", "handle": "seed_pattern",
+      "wgslSource": "// FluidSim2D seed pattern — open family.\n// Writes a single-channel density texture; node.seed_particles_from_texture\n// performs exact placement (every bright texel → a particle, sub-texel\n// jitter for stacks). Crisp hard-edged patterns matching the legacy Unity\n// FluidSim 7-pattern set: tight cluster, 6 H-lines, 6 V-lines, 3 rings,\n// diagonal X, Archimedean spiral, edge ring.\n// Add an 8th pattern by appending a `case` to pattern_density's switch.\n\nstruct U {\n    pattern: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var density: texture_storage_2d<r32float, write>;\n\nconst TAU: f32 = 6.28318530718;\n// Half-width of every line/ring/arm in UV space. 0.0025 ≈ 5 px on a\n// 1080-tall canvas — crisp at viewing distance, wide enough that the\n// downstream compact pass finds enough texels for ~2M-particle round-robin.\nconst LINE_W: f32 = 0.0025;\n\nfn cluster(uv: vec2<f32>) -> f32 {\n    // Tight central disk. Legacy was a CLT Gaussian (spread 0.052);\n    // the disk gives the same visual stack with crisper boundary.\n    let d = distance(uv, vec2<f32>(0.5));\n    return select(0.0, 1.0, d < 0.06);\n}\n\nfn h_lines(uv: vec2<f32>) -> f32 {\n    // 6 horizontal lines at y = (k + 0.5) / 6 — legacy parity.\n    let bands = 6.0;\n    let nearest_y = (floor(uv.y * bands) + 0.5) / bands;\n    return select(0.0, 1.0, abs(uv.y - nearest_y) < LINE_W);\n}\n\nfn v_lines(uv: vec2<f32>) -> f32 {\n    // 6 vertical lines at x = (k + 0.5) / 6.\n    let bands = 6.0;\n    let nearest_x = (floor(uv.x * bands) + 0.5) / bands;\n    return select(0.0, 1.0, abs(uv.x - nearest_x) < LINE_W);\n}\n\nfn rings(uv: vec2<f32>) -> f32 {\n    // 3 concentric rings at r = 0.1, 0.2, 0.3 — legacy parity.\n    let d = distance(uv, vec2<f32>(0.5));\n    let on_ring = abs(d - 0.1) < LINE_W\n        || abs(d - 0.2) < LINE_W\n        || abs(d - 0.3) < LINE_W;\n    return select(0.0, 1.0, on_ring);\n}\n\nfn cross_shape(uv: vec2<f32>) -> f32 {\n    // Diagonal X — two bands at y = x and y = 1 - x. Legacy parity (NOT a + sign).\n    // Multiply line width by sqrt(2) because the band runs at 45°, so the\n    // perpendicular distance threshold is wider than an axis-aligned line.\n    let line_w = LINE_W * 1.41421356;\n    return select(0.0, 1.0,\n        abs(uv.y - uv.x) < line_w || abs(uv.y - (1.0 - uv.x)) < line_w);\n}\n\nfn spiral(uv: vec2<f32>) -> f32 {\n    // Archimedean spiral, 4 turns from center to r = 0.4 — legacy parity.\n    // Locus: theta + k·TAU = r · 10 · TAU (for integer k), with r ≤ 0.4.\n    let c = uv - vec2<f32>(0.5);\n    let r = length(c);\n    if r > 0.4 || r < 0.002 { return 0.0; }\n    let theta = atan2(c.y, c.x);\n    let k = round(r * 10.0 - theta / TAU);\n    let expected_theta = r * 10.0 * TAU - k * TAU;\n    let arc_dist = r * abs(theta - expected_theta);\n    return select(0.0, 1.0, arc_dist < LINE_W);\n}\n\nfn edge_ring(uv: vec2<f32>) -> f32 {\n    // Single ring at r = 0.45 — legacy parity.\n    let d = distance(uv, vec2<f32>(0.5));\n    return select(0.0, 1.0, abs(d - 0.45) < LINE_W);\n}\n\nfn pattern_density(uv: vec2<f32>, pat: u32) -> f32 {\n    switch pat {\n        case 0u: { return cluster(uv); }\n        case 1u: { return h_lines(uv); }\n        case 2u: { return v_lines(uv); }\n        case 3u: { return rings(uv); }\n        case 4u: { return cross_shape(uv); }\n        case 5u: { return spiral(uv); }\n        case 6u: { return edge_ring(uv); }\n        default: { return cluster(uv); }\n    }\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(density);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5)) / vec2<f32>(dims);\n    let d = pattern_density(uv, u.pattern);\n    textureStore(density, vec2<i32>(id.xy), vec4<f32>(d, 0.0, 0.0, 1.0));\n}\n",
+      "params": {
+        "pattern": { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 81, "typeId": "node.seed_particles_from_texture", "handle": "seed_spawn",
       "params": {
         "max_capacity": { "type": "Int",   "value": 8000000 },
         "active_count": { "type": "Int",   "value": 2000000 },
-        "seed_offset":  { "type": "Float", "value": 0.0 },
-        "seed_mode":    { "type": "Enum",  "value": 1 }
+        "output_width": { "type": "Float", "value": 1920.0 },
+        "output_height":{ "type": "Float", "value": 1080.0 },
+        "frame_seed":   { "type": "Int",   "value": 0 }
       } },
-
-    { "id": 80, "typeId": "node.wgsl_compute", "handle": "seed_pattern",
-      "wgslSource": "// FluidSim2D seed pattern — open family.\n// DEBUG: collapse every pattern into a y-band at y = (pattern + 1) / 8\n// so we can tell at a glance which pattern made it into state.prev.\n// Each pattern reseeds particles to a single horizontal line at a\n// distinct y; integration will then advect that line outward.\n// Restore the real switch once the plumbing is verified.\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\nstruct U {\n    pattern: u32,\n    trigger_count: u32,\n    active_count: u32,\n    _pad0: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nconst TAU: f32 = 6.28318530718;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float2(seed: u32) -> vec2<f32> {\n    let h1 = wang_hash(seed);\n    let h2 = wang_hash(h1);\n    return vec2<f32>(f32(h1), f32(h2)) / 4294967296.0;\n}\n\nfn pattern_color(pat: u32) -> vec4<f32> {\n    // 7 distinct hues so the user can see which pattern made it\n    // into state.prev. Boosted to ~0.05 brightness to overpower the\n    // 0.005 baseline and survive a few frames of advection.\n    switch pat {\n        case 0u: { return vec4<f32>(0.05, 0.0,  0.0,  1.0); } // red\n        case 1u: { return vec4<f32>(0.05, 0.03, 0.0,  1.0); } // orange\n        case 2u: { return vec4<f32>(0.05, 0.05, 0.0,  1.0); } // yellow\n        case 3u: { return vec4<f32>(0.0,  0.05, 0.0,  1.0); } // green\n        case 4u: { return vec4<f32>(0.0,  0.05, 0.05, 1.0); } // cyan\n        case 5u: { return vec4<f32>(0.0,  0.0,  0.05, 1.0); } // blue\n        case 6u: { return vec4<f32>(0.05, 0.0,  0.05, 1.0); } // magenta\n        default: { return vec4<f32>(0.05, 0.05, 0.05, 1.0); } // white fallback\n    }\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= arrayLength(&particles) {\n        return;\n    }\n\n    var p: Particle;\n    p.velocity = vec3<f32>(0.0);\n    p.age = -1.0;\n    p.color = pattern_color(u.pattern);\n\n    // Excess particles: held dead at the centre nozzle, slight\n    // random radial scatter so they don't all sit on one pixel.\n    if i >= u.active_count {\n        let spread_hash_a = f32(wang_hash(i * 1664525u + 12345u)) / 4294967296.0;\n        let spread_hash_b = f32(wang_hash(wang_hash(i * 1664525u + 12345u))) / 4294967296.0;\n        let spread_r = spread_hash_a * 0.05;\n        let spread_a = spread_hash_b * 6.28318;\n        p.position = vec3<f32>(\n            0.5 + cos(spread_a) * spread_r,\n            0.5 + sin(spread_a) * spread_r,\n            0.0,\n        );\n        p.life = 0.0;\n        particles[i] = p;\n        return;\n    }\n\n    let seed = i * 1664525u + u.trigger_count * 747796405u;\n    let x = hash_float(seed);\n    let y = (f32(u.pattern) + 1.0) / 8.0;\n    p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);\n    p.life = 1.0;\n    particles[i] = p;\n}\n",
-      "params": {
-        "pattern":       { "type": "Float", "value": 3.0 },
-        "trigger_count": { "type": "Float", "value": 42.0 },
-        "active_count":  { "type": "Float", "value": 2000000.0 }
-      } },
-
-    { "id": 95, "typeId": "node.cast_as_particle", "handle": "seed_cast",
-      "params": {} },
 
     { "id": 82, "typeId": "node.array_feedback", "handle": "particles_feedback",
       "params": {} },
@@ -314,16 +310,14 @@
   "wires": [
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 70, "toPort": "trigger_count" },
 
-    { "fromNode": 21, "fromPort": "out",       "toNode": 81, "toPort": "active_count" },
-
-    { "fromNode": 81, "fromPort": "particles", "toNode": 80, "toPort": "particles" },
     { "fromNode": 70, "fromPort": "out",       "toNode": 80, "toPort": "pattern" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 80, "toPort": "trigger_count" },
-    { "fromNode": 21, "fromPort": "out",       "toNode": 80, "toPort": "active_count" },
 
-    { "fromNode": 80, "fromPort": "particles", "toNode": 95, "toPort": "in" },
+    { "fromNode": 80, "fromPort": "density",       "toNode": 81, "toPort": "mask" },
+    { "fromNode": 21, "fromPort": "out",           "toNode": 81, "toPort": "active_count" },
+    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 81, "toPort": "output_width" },
+    { "fromNode": 0,  "fromPort": "output_height", "toNode": 81, "toPort": "output_height" },
 
-    { "fromNode": 95, "fromPort": "out",       "toNode": 82, "toPort": "seed" },
+    { "fromNode": 81, "fromPort": "particles", "toNode": 82, "toPort": "seed" },
     { "fromNode": 91, "fromPort": "out",       "toNode": 82, "toPort": "in" },
     { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
 
