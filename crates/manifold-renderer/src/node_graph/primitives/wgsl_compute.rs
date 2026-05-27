@@ -508,13 +508,22 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     // itself is type-agnostic: the WGSL kernel owns the
                     // per-byte interpretation.
                     let port_name = leak_str(&name);
+                    // Atomic accumulator: an `array<atomic<u32>>` is
+                    // u32-per-slot, so the Channels signature is the
+                    // single-channel u32 form that downstream consumers
+                    // (resolve_accumulator etc.) declare via Array(u32).
+                    // Same `value: U32` shape that u32's KnownItem impl
+                    // produces; matches by hash, validates cleanly.
                     outputs.push(NodePort {
                         name: port_name,
                         ty: PortType::Array(ArrayType {
                             item_size: 4,
                             item_align: 4,
                             item_kind: ItemKind::Anonymous,
-                            specs: &[],
+                            specs: &[ChannelSpec {
+                                name: crate::node_graph::channel_names::well_known::VALUE,
+                                ty: ChannelElementType::U32,
+                            }],
                             match_mode: crate::node_graph::ports::MatchMode::Exact,
                         }),
                         kind: PortKind::Output,

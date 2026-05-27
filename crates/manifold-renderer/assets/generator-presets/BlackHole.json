@@ -786,18 +786,6 @@
           "value": 9
         }
       }
-    },
-    {
-      "id": 22,
-      "typeId": "node.cast_as_u32",
-      "handle": "cast_accum_top",
-      "params": {}
-    },
-    {
-      "id": 23,
-      "typeId": "node.cast_as_u32",
-      "handle": "cast_accum_bottom",
-      "params": {}
     }
   ],
   "wires": [
@@ -864,24 +852,12 @@
     {
       "fromNode": 4,
       "fromPort": "accum_top",
-      "toNode": 22,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 22,
-      "fromPort": "out",
       "toNode": 6,
       "toPort": "accum"
     },
     {
       "fromNode": 4,
       "fromPort": "accum_bottom",
-      "toNode": 23,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 23,
-      "fromPort": "out",
       "toNode": 7,
       "toPort": "accum"
     },

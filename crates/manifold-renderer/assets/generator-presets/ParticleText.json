@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Particle Text",
-  "description": "Particle Text — text baked into FluidSim2D's force field as a curl-rotated gradient. Same atom-decomposed base as FluidSim2D (`seed_particles` + wgsl_compute pattern + `cast_as_particle` + `array_feedback` particle loop + per-particle `sample / simplex_noise_force / anti_clump / euler / wrap / apply_radial_burst` integrator + texture-domain `gradient_central_diff / scale_offset / rotate_vec2_by_angle` force field), with one extra branch grafted in. Density-adaptive simplex noise now runs per-particle inside the force chain rather than per-pixel.\n\nText-force branch added in parallel to the velocity field: `node.render_text → gaussian_blur H+V (softens the gradient so it isn't single-texel spiky) → gradient_central_diff (R channel, texel-scale, clamp wrap) → rotate_vec2_by_angle (angle=PI/2: perpendicular curl-along-edge flow, divergence-free) → gain (driven by outer-card text_strength)`. That contribution is summed into the velocity field via `mix(Add)` so the per-particle sampler reads field + text in one composed texture; noise is then added per-particle downstream.\n\nOuter-card params on top of the FluidSim2D surface: `text` (string), `fontFamily` (string), `text_size` (font height as a fraction of output height, 0.05..1.0, default 0.25), `text_strength` (gain on the text-derived force, 0..20, default 4.0).\n\nDeparture from legacy ParticleText visual: particles never \"form the text and dissolve\" — the text is a persistent attractor / repeller depending on local flow direction. Best results with text_strength 3-8 and text_size 0.3-0.6 against FluidSim2D defaults. Increase `feather` for chunkier glyph trails; increase `count_m` to fill the text shape more densely.",
+  "description": "Particle Text — text baked into FluidSim2D's force field as a curl-rotated gradient. Same atom-decomposed base as FluidSim2D (`seed_particles` + wgsl_compute pattern + `array_feedback` particle loop + per-particle `sample / simplex_noise_force / anti_clump / euler / wrap / apply_radial_burst` integrator + texture-domain `gradient_central_diff / scale_offset / rotate_vec2_by_angle` force field), with one extra branch grafted in. Density-adaptive simplex noise now runs per-particle inside the force chain rather than per-pixel.\n\nText-force branch added in parallel to the velocity field: `node.render_text → gaussian_blur H+V (softens the gradient so it isn't single-texel spiky) → gradient_central_diff (R channel, texel-scale, clamp wrap) → rotate_vec2_by_angle (angle=PI/2: perpendicular curl-along-edge flow, divergence-free) → gain (driven by outer-card text_strength)`. That contribution is summed into the velocity field via `mix(Add)` so the per-particle sampler reads field + text in one composed texture; noise is then added per-particle downstream.\n\nOuter-card params on top of the FluidSim2D surface: `text` (string), `fontFamily` (string), `text_size` (font height as a fraction of output height, 0.05..1.0, default 0.25), `text_strength` (gain on the text-derived force, 0..20, default 4.0).\n\nDeparture from legacy ParticleText visual: particles never \"form the text and dissolve\" — the text is a persistent attractor / repeller depending on local flow direction. Best results with text_strength 3-8 and text_size 0.3-0.6 against FluidSim2D defaults. Increase `feather` for chunkier glyph trails; increase `count_m` to fill the text shape more densely.",
   "presetMetadata": {
     "id": "ParticleText",
     "displayName": "Particle Text",
@@ -126,9 +126,6 @@
         "trigger_count": { "type": "Float", "value": 42.0 },
         "active_count":  { "type": "Float", "value": 2000000.0 }
       } },
-
-    { "id": 95, "typeId": "node.cast_as_particle", "handle": "seed_cast",
-      "params": {} },
 
     { "id": 82, "typeId": "node.array_feedback", "handle": "particles_feedback",
       "params": {} },
@@ -374,9 +371,7 @@
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 80, "toPort": "trigger_count" },
     { "fromNode": 21, "fromPort": "out",       "toNode": 80, "toPort": "active_count" },
 
-    { "fromNode": 80, "fromPort": "particles", "toNode": 95, "toPort": "in" },
-
-    { "fromNode": 95, "fromPort": "out",       "toNode": 82, "toPort": "seed" },
+    { "fromNode": 80, "fromPort": "particles", "toNode": 82, "toPort": "seed" },
     { "fromNode": 91, "fromPort": "out",       "toNode": 82, "toPort": "in" },
     { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
 
