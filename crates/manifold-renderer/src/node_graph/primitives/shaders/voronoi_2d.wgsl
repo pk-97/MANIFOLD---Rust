@@ -8,10 +8,18 @@
 //   R = F1                  (distance to nearest feature point)
 //   G = F2                  (distance to second-nearest)
 //   B = F2 - F1             (cell-edge factor — high at boundaries)
-//   A = 1
+//   A = cell_hash           (per-cell stable random in [0, 1] —
+//                            the hash of the F1-winning cell's
+//                            coordinates. Constant across every
+//                            pixel inside one cell; uncorrelated
+//                            between neighboring cells. Foundation
+//                            for per-cell variation: density
+//                            thresholding, per-cell colour, per-cell
+//                            timing/twinkle, per-cell size.)
 //
-// All three are scaled by `out_scale` so the user can remap into a
-// useful range without an extra scale_offset_texture node.
+// F1/F2/(F2-F1) are scaled by `out_scale` so the user can remap into
+// a useful range without an extra scale_offset_texture node. The
+// cell_hash on A is always raw [0, 1] — out_scale does not apply.
 
 struct Uniforms {
     scale:     f32,   // cell density (cells per UV-unit)
@@ -58,6 +66,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var f1 = 1e9;
     var f2 = 1e9;
+    var f1_cell = cell;
     for (var dy = -1; dy <= 1; dy = dy + 1) {
         for (var dx = -1; dx <= 1; dx = dx + 1) {
             let neighbor = cell + vec2<i32>(dx, dy);
@@ -66,14 +75,23 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if d < f1 {
                 f2 = f1;
                 f1 = d;
+                f1_cell = neighbor;
             } else if d < f2 {
                 f2 = d;
             }
         }
     }
 
+    // Per-cell stable random — independent hash mix from the jitter
+    // hashes so cell_hash decorrelates from the per-cell jitter offset
+    // (otherwise dense / sparse cells correlate with how-jittered-the-
+    // point-is, which is a non-obvious coupling for downstream consumers).
+    let cell_hash = f32(wang_hash(
+        u32(f1_cell.x + 10000) * 12345701u ^ u32(f1_cell.y + 10000) * 39916801u,
+    ) & 0xFFFFu) / 65535.0;
+
     let r = f1 * u.out_scale;
     let g = f2 * u.out_scale;
     let b = (f2 - f1) * u.out_scale;
-    textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(r, g, b, 1.0));
+    textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(r, g, b, cell_hash));
 }

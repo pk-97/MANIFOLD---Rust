@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Star Field",
-  "description": "Star Field — cinematic 3D parallax star field with four depth-staggered layers, spectral colouring, aspect-corrected core+halo gaussians, and multi-frequency twinkle. Decomposed from the legacy `StarFieldGenerator` Rust struct into a single curated `node.star_field_2d` primitive that exposes nine outer-card sliders bound directly to its params plus a side-channel `Array<CurvePoint>` output (`stars`) carrying per-star screen NDC positions for downstream composition (constellation lines, particle seeding, audio-reactive modulation).\n\nThe two outputs are independent: wire `out` for the classic generator look, wire `stars` (when sentinel-filtering downstream primitives exist) to drive other graph nodes from the same hash + camera-drift state used by the texture.",
+  "description": "Star Field — fully atomized from the legacy `node.star_field_2d` Rust bundle. Composed entirely of existing texture-domain atoms: `voronoi_2d` (per-cell distance + hash) → `scale_offset` (invert distance) → `power_texture` (spike to star core) → `channel_mix` (swizzle voronoi.A cell_hash → R) → `smoothstep_texture` (density threshold) → `mix(Multiply)` mask the core → `trig_texture` (per-pixel sin with per-cell freq/phase via texture-shadow inputs) → `mix(Multiply)` apply twinkle → final brightness.\n\nKey enablers shipped with this decomposition:\n(1) `node.voronoi_2d` extended to expose the F1-winner cell hash on the A channel — was constant 1.0, now carries a per-cell stable random in [0, 1] that's the foundation for per-cell density / colour / timing variation across the cellular-noise family (stars, foam, cracked glass, embers, tiles).\n(2) `node.channel_mix` GPU shader implemented (was a no-op stub registered for halation) — completes the 4×4 RGBA matrix transform that lets any channel be moved to any other. Critical for reading the voronoi A cell_hash as a control signal in downstream R-channel-operating math atoms.\n(3) `node.trig_texture` extended with optional `freq_tex` and `phase_tex` texture-shadow inputs — when wired, per-pixel freq/phase comes from the texture R channel instead of the scalar uniform. This is what unlocks per-star unique twinkle (each cell pulses at its own freq + phase, not just a global LFO on everything).\n\nDropped sliders from the legacy bundle (intentionally — atomization scope): `depth` (was per-layer parallax scaling — single-layer graph here, no need), `warmth` (per-star colour temperature — would need color_ramp wired through a per-cell-hash bridge; future work if visual demands it), `glow` (per-star halo extent — would need a second voronoi pass at the same offset/scale with a wider gaussian; future work). The cinematic 4-layer parallax was also dropped — the legacy bundle ran a 4-depth-staggered spherical projection per pixel which is a per-pixel iteration loop (Plasma-Noise/Fractal-class blocker for atomization until the graph compiler / for_each_n lands). Single-layer star field with UV drift reads as 'twinkling stars'; multi-layer parallax can be added later either by duplicating the inner chain in JSON (each layer at a different voronoi scale + drift speed, summed via `mix(Add)`) or via the graph compiler.\n\nThe Array<CurvePoint> side-channel `stars` output from the legacy bundle is dropped in this decomposition (no current preset consumed it; restoring requires the parked `wgsl_compute` write-only declared-read_write infrastructure work or a generic per-type allocator atom). Documented as a parity delta in the migration commit.",
   "presetMetadata": {
     "id": "StarField",
     "displayName": "Star Field",
@@ -11,11 +11,22 @@
     "isLineBased": false,
     "params": [
       {
+        "id": "scale",
+        "name": "Scale",
+        "min": 4.0,
+        "max": 64.0,
+        "defaultValue": 24.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1",
+        "oscSuffix": "scale"
+      },
+      {
         "id": "density",
         "name": "Density",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.5,
+        "defaultValue": 0.6,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2",
@@ -25,23 +36,12 @@
         "id": "brightness",
         "name": "Brightness",
         "min": 0.0,
-        "max": 2.0,
-        "defaultValue": 0.7,
+        "max": 4.0,
+        "defaultValue": 1.5,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2",
         "oscSuffix": "brightness"
-      },
-      {
-        "id": "depth",
-        "name": "Depth",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.5,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "depth"
       },
       {
         "id": "drift_speed",
@@ -81,74 +81,126 @@
         "name": "Twinkle",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.3,
+        "defaultValue": 0.6,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2",
         "oscSuffix": "twinkle"
-      },
-      {
-        "id": "warmth",
-        "name": "Warmth",
-        "min": -1.0,
-        "max": 1.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "warmth"
-      },
-      {
-        "id": "glow",
-        "name": "Glow",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.3,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "glow"
       }
     ],
     "bindings": [
-      { "id": "density",     "label": "Density",     "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "density" },
+      { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
+        "target": { "kind": "handleNode", "handle": "cells", "param": "scale" },
         "convert": { "type": "Float" } },
-      { "id": "brightness",  "label": "Brightness",  "defaultValue": 0.7,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "brightness" },
+      { "id": "density",     "label": "Density",     "defaultValue": 0.6,
+        "target": { "kind": "handleNode", "handle": "density_mask", "param": "low" },
         "convert": { "type": "Float" } },
-      { "id": "depth",       "label": "Depth",       "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "depth" },
+      { "id": "brightness",  "label": "Brightness",  "defaultValue": 1.5,
+        "target": { "kind": "handleNode", "handle": "final_brightness", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "drift_speed", "label": "Drift Speed", "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "drift_speed" },
+        "target": { "kind": "handleNode", "handle": "drift_t", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "drift_x",     "label": "Drift X",     "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "drift_x" },
+        "target": { "kind": "handleNode", "handle": "offset_x", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "drift_y",     "label": "Drift Y",     "defaultValue": 0.1,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "drift_y" },
+        "target": { "kind": "handleNode", "handle": "offset_y", "param": "b" },
         "convert": { "type": "Float" } },
-      { "id": "twinkle",     "label": "Twinkle",     "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "twinkle" },
-        "convert": { "type": "Float" } },
-      { "id": "warmth",      "label": "Warmth",      "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "warmth" },
-        "convert": { "type": "Float" } },
-      { "id": "glow",        "label": "Glow",        "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "stars", "param": "glow" },
+      { "id": "twinkle",     "label": "Twinkle",     "defaultValue": 0.6,
+        "target": { "kind": "handleNode", "handle": "apply_twinkle", "param": "amount" },
         "convert": { "type": "Float" } }
+    ],
+    "paramAliases": [
+      { "old": "depth", "new": "scale" }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
     { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "typeId": "node.star_field_2d",     "handle": "stars" },
-    { "id": 2, "typeId": "system.final_output",    "handle": "final_output" }
+    { "id": 1, "typeId": "system.final_output",    "handle": "final_output" },
+
+    { "id": 2, "typeId": "node.math", "handle": "drift_t",
+      "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.15 } } },
+    { "id": 3, "typeId": "node.math", "handle": "offset_x",
+      "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.3 } } },
+    { "id": 4, "typeId": "node.math", "handle": "offset_y",
+      "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.1 } } },
+
+    { "id": 5, "typeId": "node.voronoi_2d", "handle": "cells",
+      "params": { "scale": { "type": "Float", "value": 24.0 }, "jitter": { "type": "Float", "value": 1.0 }, "out_scale": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 6, "typeId": "node.scale_offset_texture", "handle": "invert_distance",
+      "params": { "scale": { "type": "Float", "value": -1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 7, "typeId": "node.power_texture", "handle": "spike",
+      "params": { "exponent": { "type": "Float", "value": 12.0 } } },
+
+    { "id": 8, "typeId": "node.channel_mix", "handle": "cell_hash_to_r",
+      "params": {
+        "row0": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] },
+        "row1": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+        "row2": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
+        "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }
+      } },
+
+    { "id": 9, "typeId": "node.smoothstep_texture", "handle": "density_mask",
+      "params": { "low": { "type": "Float", "value": 0.6 }, "high": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 10, "typeId": "node.mix", "handle": "masked_stars",
+      "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 1.0 } } },
+
+    { "id": 11, "typeId": "node.scale_offset_texture", "handle": "freq_per_cell",
+      "params": { "scale": { "type": "Float", "value": 3.5 }, "offset": { "type": "Float", "value": 1.5 } } },
+
+    { "id": 12, "typeId": "node.scale_offset_texture", "handle": "phase_per_cell",
+      "params": { "scale": { "type": "Float", "value": 6.2831853 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 13, "typeId": "node.trig_texture", "handle": "twinkle_sin",
+      "params": { "mode": { "type": "Enum", "value": 0 }, "freq": { "type": "Float", "value": 1.0 }, "phase": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 14, "typeId": "node.scale_offset_texture", "handle": "twinkle_to_unit",
+      "params": { "scale": { "type": "Float", "value": 0.5 }, "offset": { "type": "Float", "value": 0.5 } } },
+
+    { "id": 15, "typeId": "node.mix", "handle": "apply_twinkle",
+      "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 0.6 } } },
+
+    { "id": 16, "typeId": "node.scale_offset_texture", "handle": "final_brightness",
+      "params": { "scale": { "type": "Float", "value": 1.5 }, "offset": { "type": "Float", "value": 0.0 } } }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "time",   "toNode": 1, "toPort": "time"   },
-    { "fromNode": 0, "fromPort": "aspect", "toNode": 1, "toPort": "aspect" },
-    { "fromNode": 1, "fromPort": "out",    "toNode": 2, "toPort": "in"     }
+    { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
+
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "a" },
+
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "offset_x" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "offset_y" },
+
+    { "fromNode": 5, "fromPort": "out", "toNode": 6,  "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7,  "toPort": "in" },
+
+    { "fromNode": 5, "fromPort": "out", "toNode": 8,  "toPort": "source" },
+
+    { "fromNode": 8, "fromPort": "out", "toNode": 9,  "toPort": "in" },
+
+    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "b" },
+
+    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 12, "toPort": "in" },
+
+    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "in" },
+    { "fromNode": 0,  "fromPort": "time", "toNode": 13, "toPort": "freq" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "phase_tex" },
+
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
+
+    { "fromNode": 10, "fromPort": "out", "toNode": 15, "toPort": "a" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b" },
+
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
+
+    { "fromNode": 16, "fromPort": "out", "toNode": 1,  "toPort": "in" }
   ]
 }

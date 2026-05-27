@@ -2,13 +2,17 @@
 //!
 //! Pure generator. Each integer cell holds one jittered feature
 //! point. The shader returns F1 (distance to nearest), F2
-//! (second-nearest), and F2 - F1 (cell-edge factor).
+//! (second-nearest), F2 - F1 (cell-edge factor), and a per-cell
+//! stable random hash.
 //!
 //! Output:
-//! - R = F1                (cell-center proximity)
-//! - G = F2                (second-nearest distance)
-//! - B = F2 - F1           (edge factor: high at cell boundaries)
-//! - A = 1
+//! - R = F1 (cell-center proximity)
+//! - G = F2 (second-nearest distance)
+//! - B = F2 - F1 (edge factor: high at cell boundaries)
+//! - A = cell_hash (per-cell stable random in [0, 1] — same value
+//!   across every pixel inside one cell, uncorrelated between cells.
+//!   The foundation for per-cell variation: density threshold,
+//!   per-cell colour, per-cell timing, twinkle frequency, etc.)
 
 use manifold_gpu::GpuBinding;
 
@@ -32,8 +36,18 @@ struct VoronoiUniforms {
 crate::primitive! {
     name: Voronoi2D,
     type_id: "node.voronoi_2d",
-    purpose: "Pure generator. 2D Worley / Voronoi cellular noise. Outputs F1 in R (distance to nearest feature point), F2 in G (second-nearest), F2-F1 in B (cell-edge factor — high at boundaries). Foundation for cellular patterns, cracked-glass, stained-glass, stars (sparse jitter), foam.",
-    inputs: {},
+    purpose: "Pure generator. 2D Worley / Voronoi cellular noise. Outputs F1 in R (distance to nearest feature point), F2 in G (second-nearest), F2-F1 in B (cell-edge factor — high at boundaries), and a per-cell stable random hash in A (same value across every pixel inside a cell, uncorrelated between cells — drives per-cell variation: density threshold, twinkle frequency, per-cell colour, per-cell size). Foundation for cellular patterns, cracked-glass, stained-glass, stars (sparse jitter + per-star twinkle), foam, fire embers, procedural tiles.",
+    inputs: {
+        // Every numeric param is port-shadowable so drift / animated
+        // density / time-varying cell scale can come from upstream
+        // scalar wires (LFOs, value-from-clip-trigger math chains,
+        // generator-input.time multiplied by per-axis drift values).
+        scale: ScalarF32 optional,
+        offset_x: ScalarF32 optional,
+        offset_y: ScalarF32 optional,
+        jitter: ScalarF32 optional,
+        out_scale: ScalarF32 optional,
+    },
     outputs: {
         out: Texture2D,
     },
@@ -79,33 +93,21 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "For star fields: chain into node.fract_texture → node.power_texture (high exponent ~16) to spike F1 into points. For cracked-glass / cell edges: read the B (F2-F1) channel via node.channel_mix. For watercolor patches: read R, threshold via node.threshold. Setting jitter to 0 gives a perfect grid; 1 gives full random cells.",
+    composition_notes: "For star fields: chain into node.fract_texture → node.power_texture (high exponent ~16) to spike F1 into points. Read A (cell_hash) to threshold which cells are stars (density slider via node.filter or node.smoothstep_texture against A), and to derive per-star twinkle (math chain: A → frequency range → multiply by time → sin_term → multiply with the core). For cracked-glass / cell edges: read the B (F2-F1) channel via node.channel_mix. For watercolor patches: read R, threshold via node.threshold. For per-cell colour variation (foam, pebbles, tiles): feed A into node.color_ramp or node.lut1d. Setting jitter to 0 gives a perfect grid; 1 gives full random cells. The cell_hash on A uses an independent hash mix from the jitter offsets, so each cell's hash is stable as jitter is animated (only the F1-winner can change at cell boundaries).",
     examples: [],
     picker: { label: "Voronoi 2D", category: Atom },
 }
 
 impl Primitive for Voronoi2D {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let scale = match ctx.params.get("scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 8.0,
-        };
-        let offset_x = match ctx.params.get("offset_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let offset_y = match ctx.params.get("offset_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
-        };
-        let jitter = match ctx.params.get("jitter") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-        let out_scale = match ctx.params.get("out_scale") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        // Port-shadows-param on every numeric input: a wired scalar
+        // overrides the inline param, the param's default fires when
+        // unwired.
+        let scale = ctx.scalar_or_param("scale", 8.0);
+        let offset_x = ctx.scalar_or_param("offset_x", 0.0);
+        let offset_y = ctx.scalar_or_param("offset_y", 0.0);
+        let jitter = ctx.scalar_or_param("jitter", 1.0);
+        let out_scale = ctx.scalar_or_param("out_scale", 1.0);
 
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;
@@ -161,10 +163,19 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn voronoi_2d_declares_zero_inputs_and_one_texture_output() {
-        use crate::node_graph::ports::PortType;
+    fn voronoi_2d_declares_five_optional_scalar_inputs_and_one_texture_output() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(Voronoi2D::TYPE_ID, "node.voronoi_2d");
-        assert!(Voronoi2D::INPUTS.is_empty());
+        let ins = Voronoi2D::INPUTS;
+        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        assert_eq!(
+            names,
+            vec!["scale", "offset_x", "offset_y", "jitter", "out_scale"]
+        );
+        for port in ins {
+            assert!(!port.required, "all voronoi_2d inputs are optional");
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(Voronoi2D::OUTPUTS.len(), 1);
         assert_eq!(Voronoi2D::OUTPUTS[0].name, "out");
         assert_eq!(Voronoi2D::OUTPUTS[0].ty, PortType::Texture2D);
@@ -184,5 +195,171 @@ mod tests {
         let prim = Voronoi2D::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.voronoi_2d");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Hardware tests for the cell_hash A-channel contract:
+    //! (1) per-cell stable — pixels deep inside the same cell share A,
+    //! (2) decorrelated across cells — distinct cells produce distinct A,
+    //! (3) range — A ∈ [0, 1].
+    //!
+    //! These are the load-bearing properties downstream consumers rely
+    //! on (density threshold via filter / smoothstep, per-cell colour
+    //! ramp, per-star twinkle frequency, etc.). Run at jitter=0 so the
+    //! F1 winner for each pixel is the cell the pixel falls in — makes
+    //! "deep inside cell X" pixel coordinates deterministic.
+    use half::f16;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+
+    use super::Voronoi2D;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use crate::node_graph::graph::Graph;
+    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::{Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId};
+    use crate::render_target::RenderTarget;
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+        for step in plan.steps() {
+            if step.node == node {
+                for &(name, id) in &step.outputs {
+                    if name == port {
+                        return id;
+                    }
+                }
+            }
+        }
+        panic!("no output `{port}` on node {node:?}");
+    }
+
+    /// Render one Voronoi2D frame at the given params; return raw fp16
+    /// pixels in row-major rgba order.
+    fn run_voronoi(scale: f32, jitter: f32, w: u32, h: u32) -> Vec<u16> {
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut g = Graph::new();
+        let node = g.add_node(Box::new(Voronoi2D::new()));
+        let sink = g.add_node(Box::new(FinalOutput::new()));
+        g.set_param(node, "scale", ParamValue::Float(scale)).unwrap();
+        g.set_param(node, "jitter", ParamValue::Float(jitter)).unwrap();
+        g.connect((node, "out"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let r_out = output_resource(&plan, node, "out");
+
+        let mut backend = MetalBackend::new(&device, w, h, format);
+        let target = RenderTarget::new(&device, w, h, format, "voronoi-out");
+        let out_slot = backend.pre_bind_texture_2d(r_out, target);
+
+        let mut native_enc = device.create_encoder("voronoi-frame");
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let tex = exec.backend().texture_2d(out_slot).expect("retained");
+        let bytes_per_row = w * 8;
+        let total = u64::from(h * bytes_per_row);
+        let readback = device.create_buffer_shared(total);
+        let mut readback_enc = device.create_encoder("voronoi-readback");
+        readback_enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+
+        let ptr = readback.mapped_ptr().expect("shared");
+        let slice: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        slice.to_vec()
+    }
+
+    fn alpha_at(pixels: &[u16], x: u32, y: u32, w: u32) -> f32 {
+        let i = (y * w + x) as usize;
+        f16::from_bits(pixels[i * 4 + 3]).to_f32()
+    }
+
+    /// At jitter=0 every feature point sits at the cell centre, so the
+    /// F1 winner for a pixel is the cell the pixel falls in. Two
+    /// pixels well inside the same cell must report identical A.
+    #[test]
+    fn cell_hash_is_stable_within_one_cell() {
+        // scale=4 over 16-pixel canvas → cells span 4 pixels each.
+        // Pixels (1,1) and (2,2) are deep inside cell (0,0).
+        let w = 16;
+        let h = 16;
+        let pixels = run_voronoi(4.0, 0.0, w, h);
+
+        let a_at_1_1 = alpha_at(&pixels, 1, 1, w);
+        let a_at_2_2 = alpha_at(&pixels, 2, 2, w);
+        assert_eq!(
+            a_at_1_1, a_at_2_2,
+            "two pixels in the same cell (0,0) returned different cell_hash"
+        );
+
+        // Pixels (9,9), (10,10) are deep inside cell (2,2). Same cell,
+        // expect same hash.
+        let a_at_9_9 = alpha_at(&pixels, 9, 9, w);
+        let a_at_10_10 = alpha_at(&pixels, 10, 10, w);
+        assert_eq!(
+            a_at_9_9, a_at_10_10,
+            "two pixels in the same cell (2,2) returned different cell_hash"
+        );
+    }
+
+    /// Distinct cells must produce distinct (with very high probability)
+    /// hashes. Survey several non-adjacent cells; require that not all
+    /// reported alphas collapse to a single value.
+    #[test]
+    fn cell_hash_decorrelates_across_cells() {
+        let w = 16;
+        let h = 16;
+        let pixels = run_voronoi(4.0, 0.0, w, h);
+
+        // One sample deep inside each of cells (0,0), (1,0), (2,0),
+        // (3,0), (0,1), (0,2), (0,3) — 7 different cells.
+        let samples = [
+            alpha_at(&pixels, 1, 1, w),    // cell (0,0)
+            alpha_at(&pixels, 5, 1, w),    // cell (1,0)
+            alpha_at(&pixels, 9, 1, w),    // cell (2,0)
+            alpha_at(&pixels, 13, 1, w),   // cell (3,0)
+            alpha_at(&pixels, 1, 5, w),    // cell (0,1)
+            alpha_at(&pixels, 1, 9, w),    // cell (0,2)
+            alpha_at(&pixels, 1, 13, w),   // cell (0,3)
+        ];
+        let unique: std::collections::HashSet<u32> =
+            samples.iter().map(|f| f.to_bits()).collect();
+        assert!(
+            unique.len() >= 5,
+            "expected ≥5 distinct cell hashes across 7 cells, got {unique:?} from {samples:?}",
+        );
+    }
+
+    /// Every pixel's A must land in [0, 1].
+    #[test]
+    fn cell_hash_in_unit_range() {
+        let w = 16;
+        let h = 16;
+        let pixels = run_voronoi(4.0, 1.0, w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let a = alpha_at(&pixels, x, y, w);
+                assert!(
+                    (0.0..=1.0).contains(&a),
+                    "cell_hash out of range at ({x},{y}): {a}",
+                );
+            }
+        }
     }
 }

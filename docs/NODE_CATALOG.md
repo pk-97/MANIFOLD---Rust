@@ -76,11 +76,10 @@ Procedural textures that emit per-pixel coordinates. Start most procedural graph
 | FBM (per instance) | `node.fbm_per_instance` | Bit-identical to `fbm_2d` but indexed by `Array<vec2<f32>>` |
 | Hash Noise 2D | `node.hash_noise_field_2d` | Uncorrelated wang-hash white noise — grain, dust, LIC ink |
 | Flow Field Noise | `node.flow_field_noise` | 2-channel flow vectors for advection (Watercolor-style) |
-| Voronoi 2D | `node.voronoi_2d` | Worley/Voronoi — F1/F2/F2-F1 distances in RGB |
+| Voronoi 2D | `node.voronoi_2d` | Worley/Voronoi — F1 (R), F2 (G), F2-F1 (B), per-cell stable hash (A). Foundation for stars, foam, cracked glass, embers, tiles. |
 | Checkerboard | `node.checkerboard` | Binary checker pattern at configurable scale |
 | Distance to Point | `node.distance_to_point` | Per-pixel distance to a configurable point in UV space |
 | Plasma Pattern 2D | `node.plasma_pattern_2d` | Curated family — 8 plasma variants behind a `pattern` enum |
-| Star Field 2D | `node.star_field_2d` | Curated single-purpose star-field generator |
 | Basic Shape | `node.basic_shape` | Single-dispatch SDF — Square / Diamond / Octagon picked by static `shape` enum. Three instances + `mux_texture` gives runtime shape selection. |
 | Color | `node.color` (id `node.brightness`) | Per-pixel luminance to RGB |
 
@@ -91,7 +90,7 @@ Compose these for arbitrary procedural fields.
 | Display Name | Type ID | Purpose |
 |---|---|---|
 | Sin Term | `node.sin_term` | `sin((a*r + b*g + c) * freq + time * rate)` — one term of a sum-of-sines |
-| Trig Texture | `node.trig_texture` | Per-pixel Sin / Cos / Tan with freq + phase |
+| Trig Texture | `node.trig_texture` | Per-pixel Sin / Cos / Tan with freq + phase. Both freq and phase have optional texture-shadow inputs (`freq_tex` / `phase_tex` — R channel sampled per pixel) — unlocks per-cell unique trig modulation when fed from per-cell-stable sources like `voronoi_2d.A` via `channel_mix`. |
 | Abs Texture | `node.abs_texture` | Per-pixel `abs(rgb)` |
 | Fract Texture | `node.fract_texture` | Per-pixel `fract(rgb)` |
 | Power Texture | `node.power_texture` | Per-pixel `pow(rgb, exponent)` |
@@ -106,6 +105,7 @@ Compose these for arbitrary procedural fields.
 | Display Name | Type ID | Purpose |
 |---|---|---|
 | Clamp | `node.clamp_texture` | Per-pixel saturate to [min, max] — the texture-side counterpart of `array_math::Clamp01` |
+| Channel Mix | `node.channel_mix` | Per-pixel 4×4 RGBA matrix transform. Default = identity. Use to swizzle channels (A→R for reading cell_hash as a control signal), pull luma, isolate a single channel, or pre-tint for halation-style chains. |
 | Color Grade | `node.color_grade` | Gain / saturation / hue / contrast / tint colorize |
 | Color LUT | `node.color_lut` | 1D LUT remap via luminance index |
 | Infrared | `node.infrared` | Thermal-vision palette (10 baked LUTs) |
@@ -401,7 +401,7 @@ All shipping generators are JSON-defined sub-graphs at [`assets/generator-preset
 | NestedCubes | instanced mesh with cycled poses: `trigger_gate` → `scalar_array_accumulator` → `cycle_table_row` → `mux_array` → `nested_cubes_geometry` |
 | OilyFluid | screen-space fluid + atomized PBR: `feedback` ×2 + gradient atoms + `texture_advect` + `simplex_field_2d` → `heightmap_to_normal` → `lambert_directional` + `matcap_two_tone` + `fresnel_rim` + `blinn_specular` summed via `mix` |
 | Plasma | single curated family primitive: `plasma_pattern_2d` |
-| StarField | single curated primitive: `star_field_2d` |
+| StarField | fully atomized: `system.generator_input.time` → `math` ×3 (drift_t → offset_x/y) → `voronoi_2d` (per-cell distance + cell_hash on A) → (`scale_offset_texture` invert + `power_texture` spike) || (`channel_mix` A→R cell_hash → `smoothstep_texture` density mask + `scale_offset` ×2 freq/phase tables) → `mix Multiply` core × mask → `trig_texture` (per-pixel sin via `freq_tex`/`phase_tex` shadows) → `scale_offset` to [0,1] → `mix Multiply` apply twinkle → `scale_offset` brightness. Single-layer (cinematic 4-layer parallax dropped; revivable by duplicating the inner chain and `mix Add`-summing). Per-star unique twinkle preserved via the trig_texture texture-shadow extension. Activates `voronoi_2d` cell_hash on A + `channel_mix` GPU shader (was no-op stub) + `trig_texture.freq_tex`/`phase_tex` shadows. |
 | Tesseract | 4D wireframe: `generate_tesseract_vertices` → `rotate_4d` → `project_4d` → `render_lines` |
 | Text | single-primitive wrap of the CoreText glyph rasterizer: `node.render_text` |
 | TrivialPassthrough | smoke test: `uv_field` |
