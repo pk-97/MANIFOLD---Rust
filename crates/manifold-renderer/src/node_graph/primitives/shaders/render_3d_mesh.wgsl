@@ -1,23 +1,35 @@
 // node.render_3d_mesh — vertex+fragment pipeline that draws an
-// Array<MeshVertex> as a triangle list with depth testing and
-// simple two-point lighting. Phase B of BUFFER_PORT_PLAN.
+// Array<MeshVertex> as a triangle list with depth testing and a
+// per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel).
+//
+// Material system M4: the renderer holds an AHashMap<MaterialKind,
+// GpuRenderPipeline> and dispatches the matching pipeline per the
+// wired `material: Material` input. The uniform is the SUPERSET of
+// every kind's params; fragments only read what their kind needs.
+// Naga rule: multi-entry-point WGSL must declare the same uniform
+// shape at the same binding — we therefore share one Uniforms struct
+// across every entry point in this file. Per-entry-point MSL is
+// emitted by naga with only the bindings each entry actually
+// accesses, so unlit/phong/cel pipelines don't reference the envmap
+// binding even though the WGSL declares it.
 //
 // MeshVertex layout (32 bytes):
 //   position: vec3<f32> + pad
 //   normal:   vec3<f32> + pad
 //
 // Topology: every 3 consecutive vertices form one triangle.
-// The vertex shader looks up vertex `vertex_index` directly
-// from the storage buffer — no vertex buffer binding.
+// The vertex shader looks up vertex `vertex_index` directly from the
+// storage buffer — no vertex buffer binding.
 //
-// Three fragment entry points share the same vertex shader:
-//   fs_main          — Lambert + ambient shaded color
+// Entry points:
+//   fs_unlit         — flat colour passthrough + emission
+//   fs_phong         — Lambert diffuse + Blinn-Phong specular
+//   fs_pbr           — Cook-Torrance D_GGX * G_Smith * F_Schlick + IBL
+//   fs_cel           — Lambert N·L quantized into cel_bands
 //   fs_world_pos     — emit interpolated world position (G-buffer)
-//   fs_world_normal  — emit interpolated world-space surface normal
-//                      (G-buffer; normalised, signed). Runs alongside
-//                      fs_main when downstream PBR atoms need per-pixel
-//                      V/L from world coordinates — TouchDesigner /
-//                      Blender style multi-pass aspect output.
+//   fs_world_normal  — emit normalised world-space surface normal (G-buffer)
+
+const PI: f32 = 3.14159265358979;
 
 struct Vertex {
     position: vec3<f32>,
@@ -26,16 +38,37 @@ struct Vertex {
     _pad1: f32,
 };
 
+// Superset uniform — fields inert for kinds that don't read them.
+// 16-byte aligned. Total: 64 + 16*8 = 192 bytes.
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    light_dir: vec4<f32>,    // xyz: world-space direction toward light, w: intensity
-    light_color: vec4<f32>,  // rgb: light color, a: ambient strength
-    base_color: vec4<f32>,   // rgb: surface color, a: alpha
+    // Direct light direction (xyz: from-surface-toward-light unit
+    // vector, w: intensity multiplier). Light colour is premultiplied
+    // with intensity by the producer; w stays available as an extra
+    // tweak knob for unwired-light scenarios (kept = 1.0 currently).
+    light_dir: vec4<f32>,
+    // rgb: light colour PREMULTIPLIED with intensity, w: ambient.
+    light_color: vec4<f32>,
+    // rgb: surface diffuse / base colour, w: opacity (informational
+    // for v1; opaque-only rendering).
+    base_color: vec4<f32>,
+    // rgb: emission PREMULTIPLIED with intensity, w: reserved (1.0).
+    emission: vec4<f32>,
+    // x: metallic [0,1], y: roughness [0.01,1], z/w: reserved.
+    pbr_metallic_roughness: vec4<f32>,
+    // rgb: specular tint, w: Phong exponent.
+    specular: vec4<f32>,
+    // x: cel_bands (count, as f32), y: band_low, z: band_high, w: reserved.
+    cel_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> verts: array<Vertex>;
+// PBR-only IBL envmap. Equirectangular HDR. Bound only by the PBR
+// pipeline at draw time; other pipelines never sample it.
+@group(0) @binding(2) var envmap: texture_2d<f32>;
+@group(0) @binding(3) var envmap_sampler: sampler;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -53,29 +86,115 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     return out;
 }
 
+// ===== Material kind fragment entry points =====
+
+// Unlit — flat colour passthrough plus emission. No lighting math.
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let n = normalize(in.world_normal);
-    let l = normalize(u.light_dir.xyz);
-    let n_dot_l = max(dot(n, l), 0.0);
-
-    let ambient = u.base_color.rgb * u.light_color.a;
-    let diffuse = u.base_color.rgb * u.light_color.rgb * n_dot_l * u.light_dir.w;
-
-    return vec4<f32>(ambient + diffuse, u.base_color.a);
+fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
+    let rgb = u.base_color.rgb + u.emission.rgb;
+    return vec4<f32>(rgb, u.base_color.a);
 }
 
-// G-buffer fragment: emit interpolated world position (XYZ, with W=1
-// so downstream samplers can distinguish "geometry covered this pixel"
-// from "background, alpha=0" via .a).
+// Phong — Lambert diffuse + Blinn-Phong specular.
+@fragment
+fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
+    let N = normalize(in.world_normal);
+    let L = normalize(u.light_dir.xyz);
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    let H = normalize(L + V);
+    let n_dot_l = max(dot(N, L), 0.0);
+    let n_dot_h = max(dot(N, H), 0.0);
+    let ambient = u.light_color.a;
+    let diffuse = u.base_color.rgb * (1.0 - ambient) * n_dot_l + u.base_color.rgb * ambient;
+    let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
+    let lit = (diffuse + spec) * u.light_color.rgb * u.light_dir.w;
+    return vec4<f32>(lit + u.emission.rgb, u.base_color.a);
+}
+
+// PBR — Cook-Torrance microfacet specular + Lambert diffuse + IBL
+// reflection from envmap. F0 blends 0.04 dielectric ↔ base_color metal.
+@fragment
+fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
+    let N = normalize(in.world_normal);
+    let L = normalize(u.light_dir.xyz);
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    let H = normalize(L + V);
+    let metallic = clamp(u.pbr_metallic_roughness.x, 0.0, 1.0);
+    let roughness = max(u.pbr_metallic_roughness.y, 0.01);
+
+    let n_dot_l = max(dot(N, L), 0.0);
+    let n_dot_v = max(dot(N, V), 0.001);
+    let n_dot_h = max(dot(N, H), 0.0);
+    let v_dot_h = max(dot(V, H), 0.001);
+
+    // F0 — dielectric 0.04 lerped to base_color for metals.
+    let F0 = mix(vec3<f32>(0.04), u.base_color.rgb, metallic);
+
+    // GGX D term.
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let denom_d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    let D = a2 / (PI * denom_d * denom_d);
+
+    // Smith G term (Schlick-GGX paired).
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
+    let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
+    let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
+    let G = g_v * g_l;
+
+    // Schlick Fresnel.
+    let F = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+
+    let specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
+
+    // Lambert diffuse (dielectric only — metals have no diffuse term).
+    let kd = (1.0 - F) * (1.0 - metallic);
+    let diffuse = kd * u.base_color.rgb / PI;
+
+    let direct = (diffuse + specular) * u.light_color.rgb * n_dot_l * u.light_dir.w;
+
+    // IBL reflection — sample envmap along reflected view direction.
+    let R = reflect(-V, N);
+    let azimuth = atan2(R.z, R.x);
+    let elevation = asin(clamp(R.y, -1.0, 1.0));
+    let uv = vec2<f32>(azimuth / (2.0 * PI) + 0.5, elevation / PI + 0.5);
+    // Roughness-driven attenuation. envmap is a single mip in v1.
+    let ibl_sample = textureSampleLevel(envmap, envmap_sampler, uv, 0.0).rgb;
+    let ibl_strength = 1.0 - roughness * 0.7;
+    let ibl = F * ibl_sample * ibl_strength;
+
+    let ambient = u.base_color.rgb * u.light_color.a;
+    let rgb = direct + ibl + ambient + u.emission.rgb;
+    return vec4<f32>(rgb, u.base_color.a);
+}
+
+// Cel — Lambert N·L quantized into cel_bands discrete steps between
+// band_low (shadow) and band_high (lit).
+@fragment
+fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
+    let N = normalize(in.world_normal);
+    let L = normalize(u.light_dir.xyz);
+    let n_dot_l = max(dot(N, L), 0.0);
+    let bands = max(u.cel_params.x, 2.0);
+    let band_low = u.cel_params.y;
+    let band_high = u.cel_params.z;
+    // Snap n_dot_l to one of `bands` discrete levels in [0, 1].
+    let snapped = floor(n_dot_l * bands) / (bands - 1.0);
+    let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
+    let lit = u.base_color.rgb * level * u.light_color.rgb * u.light_dir.w;
+    return vec4<f32>(lit + u.emission.rgb, u.base_color.a);
+}
+
+// ===== G-buffer outputs (preserved from pre-Material design) =====
+
+// Emit interpolated world position (XYZ + alpha=1 for geometry coverage).
 @fragment
 fn fs_world_pos(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(in.world_pos, 1.0);
 }
 
-// G-buffer fragment: emit normalised world-space surface normal in [-1, 1].
-// Renormalised here because triangle interpolation across edges produces
-// non-unit vectors. Alpha = 1 to mark geometry coverage.
+// Emit normalised world-space surface normal in [-1, 1] (alpha=1).
 @fragment
 fn fs_world_normal(in: VsOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);

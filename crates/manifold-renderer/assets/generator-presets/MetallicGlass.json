@@ -241,13 +241,14 @@
     { "id": 61, "typeId": "node.math", "handle": "z_scale_from_canvas",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1920.0 }, "op": { "type": "Enum", "value": 3 } } },
 
-    { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass",
+    { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass" },
+
+    { "id": 62, "typeId": "node.unlit_material", "handle": "material_stub",
       "params": {
-        "light_intensity": { "type": "Float", "value": 0.0 },
-        "ambient":         { "type": "Float", "value": 0.0 },
-        "color_r":         { "type": "Float", "value": 0.0 },
-        "color_g":         { "type": "Float", "value": 0.0 },
-        "color_b":         { "type": "Float", "value": 0.0 }
+        "color_r": { "type": "Float", "value": 0.0 },
+        "color_g": { "type": "Float", "value": 0.0 },
+        "color_b": { "type": "Float", "value": 0.0 },
+        "color_a": { "type": "Float", "value": 1.0 }
       } },
 
     { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal",
@@ -360,6 +361,7 @@
 
     { "fromNode": 35, "fromPort": "out", "toNode": 50, "toPort": "vertices" },
     { "fromNode": 43, "fromPort": "out", "toNode": 50, "toPort": "camera" },
+    { "fromNode": 62, "fromPort": "out", "toNode": 50, "toPort": "material" },
 
     { "fromNode": 58, "fromPort": "out", "toNode": 49, "toPort": "in" },
     { "fromNode": 49, "fromPort": "out", "toNode": 51, "toPort": "in" },
