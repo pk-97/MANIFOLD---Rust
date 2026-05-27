@@ -1,12 +1,16 @@
-//! `node.reinhard_tone_map` — extended Reinhard tone mapping on
-//! an HDR Texture2D.
+//! `node.reinhard_tone_map` — Reinhard tone mapping on an HDR
+//! Texture2D, in one of two curves selected by the `curve` enum:
 //!
-//! Extracted from `generators/shaders/fluid_display_compute.wgsl`.
-//! Per-channel curve `x*(1 + x/9) / (1 + x)` matching the FluidSim
-//! display path bit-for-bit. SDR-only.
+//! - **Extended** (default): per-channel `x * (1 + x/9) / (1 + x)`,
+//!   matches the FluidSim display path bit-for-bit. Preserves more
+//!   high values than Simple — visible difference on bright highlights
+//!   (specular peaks).
+//! - **Simple**: per-channel `x / (x + 1)`, the textbook Reinhard
+//!   curve. Crushes highlights more aggressively. Matches the legacy
+//!   MetallicGlass render terminal bit-for-bit.
 //!
-//! For multi-curve / HDR-aware tone mapping (ACES, AgX, Khronos
-//! PBR, PQ / EDR output), use `node.tone_map` instead.
+//! SDR-only. For multi-curve / HDR-aware tone mapping (ACES, AgX,
+//! Khronos PBR, PQ / EDR output), use `node.tone_map` instead.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -19,14 +23,14 @@ use crate::node_graph::primitive::Primitive;
 struct ReinhardUniforms {
     intensity: f32,
     contrast: f32,
+    curve: u32, // 0 = Extended (default), 1 = Simple (x/(x+1))
     _pad0: f32,
-    _pad1: f32,
 }
 
 crate::primitive! {
     name: ReinhardToneMap,
     type_id: "node.reinhard_tone_map",
-    purpose: "Extended Reinhard tone mapping for HDR display: per-channel curve x*(1+x/9)/(1+x) with intensity + contrast pre-multipliers. Matches the FluidSim display path bit-for-bit. Both pre-multipliers are port-shadows-param — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
+    purpose: "Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simple (`x/(x+1)`, the textbook Reinhard curve, matches the legacy MetallicGlass render terminal bit-for-bit). intensity + contrast are port-shadowed pre-multipliers — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
     inputs: {
         in: Texture2D required,
         intensity: ScalarF32 optional,
@@ -52,8 +56,16 @@ crate::primitive! {
             range: Some((0.0, 8.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "curve",
+            label: "Curve",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: None,
+            enum_values: &["Extended", "Simple"],
+        },
     ],
-    composition_notes: "intensity scales the pre-tonemap signal; contrast is a second multiplier. Both port-shadowed for runtime modulation (canvas-area brightness comp, audio-driven dynamics). White-point fixed at 3.0 (the FluidSim default). Output alpha = source alpha. For HDR pipelines that need parameterised white-point or alternate curves, swap in `node.tone_map`.",
+    composition_notes: "intensity scales the pre-tonemap signal; contrast is a second multiplier. Both port-shadowed for runtime modulation (canvas-area brightness comp, audio-driven dynamics). Extended white-point fixed at 3.0 (FluidSim default). Simple curve is bit-exact `x/(x+1)` — picks this when matching a legacy renderer that used textbook Reinhard. Output alpha = source alpha. For HDR pipelines that need parameterised white-point or alternate curves, swap in `node.tone_map`.",
     examples: [],
     picker: { label: "Reinhard Tone Map", category: Atom },
 }
@@ -62,6 +74,10 @@ impl Primitive for ReinhardToneMap {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let intensity = ctx.scalar_or_param("intensity", 1.0);
         let contrast = ctx.scalar_or_param("contrast", 1.0);
+        let curve: u32 = match ctx.params.get("curve") {
+            Some(ParamValue::Enum(v)) => *v,
+            _ => 0,
+        };
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
@@ -90,8 +106,8 @@ impl Primitive for ReinhardToneMap {
         let uniforms = ReinhardUniforms {
             intensity,
             contrast,
+            curve,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -157,7 +173,7 @@ mod tests {
     #[test]
     fn reinhard_has_intensity_and_contrast_params() {
         let names: Vec<&str> = ReinhardToneMap::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["intensity", "contrast"]);
+        assert_eq!(names, vec!["intensity", "contrast", "curve"]);
     }
 
     #[test]

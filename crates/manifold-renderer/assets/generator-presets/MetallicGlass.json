@@ -290,7 +290,8 @@
     { "id": 55, "typeId": "node.mix", "handle": "direct_plus_ibl",
       "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
 
-    { "id": 56, "typeId": "node.reinhard_tone_map", "handle": "tone_map" },
+    { "id": 56, "typeId": "node.reinhard_tone_map", "handle": "tone_map",
+      "params": { "curve": { "type": "Enum", "value": 1 } } },
 
     { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
   ],
