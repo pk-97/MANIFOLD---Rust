@@ -53,14 +53,14 @@
         "convert": { "type": "Float" } },
 
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "pbr", "param": "roughness" },
+        "target": { "kind": "handleNode", "handle": "direct_specular", "param": "roughness" },
         "convert": { "type": "Float" } },
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "roughness_from_edge", "param": "offset" },
+        "target": { "kind": "handleNode", "handle": "ibl_specular", "param": "roughness" },
         "convert": { "type": "Float" } },
 
       { "id": "light_int",   "label": "Light Intensity", "defaultValue": 3.5,
-        "target": { "kind": "handleNode", "handle": "key_light", "param": "intensity" },
+        "target": { "kind": "handleNode", "handle": "direct_specular", "param": "intensity" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",    "label": "Camera Distance", "defaultValue": 2.5,
@@ -243,39 +243,12 @@
 
     { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass" },
 
-    { "id": 62, "typeId": "node.pbr_material", "handle": "pbr",
+    { "id": 62, "typeId": "node.unlit_material", "handle": "material_stub",
       "params": {
-        "color_r":            { "type": "Float", "value": 0.8 },
-        "color_g":            { "type": "Float", "value": 0.8 },
-        "color_b":            { "type": "Float", "value": 0.82 },
-        "color_a":            { "type": "Float", "value": 1.0 },
-        "ambient":            { "type": "Float", "value": 0.0 },
-        "metallic":           { "type": "Float", "value": 1.0 },
-        "roughness":          { "type": "Float", "value": 0.05 },
-        "emission_r":         { "type": "Float", "value": 0.0 },
-        "emission_g":         { "type": "Float", "value": 0.0 },
-        "emission_b":         { "type": "Float", "value": 0.0 },
-        "emission_intensity": { "type": "Float", "value": 0.0 }
-      } },
-
-    { "id": 63, "typeId": "node.light", "handle": "key_light",
-      "params": {
-        "mode":              { "type": "Enum",  "value": 0 },
-        "pos_x":             { "type": "Float", "value": -2.0 },
-        "pos_y":             { "type": "Float", "value": 2.0 },
-        "pos_z":             { "type": "Float", "value": 5.0 },
-        "aim_x":             { "type": "Float", "value": 0.0 },
-        "aim_y":             { "type": "Float", "value": 0.0 },
-        "aim_z":             { "type": "Float", "value": 0.0 },
-        "color_r":           { "type": "Float", "value": 1.0 },
-        "color_g":           { "type": "Float", "value": 1.0 },
-        "color_b":           { "type": "Float", "value": 1.0 },
-        "intensity":         { "type": "Float", "value": 3.5 },
-        "range":             { "type": "Float", "value": 30.0 },
-        "cast_shadows":      { "type": "Float", "value": 0.0 },
-        "shadow_softness":   { "type": "Enum",  "value": 1 },
-        "shadow_bias":       { "type": "Float", "value": 0.003 },
-        "shadow_resolution": { "type": "Int",   "value": 2048 }
+        "color_r": { "type": "Float", "value": 0.0 },
+        "color_g": { "type": "Float", "value": 0.0 },
+        "color_b": { "type": "Float", "value": 0.0 },
+        "color_a": { "type": "Float", "value": 1.0 }
       } },
 
     { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal",
@@ -287,6 +260,39 @@
 
     { "id": 52, "typeId": "node.scale_offset_texture", "handle": "roughness_from_edge",
       "params": { "scale": { "type": "Float", "value": 0.15 }, "offset": { "type": "Float", "value": 0.05 } } },
+
+    { "id": 53, "typeId": "node.cook_torrance_specular", "handle": "direct_specular",
+      "params": {
+        "light_x":           { "type": "Float", "value": -2.0 },
+        "light_y":           { "type": "Float", "value": 2.0 },
+        "light_z":           { "type": "Float", "value": 5.0 },
+        "view_x":            { "type": "Float", "value": 0.0 },
+        "view_y":            { "type": "Float", "value": 0.0 },
+        "view_z":            { "type": "Float", "value": 1.0 },
+        "roughness":         { "type": "Float", "value": 0.05 },
+        "metallic":          { "type": "Float", "value": 1.0 },
+        "intensity":         { "type": "Float", "value": 3.5 },
+        "attenuation_scale": { "type": "Float", "value": 25.0 },
+        "light_color":       { "type": "Color", "value": [1.0, 1.0, 1.0, 1.0] },
+        "base_color":        { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
+      } },
+
+    { "id": 54, "typeId": "node.equirect_envmap_sample", "handle": "ibl_specular",
+      "params": {
+        "view_x":          { "type": "Float", "value": 0.0 },
+        "view_y":          { "type": "Float", "value": 0.0 },
+        "view_z":          { "type": "Float", "value": 1.0 },
+        "roughness":       { "type": "Float", "value": 0.05 },
+        "metallic":        { "type": "Float", "value": 1.0 },
+        "roughness_scale": { "type": "Float", "value": 0.7 },
+        "base_color":      { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
+      } },
+
+    { "id": 55, "typeId": "node.mix", "handle": "direct_plus_ibl",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+
+    { "id": 56, "typeId": "node.reinhard_tone_map", "handle": "tone_map",
+      "params": { "curve": { "type": "Enum", "value": 1 } } },
 
     { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
   ],
@@ -353,16 +359,12 @@
     { "fromNode": 37, "fromPort": "out",  "toNode": 43, "toPort": "tilt" },
     { "fromNode": 38, "fromPort": "out",  "toNode": 43, "toPort": "fov_y" },
 
-    { "fromNode": 35, "fromPort": "out",    "toNode": 50, "toPort": "vertices" },
-    { "fromNode": 43, "fromPort": "out",    "toNode": 50, "toPort": "camera" },
-    { "fromNode": 62, "fromPort": "out",    "toNode": 50, "toPort": "material" },
-    { "fromNode": 63, "fromPort": "out",    "toNode": 50, "toPort": "light" },
-    { "fromNode": 32, "fromPort": "envmap", "toNode": 50, "toPort": "envmap" },
-    { "fromNode": 51, "fromPort": "out",    "toNode": 50, "toPort": "normal_map" },
-    { "fromNode": 52, "fromPort": "out",    "toNode": 50, "toPort": "roughness_map" },
+    { "fromNode": 35, "fromPort": "out", "toNode": 50, "toPort": "vertices" },
+    { "fromNode": 43, "fromPort": "out", "toNode": 50, "toPort": "camera" },
+    { "fromNode": 62, "fromPort": "out", "toNode": 50, "toPort": "material" },
 
-    { "fromNode": 58, "fromPort": "out",    "toNode": 49, "toPort": "in" },
-    { "fromNode": 49, "fromPort": "out",    "toNode": 51, "toPort": "in" },
+    { "fromNode": 58, "fromPort": "out", "toNode": 49, "toPort": "in" },
+    { "fromNode": 49, "fromPort": "out", "toNode": 51, "toPort": "in" },
     { "fromNode": 0,  "fromPort": "aspect", "toNode": 51, "toPort": "aspect" },
 
     { "fromNode": 0,  "fromPort": "aspect",       "toNode": 61, "toPort": "a" },
@@ -371,6 +373,25 @@
 
     { "fromNode": 60, "fromPort": "out", "toNode": 52, "toPort": "in" },
 
-    { "fromNode": 50, "fromPort": "color", "toNode": 40, "toPort": "in" }
+    { "fromNode": 51, "fromPort": "out",       "toNode": 53, "toPort": "normal" },
+    { "fromNode": 50, "fromPort": "world_pos", "toNode": 53, "toPort": "world_pos" },
+    { "fromNode": 52, "fromPort": "out",       "toNode": 53, "toPort": "roughness_map" },
+    { "fromNode": 43, "fromPort": "pos_x",     "toNode": 53, "toPort": "view_x" },
+    { "fromNode": 43, "fromPort": "pos_y",     "toNode": 53, "toPort": "view_y" },
+    { "fromNode": 43, "fromPort": "pos_z",     "toNode": 53, "toPort": "view_z" },
+
+    { "fromNode": 51, "fromPort": "out",       "toNode": 54, "toPort": "normal" },
+    { "fromNode": 32, "fromPort": "envmap",    "toNode": 54, "toPort": "env_map" },
+    { "fromNode": 50, "fromPort": "world_pos", "toNode": 54, "toPort": "world_pos" },
+    { "fromNode": 52, "fromPort": "out",       "toNode": 54, "toPort": "roughness_map" },
+    { "fromNode": 43, "fromPort": "pos_x",     "toNode": 54, "toPort": "view_x" },
+    { "fromNode": 43, "fromPort": "pos_y",     "toNode": 54, "toPort": "view_y" },
+    { "fromNode": 43, "fromPort": "pos_z",     "toNode": 54, "toPort": "view_z" },
+
+    { "fromNode": 53, "fromPort": "out", "toNode": 55, "toPort": "a" },
+    { "fromNode": 54, "fromPort": "out", "toNode": 55, "toPort": "b" },
+
+    { "fromNode": 55, "fromPort": "out", "toNode": 56, "toPort": "in" },
+    { "fromNode": 56, "fromPort": "out", "toNode": 40, "toPort": "in" }
   ]
 }
