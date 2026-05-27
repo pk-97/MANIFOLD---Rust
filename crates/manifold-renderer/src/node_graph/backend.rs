@@ -21,6 +21,7 @@ use crate::node_graph::bindings::Slot;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::execution_plan::ResourceId;
 use crate::node_graph::light::Light;
+use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 
@@ -156,6 +157,18 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as `set_camera` / `set_scalar`.
     fn set_light(&mut self, _slot: Slot, _value: Light) {}
 
+    /// [`Material`] value bound to a slot. Mirrors `light` / `camera` for the
+    /// [`PortType::Material`] wire shape — CPU-only struct payload set by
+    /// the producing material atom's evaluate and drained by the executor
+    /// before consumers run. Default impls return `None`.
+    fn material(&self, _slot: Slot) -> Option<Material> {
+        None
+    }
+
+    /// Write a [`Material`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as `set_light` / `set_camera`.
+    fn set_material(&mut self, _slot: Slot, _value: Material) {}
+
     /// Backend-specific downcast hook. Default implementation returns
     /// `None`. Real backends override to expose themselves for
     /// implementation-specific calls (e.g., the chain's swap-based
@@ -233,6 +246,8 @@ pub struct MockBackend {
     cameras: AHashMap<Slot, Camera>,
     /// Light values written via [`Backend::set_light`] — same shape.
     lights: AHashMap<Slot, Light>,
+    /// Material values written via [`Backend::set_material`] — same shape.
+    materials: AHashMap<Slot, Material>,
 }
 
 impl MockBackend {
@@ -244,6 +259,7 @@ impl MockBackend {
             scalars: AHashMap::default(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
+            materials: AHashMap::default(),
         }
     }
 }
@@ -333,6 +349,14 @@ impl Backend for MockBackend {
 
     fn set_light(&mut self, slot: Slot, value: Light) {
         self.lights.insert(slot, value);
+    }
+
+    fn material(&self, slot: Slot) -> Option<Material> {
+        self.materials.get(&slot).copied()
+    }
+
+    fn set_material(&mut self, slot: Slot, value: Material) {
+        self.materials.insert(slot, value);
     }
 }
 

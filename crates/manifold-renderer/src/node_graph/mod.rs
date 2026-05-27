@@ -12,6 +12,7 @@ mod backend;
 mod bindings;
 pub mod camera;
 pub mod light;
+pub mod material;
 mod boundary_nodes;
 mod bundled_presets;
 mod chain_spec;
@@ -37,6 +38,7 @@ pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use camera::{Camera, CameraMode};
 pub use light::{Light, LightMode, ShadowSoftness};
+pub use material::{Material, MaterialKind};
 pub use boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
     Source,

@@ -118,6 +118,7 @@ Write code directly in the main context by default. Only spawn an agent for genu
 | `docs/DECOMPOSING_GENERATORS.md` | How-to-think for any decomposition work (generators + effects + bundles). Bundle-vs-atom criterion + §2.5 audit are mandatory before proposing new primitives. |
 | `docs/GENERATOR_DECOMPOSITION_PLAN.md` | Historical record of the original generator migration (closed — 0 Rust generators remain) |
 | `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` | Active 2nd-pass plan: tranche order, per-bundle inventory, atom activation list |
+| `docs/MATERIAL_SYSTEM_DESIGN.md` | Implementation contract for the Material port type + 3D mesh renderer integration (unlit / phong / pbr / cel). Read before any material-related work; supersedes the scattered-scalar shading params on render_3d_mesh / render_instanced_3d_mesh. |
 | `docs/EFFECT_RUNTIME_UNIFICATION.md` | EffectChain → graph runtime migration, StateStore design |
 | `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Design rationale and historical context (catalog tables here are historical — current inventory lives in NODE_CATALOG.md) |
 | `docs/ADDING_PRIMITIVES.md` | Authoring new primitives, `primitive!` macro, parity test pattern |

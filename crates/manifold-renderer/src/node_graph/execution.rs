@@ -73,6 +73,8 @@ pub struct Executor {
     camera_write_scratch: Vec<(Slot, crate::node_graph::camera::Camera)>,
     /// Sibling scratch for [`PortType::Light`] writes — same drain pattern.
     light_write_scratch: Vec<(Slot, crate::node_graph::light::Light)>,
+    /// Sibling scratch for [`PortType::Material`] writes — same drain pattern.
+    material_write_scratch: Vec<(Slot, crate::node_graph::material::Material)>,
     /// Persistent resources whose first acquisition has been cleared to
     /// opaque black. Subsequent frames find them in this set and skip
     /// the clear — the buffer's contents are now valid producer writes
@@ -100,6 +102,7 @@ impl Executor {
             scalar_write_scratch: Vec::new(),
             camera_write_scratch: Vec::new(),
             light_write_scratch: Vec::new(),
+            material_write_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
@@ -463,6 +466,7 @@ impl Executor {
                     self.scalar_write_scratch.clear();
                     self.camera_write_scratch.clear();
                     self.light_write_scratch.clear();
+                    self.material_write_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
@@ -472,6 +476,7 @@ impl Executor {
                             &mut self.scalar_write_scratch,
                             &mut self.camera_write_scratch,
                             &mut self.light_write_scratch,
+                            &mut self.material_write_scratch,
                         );
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
@@ -542,6 +547,10 @@ impl Executor {
                     for (slot, value) in self.light_write_scratch.drain(..) {
                         self.backend.set_light(slot, value);
                     }
+                    // Material writes use the same drain shape.
+                    for (slot, value) in self.material_write_scratch.drain(..) {
+                        self.backend.set_material(slot, value);
+                    }
                 }
             }
 
@@ -608,6 +617,7 @@ impl Executor {
                 self.scalar_write_scratch.clear();
                 self.camera_write_scratch.clear();
                 self.light_write_scratch.clear();
+                self.material_write_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
                 let outputs = NodeOutputs::new(
@@ -616,6 +626,7 @@ impl Executor {
                     &mut self.scalar_write_scratch,
                     &mut self.camera_write_scratch,
                     &mut self.light_write_scratch,
+                    &mut self.material_write_scratch,
                 );
                 let mut ctx = EffectNodeContext::with_state(
                     time,

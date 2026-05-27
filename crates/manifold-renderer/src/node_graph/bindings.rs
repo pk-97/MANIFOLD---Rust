@@ -17,6 +17,7 @@ use manifold_gpu::{GpuBuffer, GpuTexture};
 use crate::node_graph::backend::Backend;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::light::Light;
+use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
@@ -102,6 +103,15 @@ impl<'a> NodeInputs<'a> {
         self.backend.light(self.slot(port)?)
     }
 
+    /// [`Material`] bound to the named [`PortType::Material`] input port.
+    /// `None` if unwired — but the bundled 3D mesh renderers TREAT an
+    /// unwired material as a structured error (per the Material design
+    /// doc's "no silent fallbacks" rule), so consumers should check for
+    /// `None` and emit `ctx.error(...)` rather than substitute a default.
+    pub fn material(&self, port: &str) -> Option<Material> {
+        self.backend.material(self.slot(port)?)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -138,6 +148,8 @@ pub struct NodeOutputs<'a> {
     pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
     /// Sibling scratch for `Light` writes — same shape as cameras.
     pending_light_writes: &'a mut Vec<(Slot, Light)>,
+    /// Sibling scratch for `Material` writes — same shape as lights.
+    pending_material_writes: &'a mut Vec<(Slot, Material)>,
 }
 
 impl<'a> NodeOutputs<'a> {
@@ -147,6 +159,7 @@ impl<'a> NodeOutputs<'a> {
         pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
         pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
         pending_light_writes: &'a mut Vec<(Slot, Light)>,
+        pending_material_writes: &'a mut Vec<(Slot, Material)>,
     ) -> Self {
         Self {
             bindings,
@@ -154,6 +167,7 @@ impl<'a> NodeOutputs<'a> {
             pending_scalar_writes,
             pending_camera_writes,
             pending_light_writes,
+            pending_material_writes,
         }
     }
 
@@ -223,6 +237,15 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
+    /// Queue a [`Material`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_light`.
+    pub fn set_material(&mut self, port: &str, value: Material) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_material_writes.push((slot, value));
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -277,12 +300,14 @@ mod array_accessor_tests {
         let mut scratch = Vec::new();
         let mut cam_scratch = Vec::new();
         let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
         let outputs = NodeOutputs::new(
             bindings,
             &backend,
             &mut scratch,
             &mut cam_scratch,
             &mut light_scratch,
+            &mut material_scratch,
         );
 
         let got = outputs.array("particles_out").expect("should resolve");

@@ -681,6 +681,9 @@ macro_rules! __primitive_port_type {
     (Light) => {
         $crate::node_graph::ports::PortType::Light
     };
+    (Material) => {
+        $crate::node_graph::ports::PortType::Material
+    };
 }
 
 // ---------------------------------------------------------------------------

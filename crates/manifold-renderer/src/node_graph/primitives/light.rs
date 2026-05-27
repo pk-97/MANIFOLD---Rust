@@ -374,6 +374,7 @@ mod tests {
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
         let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
         let inputs = NodeInputs::new(inputs_bindings, &backend);
         let outputs = NodeOutputs::new(
             outputs_bindings,
@@ -381,6 +382,7 @@ mod tests {
             &mut scalar_scratch,
             &mut camera_scratch,
             &mut light_scratch,
+            &mut material_scratch,
         );
         let time = crate::node_graph::effect_node::FrameTime {
             beats: Beats(0.0),
@@ -446,6 +448,7 @@ mod tests {
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
         let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
         let inputs = NodeInputs::new(inputs_bindings, &backend);
         let outputs = NodeOutputs::new(
             outputs_bindings,
@@ -453,6 +456,7 @@ mod tests {
             &mut scalar_scratch,
             &mut camera_scratch,
             &mut light_scratch,
+            &mut material_scratch,
         );
         let time = crate::node_graph::effect_node::FrameTime {
             beats: Beats(0.0),

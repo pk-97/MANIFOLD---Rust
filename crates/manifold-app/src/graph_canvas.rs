@@ -49,6 +49,7 @@ const PORT_SCALAR_COLOR: [f32; 4] = [1.00, 0.78, 0.40, 1.0];
 const PORT_ARRAY_COLOR: [f32; 4] = [0.50, 1.00, 0.62, 1.0];
 const PORT_CAMERA_COLOR: [f32; 4] = [1.00, 0.55, 0.55, 1.0];
 const PORT_LIGHT_COLOR: [f32; 4] = [1.00, 0.95, 0.55, 1.0];
+const PORT_MATERIAL_COLOR: [f32; 4] = [0.95, 0.65, 0.40, 1.0];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
@@ -76,6 +77,7 @@ impl PortView {
             PortKindSnapshot::Array => PORT_ARRAY_COLOR,
             PortKindSnapshot::Camera => PORT_CAMERA_COLOR,
             PortKindSnapshot::Light => PORT_LIGHT_COLOR,
+            PortKindSnapshot::Material => PORT_MATERIAL_COLOR,
         };
         Self { name, color }
     }
