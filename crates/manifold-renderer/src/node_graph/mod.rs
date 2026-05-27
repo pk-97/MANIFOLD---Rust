@@ -34,6 +34,12 @@ mod snapshot;
 mod state_store;
 mod validation;
 
+// Phase 0 throwaway: end-to-end Channel-type-system smoke test.
+// Deleted in Phase 1 when the production types land in `ports.rs` /
+// `validation.rs`. See `docs/CHANNEL_TYPE_SYSTEM.md` §10 Phase 0.
+#[cfg(test)]
+mod channel_smoke;
+
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use camera::{Camera, CameraMode};
