@@ -17,6 +17,8 @@ struct MeshVertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Rotate3DUniforms;
@@ -74,4 +76,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     output[i]._pad0 = 0.0;
     output[i].normal = normal;
     output[i]._pad1 = 0.0;
+    // UV is a parametric value on the surface — doesn't rotate with position.
+    output[i].uv = input[i].uv;
+    output[i]._pad2 = vec2<f32>(0.0, 0.0);
 }

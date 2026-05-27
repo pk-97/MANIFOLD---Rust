@@ -18,6 +18,8 @@ struct MeshVertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: TriangulateUniforms;
@@ -29,6 +31,13 @@ fn sample_pos(col: i32, row: i32) -> vec3<f32> {
     let rr = clamp(row, 0, i32(u.src_rows) - 1);
     let idx = u32(rr) * u.src_cols + u32(cc);
     return src[idx].position;
+}
+
+fn sample_uv(col: i32, row: i32) -> vec2<f32> {
+    let cc = clamp(col, 0, i32(u.src_cols) - 1);
+    let rr = clamp(row, 0, i32(u.src_rows) - 1);
+    let idx = u32(rr) * u.src_cols + u32(cc);
+    return src[idx].uv;
 }
 
 fn compute_normal(col: i32, row: i32) -> vec3<f32> {
@@ -61,6 +70,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dst[i]._pad0 = 0.0;
         dst[i].normal = vec3<f32>(0.0, 1.0, 0.0);
         dst[i]._pad1 = 0.0;
+        dst[i].uv = vec2<f32>(0.0, 0.0);
+        dst[i]._pad2 = vec2<f32>(0.0, 0.0);
         return;
     }
 
@@ -91,9 +102,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let row = i32(qy + dy);
     let pos = sample_pos(col, row);
     let normal = compute_normal(col, row);
+    let uv = sample_uv(col, row);
 
     dst[i].position = pos;
     dst[i]._pad0 = 0.0;
     dst[i].normal = normal;
     dst[i]._pad1 = 0.0;
+    dst[i].uv = uv;
+    dst[i]._pad2 = vec2<f32>(0.0, 0.0);
 }

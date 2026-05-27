@@ -1,10 +1,14 @@
 // node.displace_mesh — perturb the Y component of an
-// Array<MeshVertex> positions grid by sampling a height Texture2D.
-// One thread per grid vertex.
+// Array<MeshVertex> positions grid by sampling a height Texture2D
+// at each vertex's own UV. One thread per grid vertex.
 //
-// Vertex idx → (col, row): row-major, cols + rows from uniforms.
-// UV → (col / (cols - 1), row / (rows - 1)).
-// Y += (sample.r - 0.5) * displacement.
+// UV comes from the per-vertex `uv` channel (post-U1 layout); the
+// `cols` / `rows` uniforms are retained as a passive topology hint
+// for the (i >= cols*rows) inactive-slot pass-through. The legacy
+// (col, row) → UV reconstruction was redundant once MeshVertex
+// carries UV.
+//
+// Y += (sample.r - height_bias) * displacement.
 
 struct DisplaceUniforms {
     cols: u32,
@@ -22,6 +26,8 @@ struct MeshVertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: DisplaceUniforms;
@@ -43,12 +49,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let col = i % u.cols;
-    let row = i / u.cols;
-    let denom_c = f32(max(u.cols - 1u, 1u));
-    let denom_r = f32(max(u.rows - 1u, 1u));
-    let uv = vec2<f32>(f32(col) / denom_c, f32(row) / denom_r);
-
+    let uv = src[i].uv;
     let h_raw = textureSampleLevel(height_tex, height_sampler, uv, 0.0).r;
     let displaced_y = src[i].position.y + (h_raw - u.height_bias) * u.displacement;
 
@@ -56,4 +57,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[i]._pad0 = 0.0;
     dst[i].normal = src[i].normal;
     dst[i]._pad1 = 0.0;
+    dst[i].uv = src[i].uv;
+    dst[i]._pad2 = vec2<f32>(0.0, 0.0);
 }
