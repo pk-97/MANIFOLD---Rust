@@ -43,7 +43,8 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
-    ArrayType, ItemKind, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    ArrayType, ChannelElementType, ChannelSpec, ItemKind, NodeInput, NodeOutput, NodePort,
+    PortKind, PortType, ScalarType,
 };
 
 pub const TYPE_ID: &str = "node.wgsl_compute";
@@ -536,7 +537,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     // 32-byte vertex producers, etc.). The Particle special
                     // case here was removed 2026-05-26 — type discipline
                     // lives at the cast-atom boundary, not at the introspection.
-                    let item = element_to_array_type(element, stride)?;
+                    let item = element_to_array_type(element, stride, &module)?;
                     let port_name = leak_str(&name);
                     if read && write {
                         // Aliased in/out — declare an input AND an
@@ -695,27 +696,108 @@ fn parse_uniform(
     ))
 }
 
-fn element_to_array_type(element: &naga::Type, _stride: u32) -> Result<ArrayType, String> {
-    // wgsl_compute is the byte-buffer escape hatch — every struct
-    // array output (including 64-byte Particle layouts) ships as
-    // Anonymous with size+align metadata. Typed downstream consumers
-    // wire through `node.cast_as_*` atoms (cast_as_particle for the
-    // integrator pattern, cast_as_mesh_vertex for vertex producers,
-    // etc.) to relabel the wire. Type discipline lives at the cast-
-    // atom boundary, not at the introspection.
+fn element_to_array_type(
+    element: &naga::Type,
+    _stride: u32,
+    module: &naga::Module,
+) -> Result<ArrayType, String> {
+    // wgsl_compute is the byte-buffer escape hatch. The legacy
+    // ItemKind::Anonymous tag + (item_size, item_align) bridge survives
+    // so existing cast atoms (cast_as_particle, cast_as_u32, ...) keep
+    // working through Phase 4a. Phase 4b deletes the cast atoms and
+    // ItemKind entirely once preset JSONs migrate.
+    //
+    // Phase 4a addition: walk the WGSL struct's fields via naga and emit
+    // a typed Channels signature alongside the legacy bridge fields.
+    // Downstream typed consumers that already declare matching specs
+    // (post-Phase-3 KnownItem migration) wire through the new validator
+    // path directly when reached without a cast atom in between; Phase
+    // 4b JSON-prunes the cast atoms once preset surgery is reviewed.
     //
     // align=4 not naga's vec3-padded alignment of 16 — matches the
     // Rust-side layout convention every other primitive uses.
-    let naga::TypeInner::Struct { span, .. } = element.inner else {
+    let naga::TypeInner::Struct { span, members } = &element.inner else {
         return Err("storage array element is not a struct".into());
     };
+    let specs = struct_members_to_specs(members, module);
     Ok(ArrayType {
-        item_size: span,
+        item_size: *span,
         item_align: 4,
         item_kind: ItemKind::Anonymous,
-        specs: &[],
+        specs,
         match_mode: crate::node_graph::ports::MatchMode::Exact,
     })
+}
+
+/// Walk a WGSL storage-array struct's members and emit a Channels
+/// signature.
+///
+/// Per `docs/CHANNEL_TYPE_SYSTEM.md` §8.2:
+/// - Fields whose name starts with `_pad` are SKIPPED (existing
+///   convention used throughout the codebase, including the uniform-
+///   member walker above; the doc's "explicit marker" preference is
+///   parked for a follow-up that introduces a preprocessor).
+/// - Each remaining field maps to a [`ChannelSpec`] with:
+///     - `name`: `ChannelName::from_str(field.name)`. The hash collides
+///       with the registry's `well_known::*` constants when the WGSL
+///       author happens to use a canonical name; otherwise the
+///       signature carries the field's raw name (debug lookup falls
+///       back to the hex hash).
+///     - `ty`: mapped from the field's WGSL type via
+///       [`naga_type_to_channel_element_type`].
+/// - Fields whose type doesn't map cleanly (matrices, runtime arrays,
+///   atomics) cause the entire signature to fall back to `&[]` — Phase
+///   4a is best-effort: when the walk can produce a typed signature,
+///   downstream consumers benefit; when it can't, the wire continues
+///   to behave exactly like pre-Phase-4 (Anonymous bridge to a cast
+///   atom).
+///
+/// The returned slice is `'static` via `Box::leak`. Same justification
+/// as `leak_str`: bounded by the distinct field-name + element-type
+/// combinations across all loaded wgsl_compute shaders in a session.
+fn struct_members_to_specs(
+    members: &[naga::StructMember],
+    module: &naga::Module,
+) -> &'static [ChannelSpec] {
+    let mut specs: Vec<ChannelSpec> = Vec::with_capacity(members.len());
+    for m in members {
+        let Some(name) = m.name.as_deref() else {
+            return &[];
+        };
+        if name.starts_with("_pad") {
+            continue;
+        }
+        let inner = &module.types[m.ty].inner;
+        let Some(ty) = naga_type_to_channel_element_type(inner) else {
+            return &[];
+        };
+        specs.push(ChannelSpec {
+            name: crate::node_graph::ports::ChannelName::from_str(leak_str(name)),
+            ty,
+        });
+    }
+    Box::leak(specs.into_boxed_slice())
+}
+
+fn naga_type_to_channel_element_type(inner: &naga::TypeInner) -> Option<ChannelElementType> {
+    use crate::node_graph::ports::ChannelElementType as CET;
+    use naga::ScalarKind as SK;
+    use naga::VectorSize as VS;
+    match inner {
+        naga::TypeInner::Scalar(scalar) => match (scalar.kind, scalar.width) {
+            (SK::Float, 4) => Some(CET::F32),
+            (SK::Sint, 4) => Some(CET::I32),
+            (SK::Uint, 4) => Some(CET::U32),
+            _ => None,
+        },
+        naga::TypeInner::Vector { size, scalar } => match (size, scalar.kind, scalar.width) {
+            (VS::Bi, SK::Float, 4) => Some(CET::Vec2F),
+            (VS::Tri, SK::Float, 4) => Some(CET::Vec3F),
+            (VS::Quad, SK::Float, 4) => Some(CET::Vec4F),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn storage_format_to_gpu(f: naga::StorageFormat) -> Option<GpuTextureFormat> {
@@ -1173,20 +1255,37 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Inputs = [uniform port-shadow scalar "dt", aliased
         // Array(Anonymous, size=64) "particles" (read_write storage
         // maps to both an input and output port of the same name).
-        // The Particle special case was removed 2026-05-26 — typed
-        // downstream consumers wire through `node.cast_as_particle`.
+        //
+        // Phase 4a: naga walks the Particle struct and emits a typed
+        // Channels signature alongside the legacy Anonymous bridge
+        // fields. ItemKind stays Anonymous so existing cast_as_*
+        // wires keep working through Phase 4b's deletion pass.
         assert_eq!(input_names(&node), vec!["dt", "particles"]);
         assert_eq!(node.inputs[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(
-            node.inputs[1].ty,
-            PortType::Array(ArrayType {
-                item_size: 64,
-                item_align: 4,
-                item_kind: ItemKind::Anonymous,
-                specs: &[],
-                match_mode: crate::node_graph::ports::MatchMode::Exact,
-            })
-        );
+        match node.inputs[1].ty {
+            PortType::Array(at) => {
+                assert_eq!(at.item_size, 64);
+                assert_eq!(at.item_align, 4);
+                assert_eq!(at.item_kind, ItemKind::Anonymous);
+                assert_eq!(at.match_mode, crate::node_graph::ports::MatchMode::Exact);
+                // naga-derived Channels signature: vec3 position +
+                // vec3 velocity + f32 life + f32 age + vec4 color.
+                assert_eq!(at.specs.len(), 5);
+                let names: Vec<&'static str> = at
+                    .specs
+                    .iter()
+                    .map(|s| s.name.debug_name().unwrap_or("<unknown>"))
+                    .collect();
+                assert_eq!(
+                    names,
+                    vec!["position", "velocity", "life", "age", "color"]
+                );
+                use crate::node_graph::ports::ChannelElementType as CET;
+                let types: Vec<CET> = at.specs.iter().map(|s| s.ty).collect();
+                assert_eq!(types, vec![CET::Vec3F, CET::Vec3F, CET::F32, CET::F32, CET::Vec4F]);
+            }
+            _ => panic!("expected Array port"),
+        }
         assert_eq!(node.outputs.len(), 1);
         assert_eq!(node.outputs[0].name, "particles");
         let aliased = node.aliased_array_io();

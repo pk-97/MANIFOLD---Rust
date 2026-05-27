@@ -480,13 +480,23 @@ fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if let (PortType::Array(a), PortType::Array(b)) = (from, to)
         && a.item_size == b.item_size
         && a.item_align == b.item_align
-        && a.item_kind != ItemKind::Anonymous
-        && b.item_kind == ItemKind::Anonymous
     {
         // Typed source → Anonymous consumer: the typed bytes are
         // still the same bytes; the consumer just treats them
-        // generically. Safe direction.
-        return true;
+        // generically. Safe direction (the asymmetric Postel's-law
+        // shape from pre-migration).
+        if a.item_kind != ItemKind::Anonymous && b.item_kind == ItemKind::Anonymous {
+            return true;
+        }
+        // Anonymous → Anonymous: both endpoints are raw-byte
+        // escape-hatch wires of the same shape; specs differences
+        // (e.g. wgsl_compute's Phase 4a naga-derived typed signature
+        // flowing into a cast atom's empty-spec Anonymous input)
+        // are by definition meaningless when neither side is a
+        // declared typed family. Accept.
+        if a.item_kind == ItemKind::Anonymous && b.item_kind == ItemKind::Anonymous {
+            return true;
+        }
     }
     false
 }
