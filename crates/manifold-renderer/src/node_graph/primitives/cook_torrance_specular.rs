@@ -1,6 +1,6 @@
 //! `node.cook_torrance_specular` — physically-based microfacet specular
-//! from a tangent-space normal map + directional light + view + material
-//! params. Sibling to `node.blinn_specular`: same shape, more accurate.
+//! from a normal map + light + view + material params. Sibling to
+//! `node.blinn_specular`: same shape, more accurate.
 //!
 //! Computes `D_GGX * G_Smith * F_Schlick / (4 * NdotV * NdotL) * NdotL`
 //! per pixel, multiplied by light colour and intensity. Outputs an
@@ -10,6 +10,24 @@
 //! `metallic` ∈ [0, 1] interpolates F0 between dielectric (0.04) and
 //! the surface's `base_color`. Metals get a coloured Fresnel; dielectrics
 //! get the standard 4% reflectance.
+//!
+//! Two operating modes, picked implicitly by whether `world_pos` is wired:
+//!
+//! **Flat-screen mode** (no world_pos): `view_x/y/z` and `light_x/y/z` are
+//! interpreted as unit DIRECTIONS, constant across the image. Used by
+//! screen-space shaders (OilyFluid-shaped feedback sims) — one V and one L
+//! shared by every pixel.
+//!
+//! **3D-mesh mode** (world_pos wired): `view_x/y/z` is interpreted as the
+//! CAMERA WORLD POSITION; `light_x/y/z` as the LIGHT WORLD POSITION.
+//! Per-pixel V and L are computed from `camera_pos - world_pos` and
+//! `light_pos - world_pos`. An inverse-square attenuation
+//! `1 / (1 + d²/attenuation_scale)` is multiplied into the result so a
+//! positional light falls off realistically. Wire this with
+//! `node.render_3d_mesh.world_pos` + `node.render_3d_mesh.world_normal`
+//! to shade a perspective-projected mesh with per-pixel PBR. `normal` in
+//! 3D mode is the world-space surface normal (from `world_normal`), not a
+//! tangent-space normal map.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -30,6 +48,10 @@ struct CookTorranceUniforms {
     metallic: f32,
     light_color: [f32; 4], // rgb = colour, a = intensity
     base_color: [f32; 4],
+    use_world_pos: u32,    // 0 = flat screen-space, 1 = 3D mesh (per-pixel V/L)
+    use_roughness_map: u32,
+    attenuation_scale: f32,
+    _pad0: f32,
 }
 
 const PBR_BRDF: &str = include_str!("shaders/pbr_brdf.wgsl");
@@ -40,6 +62,8 @@ crate::primitive! {
     purpose: "Physically-based microfacet specular (D_GGX × G_Smith × F_Schlick) from a tangent-space normal map + directional light + view + material. Outputs the ADDITIVE specular contribution. Sibling to node.blinn_specular — more accurate for metals; pair with node.lambert_directional for the diffuse term and sum via node.compose mode=Add. F0 interpolates between dielectric (0.04) and base_color by metallic.",
     inputs: {
         normal: Texture2D required,
+        world_pos: Texture2D optional,
+        roughness_map: Texture2D optional,
         light_x: ScalarF32 optional,
         light_y: ScalarF32 optional,
         light_z: ScalarF32 optional,
@@ -49,6 +73,7 @@ crate::primitive! {
         roughness: ScalarF32 optional,
         metallic: ScalarF32 optional,
         intensity: ScalarF32 optional,
+        attenuation_scale: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -142,8 +167,16 @@ crate::primitive! {
             range: None,
             enum_values: &[],
         },
+        ParamDef {
+            name: "attenuation_scale",
+            label: "Attenuation Scale",
+            ty: ParamType::Float,
+            default: ParamValue::Float(25.0),
+            range: Some((0.1, 1000.0)),
+            enum_values: &[],
+        },
     ],
-    composition_notes: "Output is the additive specular term — sum with diffuse via `node.compose` mode=Add. base_color is the metal tint when metallic=1; for dielectrics (metallic=0) it's ignored. roughness clamps to 0.01 to avoid mirror-degenerate. Normal map is tangent-space, signed (typically from node.heightmap_to_normal). View direction is constant per dispatch — for 3D-mesh perspective use the dedicated mesh-render primitive that varies view per pixel.",
+    composition_notes: "Output is the additive specular term — sum with diffuse via `node.compose` mode=Add. base_color is the metal tint when metallic=1; for dielectrics (metallic=0) it's ignored. roughness clamps to 0.01 to avoid mirror-degenerate. \n\nFlat-screen mode (no world_pos input): normal is a tangent-space normal map, view/light are constant directions. \n\n3D-mesh mode (world_pos wired from node.render_3d_mesh.world_pos): normal is a world-space surface normal (from node.render_3d_mesh.world_normal), view scalars are camera world position, light scalars are light world position, attenuation_scale (default 25.0) shapes the 1/(1+d²/scale) falloff. Background pixels (world_pos.a < 0.5) emit zero.",
     examples: [],
     picker: { label: "Cook-Torrance Specular", category: Atom },
 }
@@ -168,6 +201,7 @@ impl Primitive for CookTorranceSpecular {
         let roughness = read("roughness", 0.3);
         let metallic = read("metallic", 1.0);
         let intensity = read("intensity", 1.0);
+        let attenuation_scale = read("attenuation_scale", 25.0);
         let light_color = match ctx.params.get("light_color") {
             Some(ParamValue::Color(c)) => *c,
             _ => [1.0, 1.0, 1.0, 1.0],
@@ -180,6 +214,8 @@ impl Primitive for CookTorranceSpecular {
         let Some(normal) = ctx.inputs.texture_2d("normal") else {
             return;
         };
+        let world_pos = ctx.inputs.texture_2d("world_pos");
+        let roughness_map = ctx.inputs.texture_2d("roughness_map");
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;
         };
@@ -221,7 +257,17 @@ impl Primitive for CookTorranceSpecular {
                 intensity,
             ],
             base_color,
+            use_world_pos: world_pos.is_some() as u32,
+            use_roughness_map: roughness_map.is_some() as u32,
+            attenuation_scale,
+            _pad0: 0.0,
         };
+
+        // Shader always binds world_pos + roughness_map slots; bind `target`
+        // as a harmless dummy when an input isn't wired (the shader gates
+        // the read behind the matching `use_*` flag).
+        let world_pos_bind = world_pos.unwrap_or(target);
+        let roughness_map_bind = roughness_map.unwrap_or(target);
 
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -242,8 +288,16 @@ impl Primitive for CookTorranceSpecular {
                     binding: 3,
                     texture: target,
                 },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: world_pos_bind,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: roughness_map_bind,
+                },
             ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
+            [w.div_ceil(16), h.div_ceil(16), 1,],
             "node.cook_torrance_specular",
         );
     }
@@ -265,6 +319,9 @@ mod tests {
         assert_eq!(CookTorranceSpecular::INPUTS[0].name, "normal");
         assert_eq!(CookTorranceSpecular::INPUTS[0].ty, PortType::Texture2D);
         assert!(CookTorranceSpecular::INPUTS[0].required);
+        assert_eq!(CookTorranceSpecular::INPUTS[1].name, "world_pos");
+        assert_eq!(CookTorranceSpecular::INPUTS[1].ty, PortType::Texture2D);
+        assert!(!CookTorranceSpecular::INPUTS[1].required);
         assert_eq!(CookTorranceSpecular::OUTPUTS.len(), 1);
         assert_eq!(CookTorranceSpecular::OUTPUTS[0].name, "out");
     }

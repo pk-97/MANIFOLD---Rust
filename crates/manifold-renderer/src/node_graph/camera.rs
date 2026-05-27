@@ -89,7 +89,7 @@ impl Camera {
     /// Build an orbit-style perspective camera from `(orbit, tilt, distance,
     /// fov_y, look_y, roll)`. The orbit math mirrors the inline formula every 3D
     /// renderer used pre-Camera-port (`render_3d_mesh`, `render_instanced_3d_mesh`,
-    /// `render_3d_mesh_pbr_ibl`, `digital_plants_render`). `roll` rotates the
+    /// `digital_plants_render`). `roll` rotates the
     /// `right` and `up` vectors around `fwd` so the camera banks while still
     /// orbiting the same target — radians, positive = clockwise when looking
     /// along `fwd`. `look_at_rh` is rebuilt from the rolled `up` so the view

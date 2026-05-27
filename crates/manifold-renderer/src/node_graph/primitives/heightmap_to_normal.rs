@@ -1,12 +1,27 @@
-//! `node.heightmap_to_normal` — scalar height field → tangent-space
-//! normal map via central-difference gradient.
+//! `node.heightmap_to_normal` — scalar height field → unit normal map via
+//! central-difference gradient.
 //!
 //! Reads `in.r` as height per pixel, computes `(dh/dx, dh/dy)` via
-//! half-difference of adjacent samples, then emits the unnormalised
-//! tangent-space normal `vec3(-dh/dx, -dh/dy, z_scale)` normalised.
-//! Larger `z_scale` = flatter normals; smaller = steeper.
+//! half-difference of adjacent samples. Two output coordinate spaces,
+//! picked by the `coord_space` param:
 //!
-//! Output: RGB = signed tangent-space normal in [-1, 1], A = 1.
+//! - **TangentZ** (default — flat-surface tangent-space convention used
+//!   by `lambert_directional`, `matcap_two_tone`, `blinn_specular` and
+//!   the rest of the OilyFluid-shaped screen-space PBR family):
+//!   `N = normalize(-dh/dx, -dh/dy * aspect, z_scale)`. Surface-normal
+//!   direction sits on the `.z` channel.
+//!
+//! - **WorldYUp** (3D mesh laid out in the world XZ plane with Y up —
+//!   matches the MetallicGlass full-resolution-reflection trick where a
+//!   per-pixel surface normal is derived from the displaced height field
+//!   rather than from the under-sampled vertex normals):
+//!   `N = normalize(-dh/dx, z_scale, -dh/dy * aspect)`. Surface-normal
+//!   direction sits on the `.y` channel.
+//!
+//! The `aspect` input scales the Y-axis gradient so non-square world
+//! quads keep the right relative slope (default 1.0 = no correction).
+//! Larger `z_scale` = flatter normals; smaller = steeper. Output is
+//! signed (range [-1, 1] per channel), alpha = 1.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -18,18 +33,19 @@ use crate::node_graph::primitive::Primitive;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HeightmapNormalUniforms {
     z_scale: f32,
+    aspect: f32,
+    coord_space: u32, // 0 = TangentZ (default), 1 = WorldYUp
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 crate::primitive! {
     name: HeightmapToNormal,
     type_id: "node.heightmap_to_normal",
-    purpose: "Scalar height field (read from `in.r`) → tangent-space normal map (RGB) via central-difference gradient. Larger `z_scale` flattens the normal; smaller `z_scale` steepens it. The universal building block for fake-lit / matcap / PBR shading of procedural heightmaps. Output is SIGNED (range [-1, 1] per channel) — caller may abs/scale/grade downstream.",
+    purpose: "Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. Coord_space picks the output convention: TangentZ for flat-surface tangent-space shading (OilyFluid lambert/matcap/blinn), WorldYUp for 3D meshes laid out in the XZ plane with Y up (MetallicGlass full-resolution-reflection trick). Larger `z_scale` flattens the normal; smaller steepens it. `aspect` scales the Y-axis gradient for non-square world quads. Output is SIGNED (range [-1, 1] per channel).",
     inputs: {
         in: Texture2D required,
         z_scale: ScalarF32 optional,
+        aspect: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -43,20 +59,44 @@ crate::primitive! {
             range: Some((0.001, 4.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "aspect",
+            label: "Aspect",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.1, 10.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "coord_space",
+            label: "Coord Space",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: None,
+            enum_values: &["TangentZ", "WorldYUp"],
+        },
     ],
-    composition_notes: "Height is read from the R channel only. If your height is a derived quantity (e.g. `length(color.rg)` in the oily-fluid family) wire `node.length_vec2` upstream first. Pair downstream with `node.lambert_directional`, `node.matcap_two_tone`, `node.fresnel_rim`, `node.blinn_specular` for shading variations. For chromatic-aberration-style displaced normals (oily-fluid Oil Slick), follow with `node.chromatic_displace` reading the normal map.",
+    composition_notes: "Height is read from the R channel only. If your height is a derived quantity (e.g. `length(color.rg)` in the oily-fluid family) wire `node.length_vec2` upstream first. TangentZ (default) pairs with `node.lambert_directional`, `node.matcap_two_tone`, `node.fresnel_rim`, `node.blinn_specular` for the flat-surface screen-space shading family. WorldYUp pairs with `node.cook_torrance_specular` + `node.equirect_envmap_sample` (with world_pos wired) for PBR on a 3D mesh laid out in the XZ plane — the MetallicGlass pattern. The `aspect` input is normally wired from `system.generator_input.aspect` so reflections stay correct across canvas aspect ratios.",
     examples: [],
     picker: { label: "Heightmap → Normal", category: Atom },
 }
 
 impl Primitive for HeightmapToNormal {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let z_scale = match ctx.inputs.scalar("z_scale") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("z_scale") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 0.5,
-            },
+        let read = |name: &str, default: f32| -> f32 {
+            match ctx.inputs.scalar(name) {
+                Some(ParamValue::Float(f)) => f,
+                _ => match ctx.params.get(name) {
+                    Some(ParamValue::Float(f)) => *f,
+                    _ => default,
+                },
+            }
+        };
+        let z_scale = read("z_scale", 0.5);
+        let aspect = read("aspect", 1.0);
+        let coord_space: u32 = match ctx.params.get("coord_space") {
+            Some(ParamValue::Enum(v)) => *v,
+            _ => 0,
         };
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
@@ -84,9 +124,9 @@ impl Primitive for HeightmapToNormal {
 
         let uniforms = HeightmapNormalUniforms {
             z_scale,
+            aspect,
+            coord_space,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

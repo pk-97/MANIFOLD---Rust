@@ -35,13 +35,15 @@ struct MeshRenderUniforms {
 crate::primitive! {
     name: Render3DMesh,
     type_id: "node.render_3d_mesh",
-    purpose: "Render an Array<MeshVertex> as a depth-tested triangle list (every 3 consecutive vertices form one triangle). One directional light + ambient. Takes a `camera: Camera` input from `node.camera_orbit` (or any future Camera source) — the renderer reads view + projection from the camera instead of holding its own orbit/tilt/distance/FOV scalars. Establishes the pattern for the rest of the 3D-renderer family.",
+    purpose: "Render an Array<MeshVertex> as a depth-tested triangle list (every 3 consecutive vertices form one triangle). One directional light + ambient. Takes a `camera: Camera` input from `node.camera_orbit` (or any future Camera source) — the renderer reads view + projection from the camera instead of holding its own orbit/tilt/distance/FOV scalars. Emits three outputs: `color` (Lambert + ambient shaded), `world_pos` (interpolated per-pixel world position, alpha=1 where geometry covers), `world_normal` (renormalised per-pixel surface normal in world space, alpha=1). The G-buffer outputs let downstream PBR / SSAO / SSR atoms shade in screen space with per-pixel V and L derived from world coordinates — TouchDesigner / Blender / Unreal deferred-shading style.",
     inputs: {
         vertices: Array(MeshVertex) required,
         camera: Camera required,
     },
     outputs: {
         color: Texture2D,
+        world_pos: Texture2D,
+        world_normal: Texture2D,
     },
     params: [
         ParamDef {
@@ -85,11 +87,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Vertex count must be a multiple of 3; the trailing 0/1/2 leftover verts are silently truncated. Producer must emit triangle order — pair with a future Triangulate primitive when the upstream is a positions-only grid. Output is Rgba16Float color with pre-multiplied background = transparent.",
+    composition_notes: "Vertex count must be a multiple of 3; the trailing 0/1/2 leftover verts are silently truncated. Producer must emit triangle order — pair with a future Triangulate primitive when the upstream is a positions-only grid. Output `color` is Rgba16Float with pre-multiplied background = transparent. Outputs `world_pos` / `world_normal` are Rgba16Float G-buffer attachments emitted via two extra single-attachment render passes (the vertex shader runs three times — cheap at typical mesh sizes; lets the runtime stay on the existing single-color-attachment encoder API). Downstream PBR atoms (cook_torrance_specular, equirect_envmap_sample) consume `world_pos` plus camera/light positions to compute per-pixel V and L for perspective-correct shading.",
     examples: [],
     picker: { label: "Render 3D Mesh", category: Atom },
     extra_fields: {
         render_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        world_pos_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
+        world_normal_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,
         depth_texture: Option<manifold_gpu::GpuTexture> = None,
         depth_width: u32 = 0,
@@ -150,6 +154,8 @@ impl Primitive for Render3DMesh {
         let Some(target) = ctx.outputs.texture_2d("color") else {
             return;
         };
+        let world_pos_target = ctx.outputs.texture_2d("world_pos");
+        let world_normal_target = ctx.outputs.texture_2d("world_normal");
         let width = target.width;
         let height = target.height;
         if width == 0 || height == 0 {
@@ -164,6 +170,12 @@ impl Primitive for Render3DMesh {
             // No geometry — emit a clear pass so the output isn't garbage.
             let gpu = ctx.gpu_encoder();
             gpu.native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            if let Some(wp) = world_pos_target {
+                gpu.native_enc.clear_texture(wp, 0.0, 0.0, 0.0, 0.0);
+            }
+            if let Some(wn) = world_normal_target {
+                gpu.native_enc.clear_texture(wn, 0.0, 0.0, 0.0, 0.0);
+            }
             return;
         }
 
@@ -192,6 +204,30 @@ impl Primitive for Render3DMesh {
                 "node.render_3d_mesh",
             ));
         }
+        if self.world_pos_pipeline.is_none() {
+            self.world_pos_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                include_str!("shaders/render_3d_mesh.wgsl"),
+                "vs_main",
+                "fs_world_pos",
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                None,
+                1,
+                "node.render_3d_mesh.world_pos",
+            ));
+        }
+        if self.world_normal_pipeline.is_none() {
+            self.world_normal_pipeline = Some(gpu.device.create_render_pipeline_depth(
+                include_str!("shaders/render_3d_mesh.wgsl"),
+                "vs_main",
+                "fs_world_normal",
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                None,
+                1,
+                "node.render_3d_mesh.world_normal",
+            ));
+        }
         if self.depth_stencil.is_none() {
             self.depth_stencil = Some(
                 gpu.device
@@ -204,30 +240,67 @@ impl Primitive for Render3DMesh {
         self.ensure_depth_texture(gpu.device, width, height);
 
         let pipeline = self.render_pipeline.as_ref().expect("just inserted");
+        let world_pos_pipeline = self.world_pos_pipeline.as_ref().expect("just inserted");
+        let world_normal_pipeline = self.world_normal_pipeline.as_ref().expect("just inserted");
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
+
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: vertices,
+                offset: 0,
+            },
+        ];
 
         gpu.native_enc.draw_instanced_depth(
             pipeline,
             target,
             depth_tex,
             depth_stencil,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: vertices,
-                    offset: 0,
-                },
-            ],
+            &bindings,
             vertex_count,
             1,
             GpuLoadAction::Clear,
             "node.render_3d_mesh",
         );
+
+        // G-buffer passes. Each is a Clear of its color attachment + depth,
+        // followed by a re-rasterization of the same geometry. Depth is
+        // deterministic across passes — the rasterizer produces the same
+        // depth values from the same vertex buffer + view_proj, so the
+        // depth-Less test admits identical fragments and the outputs align
+        // pixel-perfect with the color pass.
+        if let Some(wp_target) = world_pos_target {
+            gpu.native_enc.draw_instanced_depth(
+                world_pos_pipeline,
+                wp_target,
+                depth_tex,
+                depth_stencil,
+                &bindings,
+                vertex_count,
+                1,
+                GpuLoadAction::Clear,
+                "node.render_3d_mesh.world_pos",
+            );
+        }
+        if let Some(wn_target) = world_normal_target {
+            gpu.native_enc.draw_instanced_depth(
+                world_normal_pipeline,
+                wn_target,
+                depth_tex,
+                depth_stencil,
+                &bindings,
+                vertex_count,
+                1,
+                GpuLoadAction::Clear,
+                "node.render_3d_mesh.world_normal",
+            );
+        }
     }
 }
 
@@ -253,9 +326,13 @@ mod tests {
         assert_eq!(Render3DMesh::INPUTS[1].name, "camera");
         assert!(Render3DMesh::INPUTS[1].required);
         assert_eq!(Render3DMesh::INPUTS[1].ty, PortType::Camera);
-        assert_eq!(Render3DMesh::OUTPUTS.len(), 1);
+        assert_eq!(Render3DMesh::OUTPUTS.len(), 3);
         assert_eq!(Render3DMesh::OUTPUTS[0].name, "color");
         assert_eq!(Render3DMesh::OUTPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(Render3DMesh::OUTPUTS[1].name, "world_pos");
+        assert_eq!(Render3DMesh::OUTPUTS[1].ty, PortType::Texture2D);
+        assert_eq!(Render3DMesh::OUTPUTS[2].name, "world_normal");
+        assert_eq!(Render3DMesh::OUTPUTS[2].ty, PortType::Texture2D);
     }
 
     #[test]

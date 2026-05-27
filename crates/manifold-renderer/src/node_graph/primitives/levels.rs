@@ -6,10 +6,10 @@
 //! into one shader. The same cluster appears in MetallicGlass's height
 //! and metallic chains, in Halation's bloom thresholds, and in OilyFluid's
 //! hue ramps — anywhere per-channel affine + clamp + gamma sits between
-//! atoms. Curated medium-grain primitive in the spirit of
-//! `render_3d_mesh_pbr_ibl`: the decomposition is still expressible via
-//! the three component atoms when authoring needs to inspect intermediates;
-//! `node.levels` is what you reach for once the shape is settled.
+//! atoms. Curated medium-grain primitive: the decomposition is still
+//! expressible via the three component atoms when authoring needs to
+//! inspect intermediates; `node.levels` is what you reach for once the
+//! shape is settled.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 

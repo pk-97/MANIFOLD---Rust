@@ -9,6 +9,15 @@
 // Topology: every 3 consecutive vertices form one triangle.
 // The vertex shader looks up vertex `vertex_index` directly
 // from the storage buffer — no vertex buffer binding.
+//
+// Three fragment entry points share the same vertex shader:
+//   fs_main          — Lambert + ambient shaded color
+//   fs_world_pos     — emit interpolated world position (G-buffer)
+//   fs_world_normal  — emit interpolated world-space surface normal
+//                      (G-buffer; normalised, signed). Runs alongside
+//                      fs_main when downstream PBR atoms need per-pixel
+//                      V/L from world coordinates — TouchDesigner /
+//                      Blender style multi-pass aspect output.
 
 struct Vertex {
     position: vec3<f32>,
@@ -54,4 +63,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let diffuse = u.base_color.rgb * u.light_color.rgb * n_dot_l * u.light_dir.w;
 
     return vec4<f32>(ambient + diffuse, u.base_color.a);
+}
+
+// G-buffer fragment: emit interpolated world position (XYZ, with W=1
+// so downstream samplers can distinguish "geometry covered this pixel"
+// from "background, alpha=0" via .a).
+@fragment
+fn fs_world_pos(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.world_pos, 1.0);
+}
+
+// G-buffer fragment: emit normalised world-space surface normal in [-1, 1].
+// Renormalised here because triangle interpolation across edges produces
+// non-unit vectors. Alpha = 1 to mark geometry coverage.
+@fragment
+fn fs_world_normal(in: VsOut) -> @location(0) vec4<f32> {
+    let n = normalize(in.world_normal);
+    return vec4<f32>(n, 1.0);
 }

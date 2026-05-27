@@ -37,7 +37,6 @@ mod equirect_envmap_sample;
 mod mirror_axis;
 mod pack_channels;
 mod pack_curve_xy;
-mod render_3d_mesh_pbr_ibl;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
 mod color;
@@ -219,7 +218,6 @@ pub use equirect_envmap_sample::EquirectEnvmapSample;
 pub use mirror_axis::MirrorAxis;
 pub use pack_channels::PackChannels;
 pub use pack_curve_xy::PackCurveXy;
-pub use render_3d_mesh_pbr_ibl::Render3DMeshPbrIbl;
 pub use color::{
     BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
 };

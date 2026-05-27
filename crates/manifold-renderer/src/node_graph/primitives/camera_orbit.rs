@@ -27,7 +27,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: CameraOrbit,
     type_id: "node.camera_orbit",
-    purpose: "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y) — matches the inline orbit formula every legacy 3D renderer used. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_3d_mesh_pbr_ibl, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
+    purpose: "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y) — matches the inline orbit formula every legacy 3D renderer used. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
     inputs: {
         orbit: ScalarF32 optional,
         tilt: ScalarF32 optional,
@@ -38,6 +38,9 @@ crate::primitive! {
     },
     outputs: {
         out: Camera,
+        pos_x: ScalarF32,
+        pos_y: ScalarF32,
+        pos_z: ScalarF32,
     },
     params: [
         ParamDef {
@@ -105,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Outer-card sliders typically expose orbit/tilt in degrees and `fov_y` in degrees too — convert with a `node.affine_scalar` (scale = π/180) per input before wiring into camera_orbit, matching the DigitalPlants / MetallicGlass pattern. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target.",
+    composition_notes: "Outer-card sliders typically expose orbit/tilt in degrees and `fov_y` in degrees too — convert with a `node.affine_scalar` (scale = π/180) per input before wiring into camera_orbit, matching the DigitalPlants / MetallicGlass pattern. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target. `pos_x`/`pos_y`/`pos_z` outputs are the camera's world position — wire into PBR atoms (`cook_torrance_specular.view_x/y/z`, `equirect_envmap_sample.view_x/y/z`) when they're running in 3D-mesh mode (world_pos input wired), so per-pixel V = camera_pos - world_pos.",
     examples: [],
     picker: { label: "Orbit Camera", category: Driver },
 }
@@ -128,7 +131,11 @@ impl Primitive for CameraOrbit {
         };
 
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, roll, near, far);
+        let pos = cam.pos;
         ctx.outputs.set_camera("out", cam);
+        ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
+        ctx.outputs.set_scalar("pos_y", ParamValue::Float(pos[1]));
+        ctx.outputs.set_scalar("pos_z", ParamValue::Float(pos[2]));
     }
 }
 
@@ -149,9 +156,13 @@ mod tests {
             assert!(!input.required, "{} should be optional (port-shadow)", input.name);
             assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
         }
-        assert_eq!(CameraOrbit::OUTPUTS.len(), 1);
+        assert_eq!(CameraOrbit::OUTPUTS.len(), 4);
         assert_eq!(CameraOrbit::OUTPUTS[0].name, "out");
         assert_eq!(CameraOrbit::OUTPUTS[0].ty, PortType::Camera);
+        assert_eq!(CameraOrbit::OUTPUTS[1].name, "pos_x");
+        assert_eq!(CameraOrbit::OUTPUTS[1].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(CameraOrbit::OUTPUTS[2].name, "pos_y");
+        assert_eq!(CameraOrbit::OUTPUTS[3].name, "pos_z");
     }
 
     #[test]

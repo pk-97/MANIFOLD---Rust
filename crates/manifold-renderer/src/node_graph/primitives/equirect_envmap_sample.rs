@@ -1,14 +1,24 @@
 //! `node.equirect_envmap_sample` — per-pixel image-based-lighting (IBL)
 //! reflection. For each pixel: reflect the view direction across the
-//! surface normal, then sample an equirectangular environment map at
-//! that reflection direction.
+//! surface normal, sample an equirectangular environment map at that
+//! reflection direction, then apply Schlick Fresnel + roughness scaling
+//! so the output drops in for the IBL term of a Cook-Torrance PBR sum.
 //!
 //! Pair with `node.bake_equirect_envmap` upstream (or any other
 //! equirect-formatted Texture2D — file-loaded HDRIs, procedural sky
-//! generators) to supply the env map. Output is the un-attenuated
-//! reflected colour; multiply by Fresnel via `node.compose` mode=Multiply
-//! and a roughness-scaled coefficient before summing into the final
-//! shading.
+//! generators) to supply the env map.
+//!
+//! Two operating modes, picked implicitly by whether `world_pos` is wired:
+//!
+//! **Flat-screen mode** (no world_pos): `view_x/y/z` is a constant unit
+//! direction shared across every pixel. Used by screen-space PBR shaders
+//! over a flat surface.
+//!
+//! **3D-mesh mode** (world_pos wired): `view_x/y/z` is the camera world
+//! position; per-pixel V comes from `camera_pos - world_pos`. `normal`
+//! in this mode is the world-space surface normal (typically from
+//! `node.render_3d_mesh.world_normal`). Background pixels
+//! (world_pos.a < 0.5) emit zero.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -22,7 +32,12 @@ struct EnvSampleUniforms {
     view_x: f32,
     view_y: f32,
     view_z: f32,
-    _pad0: f32,
+    roughness: f32,
+    base_color: [f32; 4],
+    metallic: f32,
+    use_world_pos: u32,
+    roughness_scale: f32,
+    use_roughness_map: u32,
 }
 
 const PBR_BRDF: &str = include_str!("shaders/pbr_brdf.wgsl");
@@ -34,9 +49,14 @@ crate::primitive! {
     inputs: {
         normal: Texture2D required,
         env_map: Texture2D required,
+        world_pos: Texture2D optional,
+        roughness_map: Texture2D optional,
         view_x: ScalarF32 optional,
         view_y: ScalarF32 optional,
         view_z: ScalarF32 optional,
+        roughness: ScalarF32 optional,
+        metallic: ScalarF32 optional,
+        roughness_scale: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -47,7 +67,7 @@ crate::primitive! {
             label: "View X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-1.0, 1.0)),
+            range: Some((-20.0, 20.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -55,7 +75,7 @@ crate::primitive! {
             label: "View Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-1.0, 1.0)),
+            range: Some((-20.0, 20.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -63,11 +83,43 @@ crate::primitive! {
             label: "View Z",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
-            range: Some((-1.0, 1.0)),
+            range: Some((-20.0, 20.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "roughness",
+            label: "Roughness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.05),
+            range: Some((0.01, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "metallic",
+            label: "Metallic",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "roughness_scale",
+            label: "Roughness Scale",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.7),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "base_color",
+            label: "Base Color",
+            ty: ParamType::Color,
+            default: ParamValue::Color([0.8, 0.8, 0.82, 1.0]),
+            range: None,
             enum_values: &[],
         },
     ],
-    composition_notes: "View direction is constant per dispatch — for 3D-mesh perspective use the dedicated PBR mesh-render primitive. The env_map is expected to be in equirectangular (longitude × latitude) layout: pbr_brdf::pbr_equirect_uv maps the 3D reflection direction to texture UV. Output is HDR (can exceed 1.0) — pair with node.tone_map / node.reinhard_tone_map downstream when feeding an SDR display.",
+    composition_notes: "Output is `env * F_schlick(NdotV, F0) * (1 - roughness * roughness_scale)` per pixel — the IBL term of a Cook-Torrance PBR sum. F0 = mix(0.04, base_color, metallic). Sum with `node.cook_torrance_specular`'s direct-lighting output via `node.compose` mode=Add for the full PBR shading. env_map is equirectangular (longitude × latitude); pbr_equirect_uv maps reflection direction to UV. Output is HDR — pair with `node.reinhard_tone_map` for SDR display. The legacy `roughness_scale = 0.7` matches the MetallicGlass bundle exactly.",
     examples: [],
     picker: { label: "Env Reflect (Equirect)", category: Atom },
 }
@@ -86,6 +138,13 @@ impl Primitive for EquirectEnvmapSample {
         let view_x = read("view_x", 0.0);
         let view_y = read("view_y", 0.0);
         let view_z = read("view_z", 1.0);
+        let roughness = read("roughness", 0.05);
+        let metallic = read("metallic", 1.0);
+        let roughness_scale = read("roughness_scale", 0.7);
+        let base_color = match ctx.params.get("base_color") {
+            Some(ParamValue::Color(c)) => *c,
+            _ => [0.8, 0.8, 0.82, 1.0],
+        };
 
         let Some(normal) = ctx.inputs.texture_2d("normal") else {
             return;
@@ -93,6 +152,8 @@ impl Primitive for EquirectEnvmapSample {
         let Some(env_map) = ctx.inputs.texture_2d("env_map") else {
             return;
         };
+        let world_pos = ctx.inputs.texture_2d("world_pos");
+        let roughness_map = ctx.inputs.texture_2d("roughness_map");
         let Some(target) = ctx.outputs.texture_2d("out") else {
             return;
         };
@@ -122,8 +183,16 @@ impl Primitive for EquirectEnvmapSample {
             view_x,
             view_y,
             view_z,
-            _pad0: 0.0,
+            roughness,
+            base_color,
+            metallic,
+            use_world_pos: world_pos.is_some() as u32,
+            roughness_scale,
+            use_roughness_map: roughness_map.is_some() as u32,
         };
+
+        let world_pos_bind = world_pos.unwrap_or(target);
+        let roughness_map_bind = roughness_map.unwrap_or(target);
 
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -147,6 +216,14 @@ impl Primitive for EquirectEnvmapSample {
                 GpuBinding::Texture {
                     binding: 4,
                     texture: target,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: world_pos_bind,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: roughness_map_bind,
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
@@ -178,12 +255,23 @@ mod tests {
     }
 
     #[test]
-    fn has_view_direction_params() {
+    fn has_view_pbr_and_base_color_params() {
         let names: Vec<&str> = EquirectEnvmapSample::PARAMS
             .iter()
             .map(|p| p.name)
             .collect();
-        assert_eq!(names, vec!["view_x", "view_y", "view_z"]);
+        assert_eq!(
+            names,
+            vec![
+                "view_x",
+                "view_y",
+                "view_z",
+                "roughness",
+                "metallic",
+                "roughness_scale",
+                "base_color",
+            ]
+        );
     }
 
     #[test]

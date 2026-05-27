@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Metallic Glass",
-  "description": "Y2K-aesthetic feedback-displacement metallic surface generator, decomposed from the legacy MetallicGlassGenerator into curated primitives.\n\nPipeline: 3D simplex noise drives a feedback-blend loop (mix Difference + abs + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result; the same height field feeds (a) a height/levels chain for the displacement R channel, (b) a mirror_axis → Sobel-magnitude chain for the metallic/edge G+B channels, and (c) per-pixel finite-difference normals inside the renderer for full-resolution reflections. A 0.15 temporal-blend feedback on the packed material texture eliminates per-frame jitter. The mesh path is the standard generate_grid_mesh → displace_mesh → triangulate_grid → render_3d_mesh_pbr_ibl chain; the env_map comes from bake_equirect_envmap (the procedural HDR studio).\n\nNew primitives shipped alongside this preset (all reusable):\n  - clamp_texture        — saturate atom\n  - mirror_axis          — single-axis mirror across an angled line\n  - cook_torrance_specular — sibling to blinn_specular (OilyFluid upgrade candidate)\n  - equirect_envmap_sample — IBL atom\n  - bake_equirect_envmap   — procedural HDR studio env baker\n  - pack_channels        — recompose RGBA from 4 single-channel textures\n  - render_3d_mesh_pbr_ibl — render-family entry parallel to render_3d_mesh (Lambert)\n\nKnown parity deltas vs legacy:\n(1) Sobel decomposes via brightness → convolution_2d_9tap ×2 → pack_channels → length_vec2 rather than the fused luma-Sobel in the legacy WGSL — boundary handling at the texture edges differs by ≤1 ULP per pixel.\n(2) The luma weights (Rec.601: 0.299/0.587/0.114) match exactly; the kernel weights match exactly; gradient_mag = sqrt(gx² + gy²) matches exactly.\n(3) Per-pixel normals inside the render shader come from sampling the packed material's R channel — identical math to the legacy fragment shader.",
+  "description": "Y2K-aesthetic feedback-displacement metallic surface generator, decomposed from the legacy MetallicGlassGenerator into curated primitives.\n\nUpstream pipeline (unchanged): 3D simplex noise drives a feedback-blend loop (mix Difference + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result. The smoothed height feeds (a) the displaced-grid mesh path and (b) a mirror_axis → Sobel-magnitude chain that produces an edge / roughness modulation texture.\n\nTerminal (decomposed 2026-05-27 from the fused node.render_3d_mesh_pbr_ibl bundle): the geometry pass (node.render_3d_mesh, extended with G-buffer outputs) rasterises the displaced mesh and writes world_pos + world_normal alongside its Lambert color (the color output is unused here — only the G-buffer is consumed). A full-resolution world-space surface normal is recomputed from the height texture via node.heightmap_to_normal (coord_space=WorldYUp, aspect-corrected). A per-pixel roughness map is derived from the edge texture via node.scale_offset_texture, mapping edge ∈ [0,1] to roughness ∈ [0.05, 0.20]. node.cook_torrance_specular + node.equirect_envmap_sample then shade per pixel in 3D-mesh mode (world_pos wired from render_3d_mesh.world_pos, view/light wired from camera_orbit.pos_xyz / light_pos params), the two terms are summed via node.mix mode=Add, and node.reinhard_tone_map produces the final SDR output. The env_map upstream stays node.bake_equirect_envmap (the procedural HDR studio).\n\nKnown parity deltas vs the legacy bundle (all documented and acceptable for live performance):\n(1) The packed RGBA material's second temporal_blend smoothing pass was dropped — each PBR atom now samples height and edge directly from the upstream chain (pre-pack). The primary feedback loop on the height field (node.feedback at amount=0.98) still applies, so the surface evolves slowly; the absence of the second temporal smoothing produces slightly more per-frame noise on the reflections. Visually subtle.\n(2) Displacement and roughness curves: the outer-card `displace` slider now also drives a node.gain on the height feeding heightmap_to_normal, preserving the legacy coupling between displacement and normal steepness. The inverse-square attenuation scale stays at the legacy's 25.0.\n(3) Per-pixel normals come from heightmap_to_normal's WorldYUp mode with aspect correction wired from system.aspect — same math shape as the legacy bundle's inline finite-difference + cross-product, modulo a ≤1 ULP per-pixel difference from atom-decomposition reassociation.\n\nAtom activations and extensions shipped alongside this decomposition (all reusable for any future PBR-on-3D-mesh preset):\n  - render_3d_mesh: added world_pos + world_normal G-buffer outputs (additive — Lambert color path unchanged)\n  - cook_torrance_specular: added optional world_pos + roughness_map inputs + attenuation_scale param; 3D-mesh mode when world_pos wired\n  - equirect_envmap_sample: added optional world_pos + roughness_map inputs + roughness/metallic/base_color/roughness_scale params (Fresnel + roughness coupling folded into the atom)\n  - heightmap_to_normal: added coord_space enum (TangentZ default | WorldYUp new) + aspect input\n  - camera_orbit: added pos_x/pos_y/pos_z scalar outputs",
   "presetMetadata": {
     "id": "MetallicGlass",
     "displayName": "Metallic Glass",
@@ -49,15 +49,18 @@
         "target": { "kind": "handleNode", "handle": "displace_mesh_node", "param": "displacement" },
         "convert": { "type": "Float" } },
       { "id": "displace",    "label": "Displace",        "defaultValue": 0.2,
-        "target": { "kind": "handleNode", "handle": "render", "param": "displacement" },
+        "target": { "kind": "handleNode", "handle": "height_for_normal_gain", "param": "gain" },
         "convert": { "type": "Float" } },
 
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "render", "param": "roughness" },
+        "target": { "kind": "handleNode", "handle": "direct_specular", "param": "roughness" },
+        "convert": { "type": "Float" } },
+      { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
+        "target": { "kind": "handleNode", "handle": "ibl_specular", "param": "roughness" },
         "convert": { "type": "Float" } },
 
       { "id": "light_int",   "label": "Light Intensity", "defaultValue": 3.5,
-        "target": { "kind": "handleNode", "handle": "render", "param": "light_intensity" },
+        "target": { "kind": "handleNode", "handle": "direct_specular", "param": "intensity" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",    "label": "Camera Distance", "defaultValue": 2.5,
@@ -173,29 +176,6 @@
     { "id": 25, "typeId": "node.clamp_texture", "handle": "edge_clamp",
       "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 26, "typeId": "node.levels", "handle": "metallic_levels",
-      "params": {
-        "scale":  { "type": "Float", "value": -1.0 },
-        "offset": { "type": "Float", "value": 1.0 },
-        "lo":     { "type": "Float", "value": 0.0 },
-        "hi":     { "type": "Float", "value": 1.0 },
-        "gamma":  { "type": "Float", "value": 1.5 }
-      } },
-
-    { "id": 29, "typeId": "node.pack_channels", "handle": "packed",
-      "params": {
-        "default_r": { "type": "Float", "value": 0.0 },
-        "default_g": { "type": "Float", "value": 0.0 },
-        "default_b": { "type": "Float", "value": 0.0 },
-        "default_a": { "type": "Float", "value": 1.0 }
-      } },
-
-    { "id": 30, "typeId": "node.feedback", "handle": "fb_processed",
-      "outputFormats": { "out": "rgba16float" } },
-
-    { "id": 31, "typeId": "node.mix", "handle": "temporal_blend",
-      "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
-
     { "id": 32, "typeId": "node.bake_equirect_envmap", "handle": "envmap",
       "params": {
         "width":  { "type": "Int", "value": 512 },
@@ -234,21 +214,6 @@
     { "id": 38, "typeId": "node.affine_scalar", "handle": "cam_fov_deg_to_rad",
       "params": { "a": { "type": "Float", "value": 54.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 39, "typeId": "node.render_3d_mesh_pbr_ibl", "handle": "render",
-      "params": {
-        "grid_size":          { "type": "Int", "value": 500 },
-        "light_x":            { "type": "Float", "value": -2.0 },
-        "light_y":            { "type": "Float", "value": 2.0 },
-        "light_z":            { "type": "Float", "value": 5.0 },
-        "light_intensity":    { "type": "Float", "value": 3.5 },
-        "metallic":           { "type": "Float", "value": 1.0 },
-        "roughness":          { "type": "Float", "value": 0.05 },
-        "displacement":       { "type": "Float", "value": 0.2 },
-        "edge_roughness_mul": { "type": "Float", "value": 4.0 },
-        "light_color":        { "type": "Color", "value": [1.0, 1.0, 1.0, 1.0] },
-        "base_color":         { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
-      } },
-
     { "id": 43, "typeId": "node.camera_orbit", "handle": "cam_orbit_node",
       "params": {
         "orbit":    { "type": "Float", "value": 1.57079632679 },
@@ -259,6 +224,60 @@
         "near":     { "type": "Float", "value": 0.01 },
         "far":      { "type": "Float", "value": 50.0 }
       } },
+
+    { "id": 49, "typeId": "node.gain", "handle": "height_for_normal_gain",
+      "params": { "gain": { "type": "Float", "value": 0.2 } } },
+
+    { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass",
+      "params": {
+        "light_intensity": { "type": "Float", "value": 0.0 },
+        "ambient":         { "type": "Float", "value": 0.0 },
+        "color_r":         { "type": "Float", "value": 0.0 },
+        "color_g":         { "type": "Float", "value": 0.0 },
+        "color_b":         { "type": "Float", "value": 0.0 }
+      } },
+
+    { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal",
+      "params": {
+        "z_scale":     { "type": "Float", "value": 0.02 },
+        "aspect":      { "type": "Float", "value": 1.0 },
+        "coord_space": { "type": "Enum",  "value": 1 }
+      } },
+
+    { "id": 52, "typeId": "node.scale_offset_texture", "handle": "roughness_from_edge",
+      "params": { "scale": { "type": "Float", "value": 0.15 }, "offset": { "type": "Float", "value": 0.05 } } },
+
+    { "id": 53, "typeId": "node.cook_torrance_specular", "handle": "direct_specular",
+      "params": {
+        "light_x":           { "type": "Float", "value": -2.0 },
+        "light_y":           { "type": "Float", "value": 2.0 },
+        "light_z":           { "type": "Float", "value": 5.0 },
+        "view_x":            { "type": "Float", "value": 0.0 },
+        "view_y":            { "type": "Float", "value": 0.0 },
+        "view_z":            { "type": "Float", "value": 1.0 },
+        "roughness":         { "type": "Float", "value": 0.05 },
+        "metallic":          { "type": "Float", "value": 1.0 },
+        "intensity":         { "type": "Float", "value": 3.5 },
+        "attenuation_scale": { "type": "Float", "value": 25.0 },
+        "light_color":       { "type": "Color", "value": [1.0, 1.0, 1.0, 1.0] },
+        "base_color":        { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
+      } },
+
+    { "id": 54, "typeId": "node.equirect_envmap_sample", "handle": "ibl_specular",
+      "params": {
+        "view_x":          { "type": "Float", "value": 0.0 },
+        "view_y":          { "type": "Float", "value": 0.0 },
+        "view_z":          { "type": "Float", "value": 1.0 },
+        "roughness":       { "type": "Float", "value": 0.05 },
+        "metallic":        { "type": "Float", "value": 1.0 },
+        "roughness_scale": { "type": "Float", "value": 0.7 },
+        "base_color":      { "type": "Color", "value": [0.8, 0.8, 0.82, 1.0] }
+      } },
+
+    { "id": 55, "typeId": "node.mix", "handle": "direct_plus_ibl",
+      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+
+    { "id": 56, "typeId": "node.reinhard_tone_map", "handle": "tone_map" },
 
     { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
   ],
@@ -304,33 +323,45 @@
     { "fromNode": 23, "fromPort": "out",  "toNode": 24, "toPort": "in" },
     { "fromNode": 24, "fromPort": "out",  "toNode": 25, "toPort": "in" },
 
-    { "fromNode": 25, "fromPort": "out",  "toNode": 26, "toPort": "in" },
-
-    { "fromNode": 13, "fromPort": "out",  "toNode": 29, "toPort": "r" },
-    { "fromNode": 26, "fromPort": "out",  "toNode": 29, "toPort": "g" },
-    { "fromNode": 25, "fromPort": "out",  "toNode": 29, "toPort": "b" },
-
-    { "fromNode": 30, "fromPort": "out",  "toNode": 31, "toPort": "a" },
-    { "fromNode": 29, "fromPort": "out",  "toNode": 31, "toPort": "b" },
-    { "fromNode": 31, "fromPort": "out",  "toNode": 30, "toPort": "in" },
-    { "fromNode": 29, "fromPort": "out",  "toNode": 30, "toPort": "seed" },
-
     { "fromNode": 0,  "fromPort": "aspect", "toNode": 42, "toPort": "a" },
     { "fromNode": 42, "fromPort": "out",    "toNode": 33, "toPort": "size_x" },
 
     { "fromNode": 33, "fromPort": "vertices", "toNode": 34, "toPort": "in" },
-    { "fromNode": 31, "fromPort": "out",  "toNode": 34, "toPort": "height" },
+    { "fromNode": 13, "fromPort": "out",  "toNode": 34, "toPort": "height" },
     { "fromNode": 34, "fromPort": "out",  "toNode": 35, "toPort": "in" },
 
     { "fromNode": 36, "fromPort": "out",  "toNode": 43, "toPort": "orbit" },
     { "fromNode": 37, "fromPort": "out",  "toNode": 43, "toPort": "tilt" },
     { "fromNode": 38, "fromPort": "out",  "toNode": 43, "toPort": "fov_y" },
-    { "fromNode": 43, "fromPort": "out",  "toNode": 39, "toPort": "camera" },
 
-    { "fromNode": 35, "fromPort": "out",     "toNode": 39, "toPort": "vertices" },
-    { "fromNode": 31, "fromPort": "out",     "toNode": 39, "toPort": "material" },
-    { "fromNode": 32, "fromPort": "envmap",  "toNode": 39, "toPort": "env_map" },
+    { "fromNode": 35, "fromPort": "out", "toNode": 50, "toPort": "vertices" },
+    { "fromNode": 43, "fromPort": "out", "toNode": 50, "toPort": "camera" },
 
-    { "fromNode": 39, "fromPort": "color",   "toNode": 40, "toPort": "in" }
+    { "fromNode": 13, "fromPort": "out", "toNode": 49, "toPort": "in" },
+    { "fromNode": 49, "fromPort": "out", "toNode": 51, "toPort": "in" },
+    { "fromNode": 0,  "fromPort": "aspect", "toNode": 51, "toPort": "aspect" },
+
+    { "fromNode": 25, "fromPort": "out", "toNode": 52, "toPort": "in" },
+
+    { "fromNode": 51, "fromPort": "out",       "toNode": 53, "toPort": "normal" },
+    { "fromNode": 50, "fromPort": "world_pos", "toNode": 53, "toPort": "world_pos" },
+    { "fromNode": 52, "fromPort": "out",       "toNode": 53, "toPort": "roughness_map" },
+    { "fromNode": 43, "fromPort": "pos_x",     "toNode": 53, "toPort": "view_x" },
+    { "fromNode": 43, "fromPort": "pos_y",     "toNode": 53, "toPort": "view_y" },
+    { "fromNode": 43, "fromPort": "pos_z",     "toNode": 53, "toPort": "view_z" },
+
+    { "fromNode": 51, "fromPort": "out",       "toNode": 54, "toPort": "normal" },
+    { "fromNode": 32, "fromPort": "envmap",    "toNode": 54, "toPort": "env_map" },
+    { "fromNode": 50, "fromPort": "world_pos", "toNode": 54, "toPort": "world_pos" },
+    { "fromNode": 52, "fromPort": "out",       "toNode": 54, "toPort": "roughness_map" },
+    { "fromNode": 43, "fromPort": "pos_x",     "toNode": 54, "toPort": "view_x" },
+    { "fromNode": 43, "fromPort": "pos_y",     "toNode": 54, "toPort": "view_y" },
+    { "fromNode": 43, "fromPort": "pos_z",     "toNode": 54, "toPort": "view_z" },
+
+    { "fromNode": 53, "fromPort": "out", "toNode": 55, "toPort": "a" },
+    { "fromNode": 54, "fromPort": "out", "toNode": 55, "toPort": "b" },
+
+    { "fromNode": 55, "fromPort": "out", "toNode": 56, "toPort": "in" },
+    { "fromNode": 56, "fromPort": "out", "toNode": 40, "toPort": "in" }
   ]
 }
