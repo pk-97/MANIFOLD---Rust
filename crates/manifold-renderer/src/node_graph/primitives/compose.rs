@@ -540,11 +540,10 @@ mod gpu_tests {
         let b = [0.0, 0.0, 0.0, 1.0];
         let tol = 0.01;
         let out = run_mix_at(a, b, 7, 1.0);
-        for c in 0..3 {
+        for (c, &val) in out.iter().enumerate().take(3) {
             assert!(
-                out[c].abs() < tol,
-                "Divide channel {c}: got {} expected 0.0 (b near zero)",
-                out[c]
+                val.abs() < tol,
+                "Divide channel {c}: got {val} expected 0.0 (b near zero)",
             );
         }
     }

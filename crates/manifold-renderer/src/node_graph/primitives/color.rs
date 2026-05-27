@@ -480,12 +480,10 @@ mod channel_mix_gpu_tests {
             [0.0, 0.0, 0.0, 1.0],
         );
         let expected = 0.2126_f32;
-        for i in 0..3 {
+        for (i, &val) in out.iter().enumerate().take(3) {
             assert!(
-                (out[i] - expected).abs() < 0.02,
-                "luma channel {i}: out={} expected={}",
-                out[i],
-                expected
+                (val - expected).abs() < 0.02,
+                "luma channel {i}: out={val} expected={expected}",
             );
         }
         assert!((out[3] - 1.0).abs() < 0.02, "alpha passthrough: {}", out[3]);
