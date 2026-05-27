@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BasicShapes",
-  "description": "Trigger-cycled 2D SDF shapes — Square / Diamond / Octagon, anti-aliased with a per-pixel finite-difference fwidth. The `fill` enum picks the cycling strategy: Solid (3 shapes × 8 rotations, always filled), Mixed (6 variants × 8 rotations, alternating fill/wireframe — original snap behaviour), or Wireframe (3 shapes × 8 rotations, always outlined). The `Clip Trigger` toggle gates the cycling (defaults OFF): ON drives shape + rotation snap from `trigger_count` and eases the rotation over the quarter beat following each trigger (BPM-coupled, trigger-elapsed). OFF freezes the shape at variant 0 with no rotation animation. Renamed from `BasicShapesSnap` — the snap feel is now opt-in via the toggle, matching the Plasma shape.\n\nDecomposed into a single curated `node.shape_2d` primitive (Plasma precedent for single-shader generators).",
+  "description": "Trigger-cycled 2D SDF shapes — Square / Diamond / Octagon, anti-aliased with a per-pixel fwidth approximation. Decomposed onto three `node.basic_shape` instances (one per shape) muxed at output via `node.mux_texture`; the shape selection is visible as a graph wiring instead of a sealed compiled-enum.\n\nCycling math is in JSON: `clip_trigger_index` cycles through variants (3 in Solid / Wireframe, 6 in Mixed) with `node.math` deriving `shape_idx = variant % 3`, `rot_step = floor(tc / modulus) % 8`, and `is_wireframe = floor(variant / 3)` for the Mixed mode's interleaved fill flip. The 8 signed rotation snap angles live as inline `in_N` params on a `mux_scalar` table (`feedback_inline_mux_option_table_params`).\n\nRotation easing is `node.trigger_ease_to(window_beats=0.25)`: on each new trigger edge it samples the current visible rotation as `prev`, locks the new target as `curr`, and eases between them along a cubic ease-out over the next quarter beat. Reusable atom; any snap-on-clip-trigger-and-glide-over-a-tempo-locked-window control surface uses the same shape.\n\nThe `Clip Trigger` toggle gates the cycling via three output muxes (shape_idx, is_wireframe, target_angle). When OFF: shape freezes at variant 0 (Square / Wireframe-Square depending on fill mode) and rotation snaps to 0. When ON: the cycle drives shape + rotation snap from `trigger_count`. Note: the eased rotation runs unconditionally and is suppressed at the output gate, so re-enabling clip_trigger eases into the new variant over the quarter-beat window instead of snapping — small accepted parity delta vs the legacy reset-on-disable behaviour.\n\nFuture shape additions: extend `node.basic_shape`'s WGSL `switch` + bump the enum table, then drop a new `basic_shape` instance into this graph's mux (with shape_idx cycle widened to match). Genuinely novel SDFs that don't fit a `case` (Heart, Star, parametric ones) ship as sibling atoms and join the same mux.",
   "presetMetadata": {
     "id": "BasicShapes",
     "displayName": "Basic Shapes",
@@ -59,28 +59,263 @@
     ],
     "bindings": [
       { "id": "line",  "label": "Line",  "defaultValue": 0.015,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "line" },
+        "target": { "kind": "handleNode", "handle": "shape_square", "param": "line" },
+        "convert": { "type": "Float" } },
+      { "id": "line",  "label": "Line",  "defaultValue": 0.015,
+        "target": { "kind": "handleNode", "handle": "shape_diamond", "param": "line" },
+        "convert": { "type": "Float" } },
+      { "id": "line",  "label": "Line",  "defaultValue": 0.015,
+        "target": { "kind": "handleNode", "handle": "shape_octagon", "param": "line" },
+        "convert": { "type": "Float" } },
+
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "shape_square", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "scale" },
+        "target": { "kind": "handleNode", "handle": "shape_diamond", "param": "scale" },
         "convert": { "type": "Float" } },
+      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "shape_octagon", "param": "scale" },
+        "convert": { "type": "Float" } },
+
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "fill_mode" },
+        "target": { "kind": "handleNode", "handle": "modulus_table", "param": "selector" },
         "convert": { "type": "EnumRound" } },
+      { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "is_wireframe_on", "param": "selector" },
+        "convert": { "type": "EnumRound" } },
+      { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "off_wireframe", "param": "selector" },
+        "convert": { "type": "EnumRound" } },
+
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "shape", "param": "clip_trigger" },
-        "convert": { "type": "BoolThreshold" } }
+        "target": { "kind": "handleNode", "handle": "gated_shape_idx", "param": "selector" },
+        "convert": { "type": "Float" } },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "gated_is_wireframe", "param": "selector" },
+        "convert": { "type": "Float" } },
+      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "gated_target_angle", "param": "selector" },
+        "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "typeId": "node.shape_2d", "handle": "shape" },
-    { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
+    { "id": 1,  "typeId": "system.final_output",    "handle": "final_output" },
+
+    {
+      "id": 2, "typeId": "node.mux_scalar", "handle": "modulus_table",
+      "params": {
+        "selector": { "type": "Float", "value": 1.0 },
+        "in_0":     { "type": "Float", "value": 3.0 },
+        "in_1":     { "type": "Float", "value": 6.0 },
+        "in_2":     { "type": "Float", "value": 3.0 }
+      }
+    },
+
+    {
+      "id": 3, "typeId": "node.clip_trigger_index", "handle": "variant_cycle",
+      "params": { "modulus": { "type": "Int", "value": 6 } }
+    },
+
+    {
+      "id": 4, "typeId": "node.math", "handle": "shape_idx_mod",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 3.0 },
+        "op": { "type": "Enum",  "value": 12 }
+      }
+    },
+
+    {
+      "id": 5, "typeId": "node.math", "handle": "tc_divided",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 6.0 },
+        "op": { "type": "Enum",  "value": 3 }
+      }
+    },
+    {
+      "id": 6, "typeId": "node.math", "handle": "rot_step_floored",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 10 }
+      }
+    },
+    {
+      "id": 7, "typeId": "node.math", "handle": "rot_step_mod",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 8.0 },
+        "op": { "type": "Enum",  "value": 12 }
+      }
+    },
+
+    {
+      "id": 8, "typeId": "node.mux_scalar", "handle": "target_angle_table",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value":  0.0 },
+        "in_1":     { "type": "Float", "value":  0.7853981633974483 },
+        "in_2":     { "type": "Float", "value":  1.5707963267948966 },
+        "in_3":     { "type": "Float", "value":  2.356194490192345 },
+        "in_4":     { "type": "Float", "value":  0.0 },
+        "in_5":     { "type": "Float", "value": -0.7853981633974483 },
+        "in_6":     { "type": "Float", "value": -1.5707963267948966 },
+        "in_7":     { "type": "Float", "value": -2.356194490192345 }
+      }
+    },
+
+    {
+      "id": 9, "typeId": "node.math", "handle": "variant_div_3",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 3.0 },
+        "op": { "type": "Enum",  "value": 3 }
+      }
+    },
+    {
+      "id": 10, "typeId": "node.math", "handle": "variant_floor_div_3",
+      "params": {
+        "a":  { "type": "Float", "value": 0.0 },
+        "b":  { "type": "Float", "value": 0.0 },
+        "op": { "type": "Enum",  "value": 10 }
+      }
+    },
+
+    {
+      "id": 11, "typeId": "node.mux_scalar", "handle": "is_wireframe_on",
+      "params": {
+        "selector": { "type": "Float", "value": 1.0 },
+        "in_0":     { "type": "Float", "value": 0.0 },
+        "in_1":     { "type": "Float", "value": 0.0 },
+        "in_2":     { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 12, "typeId": "node.mux_scalar", "handle": "off_wireframe",
+      "params": {
+        "selector": { "type": "Float", "value": 1.0 },
+        "in_0":     { "type": "Float", "value": 0.0 },
+        "in_1":     { "type": "Float", "value": 0.0 },
+        "in_2":     { "type": "Float", "value": 1.0 }
+      }
+    },
+
+    {
+      "id": 13, "typeId": "node.mux_scalar", "handle": "gated_shape_idx",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 0.0 },
+        "in_1":     { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 14, "typeId": "node.mux_scalar", "handle": "gated_is_wireframe",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 0.0 },
+        "in_1":     { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 15, "typeId": "node.mux_scalar", "handle": "gated_target_angle",
+      "params": {
+        "selector": { "type": "Float", "value": 0.0 },
+        "in_0":     { "type": "Float", "value": 0.0 },
+        "in_1":     { "type": "Float", "value": 0.0 }
+      }
+    },
+
+    {
+      "id": 16, "typeId": "node.trigger_ease_to", "handle": "rotation_eased",
+      "params": { "window_beats": { "type": "Float", "value": 0.25 } }
+    },
+
+    {
+      "id": 17, "typeId": "node.basic_shape", "handle": "shape_square",
+      "params": {
+        "shape":        { "type": "Enum",  "value": 0 },
+        "aspect":       { "type": "Float", "value": 1.0 },
+        "scale":        { "type": "Float", "value": 1.0 },
+        "line":         { "type": "Float", "value": 0.015 },
+        "rotation":     { "type": "Float", "value": 0.0 },
+        "is_wireframe": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 18, "typeId": "node.basic_shape", "handle": "shape_diamond",
+      "params": {
+        "shape":        { "type": "Enum",  "value": 1 },
+        "aspect":       { "type": "Float", "value": 1.0 },
+        "scale":        { "type": "Float", "value": 1.0 },
+        "line":         { "type": "Float", "value": 0.015 },
+        "rotation":     { "type": "Float", "value": 0.0 },
+        "is_wireframe": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 19, "typeId": "node.basic_shape", "handle": "shape_octagon",
+      "params": {
+        "shape":        { "type": "Enum",  "value": 2 },
+        "aspect":       { "type": "Float", "value": 1.0 },
+        "scale":        { "type": "Float", "value": 1.0 },
+        "line":         { "type": "Float", "value": 0.015 },
+        "rotation":     { "type": "Float", "value": 0.0 },
+        "is_wireframe": { "type": "Float", "value": 0.0 }
+      }
+    },
+
+    {
+      "id": 20, "typeId": "node.mux_texture", "handle": "shape_mux",
+      "params": { "selector": { "type": "Float", "value": 0.0 } }
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "aspect",        "toNode": 1, "toPort": "aspect" },
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 1, "toPort": "trigger_count" },
-    { "fromNode": 1, "fromPort": "out",           "toNode": 2, "toPort": "in" }
+    { "fromNode": 0,  "fromPort": "aspect",        "toNode": 17, "toPort": "aspect" },
+    { "fromNode": 0,  "fromPort": "aspect",        "toNode": 18, "toPort": "aspect" },
+    { "fromNode": 0,  "fromPort": "aspect",        "toNode": 19, "toPort": "aspect" },
+
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 3,  "toPort": "trigger_count" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 5,  "toPort": "a" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 16, "toPort": "trigger" },
+
+    { "fromNode": 2,  "fromPort": "out", "toNode": 3,  "toPort": "modulus" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 5,  "toPort": "b" },
+
+    { "fromNode": 3,  "fromPort": "out", "toNode": 4,  "toPort": "a" },
+    { "fromNode": 3,  "fromPort": "out", "toNode": 9,  "toPort": "a" },
+
+    { "fromNode": 5,  "fromPort": "out", "toNode": 6,  "toPort": "a" },
+    { "fromNode": 6,  "fromPort": "out", "toNode": 7,  "toPort": "a" },
+    { "fromNode": 7,  "fromPort": "out", "toNode": 8,  "toPort": "selector" },
+
+    { "fromNode": 4,  "fromPort": "out", "toNode": 13, "toPort": "in_1" },
+    { "fromNode": 8,  "fromPort": "out", "toNode": 15, "toPort": "in_1" },
+
+    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in_1" },
+
+    { "fromNode": 11, "fromPort": "out", "toNode": 14, "toPort": "in_1" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "in_0" },
+
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "target" },
+
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "rotation" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 18, "toPort": "rotation" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 19, "toPort": "rotation" },
+
+    { "fromNode": 14, "fromPort": "out", "toNode": 17, "toPort": "is_wireframe" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 18, "toPort": "is_wireframe" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 19, "toPort": "is_wireframe" },
+
+    { "fromNode": 13, "fromPort": "out", "toNode": 20, "toPort": "selector" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 20, "toPort": "in_0" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 20, "toPort": "in_1" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "in_2" },
+
+    { "fromNode": 20, "fromPort": "out", "toNode": 1,  "toPort": "in" }
   ]
 }

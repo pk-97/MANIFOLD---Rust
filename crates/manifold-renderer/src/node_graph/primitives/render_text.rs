@@ -437,7 +437,7 @@ mod gpu_tests {
 
         let backend = MetalBackend::new(&device, w, h, format);
         // RenderText's `out` is the first (and only) lazily-allocated
-        // Texture2D — same pattern shape_2d's gpu_tests use.
+        // Texture2D — capture the slot before exec releases the binding.
         let out_slot = Slot(backend.slot_count());
 
         let mut native_enc = device.create_encoder("render-text-test");

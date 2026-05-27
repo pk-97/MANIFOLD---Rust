@@ -1,8 +1,9 @@
-// node.shape_2d — renders one of three centered 2D SDF shapes (Square /
-// Diamond / Octagon) into an RGBA16F texture. CPU pre-computes the
-// shape index, wireframe flag, and current rotation angle (including the
-// trigger-elapsed quarter-beat ease) — this shader is a thin SDF rasterizer
-// with anti-aliased edges via finite-difference fwidth.
+// node.basic_shape — renders one of three centered 2D SDF shapes
+// (Square / Diamond / Octagon) into an RGBA16F texture. The shape is
+// selected by the `shape_idx` uniform — each primitive instance binds
+// one constant value, so the runtime switch compiles to a single
+// branch per dispatch. Anti-aliased edges via finite-difference fwidth
+// sampled at one screen-pixel offset in shape-space (post-rotation).
 
 struct Uniforms {
     aspect_ratio: f32,
@@ -10,15 +11,14 @@ struct Uniforms {
     uv_scale: f32,
     shape_idx: f32,      // 0 = Square, 1 = Diamond, 2 = Octagon
     is_wireframe: f32,   // 0 = solid fill, > 0.5 = wireframe outline
-    rotation: f32,       // signed radians; CPU folds direction into the sign
+    rotation: f32,       // signed radians; outer graph folds direction
+                         // into the sign before wiring in
     _pad0: f32,
     _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
-
-// ── Utility ──
 
 fn rotate2d(p: vec2<f32>, angle: f32) -> vec2<f32> {
     let s = sin(angle);
@@ -69,17 +69,17 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let is_wireframe = u.is_wireframe > 0.5;
     let rotation = u.rotation;
 
-    // Transform UV
+    // Transform UV — the 0.315 screen-fit factor matches legacy
+    // BasicShapes vertex magnitude (kept inline per docs §6.4).
     var p = p_uv / 0.315;
     p = rotate2d(p, rotation);
 
-    // Evaluate SDF at center
     let d = eval_sdf(p, shape_idx);
 
-    // Approximate fwidth(d) via finite differences at one-pixel-right and
-    // one-pixel-down neighbors.  The pixel step must follow the full transform
-    // chain (aspect → scale → /0.315 → rotate) to land exactly one screen pixel
-    // away in SDF space.
+    // Approximate fwidth(d) via finite differences at one-pixel-right
+    // and one-pixel-down neighbors. The pixel step follows the full
+    // transform chain (aspect → scale → /0.315 → rotate) so it lands
+    // exactly one screen pixel away in SDF space.
     let inv_scale = u.uv_scale / 0.315;
     let step_x = rotate2d(vec2<f32>(inv_scale * u.aspect_ratio / f32(dims.x), 0.0), rotation);
     let step_y = rotate2d(vec2<f32>(0.0, inv_scale / f32(dims.y)), rotation);
@@ -87,7 +87,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let d_dy = eval_sdf(p + step_y, shape_idx);
     let fw = abs(d_dx - d) + abs(d_dy - d);
 
-    // Smoothstep AA centered at the edge, 1-pixel transition band.
     let half_fw = fw * 0.5;
     var shape: f32;
     if is_wireframe {

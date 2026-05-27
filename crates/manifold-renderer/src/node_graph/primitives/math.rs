@@ -24,12 +24,13 @@ pub const MATH_OPS: &[&str] = &[
     "Reciprocal", // 9  — unary, b ignored; 1/a with 0-clamp
     "Floor",      // 10 — unary, b ignored
     "Ceil",       // 11 — unary, b ignored
+    "Modulo",     // 12 — a % b, 0-clamp on |b| < 1e-9
 ];
 
 crate::primitive! {
     name: Math,
     type_id: "node.math",
-    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
+    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
     inputs: {
         a: ScalarF32 required,
         b: ScalarF32 optional,
@@ -123,11 +124,25 @@ impl Primitive for Math {
             // matches Rust / WGSL / std-library `atan2(y, x)`.
             // Returns 0 when both inputs are zero rather than letting
             // the platform pick a value the renderer might propagate.
-            _ => {
+            6 => {
                 if a == 0.0 && b == 0.0 {
                     0.0
                 } else {
                     a.atan2(b)
+                }
+            }
+            // Modulo: a % b with the same 0-clamp Divide uses. Rust's
+            // `%` is truncated remainder (sign follows dividend); for
+            // the typical clip-trigger cycling use (non-negative
+            // operands) this matches `rem_euclid`. Live cycling math
+            // in BasicShapes feeds non-negative cycles in, so this is
+            // safe; if a future consumer needs always-non-negative
+            // semantics on signed operands, that's a separate op.
+            _ => {
+                if b.abs() < 1e-9 {
+                    0.0
+                } else {
+                    a % b
                 }
             }
         };
@@ -331,6 +346,21 @@ mod tests {
     #[test]
     fn ceil_integer_is_identity() {
         assert_eq!(run_math(3.0, 0.0, 11), 3.0);
+    }
+
+    /// Modulo: non-negative cycling use (the clip-trigger pattern in
+    /// BasicShapes / NestedCubes / etc). 7 % 3 = 1; 8 % 3 = 2; 9 % 3 = 0.
+    #[test]
+    fn modulo_basic_cycle() {
+        assert_eq!(run_math(7.0, 3.0, 12), 1.0);
+        assert_eq!(run_math(8.0, 3.0, 12), 2.0);
+        assert_eq!(run_math(9.0, 3.0, 12), 0.0);
+    }
+    /// Modulo by 0 clamps to 0 — mirrors Divide's div-by-zero clamp so
+    /// upstream control wires can't shove NaN into a downstream shader.
+    #[test]
+    fn modulo_by_zero_clamps_to_zero() {
+        assert_eq!(run_math(5.0, 0.0, 12), 0.0);
     }
 
     /// The canonical bracket-interp triple: feeding any non-integer

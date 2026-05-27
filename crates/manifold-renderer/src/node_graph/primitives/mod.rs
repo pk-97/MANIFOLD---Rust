@@ -30,6 +30,7 @@ mod chromatic_displace;
 mod chromatic_offset;
 mod clamp_stretch;
 mod bake_equirect_envmap;
+mod basic_shape;
 mod cast_array;
 mod clamp_texture;
 mod cook_torrance_specular;
@@ -155,7 +156,6 @@ mod centered_uv;
 mod plasma_pattern_2d;
 mod rotate_2d;
 mod star_field_2d;
-mod shape_2d;
 mod sin_term;
 mod texture_sum_5;
 mod trig_texture;
@@ -167,6 +167,7 @@ mod texture_advect;
 mod tone_map;
 mod torus_wrap_field;
 mod triangulate_grid;
+mod trigger_ease_to;
 mod trigger_gate;
 mod uv;
 mod uv_displace_by_flow;
@@ -209,6 +210,7 @@ pub use chromatic_displace::ChromaticDisplace;
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use bake_equirect_envmap::BakeEquirectEnvmap;
+pub use basic_shape::{BASIC_SHAPE_SHAPES, BasicShape};
 pub use cast_array::{
     CastAsCurvePoint, CastAsEdgePair, CastAsInstanceTransform, CastAsMeshVertex, CastAsParticle,
     CastAsU32,
@@ -351,7 +353,6 @@ pub use centered_uv::CenteredUv;
 pub use plasma_pattern_2d::{PLASMA_PATTERNS, PLASMA_PATTERN_COUNT, PlasmaPattern2D};
 pub use rotate_2d::Rotate2D;
 pub use star_field_2d::{STAR_FIELD_TOTAL_STARS, StarField2D};
-pub use shape_2d::{SHAPE_2D_FILL_MODES, Shape2D};
 pub use sin_term::SinTerm;
 pub use texture_sum_5::TextureSum5;
 pub use trig_texture::{TRIG_MODES, TrigTexture};
@@ -365,6 +366,7 @@ pub use texture_advect::{TEXTURE_ADVECT_BOUNDARIES, TextureAdvect};
 pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
 pub use torus_wrap_field::TorusWrapField;
 pub use triangulate_grid::TriangulateGrid;
+pub use trigger_ease_to::{TRIGGER_EASE_TO_TYPE_ID, TriggerEaseTo};
 pub use trigger_gate::TriggerGate;
 pub use uv::{
     SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,

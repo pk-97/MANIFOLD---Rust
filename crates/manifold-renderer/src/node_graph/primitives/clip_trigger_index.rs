@@ -25,6 +25,7 @@ crate::primitive! {
     purpose: "Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. The graph-level counterpart to a primitive's internal clip-trigger cycling (Plasma does this inline). Use as `mux_texture.selector` to swap between N upstream variants on each clip retrigger; pair with `mux_scalar` and a static-axis param to support both manual and trigger-driven modes from one outer-card toggle.",
     inputs: {
         trigger_count: ScalarF32 optional,
+        modulus: ScalarF32 optional,
     },
     outputs: {
         out: ScalarF32,
@@ -51,10 +52,10 @@ impl Primitive for ClipTriggerIndex {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let trigger_count = ctx.scalar_or_param("trigger_count", 0.0);
         let raw = trigger_count.floor().max(0.0) as u32;
-        let modulus = match ctx.params.get("modulus") {
-            Some(ParamValue::Float(f)) => f.round().max(1.0) as u32,
-            _ => 3,
-        };
+        // Port-shadows-param: a wired `modulus` scalar overrides the
+        // inline param every frame, letting a fill-mode mux drive the
+        // cycle length (BasicShapes feeds a 3/6/3 mux based on fill).
+        let modulus = ctx.scalar_or_param("modulus", 3.0).round().max(1.0) as u32;
         let idx = self.cycle.step(raw, modulus);
         ctx.outputs
             .set_scalar("out", ParamValue::Float(idx as f32));
@@ -69,12 +70,15 @@ mod tests {
     use crate::node_graph::ports::{PortType, ScalarType};
 
     #[test]
-    fn clip_trigger_index_declares_trigger_in_and_scalar_out() {
+    fn clip_trigger_index_declares_trigger_and_modulus_in_and_scalar_out() {
         assert_eq!(ClipTriggerIndex::TYPE_ID, "node.clip_trigger_index");
-        assert_eq!(ClipTriggerIndex::INPUTS.len(), 1);
+        assert_eq!(ClipTriggerIndex::INPUTS.len(), 2);
         assert_eq!(ClipTriggerIndex::INPUTS[0].name, "trigger_count");
         assert!(!ClipTriggerIndex::INPUTS[0].required);
         assert_eq!(ClipTriggerIndex::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(ClipTriggerIndex::INPUTS[1].name, "modulus");
+        assert!(!ClipTriggerIndex::INPUTS[1].required);
+        assert_eq!(ClipTriggerIndex::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(ClipTriggerIndex::OUTPUTS.len(), 1);
         assert_eq!(ClipTriggerIndex::OUTPUTS[0].name, "out");
     }
