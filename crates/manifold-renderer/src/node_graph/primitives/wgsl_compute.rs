@@ -853,6 +853,7 @@ impl EffectNode for WgslCompute {
         // float and cast at write time (Int storage was collapsed
         // into Float — feedback_eliminate_bug_class_at_storage_layer).
         let trace = std::env::var_os("MANIFOLD_WGSL_COMPUTE_TRACE").is_some();
+        let node_id = ctx.node_id;
         if let Some(layout) = &self.uniform_layout {
             for byte in self.uniform_scratch.iter_mut() {
                 *byte = 0;
@@ -864,7 +865,8 @@ impl EffectNode for WgslCompute {
                 let f = ctx.scalar_or_param(&m.name, 0.0);
                 if trace && self.last_logged_uniforms.get(&m.name).copied() != Some(f) {
                     eprintln!(
-                        "[wgsl_compute] uniform '{}' = {} (was {:?})",
+                        "[wgsl_compute node={:?}] uniform '{}' = {} (was {:?})",
+                        node_id,
                         m.name,
                         f,
                         self.last_logged_uniforms.get(&m.name).copied(),
@@ -1009,6 +1011,16 @@ impl EffectNode for WgslCompute {
         }
 
         let pipeline = self.pipeline.as_ref().expect("pipeline compiled above");
+        if trace {
+            eprintln!(
+                "[wgsl_compute node={:?}] dispatch [{} {} {}] ({} bindings)",
+                node_id,
+                dx,
+                dy,
+                dz,
+                gpu_bindings.len()
+            );
+        }
         let gpu = ctx.gpu_encoder();
         gpu.native_enc
             .dispatch_compute(pipeline, &gpu_bindings, [dx, dy, dz], TYPE_ID);
