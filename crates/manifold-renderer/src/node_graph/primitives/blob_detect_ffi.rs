@@ -22,11 +22,24 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline};
 use manifold_native::blob_detector::BlobDetector;
 
 use crate::background_worker::BackgroundWorker;
-use crate::generators::mesh_common::Blob;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+/// In-memory representation of one detected blob. Pod-equivalent to a
+/// `Channels[x: F32, y: F32, width: F32, height: F32]` wire (4×f32,
+/// 16 bytes, 4-byte aligned). Module-private: the wire type IS the
+/// public contract; this struct is just the local Rust-side handle
+/// used by the FFI worker thread and the upload encoder.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlobRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
 
 /// Maximum number of blobs the FFI plugin is configured to track AND
 /// the WGSL uniform's fixed array size. Keep these in sync with the
@@ -53,7 +66,7 @@ struct BlobRequest {
 struct BlobResponse {
     /// Up to `MAX_BLOB_CAP` blobs; the worker also returns the
     /// inferenced count via the slice length.
-    blobs: Vec<Blob>,
+    blobs: Vec<BlobRect>,
 }
 
 struct BlobState {
@@ -63,7 +76,7 @@ struct BlobState {
     readback_pending: bool,
     blobs_dirty: bool,
     /// Live blob list (count = blobs.len()).
-    blobs: Vec<Blob>,
+    blobs: Vec<BlobRect>,
     last_request_frame: i64,
     frame_counter: i64,
 }
@@ -76,7 +89,12 @@ crate::primitive! {
         in: Texture2D required,
     },
     outputs: {
-        blobs: Array(Blob),
+        // Phase 4b: typed Channels wire describing the 16-byte
+        // (x, y, width, height) rectangle layout the FFI worker
+        // produces. Downstream consumers (blob_overlay_render,
+        // user wgsl_compute shaders) declare the same signature
+        // and the validator matches by hash.
+        blobs: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32],
     },
     params: [
         ParamDef {
@@ -157,7 +175,7 @@ impl BlobDetectFfi {
                 let n = (count.max(0) as usize).min(MAX_BLOB_CAP);
                 let mut blobs = Vec::with_capacity(n);
                 for i in 0..n {
-                    blobs.push(Blob {
+                    blobs.push(BlobRect {
                         x: raw[i * 4],
                         y: raw[i * 4 + 1],
                         width: raw[i * 4 + 2],
@@ -229,7 +247,7 @@ impl Primitive for BlobDetectFfi {
         let Some(out_buf) = ctx.outputs.array("blobs") else {
             return;
         };
-        let blob_size = std::mem::size_of::<Blob>() as u64;
+        let blob_size = std::mem::size_of::<BlobRect>() as u64;
         let capacity = (out_buf.size / blob_size) as u32;
 
         let gpu = ctx.gpu_encoder();
@@ -283,7 +301,7 @@ impl Primitive for BlobDetectFfi {
         // Build the fixed-cap upload buffer every frame (cheap, ~512 bytes)
         // so a re-dispatch always sees the latest detection. If the worker
         // is unavailable, this stays all-zero and the output gets zeroed.
-        let mut src_blobs = [Blob::default(); MAX_BLOB_CAP];
+        let mut src_blobs = [BlobRect::default(); MAX_BLOB_CAP];
         let mut count: u32 = 0;
         if let Some(bs) = self.blob_state.as_ref() {
             let n = bs.blobs.len().min(MAX_BLOB_CAP);
@@ -339,16 +357,26 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn blob_detect_ffi_declares_texture_in_and_array_blob_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let blob_layout = ArrayType::of_known::<Blob>();
+    fn blob_detect_ffi_declares_texture_in_and_channels_blob_rect_out() {
+        use crate::node_graph::channel_names::well_known;
+        use crate::node_graph::ports::{
+            ArrayType, ChannelElementType, ChannelSpec, MatchMode, PortType,
+        };
+
+        const EXPECTED: &[ChannelSpec] = &[
+            ChannelSpec { name: well_known::X,      ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::Y,      ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::WIDTH,  ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::HEIGHT, ty: ChannelElementType::F32 },
+        ];
+        let expected = ArrayType::of_channels(EXPECTED, MatchMode::Exact);
 
         assert_eq!(BlobDetectFfi::TYPE_ID, "node.blob_detect_ffi");
         assert_eq!(BlobDetectFfi::INPUTS.len(), 1);
         assert_eq!(BlobDetectFfi::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(BlobDetectFfi::OUTPUTS.len(), 1);
         assert_eq!(BlobDetectFfi::OUTPUTS[0].name, "blobs");
-        assert_eq!(BlobDetectFfi::OUTPUTS[0].ty, PortType::Array(blob_layout));
+        assert_eq!(BlobDetectFfi::OUTPUTS[0].ty, PortType::Array(expected));
     }
 
     #[test]
@@ -374,10 +402,11 @@ mod tests {
     }
 
     #[test]
-    fn blob_struct_is_16_bytes_for_array_wire() {
+    fn blob_rect_struct_is_16_bytes_for_channels_wire() {
         // Layout invariant — if this changes, the WGSL `Blob` struct
-        // in blob_detect_ffi_upload.wgsl must match.
-        assert_eq!(std::mem::size_of::<Blob>(), 16);
-        assert_eq!(std::mem::align_of::<Blob>(), 4);
+        // in blob_detect_ffi_upload.wgsl must match (and the inline
+        // Channels signature on the `blobs` output port must match).
+        assert_eq!(std::mem::size_of::<BlobRect>(), 16);
+        assert_eq!(std::mem::align_of::<BlobRect>(), 4);
     }
 }

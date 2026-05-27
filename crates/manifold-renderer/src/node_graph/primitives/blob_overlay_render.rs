@@ -10,7 +10,6 @@
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::generators::mesh_common::Blob;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -32,7 +31,12 @@ crate::primitive! {
     purpose: "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_detect_ffi for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",
     inputs: {
         in: Texture2D required,
-        blobs: Array(Blob) required,
+        // Phase 4b: typed Channels signature matching what
+        // node.blob_detect_ffi emits. The wire's byte layout (16 bytes:
+        // x, y, width, height as f32, 4-byte aligned) is the public
+        // contract; the consumer reads it directly from the bound
+        // buffer in the WGSL shader.
+        blobs: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
     },
     outputs: {
         out: Texture2D,
@@ -166,17 +170,25 @@ mod tests {
 
     #[test]
     fn blob_overlay_render_declares_two_inputs_and_one_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let blob_layout = ArrayType::of_known::<Blob>();
+        use crate::node_graph::channel_names::well_known;
+        use crate::node_graph::ports::{
+            ArrayType, ChannelElementType, ChannelSpec, MatchMode, PortType,
+        };
+
+        const EXPECTED: &[ChannelSpec] = &[
+            ChannelSpec { name: well_known::X,      ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::Y,      ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::WIDTH,  ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::HEIGHT, ty: ChannelElementType::F32 },
+        ];
+        let expected = ArrayType::of_channels(EXPECTED, MatchMode::Exact);
+
         assert_eq!(BlobOverlayRender::TYPE_ID, "node.blob_overlay_render");
         assert_eq!(BlobOverlayRender::INPUTS.len(), 2);
         assert_eq!(BlobOverlayRender::INPUTS[0].name, "in");
         assert_eq!(BlobOverlayRender::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(BlobOverlayRender::INPUTS[1].name, "blobs");
-        assert_eq!(
-            BlobOverlayRender::INPUTS[1].ty,
-            PortType::Array(blob_layout)
-        );
+        assert_eq!(BlobOverlayRender::INPUTS[1].ty, PortType::Array(expected));
         assert_eq!(BlobOverlayRender::OUTPUTS.len(), 1);
         assert_eq!(BlobOverlayRender::OUTPUTS[0].ty, PortType::Texture2D);
     }

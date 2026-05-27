@@ -753,15 +753,27 @@ mod tests {
             };
 
             let mut check_port = |kind_label: &str, port_name: &str, ty: &PortType| {
+                // Phase 4b transition: inline `Channels[name: Type, …]`
+                // declarations produce `ItemKind::Anonymous` but carry
+                // a non-empty `specs` slice — the typed semantic lives
+                // in the Channels signature, not the ItemKind tag. Only
+                // flag Anonymous-AND-empty-specs ports as violations;
+                // those are the ones that actually lack a type
+                // declaration. (The ItemKind tag itself deletes in the
+                // next cascade step, at which point this test also
+                // collapses to "every Array port has non-empty specs.")
                 if let PortType::Array(layout) = ty
                     && layout.item_kind == ItemKind::Anonymous
+                    && layout.specs.is_empty()
                 {
                     violations.push(format!(
                         "{type_id}: {kind_label} `{port_name}` is Array<…> \
-                         but its ItemKind is Anonymous. Add a `KnownItem` \
-                         impl on the item struct (or, if the buffer is \
-                         genuinely untyped scratch, extend this test's \
-                         carve-out list).",
+                         with no typed signature (item_kind = Anonymous \
+                         AND specs is empty). Either declare the port via \
+                         `Array(T)` (with a `KnownItem` impl on T), via \
+                         `Channels[name: Type, …]` inline syntax, or — if \
+                         the buffer is genuinely untyped scratch — extend \
+                         this test's carve-out list.",
                     ));
                 }
             };

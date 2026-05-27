@@ -347,39 +347,15 @@ pub fn platonic_edges(shape: u32) -> &'static [EdgePair] {
     }
 }
 
-/// A detected blob (bounding box) emitted by the FFI blob detector
-/// and consumed by overlay-render primitives. 16 bytes.
-///
-/// All four components are in normalized 0..1 image space: `x` /
-/// `y` are the top-left corner, `width` / `height` are the box
-/// extents. Out-of-range values are clamped at render time.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug, Default)]
-pub struct Blob {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-const _: () = assert!(std::mem::size_of::<Blob>() == 16);
-
-/// Channels signature for [`Blob`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.7.
-/// Four scalar f32 channels (x, y, width, height) — generic for any
-/// rectangle stream (detector boxes, face regions, sprite rects, viewport
-/// extents). Phase 4 deletes the `Blob` struct entirely; the wire type
-/// becomes `Channels[x, y, width, height]` with no Rust struct anchor.
-pub const BLOB_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::X,      ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::Y,      ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::WIDTH,  ty: ChannelElementType::F32 },
-    ChannelSpec { name: well_known::HEIGHT, ty: ChannelElementType::F32 },
-];
-
-impl KnownItem for Blob {
-    const ITEM_KIND: ItemKind = ItemKind::Blob;
-    const SPECS: &'static [ChannelSpec] = BLOB_SPECS;
-}
+// `pub struct Blob` and BLOB_SPECS deleted in Phase 4b. The blob
+// rectangle wire is now described purely by the Channels signature
+// declared inline on `node.blob_detect_ffi.blobs` and
+// `node.blob_overlay_render.blobs`:
+//   `Channels[x: F32, y: F32, width: F32, height: F32]`
+// (4×f32, 16 bytes, 4-byte aligned). The FFI producer + overlay
+// consumer each carry their own module-private `BlobRect` Pod struct
+// for the in-memory representation. See
+// `docs/CHANNEL_TYPE_SYSTEM.md` §6.7.
 
 #[cfg(test)]
 mod mesh_common_specs_drift {
@@ -431,12 +407,10 @@ mod mesh_common_specs_drift {
         );
     }
 
-    #[test]
-    fn blob_specs_stride_matches_struct() {
-        assert_eq!(
-            std430_stride(BLOB_SPECS) as usize,
-            std::mem::size_of::<Blob>(),
-            "BLOB_SPECS std430 stride drifted from struct Blob size."
-        );
-    }
+    // `blob_specs_stride_matches_struct` deleted in Phase 4b alongside
+    // `pub struct Blob` and `BLOB_SPECS`. The Channels signature on
+    // node.blob_detect_ffi.blobs now describes the byte layout
+    // directly; the size invariant survives as
+    // `blob_rect_struct_is_16_bytes_for_channels_wire` in
+    // primitives/blob_detect_ffi.rs.
 }
