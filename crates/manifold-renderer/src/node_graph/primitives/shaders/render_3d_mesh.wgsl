@@ -39,7 +39,7 @@ struct Vertex {
 };
 
 // Superset uniform — fields inert for kinds that don't read them.
-// 16-byte aligned. Total: 64 + 16*8 = 192 bytes.
+// 16-byte aligned. Total: 64 + 16*9 = 208 bytes.
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -61,14 +61,29 @@ struct Uniforms {
     specular: vec4<f32>,
     // x: cel_bands (count, as f32), y: band_low, z: band_high, w: reserved.
     cel_params: vec4<f32>,
+    // x: viewport width (pixels), y: viewport height (pixels) — used
+    //   by per-pixel texture sampling to derive screen-space UV from
+    //   @builtin(position).
+    // z: use_normal_map flag (>0.5 = sample normal_map per pixel,
+    //   else use interpolated vertex normal).
+    // w: use_roughness_map flag (>0.5 = sample roughness_map.r per
+    //   pixel, else use pbr_metallic_roughness.y uniform).
+    viewport_flags: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> verts: array<Vertex>;
-// PBR-only IBL envmap. Equirectangular HDR. Bound only by the PBR
-// pipeline at draw time; other pipelines never sample it.
+// Equirectangular HDR envmap (PBR IBL). Bound for every pipeline
+// dispatch; naga per-entry-point reflection drops the binding for
+// non-PBR pipelines.
 @group(0) @binding(2) var envmap: texture_2d<f32>;
 @group(0) @binding(3) var envmap_sampler: sampler;
+// Optional screen-space normal map (world-space surface normal as
+// signed RGB). Sampled by fs_pbr when viewport_flags.z > 0.5.
+@group(0) @binding(4) var normal_map: texture_2d<f32>;
+// Optional screen-space roughness map. Sampled .r overrides the
+// material's uniform roughness when viewport_flags.w > 0.5.
+@group(0) @binding(5) var roughness_map: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -113,14 +128,41 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
 
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse + IBL
 // reflection from envmap. F0 blends 0.04 dielectric ↔ base_color metal.
+//
+// Per-pixel normal_map and roughness_map are sampled at SCREEN-SPACE
+// UV (derived from @builtin(position) and viewport_flags.xy). This
+// matches the MetallicGlass deferred-shading shape: an upstream
+// `heightmap_to_normal` writes a world-space normal texture
+// pixel-aligned with the geometry pass, and the renderer reads it
+// per-fragment instead of interpolating the mesh's vertex normal —
+// preserving the smoothed-height high-frequency detail.
 @fragment
-fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+fn fs_pbr(in: VsOut, @builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
+    // Per-pixel screen-space UV for normal_map / roughness_map lookups.
+    // @builtin(position) is in pixel coordinates after rasterization.
+    let screen_uv = frag_pos.xy / max(u.viewport_flags.xy, vec2<f32>(1.0));
+
+    var N: vec3<f32>;
+    if u.viewport_flags.z > 0.5 {
+        // normal_map carries a SIGNED world-space normal (heightmap_to_normal
+        // WorldYUp convention). Renormalise — sampling + interpolation
+        // can shrink the vector.
+        let sampled = textureSampleLevel(normal_map, envmap_sampler, screen_uv, 0.0).rgb;
+        N = normalize(sampled + vec3<f32>(1e-8));
+    } else {
+        N = normalize(in.world_normal);
+    }
+
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let metallic = clamp(u.pbr_metallic_roughness.x, 0.0, 1.0);
-    let roughness = max(u.pbr_metallic_roughness.y, 0.01);
+    var roughness: f32;
+    if u.viewport_flags.w > 0.5 {
+        roughness = max(textureSampleLevel(roughness_map, envmap_sampler, screen_uv, 0.0).r, 0.01);
+    } else {
+        roughness = max(u.pbr_metallic_roughness.y, 0.01);
+    }
 
     let n_dot_l = max(dot(N, L), 0.0);
     let n_dot_v = max(dot(N, V), 0.001);
@@ -143,26 +185,26 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
     let G = g_v * g_l;
 
-    // Schlick Fresnel.
-    let F = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
-
-    let specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
+    // Schlick Fresnel — VdotH for the direct-light specular path.
+    let F_direct = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+    let specular = (D * G * F_direct) / (4.0 * n_dot_v * n_dot_l + 0.0001);
 
     // Lambert diffuse (dielectric only — metals have no diffuse term).
-    let kd = (1.0 - F) * (1.0 - metallic);
+    let kd = (1.0 - F_direct) * (1.0 - metallic);
     let diffuse = kd * u.base_color.rgb / PI;
 
     let direct = (diffuse + specular) * u.light_color.rgb * n_dot_l * u.light_dir.w;
 
     // IBL reflection — sample envmap along reflected view direction.
+    // Fresnel for IBL uses NdotV (no H since there's no single L).
     let R = reflect(-V, N);
     let azimuth = atan2(R.z, R.x);
     let elevation = asin(clamp(R.y, -1.0, 1.0));
     let uv = vec2<f32>(azimuth / (2.0 * PI) + 0.5, elevation / PI + 0.5);
-    // Roughness-driven attenuation. envmap is a single mip in v1.
     let ibl_sample = textureSampleLevel(envmap, envmap_sampler, uv, 0.0).rgb;
+    let F_ibl = F0 + (1.0 - F0) * pow(clamp(1.0 - n_dot_v, 0.0, 1.0), 5.0);
     let ibl_strength = 1.0 - roughness * 0.7;
-    let ibl = F * ibl_sample * ibl_strength;
+    let ibl = F_ibl * ibl_sample * ibl_strength;
 
     let ambient = u.base_color.rgb * u.light_color.a;
     let rgb = direct + ibl + ambient + u.emission.rgb;
