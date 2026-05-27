@@ -142,6 +142,11 @@ pub struct MetalBackend {
     /// Same shape as `scalars` — drained from per-step scratch by the
     /// executor after the producing camera primitive's `evaluate`.
     cameras: AHashMap<Slot, crate::node_graph::camera::Camera>,
+
+    /// CPU-only [`Light`] values written via [`Backend::set_light`].
+    /// Same shape as `cameras` — drained from per-step scratch by the
+    /// executor after the producing light primitive's `evaluate`.
+    lights: AHashMap<Slot, crate::node_graph::light::Light>,
 }
 
 // Safety: the raw `*const GpuDevice` points to a device owned by the
@@ -178,6 +183,7 @@ impl MetalBackend {
             buffers_array: AHashMap::default(),
             textures_3d: AHashMap::default(),
             cameras: AHashMap::default(),
+            lights: AHashMap::default(),
         }
     }
 
@@ -205,6 +211,7 @@ impl MetalBackend {
             buffers_array: AHashMap::default(),
             textures_3d: AHashMap::default(),
             cameras: AHashMap::default(),
+            lights: AHashMap::default(),
         }
     }
 
@@ -587,6 +594,14 @@ impl Backend for MetalBackend {
 
     fn set_camera(&mut self, slot: Slot, value: crate::node_graph::camera::Camera) {
         self.cameras.insert(slot, value);
+    }
+
+    fn light(&self, slot: Slot) -> Option<crate::node_graph::light::Light> {
+        self.lights.get(&slot).copied()
+    }
+
+    fn set_light(&mut self, slot: Slot, value: crate::node_graph::light::Light) {
+        self.lights.insert(slot, value);
     }
 
     fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {

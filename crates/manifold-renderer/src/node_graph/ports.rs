@@ -24,6 +24,13 @@ pub enum PortType {
     /// consumed by every 3D rendering primitive as a single `camera: Camera`
     /// input instead of N separate scalar params.
     Camera,
+    /// CPU-only struct wire carrying a [`Light`](crate::node_graph::light::Light).
+    /// Produced by `node.light` (sun + point modes), consumed optionally by 3D
+    /// rendering primitives (which generate shadow maps internally when wired)
+    /// and by shading atoms (`lambert_directional`, `cook_torrance_specular`,
+    /// etc., which use the light's direction/colour/attenuation instead of
+    /// their scattered scalar params). Same lifetime model as `Camera`.
+    Light,
 }
 
 /// Sub-types for [`PortType::Scalar`].

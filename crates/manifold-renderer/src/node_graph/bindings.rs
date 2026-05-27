@@ -16,6 +16,7 @@ use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
 use crate::node_graph::camera::Camera;
+use crate::node_graph::light::Light;
 use crate::node_graph::parameters::ParamValue;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
@@ -93,6 +94,14 @@ impl<'a> NodeInputs<'a> {
         self.backend.camera(self.slot(port)?)
     }
 
+    /// [`Light`] bound to the named [`PortType::Light`] input port.
+    /// `None` if unwired. Light wires are CPU-only structs with the same
+    /// drain shape as `Camera` — produced by `node.light`, consumed by
+    /// shading atoms and shadow-aware mesh renderers.
+    pub fn light(&self, port: &str) -> Option<Light> {
+        self.backend.light(self.slot(port)?)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -127,6 +136,8 @@ pub struct NodeOutputs<'a> {
     pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
     /// Sibling scratch for `Camera` writes — same shape as scalars.
     pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
+    /// Sibling scratch for `Light` writes — same shape as cameras.
+    pending_light_writes: &'a mut Vec<(Slot, Light)>,
 }
 
 impl<'a> NodeOutputs<'a> {
@@ -135,12 +146,14 @@ impl<'a> NodeOutputs<'a> {
         backend: &'a dyn Backend,
         pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
         pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
+        pending_light_writes: &'a mut Vec<(Slot, Light)>,
     ) -> Self {
         Self {
             bindings,
             backend,
             pending_scalar_writes,
             pending_camera_writes,
+            pending_light_writes,
         }
     }
 
@@ -201,6 +214,15 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
+    /// Queue a [`Light`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_camera`.
+    pub fn set_light(&mut self, port: &str, value: Light) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_light_writes.push((slot, value));
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -254,7 +276,14 @@ mod array_accessor_tests {
         let bindings: &[(&'static str, Slot)] = &[("particles_out", slot)];
         let mut scratch = Vec::new();
         let mut cam_scratch = Vec::new();
-        let outputs = NodeOutputs::new(bindings, &backend, &mut scratch, &mut cam_scratch);
+        let mut light_scratch = Vec::new();
+        let outputs = NodeOutputs::new(
+            bindings,
+            &backend,
+            &mut scratch,
+            &mut cam_scratch,
+            &mut light_scratch,
+        );
 
         let got = outputs.array("particles_out").expect("should resolve");
         assert_eq!(got.size, expected_size);

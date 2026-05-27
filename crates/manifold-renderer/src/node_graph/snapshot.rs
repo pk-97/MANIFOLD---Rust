@@ -181,6 +181,7 @@ pub enum PortKindSnapshot {
     Scalar,
     Array,
     Camera,
+    Light,
 }
 
 impl From<PortType> for PortKindSnapshot {
@@ -191,6 +192,7 @@ impl From<PortType> for PortKindSnapshot {
             PortType::Scalar(_) => Self::Scalar,
             PortType::Array(_) => Self::Array,
             PortType::Camera => Self::Camera,
+            PortType::Light => Self::Light,
         }
     }
 }

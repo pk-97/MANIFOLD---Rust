@@ -11,6 +11,7 @@ pub mod atomic;
 mod backend;
 mod bindings;
 pub mod camera;
+pub mod light;
 mod boundary_nodes;
 mod bundled_presets;
 mod chain_spec;
@@ -35,6 +36,7 @@ mod validation;
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use camera::{Camera, CameraMode};
+pub use light::{Light, LightMode, ShadowSoftness};
 pub use boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
     Source,

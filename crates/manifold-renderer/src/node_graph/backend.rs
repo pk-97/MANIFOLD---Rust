@@ -20,6 +20,7 @@ use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::execution_plan::ResourceId;
+use crate::node_graph::light::Light;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 
@@ -143,6 +144,18 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as `set_scalar`.
     fn set_camera(&mut self, _slot: Slot, _value: Camera) {}
 
+    /// [`Light`] value bound to a slot. Mirrors `camera` for the
+    /// [`PortType::Light`] wire shape — CPU-only struct payload set by
+    /// the producing light primitive's evaluate and drained by the
+    /// executor before consumers run. Default impls return `None`.
+    fn light(&self, _slot: Slot) -> Option<Light> {
+        None
+    }
+
+    /// Write a [`Light`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as `set_camera` / `set_scalar`.
+    fn set_light(&mut self, _slot: Slot, _value: Light) {}
+
     /// Backend-specific downcast hook. Default implementation returns
     /// `None`. Real backends override to expose themselves for
     /// implementation-specific calls (e.g., the chain's swap-based
@@ -218,6 +231,8 @@ pub struct MockBackend {
     scalars: AHashMap<Slot, ParamValue>,
     /// Camera values written via [`Backend::set_camera`] — same shape.
     cameras: AHashMap<Slot, Camera>,
+    /// Light values written via [`Backend::set_light`] — same shape.
+    lights: AHashMap<Slot, Light>,
 }
 
 impl MockBackend {
@@ -228,6 +243,7 @@ impl MockBackend {
             next_slot: 0,
             scalars: AHashMap::default(),
             cameras: AHashMap::default(),
+            lights: AHashMap::default(),
         }
     }
 }
@@ -309,6 +325,14 @@ impl Backend for MockBackend {
 
     fn set_camera(&mut self, slot: Slot, value: Camera) {
         self.cameras.insert(slot, value);
+    }
+
+    fn light(&self, slot: Slot) -> Option<Light> {
+        self.lights.get(&slot).copied()
+    }
+
+    fn set_light(&mut self, slot: Slot, value: Light) {
+        self.lights.insert(slot, value);
     }
 }
 
