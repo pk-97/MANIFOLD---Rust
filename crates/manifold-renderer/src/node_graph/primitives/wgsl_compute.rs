@@ -136,6 +136,11 @@ pub struct WgslCompute {
     /// MANIFOLD_WGSL_COMPUTE_TRACE diagnostic. Keyed by member name.
     /// Populated only when the env var is set; otherwise stays empty.
     last_logged_uniforms: AHashMap<String, f32>,
+    /// Latch: set to true after the first dispatch trace line so the
+    /// trace doesn't spam stderr at 60 Hz once we've confirmed the
+    /// node is running. Uniform-change prints continue to fire after
+    /// this — those are the interesting events.
+    dispatch_logged: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -244,6 +249,7 @@ impl WgslCompute {
             compile_failed: false,
             uniform_scratch: Vec::new(),
             last_logged_uniforms: AHashMap::new(),
+            dispatch_logged: false,
         };
         node.reparse(DEFAULT_WGSL.to_string());
         node
@@ -1011,15 +1017,16 @@ impl EffectNode for WgslCompute {
         }
 
         let pipeline = self.pipeline.as_ref().expect("pipeline compiled above");
-        if trace {
+        if trace && !self.dispatch_logged {
             eprintln!(
-                "[wgsl_compute node={:?}] dispatch [{} {} {}] ({} bindings)",
+                "[wgsl_compute node={:?}] first dispatch [{} {} {}] ({} bindings)",
                 node_id,
                 dx,
                 dy,
                 dz,
                 gpu_bindings.len()
             );
+            self.dispatch_logged = true;
         }
         let gpu = ctx.gpu_encoder();
         gpu.native_enc
