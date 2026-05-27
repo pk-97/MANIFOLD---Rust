@@ -1252,10 +1252,17 @@ mod tests {
             JsonGeneratorLoadError::UnboundArrayResource {
                 producer_node_type, ..
             } => {
+                // Any of the three Array<T> producers in this graph
+                // (seed_particles, euler_step_particles, grid_uv_field)
+                // is a valid catch — the audit's contract is "fires on
+                // any unbound Array<T> resource", not "names a specific
+                // one". Iteration order in the audit is an
+                // implementation detail.
                 assert!(
                     producer_node_type.contains("seed_particles")
-                        || producer_node_type.contains("euler_step_particles"),
-                    "error must name a particle-pipeline producer; got {producer_node_type}"
+                        || producer_node_type.contains("euler_step_particles")
+                        || producer_node_type.contains("grid_uv_field"),
+                    "error must name an Array<T> producer from the graph; got {producer_node_type}"
                 );
             }
             other => panic!("expected UnboundArrayResource, got {other:?}"),
