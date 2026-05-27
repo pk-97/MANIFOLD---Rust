@@ -222,14 +222,12 @@
 
     { "fromNode": 19, "fromPort": "out", "toNode": 7, "toPort": "exponent" },
 
-    { "fromNode": 7,  "fromPort": "out", "toNode": 17, "toPort": "source" },
-
     { "fromNode": 5, "fromPort": "out", "toNode": 8,  "toPort": "source" },
 
     { "fromNode": 8, "fromPort": "out", "toNode": 9,  "toPort": "in" },
 
-    { "fromNode": 17, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "b" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "b" },
 
     { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in" },
     { "fromNode": 8, "fromPort": "out", "toNode": 12, "toPort": "in" },
@@ -245,6 +243,7 @@
 
     { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
 
-    { "fromNode": 16, "fromPort": "out", "toNode": 1,  "toPort": "in" }
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "source" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 1,  "toPort": "in" }
   ]
 }
