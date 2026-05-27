@@ -137,10 +137,11 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
 // per-fragment instead of interpolating the mesh's vertex normal —
 // preserving the smoothed-height high-frequency detail.
 @fragment
-fn fs_pbr(in: VsOut, @builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
+fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // Per-pixel screen-space UV for normal_map / roughness_map lookups.
-    // @builtin(position) is in pixel coordinates after rasterization.
-    let screen_uv = frag_pos.xy / max(u.viewport_flags.xy, vec2<f32>(1.0));
+    // `clip_pos` carries @builtin(position) from the vertex shader —
+    // in fragment land that's pixel coordinates after rasterization.
+    let screen_uv = in.clip_pos.xy / max(u.viewport_flags.xy, vec2<f32>(1.0));
 
     var N: vec3<f32>;
     if u.viewport_flags.z > 0.5 {
