@@ -1,24 +1,32 @@
-//! `node.anti_clump_particles` — density-weighted Brownian kick on
+//! `node.anti_clump_particles` — modulator-weighted Brownian kick on
 //! each live particle's `position.xy`.
 //!
-//! For each particle: sample `density` at `position.xy`, compute
-//! `capped_density = d / (1 + d)`, and add
-//! `(hash3(i, frame) − 0.5) * strength * capped_density` to
-//! `position.xy`. The density weighting concentrates the kick where
-//! particles are clumped — the density texture is bright in pixels
-//! where many particles overlap — so the noise preferentially shoves
-//! clumps apart instead of being a uniform jitter everywhere.
+//! For each particle: optionally sample a `strength_modulator`
+//! texture at `position.xy`, compute `capped = m / (1 + m)`, and add
+//! `(hash3(i, frame) − 0.5) * strength * weight` to `position.xy`
+//! where `weight = capped` if a modulator is wired, otherwise `1`.
+//! Concentrates the kick where the modulator is bright — the
+//! canonical FluidSim use wires the density texture so the kick
+//! activates where particles have accumulated (textbook
+//! "anti-clumping"), but any scalar texture works: an audio
+//! amplitude band, a mask, a depth slice, etc. Without a modulator
+//! wired the atom is a plain Brownian position jitter at uniform
+//! strength everywhere.
 //!
 //! Sibling to [`super::array_diffuse_particles`] which kicks
 //! `velocity` (ODE-state diffusion for attractor sims). Two distinct
 //! atoms rather than one with a mode enum because the math, the
-//! state field, and the density-weighting are different — splitting
-//! avoids the dead-state-param anti-pattern.
+//! state field, and the modulator weighting are different —
+//! splitting avoids the dead-state-param anti-pattern.
 //!
-//! Reusable for any density-displacement particle pipeline: fluid
-//! sims, sparks, particle-text, crowd / flock simulations.
+//! Reusable for any per-particle Brownian-kick pipeline: fluid sims,
+//! sparks, particle-text, crowd / flock simulations, audio-reactive
+//! particle jitter, mask-driven turbulence.
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::{
+    GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
+    GpuTextureFormat, GpuTextureUsage,
+};
 
 use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -31,16 +39,16 @@ struct AntiClumpUniforms {
     active_count: u32,
     frame_count: u32,
     strength: f32,
-    _pad: u32,
+    has_modulator: u32,
 }
 
 crate::primitive! {
     name: AntiClumpParticles,
     type_id: "node.anti_clump_particles",
-    purpose: "Density-weighted Brownian kick on each live particle's position.xy. Samples a density texture at the particle's UV, applies `kick = (hash3(i, frame) − 0.5) * strength * capped_density` where `capped_density = d / (1 + d)`. Concentrates the noise where particles are clumped, gently shoving accumulated clusters apart — the textbook 'anti-clumping' force. Sibling to node.array_diffuse_particles (which kicks velocity, un-weighted) — these are two atoms because the math and weighting differ, not one with a mode enum.",
+    purpose: "Modulator-weighted Brownian kick on each live particle's position.xy. With a `strength_modulator` texture wired, samples it at the particle's UV and applies `kick = (hash3(i, frame) − 0.5) * strength * capped(m)` where `capped = m / (1 + m)`. Without a modulator, applies plain `kick = (hash3) * strength` uniformly. Canonical FluidSim use wires density (kick concentrates where particles cluster); equally useful with audio amplitude maps, masks, depth slices, or any scalar texture. Sibling to node.array_diffuse_particles (which kicks velocity, un-weighted) — separate atoms because the math, the state field, and the modulator weighting differ.",
     inputs: {
         in: Array(Particle) required,
-        density: Texture2D required,
+        strength_modulator: Texture2D optional,
         strength: ScalarF32 optional,
         active_count: ScalarF32 optional,
     },
@@ -65,9 +73,12 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Aliased in/out — mutates the particle buffer in place. `strength` is port-shadow so an LFO / audio band / outer-card slider can modulate the anti-clump energy live. The density texture is typically the same one driving the gradient/rotate force-field path; sampling it here ensures the kick activates exactly where particles have accumulated. Frame seed (frame_count) reseeds the hash each frame so adjacent frames produce decorrelated kicks rather than a slow drift.",
+    composition_notes: "Aliased in/out — mutates the particle buffer in place. `strength` is port-shadow so an LFO / audio band / outer-card slider can modulate the energy live. Wire a scalar Texture2D into `strength_modulator` to localize the kick (capped d/(1+d) weighting); leave it unwired for a uniform Brownian jitter. Frame seed (frame_count) reseeds the hash each frame so adjacent frames produce decorrelated kicks rather than a slow drift.",
     examples: [],
     picker: { label: "Anti-Clump Particles", category: Atom },
+    extra_fields: {
+        dummy_modulator: Option<GpuTexture> = None,
+    },
 }
 
 impl Primitive for AntiClumpParticles {
@@ -98,9 +109,7 @@ impl Primitive for AntiClumpParticles {
         let Some(particles) = ctx.inputs.array("in") else {
             return;
         };
-        let Some(density) = ctx.inputs.texture_2d("density") else {
-            return;
-        };
+        let modulator_wire = ctx.inputs.texture_2d("strength_modulator");
         let Some(out) = ctx.outputs.array("out") else {
             return;
         };
@@ -114,6 +123,7 @@ impl Primitive for AntiClumpParticles {
         }
 
         let frame_count = ctx.time.frame_count as u32;
+        let has_modulator: u32 = if modulator_wire.is_some() { 1 } else { 0 };
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
@@ -126,12 +136,31 @@ impl Primitive for AntiClumpParticles {
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+        // Metal requires every declared shader binding to be present
+        // at dispatch even when the kernel's `if has_modulator` branch
+        // skips the sample. Cache a 1×1 white texture to bind when no
+        // wire is connected; allocated once per instance.
+        let dummy = self.dummy_modulator.get_or_insert_with(|| {
+            let tex = gpu.device.create_texture(&GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                format: GpuTextureFormat::Rgba8Unorm,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
+                label: "node.anti_clump_particles dummy modulator",
+                mip_levels: 1,
+            });
+            gpu.device.upload_texture(&tex, &[255u8, 255, 255, 255]);
+            tex
+        });
+        let modulator_tex = modulator_wire.unwrap_or(dummy);
 
         let uniforms = AntiClumpUniforms {
             active_count,
             frame_count,
             strength,
-            _pad: 0,
+            has_modulator,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -148,7 +177,7 @@ impl Primitive for AntiClumpParticles {
                 },
                 GpuBinding::Texture {
                     binding: 2,
-                    texture: density,
+                    texture: modulator_tex,
                 },
                 GpuBinding::Sampler {
                     binding: 3,
@@ -168,20 +197,24 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn declares_aliased_particle_in_out_and_required_density_texture() {
+    fn declares_aliased_particle_in_out_and_optional_strength_modulator_texture() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(AntiClumpParticles::TYPE_ID, "node.anti_clump_particles");
         let names: Vec<&str> = AntiClumpParticles::INPUTS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["in", "density", "strength", "active_count"]);
+        assert_eq!(
+            names,
+            vec!["in", "strength_modulator", "strength", "active_count"]
+        );
         assert_eq!(
             AntiClumpParticles::INPUTS[0].ty,
             PortType::Array(particle_layout)
         );
         assert!(AntiClumpParticles::INPUTS[0].required);
         assert_eq!(AntiClumpParticles::INPUTS[1].ty, PortType::Texture2D);
-        assert!(AntiClumpParticles::INPUTS[1].required);
+        // The modulator is optional — unwired = plain Brownian kick.
+        assert!(!AntiClumpParticles::INPUTS[1].required);
 
         assert_eq!(AntiClumpParticles::OUTPUTS.len(), 1);
         assert_eq!(

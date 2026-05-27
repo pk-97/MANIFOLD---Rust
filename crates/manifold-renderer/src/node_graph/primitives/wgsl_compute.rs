@@ -132,6 +132,10 @@ pub struct WgslCompute {
     compiled_hash: Option<u64>,
     compile_failed: bool,
     uniform_scratch: Vec<u8>,
+    /// Per-uniform-member last-emitted-value cache, used by the
+    /// MANIFOLD_WGSL_COMPUTE_TRACE diagnostic. Keyed by member name.
+    /// Populated only when the env var is set; otherwise stays empty.
+    last_logged_uniforms: AHashMap<String, f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -239,6 +243,7 @@ impl WgslCompute {
             compiled_hash: None,
             compile_failed: false,
             uniform_scratch: Vec::new(),
+            last_logged_uniforms: AHashMap::new(),
         };
         node.reparse(DEFAULT_WGSL.to_string());
         node
@@ -847,6 +852,7 @@ impl EffectNode for WgslCompute {
         // 0.0 if neither is set. Bool / Int members read the same
         // float and cast at write time (Int storage was collapsed
         // into Float — feedback_eliminate_bug_class_at_storage_layer).
+        let trace = std::env::var_os("MANIFOLD_WGSL_COMPUTE_TRACE").is_some();
         if let Some(layout) = &self.uniform_layout {
             for byte in self.uniform_scratch.iter_mut() {
                 *byte = 0;
@@ -856,6 +862,15 @@ impl EffectNode for WgslCompute {
                     continue;
                 }
                 let f = ctx.scalar_or_param(&m.name, 0.0);
+                if trace && self.last_logged_uniforms.get(&m.name).copied() != Some(f) {
+                    eprintln!(
+                        "[wgsl_compute] uniform '{}' = {} (was {:?})",
+                        m.name,
+                        f,
+                        self.last_logged_uniforms.get(&m.name).copied(),
+                    );
+                    self.last_logged_uniforms.insert(m.name.clone(), f);
+                }
                 let val = ParamValue::Float(f);
                 let size = 4;
                 let start = m.offset as usize;

@@ -254,7 +254,8 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 | Euler Step Particles | `node.euler_step_particles` | Apply `position.xy += forces * speed * (delta * 60)` per live particle. Aliased in/out. |
 | Wrap Particles (Torus) | `node.wrap_particles_torus` | Per-particle toroidal wrap `position.xy = fract(position.xy + 1)`. Cyclic-boundary policy atom. |
 | Diffuse Particles | `node.array_diffuse_particles` | Hash-based random kick on `Particle.velocity` (generic Brownian noise — ODE-state diffusion) |
-| Anti-Clump Particles | `node.anti_clump_particles` | Density-weighted hash kick on `Particle.position.xy` — concentrates the noise where particles clump together |
+| Anti-Clump Particles | `node.anti_clump_particles` | Modulator-weighted hash kick on `Particle.position.xy` — optional scalar Texture2D `strength_modulator` concentrates the kick (FluidSim wires density; works with any scalar map). Unwired = plain uniform Brownian jitter. |
+| Simplex Noise Force at Particles | `node.simplex_noise_force_at_particles` | Per-particle 2D simplex noise force added in-place to an `Array<vec2<f32>>` buffer. Optional scalar Texture2D `amplitude_modulator` adds capped density-style amplitude boost (legacy density-adaptive noise). Resolution-independent replacement for per-pixel simplex noise texture chains. |
 | Radial Burst Force Field | `node.radial_burst_force_field` | Per-pixel vec2 force texture for a radial+tangent impulse around a point with falloff envelope. Sum into a velocity field for "impulse around a point" particle behaviour. |
 | Scatter Particles | `node.scatter_particles` | Atomic-add splat into 2D u32 accumulator (Wrap / Discard boundary) |
 | Scatter Particles 3D | `node.scatter_particles_3d` | Same shape for `Texture3D` accumulator |

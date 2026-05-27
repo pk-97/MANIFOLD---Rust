@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Particle Text",
-  "description": "Particle Text — text baked into FluidSim2D's force field as a curl-rotated gradient. Same atom-decomposed base as FluidSim2D (`seed_particles` + wgsl_compute pattern + `cast_as_particle` + `array_feedback` particle loop + per-particle `sample / anti_clump / euler / wrap / apply_radial_burst` integrator + texture-domain `gradient_central_diff / scale_offset / rotate_vec2_by_angle` force field with `simplex_field_2d`-based density-adaptive noise advection), with one extra branch grafted in.\n\nText-force branch added in parallel to the velocity field: `node.render_text → gaussian_blur H+V (softens the gradient so it isn't single-texel spiky) → gradient_central_diff (R channel, texel-scale, clamp wrap) → rotate_vec2_by_angle (angle=PI/2: perpendicular curl-along-edge flow, divergence-free) → gain (driven by outer-card text_strength)`. That contribution is summed into the existing field + noise combiner via `mix(Add)` so the per-particle sampler reads field + noise + text in one composed texture.\n\nOuter-card params on top of the FluidSim2D surface: `text` (string), `fontFamily` (string), `text_size` (font height as a fraction of output height, 0.05..1.0, default 0.25), `text_strength` (gain on the text-derived force, 0..20, default 4.0).\n\nDeparture from legacy ParticleText visual: particles never \"form the text and dissolve\" — the text is a persistent attractor / repeller depending on local flow direction. Best results with text_strength 3-8 and text_size 0.3-0.6 against FluidSim2D defaults. Increase `feather` for chunkier glyph trails; increase `count_m` to fill the text shape more densely.",
+  "description": "Particle Text — text baked into FluidSim2D's force field as a curl-rotated gradient. Same atom-decomposed base as FluidSim2D (`seed_particles` + wgsl_compute pattern + `cast_as_particle` + `array_feedback` particle loop + per-particle `sample / simplex_noise_force / anti_clump / euler / wrap / apply_radial_burst` integrator + texture-domain `gradient_central_diff / scale_offset / rotate_vec2_by_angle` force field), with one extra branch grafted in. Density-adaptive simplex noise now runs per-particle inside the force chain rather than per-pixel.\n\nText-force branch added in parallel to the velocity field: `node.render_text → gaussian_blur H+V (softens the gradient so it isn't single-texel spiky) → gradient_central_diff (R channel, texel-scale, clamp wrap) → rotate_vec2_by_angle (angle=PI/2: perpendicular curl-along-edge flow, divergence-free) → gain (driven by outer-card text_strength)`. That contribution is summed into the velocity field via `mix(Add)` so the per-particle sampler reads field + text in one composed texture; noise is then added per-particle downstream.\n\nOuter-card params on top of the FluidSim2D surface: `text` (string), `fontFamily` (string), `text_size` (font height as a fraction of output height, 0.05..1.0, default 0.25), `text_strength` (gain on the text-derived force, 0..20, default 4.0).\n\nDeparture from legacy ParticleText visual: particles never \"form the text and dissolve\" — the text is a persistent attractor / repeller depending on local flow direction. Best results with text_strength 3-8 and text_size 0.3-0.6 against FluidSim2D defaults. Increase `feather` for chunkier glyph trails; increase `count_m` to fill the text shape more densely.",
   "presetMetadata": {
     "id": "ParticleText",
     "displayName": "Particle Text",
@@ -199,8 +199,14 @@
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 90, "typeId": "node.mix", "handle": "combined_force",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 130, "typeId": "node.simplex_noise_force_at_particles", "handle": "noise_force",
+      "params": {
+        "amplitude":      { "type": "Float", "value": 0.001 },
+        "modulator_gain": { "type": "Float", "value": 20.0 },
+        "z":              { "type": "Float", "value": 0.0 },
+        "noise_scale":    { "type": "Float", "value": 2.0 },
+        "active_count":   { "type": "Int",   "value": 2000000 }
+      } },
 
     { "id": 12, "typeId": "node.reinhard_tone_map", "handle": "display_tone",
       "params": {
@@ -324,33 +330,6 @@
     { "id": 110, "typeId": "node.affine_scalar", "handle": "noise_z",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 111, "typeId": "node.simplex_field_2d", "handle": "noise_x_field",
-      "params": { "scale_x": { "type": "Float", "value": 2.0 }, "scale_y": { "type": "Float", "value": 2.0 }, "z": { "type": "Float", "value": 0.0 }, "offset_x": { "type": "Float", "value": 0.0 }, "offset_y": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 112, "typeId": "node.simplex_field_2d", "handle": "noise_y_field",
-      "params": { "scale_x": { "type": "Float", "value": 2.0 }, "scale_y": { "type": "Float", "value": 2.0 }, "z": { "type": "Float", "value": 0.0 }, "offset_x": { "type": "Float", "value": 100.0 }, "offset_y": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 113, "typeId": "node.pack_channels", "handle": "noise_vec2",
-      "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 114, "typeId": "node.scale_offset_texture", "handle": "one_plus_density",
-      "params": { "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 115, "typeId": "node.mix", "handle": "capped_density",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 7 } } },
-
-    { "id": 116, "typeId": "node.scale_offset_texture", "handle": "one_plus_weighted",
-      "params": { "scale": { "type": "Float", "value": 20.0 }, "offset": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 117, "typeId": "node.scale_offset_texture", "handle": "adaptive_amp",
-      "params": { "scale": { "type": "Float", "value": 0.001 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 118, "typeId": "node.pack_channels", "handle": "amp_broadcast",
-      "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 119, "typeId": "node.mix", "handle": "weighted_noise",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 4 } } },
-
     { "id": 200, "typeId": "node.render_text", "handle": "text_render",
       "params": {
         "size":           { "type": "Float", "value": 0.25 },
@@ -405,13 +384,20 @@
     { "fromNode": 206, "fromPort": "out", "toNode": 83, "toPort": "in" },
     { "fromNode": 21, "fromPort": "out", "toNode": 83, "toPort": "active_count" },
 
+    { "fromNode": 83,  "fromPort": "out", "toNode": 130, "toPort": "in" },
+    { "fromNode": 82,  "fromPort": "out", "toNode": 130, "toPort": "particles" },
+    { "fromNode": 8,   "fromPort": "out", "toNode": 130, "toPort": "amplitude_modulator" },
+    { "fromNode": 44,  "fromPort": "out", "toNode": 130, "toPort": "amplitude" },
+    { "fromNode": 110, "fromPort": "out", "toNode": 130, "toPort": "z" },
+    { "fromNode": 21,  "fromPort": "out", "toNode": 130, "toPort": "active_count" },
+
     { "fromNode": 82, "fromPort": "out", "toNode": 84, "toPort": "in" },
-    { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "density" },
+    { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "strength_modulator" },
     { "fromNode": 21, "fromPort": "out", "toNode": 84, "toPort": "active_count" },
 
-    { "fromNode": 84, "fromPort": "out", "toNode": 85, "toPort": "in" },
-    { "fromNode": 83, "fromPort": "out", "toNode": 85, "toPort": "forces" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 85, "toPort": "active_count" },
+    { "fromNode": 84,  "fromPort": "out", "toNode": 85, "toPort": "in" },
+    { "fromNode": 130, "fromPort": "out", "toNode": 85, "toPort": "forces" },
+    { "fromNode": 21,  "fromPort": "out", "toNode": 85, "toPort": "active_count" },
 
     { "fromNode": 85, "fromPort": "out", "toNode": 86, "toPort": "in" },
     { "fromNode": 21, "fromPort": "out", "toNode": 86, "toPort": "active_count" },
@@ -443,26 +429,7 @@
     { "fromNode": 53, "fromPort": "out",     "toNode": 91, "toPort": "amplitude" },
     { "fromNode": 21, "fromPort": "out",     "toNode": 91, "toPort": "active_count" },
 
-    { "fromNode": 11, "fromPort": "out",  "toNode": 90, "toPort": "a" },
-    { "fromNode": 119, "fromPort": "out", "toNode": 90, "toPort": "b" },
-
     { "fromNode": 0,   "fromPort": "time", "toNode": 110, "toPort": "a" },
-    { "fromNode": 110, "fromPort": "out",  "toNode": 111, "toPort": "z" },
-    { "fromNode": 110, "fromPort": "out",  "toNode": 112, "toPort": "z" },
-    { "fromNode": 111, "fromPort": "out",  "toNode": 113, "toPort": "r" },
-    { "fromNode": 112, "fromPort": "out",  "toNode": 113, "toPort": "g" },
-
-    { "fromNode": 8,   "fromPort": "out", "toNode": 114, "toPort": "in" },
-    { "fromNode": 8,   "fromPort": "out", "toNode": 115, "toPort": "a" },
-    { "fromNode": 114, "fromPort": "out", "toNode": 115, "toPort": "b" },
-    { "fromNode": 115, "fromPort": "out", "toNode": 116, "toPort": "in" },
-    { "fromNode": 116, "fromPort": "out", "toNode": 117, "toPort": "in" },
-    { "fromNode": 44,  "fromPort": "out", "toNode": 117, "toPort": "scale" },
-    { "fromNode": 117, "fromPort": "out", "toNode": 118, "toPort": "r" },
-    { "fromNode": 117, "fromPort": "out", "toNode": 118, "toPort": "g" },
-
-    { "fromNode": 113, "fromPort": "out", "toNode": 119, "toPort": "a" },
-    { "fromNode": 118, "fromPort": "out", "toNode": 119, "toPort": "b" },
 
     { "fromNode": 200, "fromPort": "out", "toNode": 201, "toPort": "in" },
     { "fromNode": 201, "fromPort": "out", "toNode": 202, "toPort": "in" },
@@ -470,7 +437,7 @@
     { "fromNode": 203, "fromPort": "out", "toNode": 204, "toPort": "in" },
     { "fromNode": 204, "fromPort": "out", "toNode": 205, "toPort": "in" },
 
-    { "fromNode": 90,  "fromPort": "out", "toNode": 206, "toPort": "a" },
+    { "fromNode": 11,  "fromPort": "out", "toNode": 206, "toPort": "a" },
     { "fromNode": 205, "fromPort": "out", "toNode": 206, "toPort": "b" },
 
     { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },

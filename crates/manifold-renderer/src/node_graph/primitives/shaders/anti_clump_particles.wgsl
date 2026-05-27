@@ -1,23 +1,28 @@
-// node.anti_clump_particles — density-weighted Brownian kick on
+// node.anti_clump_particles — modulator-weighted Brownian kick on
 // each live particle's position.xy.
 //
 // per particle i (life > 0):
-//   d = density.r at p.position.xy (bilinear)
-//   capped_density = d / (1 + d)
-//   kick = (hash3(i, frame).xy − 0.5) * strength * capped_density
+//   if has_modulator:
+//       m = modulator.r at p.position.xy (bilinear)
+//       weight = m / (1 + m)   // [0, 1) presence weighting
+//   else:
+//       weight = 1
+//   kick = (hash3(i, frame).xy − 0.5) * strength * weight
 //   p.position.xy += kick
 //
-// The density weighting concentrates the kick where the density
-// texture is bright (i.e. where many particles have splatted),
-// preferentially shoving accumulated clumps apart. Frame seed
-// reseeds the Wang hash each frame so adjacent frames produce
-// decorrelated kicks (Brownian, not slow drift).
+// When a modulator texture is wired, the kick concentrates where
+// the modulator is bright — for the canonical anti-clump use this
+// is the density texture, so the kick activates where particles
+// have accumulated. With no modulator the atom is a plain Brownian
+// position jitter at uniform strength. Frame seed reseeds the
+// Wang hash each frame so adjacent frames produce decorrelated
+// kicks (Brownian, not slow drift).
 
 struct Uniforms {
     active_count: u32,
     frame_count: u32,
     strength: f32,
-    _pad: u32,
+    has_modulator: u32,
 };
 
 struct Particle {
@@ -30,8 +35,8 @@ struct Particle {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
-@group(0) @binding(2) var density_tex: texture_2d<f32>;
-@group(0) @binding(3) var density_sampler: sampler;
+@group(0) @binding(2) var modulator_tex: texture_2d<f32>;
+@group(0) @binding(3) var modulator_sampler: sampler;
 
 fn wang_hash(seed_in: u32) -> u32 {
     var seed = seed_in;
@@ -64,11 +69,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let uv = vec2<f32>(p.position.x, p.position.y);
-    let d = textureSampleLevel(density_tex, density_sampler, uv, 0.0).r;
-    let capped_density = d / (1.0 + d);
+    var weight: f32 = 1.0;
+    if u.has_modulator != 0u {
+        let m = textureSampleLevel(modulator_tex, modulator_sampler, uv, 0.0).r;
+        weight = m / (1.0 + m);
+    }
 
     let seed = i * 1664525u + u.frame_count * 747796405u;
-    let kick = (hash_float2(seed) - 0.5) * u.strength * capped_density;
+    let kick = (hash_float2(seed) - 0.5) * u.strength * weight;
 
     p.position = vec3<f32>(p.position.x + kick.x, p.position.y + kick.y, 0.0);
     particles[i] = p;

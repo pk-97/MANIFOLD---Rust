@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Fluid Sim 2D",
-  "description": "Density-displacement particle compute fluid simulation — atom-decomposed from the bundled `fluid_seed` + `fluid_simulate` + `fluid_gradient_rotate` primitives into the curated library.\n\nPer-frame pipeline:\n1. **Seed branch** (open family — pattern math is JSON-editable WGSL): `wgsl_compute(seed_pattern_density)` writes a single-channel density Texture2D selecting one of 7 patterns (cluster / h-lines / v-lines / rings / cross / spiral / edge-ring) via `pattern` uniform. `seed_particles_from_texture` rejection-samples that density into an Array<Particle>. Output flows into `array_feedback.seed`.\n2. **Particle loop** (closes via state, no graph cycle): `array_feedback` holds last frame's sim state, emits as `out`. On `reset_trigger` integer-edge (gated by clip_trigger AND mode==3), reloads from the seed input — the graph-level clear+reseed shape.\n3. **Force-field assembly** (texture-domain math through atoms): `density → gradient_central_diff(scale=UV, wrap=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` replaces the legacy fused gradient/rotate dispatch. `→ gaussian_blur H/V → blurred_force_field`. `radial_burst_force_field` (driven by `inject_burst`'s active/phase/point outputs) produces an impulse force texture for clip-trigger mode 4. `mix(blurred_field, inject_force, Add) → combined_force`.\n4. **Per-particle dispatch chain**: `sample_texture_at_particles(particles, combined_force) → forces` → `anti_clump_particles(particles, density=blurred_density, strength=anti_clump_slider × turbulence_burst)` (density-weighted Brownian kick) → `euler_step_particles(particles, forces, speed)` (frame-rate-normalised step) → `wrap_particles_torus(particles)` (cyclic boundary).\n5. **Splat**: `scatter_particles → resolve_accumulator → density` (full-res for display, fed back through downsample+blur for the next-frame force-field assembly).\n6. **Display**: `density → reinhard_tone_map (intensity = area_scale × 3) → affine_transform (uv_scale = 1/scale) → final_output`.\n\nClip-trigger modes (same outer-card surface as legacy):\n- mode 0 (Turbulence): repurposed to **anti-clump strength burst** — `anti_clump.strength *= 1 + 9*env`. Legacy's noise-advection branch is dropped in the decomposition (its anti-clumping role is now covered explicitly by `anti_clump_particles`). Slider still has an audible effect; underlying mechanism changed.\n- mode 1 (Rot Flip): `rotation_angle += π * env`\n- mode 2 (Flow Inv): `slope_strength *= 1 - 2*env`\n- mode 3 (Pattern): `array_feedback.reset_trigger` edges on clip_trigger AND mode==3 — clear and reseed from the (newly cycled) pattern density texture\n- mode 4 (Inject): `inject_burst` 0.5s state machine drives `radial_burst_force_field` (point, force, envelope, phase)\n\nKnown parity deltas vs legacy:\n(1) Density-adaptive simplex noise advection inside the integrator is dropped — its anti-clumping role is covered by `anti_clump_particles`; visual flow becomes more deterministic (less organic wobble). `turbulence` slider re-targets to anti-clump strength burst on mode 0 rather than noise-amplitude scaling.\n(2) Seed patterns are produced as density textures rejection-sampled by `seed_particles_from_texture` rather than per-particle pattern placement. Particles concentrate in bright regions of the density rather than landing on exact pattern coordinates — visually similar but statistically distributed.\n(3) `visible_count`/excess-particle dead-at-center behaviour is dropped; `fill` slider now multiplies `count_m` to scale `active_count`. Fewer alive particles ↔ smaller buffer ↔ less GPU work.\n(4) Mode-3 pattern cycle still advances on every trigger regardless of mode (legacy did this too).\n(5) Injection burst is added as a force-field texture summed into the velocity field BEFORE Euler integration, rather than as a post-integration position perturbation. Mathematically near-equivalent for small steps.\n\nWhat the decomposition unlocks:\n- Pattern math is JSON-editable WGSL: add an 8th pattern by appending a `case` to the seed_pattern shader switch. AI agents can author novel seed shapes.\n- Each integrator stage (sample, anti-clump, euler, wrap) is a separate atom — swap Euler for Verlet (future sibling atom), or insert a new force-field contribution by wiring into the `mix` upstream of `sample_texture_at_particles`.\n- The radial-burst impulse, gradient, and rotation are reusable building blocks for any future flow-field particle sim.",
+  "description": "Density-displacement particle compute fluid simulation — atom-decomposed from the bundled `fluid_seed` + `fluid_simulate` + `fluid_gradient_rotate` primitives into the curated library.\n\nPer-frame pipeline:\n1. **Seed branch** (open family — pattern math is JSON-editable WGSL): `wgsl_compute(seed_pattern_density)` writes a single-channel density Texture2D selecting one of 7 patterns (cluster / h-lines / v-lines / rings / cross / spiral / edge-ring) via `pattern` uniform. `seed_particles_from_texture` rejection-samples that density into an Array<Particle>. Output flows into `array_feedback.seed`.\n2. **Particle loop** (closes via state, no graph cycle): `array_feedback` holds last frame's sim state, emits as `out`. On `reset_trigger` integer-edge (gated by clip_trigger AND mode==3), reloads from the seed input — the graph-level clear+reseed shape.\n3. **Force-field assembly** (texture-domain math through atoms): `density → gradient_central_diff(scale=UV, wrap=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` replaces the legacy fused gradient/rotate dispatch. `→ gaussian_blur H/V → blurred_force_field`. `radial_burst_force_field` is realised per-particle via `apply_radial_burst_to_particles` downstream.\n4. **Per-particle dispatch chain**: `sample_texture_at_particles(particles, blurred_field) → forces` → `simplex_noise_force_at_particles(forces, particles, amplitude_modulator=blurred_density, amplitude=turbulence_base × turbulence_burst)` (density-adaptive 2D simplex noise added in place to the force buffer — replaces the legacy per-pixel noise advection chain) → `anti_clump_particles(particles, strength_modulator=blurred_density, strength=anti_clump_slider)` (modulator-weighted Brownian kick) → `euler_step_particles(particles, forces, speed)` (frame-rate-normalised step) → `wrap_particles_torus(particles)` (cyclic boundary) → `apply_radial_burst_to_particles` (mode-4 inject).\n5. **Splat**: `scatter_particles → resolve_accumulator → density` (full-res for display, fed back through downsample+blur for the next-frame force-field assembly).\n6. **Display**: `density → reinhard_tone_map (intensity = area_scale × 3) → affine_transform (uv_scale = 1/scale) → final_output`.\n\nClip-trigger modes (same outer-card surface as legacy):\n- mode 0 (Turbulence): boosts the per-particle simplex noise amplitude — `turbulence_base *= 1 + 9*env`. Restores the legacy mode-0 behaviour now that the per-particle noise atom is back in the pipeline.\n- mode 1 (Rot Flip): `rotation_angle += π * env`\n- mode 2 (Flow Inv): `slope_strength *= 1 - 2*env`\n- mode 3 (Pattern): `array_feedback.reset_trigger` edges on clip_trigger AND mode==3 — clear and reseed from the (newly cycled) pattern density texture\n- mode 4 (Inject): `inject_burst` 0.5s state machine drives `apply_radial_burst_to_particles` (point, force, envelope, phase)\n\nKnown parity deltas vs legacy:\n(1) Seed patterns are produced as density textures rejection-sampled by `seed_particles_from_texture` rather than per-particle pattern placement. Particles concentrate in bright regions of the density rather than landing on exact pattern coordinates — visually similar but statistically distributed.\n(2) `visible_count`/excess-particle dead-at-center behaviour is dropped; `fill` slider now multiplies `count_m` to scale `active_count`. Fewer alive particles ↔ smaller buffer ↔ less GPU work.\n(3) Mode-3 pattern cycle still advances on every trigger regardless of mode (legacy did this too).\n(4) Injection burst is applied per-particle post-integration via `apply_radial_burst_to_particles` (matches legacy's post-integration position perturbation).\n\nWhat the decomposition unlocks:\n- Pattern math is JSON-editable WGSL: add an 8th pattern by appending a `case` to the seed_pattern shader switch. AI agents can author novel seed shapes.\n- Each integrator stage (sample, noise, anti-clump, euler, wrap, inject) is a separate atom — swap Euler for Verlet (future sibling atom), or insert a new force-field contribution by adding another per-particle force atom before euler.\n- `simplex_noise_force_at_particles` and `anti_clump_particles` both accept any scalar Texture2D as their modulator — density (FluidSim), audio amplitude, masks, depth maps — so the same atoms compose into any particle sim, not just fluid.\n- The radial-burst impulse, gradient, and rotation are reusable building blocks for any future flow-field particle sim.",
   "presetMetadata": {
     "id": "FluidSimulation",
     "displayName": "Fluid Sim 2D",
@@ -180,8 +180,14 @@
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 90, "typeId": "node.mix", "handle": "combined_force",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
+    { "id": 130, "typeId": "node.simplex_noise_force_at_particles", "handle": "noise_force",
+      "params": {
+        "amplitude":      { "type": "Float", "value": 0.001 },
+        "modulator_gain": { "type": "Float", "value": 20.0 },
+        "z":              { "type": "Float", "value": 0.0 },
+        "noise_scale":    { "type": "Float", "value": 2.0 },
+        "active_count":   { "type": "Int",   "value": 2000000 }
+      } },
 
     { "id": 12, "typeId": "node.reinhard_tone_map", "handle": "display_tone",
       "params": {
@@ -303,34 +309,7 @@
       "params": {} },
 
     { "id": 110, "typeId": "node.affine_scalar", "handle": "noise_z",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 111, "typeId": "node.simplex_field_2d", "handle": "noise_x_field",
-      "params": { "scale_x": { "type": "Float", "value": 2.0 }, "scale_y": { "type": "Float", "value": 2.0 }, "z": { "type": "Float", "value": 0.0 }, "offset_x": { "type": "Float", "value": 0.0 }, "offset_y": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 112, "typeId": "node.simplex_field_2d", "handle": "noise_y_field",
-      "params": { "scale_x": { "type": "Float", "value": 2.0 }, "scale_y": { "type": "Float", "value": 2.0 }, "z": { "type": "Float", "value": 0.0 }, "offset_x": { "type": "Float", "value": 100.0 }, "offset_y": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 113, "typeId": "node.pack_channels", "handle": "noise_vec2",
-      "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 114, "typeId": "node.scale_offset_texture", "handle": "one_plus_density",
-      "params": { "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 115, "typeId": "node.mix", "handle": "capped_density",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 7 } } },
-
-    { "id": 116, "typeId": "node.scale_offset_texture", "handle": "one_plus_weighted",
-      "params": { "scale": { "type": "Float", "value": 20.0 }, "offset": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 117, "typeId": "node.scale_offset_texture", "handle": "adaptive_amp",
-      "params": { "scale": { "type": "Float", "value": 0.001 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 118, "typeId": "node.pack_channels", "handle": "amp_broadcast",
-      "params": { "default_r": { "type": "Float", "value": 0.0 }, "default_g": { "type": "Float", "value": 0.0 }, "default_b": { "type": "Float", "value": 0.0 }, "default_a": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 119, "typeId": "node.mix", "handle": "weighted_noise",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 4 } } }
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } }
   ],
   "wires": [
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 70, "toPort": "trigger_count" },
@@ -349,16 +328,23 @@
     { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
 
     { "fromNode": 82, "fromPort": "out", "toNode": 83, "toPort": "particles" },
-    { "fromNode": 90, "fromPort": "out", "toNode": 83, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 83, "toPort": "in" },
     { "fromNode": 21, "fromPort": "out", "toNode": 83, "toPort": "active_count" },
 
+    { "fromNode": 83,  "fromPort": "out", "toNode": 130, "toPort": "in" },
+    { "fromNode": 82,  "fromPort": "out", "toNode": 130, "toPort": "particles" },
+    { "fromNode": 8,   "fromPort": "out", "toNode": 130, "toPort": "amplitude_modulator" },
+    { "fromNode": 44,  "fromPort": "out", "toNode": 130, "toPort": "amplitude" },
+    { "fromNode": 110, "fromPort": "out", "toNode": 130, "toPort": "z" },
+    { "fromNode": 21,  "fromPort": "out", "toNode": 130, "toPort": "active_count" },
+
     { "fromNode": 82, "fromPort": "out", "toNode": 84, "toPort": "in" },
-    { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "density" },
+    { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "strength_modulator" },
     { "fromNode": 21, "fromPort": "out", "toNode": 84, "toPort": "active_count" },
 
-    { "fromNode": 84, "fromPort": "out", "toNode": 85, "toPort": "in" },
-    { "fromNode": 83, "fromPort": "out", "toNode": 85, "toPort": "forces" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 85, "toPort": "active_count" },
+    { "fromNode": 84,  "fromPort": "out", "toNode": 85, "toPort": "in" },
+    { "fromNode": 130, "fromPort": "out", "toNode": 85, "toPort": "forces" },
+    { "fromNode": 21,  "fromPort": "out", "toNode": 85, "toPort": "active_count" },
 
     { "fromNode": 85, "fromPort": "out", "toNode": 86, "toPort": "in" },
     { "fromNode": 21, "fromPort": "out", "toNode": 86, "toPort": "active_count" },
@@ -390,26 +376,7 @@
     { "fromNode": 53, "fromPort": "out",     "toNode": 91, "toPort": "amplitude" },
     { "fromNode": 21, "fromPort": "out",     "toNode": 91, "toPort": "active_count" },
 
-    { "fromNode": 11, "fromPort": "out",  "toNode": 90, "toPort": "a" },
-    { "fromNode": 119, "fromPort": "out", "toNode": 90, "toPort": "b" },
-
     { "fromNode": 0,   "fromPort": "time", "toNode": 110, "toPort": "a" },
-    { "fromNode": 110, "fromPort": "out",  "toNode": 111, "toPort": "z" },
-    { "fromNode": 110, "fromPort": "out",  "toNode": 112, "toPort": "z" },
-    { "fromNode": 111, "fromPort": "out",  "toNode": 113, "toPort": "r" },
-    { "fromNode": 112, "fromPort": "out",  "toNode": 113, "toPort": "g" },
-
-    { "fromNode": 8,   "fromPort": "out", "toNode": 114, "toPort": "in" },
-    { "fromNode": 8,   "fromPort": "out", "toNode": 115, "toPort": "a" },
-    { "fromNode": 114, "fromPort": "out", "toNode": 115, "toPort": "b" },
-    { "fromNode": 115, "fromPort": "out", "toNode": 116, "toPort": "in" },
-    { "fromNode": 116, "fromPort": "out", "toNode": 117, "toPort": "in" },
-    { "fromNode": 44,  "fromPort": "out", "toNode": 117, "toPort": "scale" },
-    { "fromNode": 117, "fromPort": "out", "toNode": 118, "toPort": "r" },
-    { "fromNode": 117, "fromPort": "out", "toNode": 118, "toPort": "g" },
-
-    { "fromNode": 113, "fromPort": "out", "toNode": 119, "toPort": "a" },
-    { "fromNode": 118, "fromPort": "out", "toNode": 119, "toPort": "b" },
 
     { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
 

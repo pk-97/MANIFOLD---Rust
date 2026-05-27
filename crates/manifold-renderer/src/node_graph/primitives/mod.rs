@@ -146,6 +146,7 @@ mod separable_gaussian;
 mod sharpen;
 mod simplex_field_2d;
 mod simplex_noise_2d;
+mod simplex_noise_force_at_particles;
 mod simplex_per_instance;
 mod affine_scalar;
 mod camera_orbit;
@@ -341,6 +342,7 @@ pub use separable_gaussian::{
 pub use sharpen::Sharpen;
 pub use simplex_field_2d::{SIMPLEX_FIELD_OUTPUT_CHANNELS, SimplexField2D};
 pub use simplex_noise_2d::SimplexNoise2D;
+pub use simplex_noise_force_at_particles::SimplexNoiseForceAtParticles;
 pub use simplex_per_instance::SimplexPerInstance;
 pub use affine_scalar::AffineScalar;
 pub use camera_orbit::CameraOrbit;

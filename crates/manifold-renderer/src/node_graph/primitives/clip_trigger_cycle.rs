@@ -48,6 +48,7 @@ crate::primitive! {
     picker: { label: "Clip Trigger Cycle", category: Driver },
     extra_fields: {
         cycle: ClipTriggerCycle = ClipTriggerCycle::new(),
+        last_logged: Option<u32> = None,
     },
 }
 
@@ -65,6 +66,12 @@ impl Primitive for ClipTriggerCycleNode {
             },
         };
         let index = self.cycle.step(trigger_count, modulus);
+        if self.last_logged != Some(index) {
+            eprintln!(
+                "[clip_trigger_cycle] trigger_count={trigger_count} modulus={modulus} -> index={index}"
+            );
+            self.last_logged = Some(index);
+        }
         ctx.outputs.set_scalar("out", ParamValue::Float(index as f32));
     }
 }
