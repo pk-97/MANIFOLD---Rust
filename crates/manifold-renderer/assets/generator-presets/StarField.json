@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Star Field",
-  "description": "Star Field — fully atomized from the legacy `node.star_field_2d` Rust bundle. Composed entirely of existing texture-domain atoms: `voronoi_2d` (per-cell distance + hash) → `scale_offset` (invert distance) → `power_texture` (spike to star core) → `channel_mix` (swizzle voronoi.A cell_hash → R) → `smoothstep_texture` (density threshold) → `mix(Multiply)` mask the core → `trig_texture` (per-pixel sin with per-cell freq/phase via texture-shadow inputs) → `mix(Multiply)` apply twinkle → final brightness.\n\nKey enablers shipped with this decomposition:\n(1) `node.voronoi_2d` extended to expose the F1-winner cell hash on the A channel — was constant 1.0, now carries a per-cell stable random in [0, 1] that's the foundation for per-cell density / colour / timing variation across the cellular-noise family (stars, foam, cracked glass, embers, tiles).\n(2) `node.channel_mix` GPU shader implemented (was a no-op stub registered for halation) — completes the 4×4 RGBA matrix transform that lets any channel be moved to any other. Critical for reading the voronoi A cell_hash as a control signal in downstream R-channel-operating math atoms.\n(3) `node.trig_texture` extended with optional `freq_tex` and `phase_tex` texture-shadow inputs — when wired, per-pixel freq/phase comes from the texture R channel instead of the scalar uniform. This is what unlocks per-star unique twinkle (each cell pulses at its own freq + phase, not just a global LFO on everything).\n\nDropped sliders from the legacy bundle (intentionally — atomization scope): `depth` (was per-layer parallax scaling — single-layer graph here, no need), `warmth` (per-star colour temperature — would need color_ramp wired through a per-cell-hash bridge; future work if visual demands it), `glow` (per-star halo extent — would need a second voronoi pass at the same offset/scale with a wider gaussian; future work). The cinematic 4-layer parallax was also dropped — the legacy bundle ran a 4-depth-staggered spherical projection per pixel which is a per-pixel iteration loop (Plasma-Noise/Fractal-class blocker for atomization until the graph compiler / for_each_n lands). Single-layer star field with UV drift reads as 'twinkling stars'; multi-layer parallax can be added later either by duplicating the inner chain in JSON (each layer at a different voronoi scale + drift speed, summed via `mix(Add)`) or via the graph compiler.\n\nThe Array<CurvePoint> side-channel `stars` output from the legacy bundle is dropped in this decomposition (no current preset consumed it; restoring requires the parked `wgsl_compute` write-only declared-read_write infrastructure work or a generic per-type allocator atom). Documented as a parity delta in the migration commit.",
+  "description": "Star Field — fully atomized from the legacy `node.star_field_2d` Rust bundle. Composed entirely of existing texture-domain atoms: `voronoi_2d` (per-cell distance + hash) → `scale_offset` (invert distance) → `power_texture` (spike to star core, exponent driven by Size slider) → `channel_mix` (R→RGB, white stars) → in parallel: `channel_mix` (swizzle voronoi.A cell_hash → R) → `smoothstep_texture` (density threshold) → `mix(Multiply)` mask the core → `trig_texture` (per-pixel sin with per-cell freq/phase via texture-shadow inputs) → `mix(Multiply)` apply twinkle → final brightness.\n\nThe voronoi `offset_x` / `offset_y` are the sum of `drift_t × drift_x` (animation) AND `-0.5 × scale` (centering) — so when the user moves the Scale slider, the cell grid expands from the canvas center rather than from the top-left.\n\nKey primitive enablers from the original decomposition (2026-05-27):\n(1) `node.voronoi_2d` exposes the F1-winner cell hash on the A channel — was constant 1.0, now drives per-cell variation across the cellular-noise family (foam, cracked glass, embers, tiles, stars). Each cell's hash is decorrelated from its jitter offset so it stays deterministic as jitter animates.\n(2) `node.channel_mix` GPU shader implemented (was a no-op stub) — completes the 4×4 RGBA matrix transform. Used in two places here: swizzle voronoi.A → R for cell-hash reading, and broadcast R → RGB to make the star core white instead of single-channel red.\n(3) `node.trig_texture` extended with optional `freq_tex` / `phase_tex` texture-shadow inputs — per-pixel freq/phase from texture R channel when wired, unlocks per-cell unique twinkle (each cell pulses at its own freq + phase, not just a global LFO).\n(4) Tuning pass: `node.power_texture` extended with port-shadow on `exponent` so the Size slider can drive star spike sharpness via an inverting `affine_scalar` (slider 0 → exp=30 tight, slider 1 → exp=2 big halo).\n\nDropped from the legacy bundle (intentionally — atomization scope): cinematic 4-layer parallax (per-pixel spherical projection × 4 depth layers is a per-pixel iteration loop, Plasma-Noise/Fractal class blocker for atomization until the graph compiler lands). Single-layer star field with UV drift reads as 'twinkling stars'; multi-layer revivable by duplicating the inner chain. Also dropped sliders: `depth` (was per-layer parallax scaling), `warmth` (per-star colour temperature — would need color_ramp wired through per-cell-hash bridge), `glow` (per-star halo extent — would need a second voronoi pass with wider gaussian).\n\nThe Array<CurvePoint> side-channel `stars` output from the legacy bundle is dropped (no current preset consumed it; restoring blocked on parked `wgsl_compute` infra).",
   "presetMetadata": {
     "id": "StarField",
     "displayName": "Star Field",
@@ -31,6 +31,17 @@
         "isToggle": false,
         "formatString": "F2",
         "oscSuffix": "density"
+      },
+      {
+        "id": "size",
+        "name": "Star Size",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "size"
       },
       {
         "id": "brightness",
@@ -92,21 +103,32 @@
       { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
         "target": { "kind": "handleNode", "handle": "cells", "param": "scale" },
         "convert": { "type": "Float" } },
+      { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
+        "target": { "kind": "handleNode", "handle": "center_offset", "param": "a" },
+        "convert": { "type": "Float" } },
+
       { "id": "density",     "label": "Density",     "defaultValue": 0.6,
         "target": { "kind": "handleNode", "handle": "density_mask", "param": "low" },
         "convert": { "type": "Float" } },
+
+      { "id": "size",        "label": "Star Size",   "defaultValue": 0.3,
+        "target": { "kind": "handleNode", "handle": "exponent_from_size", "param": "a" },
+        "convert": { "type": "Float" } },
+
       { "id": "brightness",  "label": "Brightness",  "defaultValue": 1.5,
         "target": { "kind": "handleNode", "handle": "final_brightness", "param": "scale" },
         "convert": { "type": "Float" } },
+
       { "id": "drift_speed", "label": "Drift Speed", "defaultValue": 0.15,
         "target": { "kind": "handleNode", "handle": "drift_t", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "drift_x",     "label": "Drift X",     "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "offset_x", "param": "b" },
+        "target": { "kind": "handleNode", "handle": "offset_x", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "drift_y",     "label": "Drift Y",     "defaultValue": 0.1,
-        "target": { "kind": "handleNode", "handle": "offset_y", "param": "b" },
+        "target": { "kind": "handleNode", "handle": "offset_y", "param": "scale" },
         "convert": { "type": "Float" } },
+
       { "id": "twinkle",     "label": "Twinkle",     "defaultValue": 0.6,
         "target": { "kind": "handleNode", "handle": "apply_twinkle", "param": "amount" },
         "convert": { "type": "Float" } }
@@ -122,10 +144,11 @@
 
     { "id": 2, "typeId": "node.math", "handle": "drift_t",
       "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.15 } } },
-    { "id": 3, "typeId": "node.math", "handle": "offset_x",
-      "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.3 } } },
-    { "id": 4, "typeId": "node.math", "handle": "offset_y",
-      "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.1 } } },
+
+    { "id": 3, "typeId": "node.affine_scalar", "handle": "offset_x",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.3 }, "offset": { "type": "Float", "value": 0.0 } } },
+    { "id": 4, "typeId": "node.affine_scalar", "handle": "offset_y",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
 
     { "id": 5, "typeId": "node.voronoi_2d", "handle": "cells",
       "params": { "scale": { "type": "Float", "value": 24.0 }, "jitter": { "type": "Float", "value": 1.0 }, "out_scale": { "type": "Float", "value": 1.0 } } },
@@ -134,7 +157,7 @@
       "params": { "scale": { "type": "Float", "value": -1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
 
     { "id": 7, "typeId": "node.power_texture", "handle": "spike",
-      "params": { "exponent": { "type": "Float", "value": 12.0 } } },
+      "params": { "exponent": { "type": "Float", "value": 22.0 } } },
 
     { "id": 8, "typeId": "node.channel_mix", "handle": "cell_hash_to_r",
       "params": {
@@ -166,7 +189,21 @@
       "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 0.6 } } },
 
     { "id": 16, "typeId": "node.scale_offset_texture", "handle": "final_brightness",
-      "params": { "scale": { "type": "Float", "value": 1.5 }, "offset": { "type": "Float", "value": 0.0 } } }
+      "params": { "scale": { "type": "Float", "value": 1.5 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 17, "typeId": "node.channel_mix", "handle": "white_stars",
+      "params": {
+        "row0": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
+        "row1": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
+        "row2": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
+        "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }
+      } },
+
+    { "id": 18, "typeId": "node.affine_scalar", "handle": "center_offset",
+      "params": { "a": { "type": "Float", "value": 24.0 }, "scale": { "type": "Float", "value": -0.5 }, "offset": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 19, "typeId": "node.affine_scalar", "handle": "exponent_from_size",
+      "params": { "a": { "type": "Float", "value": 0.3 }, "scale": { "type": "Float", "value": -28.0 }, "offset": { "type": "Float", "value": 30.0 } } }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
@@ -174,18 +211,25 @@
     { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
     { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "a" },
 
+    { "fromNode": 18, "fromPort": "out", "toNode": 3, "toPort": "offset" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 4, "toPort": "offset" },
+
     { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "offset_x" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "offset_y" },
 
     { "fromNode": 5, "fromPort": "out", "toNode": 6,  "toPort": "in" },
     { "fromNode": 6, "fromPort": "out", "toNode": 7,  "toPort": "in" },
 
+    { "fromNode": 19, "fromPort": "out", "toNode": 7, "toPort": "exponent" },
+
+    { "fromNode": 7,  "fromPort": "out", "toNode": 17, "toPort": "source" },
+
     { "fromNode": 5, "fromPort": "out", "toNode": 8,  "toPort": "source" },
 
     { "fromNode": 8, "fromPort": "out", "toNode": 9,  "toPort": "in" },
 
-    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "b" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "b" },
 
     { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in" },
     { "fromNode": 8, "fromPort": "out", "toNode": 12, "toPort": "in" },

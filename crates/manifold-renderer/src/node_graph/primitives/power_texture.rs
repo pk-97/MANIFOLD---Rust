@@ -22,6 +22,10 @@ crate::primitive! {
     purpose: "Per-pixel pow(max(input.rgb, 0), exponent). Alpha passes through. Sharpens or softens a [0, 1] field: exponent > 1 pushes mid-grays toward 0 (great for spiking voronoi F1 into star-points), exponent < 1 lifts darks (gamma-like brightening).",
     inputs: {
         in: Texture2D required,
+        // Port-shadow on exponent so a slider / LFO / per-cell-hash
+        // chain can animate spike sharpness (StarField uses this to
+        // give the user a "Star Size" knob driving exponent).
+        exponent: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -43,10 +47,7 @@ crate::primitive! {
 
 impl Primitive for PowerTexture {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let exponent = match ctx.params.get("exponent") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 2.0,
-        };
+        let exponent = ctx.scalar_or_param("exponent", 2.0);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -108,10 +109,16 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn power_texture_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
+    fn power_texture_declares_required_input_optional_exponent_and_one_output() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(PowerTexture::TYPE_ID, "node.power_texture");
-        assert_eq!(PowerTexture::INPUTS.len(), 1);
+        assert_eq!(PowerTexture::INPUTS.len(), 2);
+        assert_eq!(PowerTexture::INPUTS[0].name, "in");
+        assert!(PowerTexture::INPUTS[0].required);
+        assert_eq!(PowerTexture::INPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(PowerTexture::INPUTS[1].name, "exponent");
+        assert!(!PowerTexture::INPUTS[1].required);
+        assert_eq!(PowerTexture::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
         assert_eq!(PowerTexture::OUTPUTS.len(), 1);
         assert_eq!(PowerTexture::OUTPUTS[0].ty, PortType::Texture2D);
     }
