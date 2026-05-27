@@ -75,6 +75,12 @@ pub struct Executor {
     light_write_scratch: Vec<(Slot, crate::node_graph::light::Light)>,
     /// Sibling scratch for [`PortType::Material`] writes — same drain pattern.
     material_write_scratch: Vec<(Slot, crate::node_graph::material::Material)>,
+    /// Per-step scratch for structured errors pushed via
+    /// [`EffectNodeContext::error`]. Drained + logged after each
+    /// `evaluate` / `late_capture` returns. Errors don't halt the frame
+    /// — the producing primitive is expected to emit a deterministic
+    /// fallback (e.g. magenta clear) alongside the error report.
+    error_scratch: Vec<String>,
     /// Persistent resources whose first acquisition has been cleared to
     /// opaque black. Subsequent frames find them in this set and skip
     /// the clear — the buffer's contents are now valid producer writes
@@ -103,6 +109,7 @@ impl Executor {
             camera_write_scratch: Vec::new(),
             light_write_scratch: Vec::new(),
             material_write_scratch: Vec::new(),
+            error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
@@ -467,6 +474,7 @@ impl Executor {
                     self.camera_write_scratch.clear();
                     self.light_write_scratch.clear();
                     self.material_write_scratch.clear();
+                    self.error_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
@@ -497,7 +505,8 @@ impl Executor {
                             state.as_deref_mut(),
                             step.node,
                             owner_key,
-                        );
+                        )
+                        .with_errors(&mut self.error_scratch);
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
                         // Aliased-output contract: a primitive that
@@ -550,6 +559,18 @@ impl Executor {
                     // Material writes use the same drain shape.
                     for (slot, value) in self.material_write_scratch.drain(..) {
                         self.backend.set_material(slot, value);
+                    }
+                    // Structured errors reported via `ctx.error(...)` —
+                    // log once per occurrence. Primitives are expected
+                    // to ALSO emit a deterministic fallback (e.g. magenta
+                    // clear) alongside the error report, so downstream
+                    // consumers don't read garbage.
+                    for msg in self.error_scratch.drain(..) {
+                        eprintln!(
+                            "[graph error] node {:?} ({}): {msg}",
+                            step.node,
+                            inst.node.type_id().as_str(),
+                        );
                     }
                 }
             }
@@ -618,6 +639,7 @@ impl Executor {
                 self.camera_write_scratch.clear();
                 self.light_write_scratch.clear();
                 self.material_write_scratch.clear();
+                self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
                 let outputs = NodeOutputs::new(
@@ -637,8 +659,16 @@ impl Executor {
                     state.as_deref_mut(),
                     step.node,
                     owner_key,
-                );
+                )
+                .with_errors(&mut self.error_scratch);
                 inst.node.late_capture(&mut ctx);
+                for msg in self.error_scratch.drain(..) {
+                    eprintln!(
+                        "[graph error] node {:?} ({}) late_capture: {msg}",
+                        step.node,
+                        inst.node.type_id().as_str(),
+                    );
+                }
             }
         }
     }

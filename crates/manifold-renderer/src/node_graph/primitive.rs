@@ -302,6 +302,26 @@ pub trait Primitive: PrimitiveSpec {
             .get("max_capacity")
             .and_then(|v| v.as_u32_clamped(1))
     }
+
+    /// Mirror of
+    /// [`EffectNode::emitted_material_kind`](crate::node_graph::effect_node::EffectNode::emitted_material_kind).
+    /// Material atoms (`node.{unlit,phong,pbr,cel}_material`) override
+    /// to return their fixed kind. Default `None` — most primitives
+    /// don't emit a Material at all.
+    fn emitted_material_kind(&self) -> Option<crate::node_graph::material::MaterialKind> {
+        None
+    }
+
+    /// Mirror of
+    /// [`EffectNode::conditional_requirements`](crate::node_graph::effect_node::EffectNode::conditional_requirements).
+    /// Nodes whose required-input set varies with an upstream-wire value
+    /// (the bundled 3D mesh renderers) override to declare per-MaterialKind
+    /// rules. Default empty.
+    fn conditional_requirements(
+        &self,
+    ) -> &'static [crate::node_graph::effect_node::ConditionalRequirement] {
+        &[]
+    }
 }
 
 /// Blanket `EffectNode` impl for any `Primitive`. Reads all surface
@@ -391,6 +411,14 @@ impl<P: Primitive + 'static> EffectNode for P {
         wired_inputs: &[&str],
     ) -> Option<&'static str> {
         Primitive::selected_input_branch(self, params, wired_inputs)
+    }
+    fn emitted_material_kind(&self) -> Option<crate::node_graph::material::MaterialKind> {
+        Primitive::emitted_material_kind(self)
+    }
+    fn conditional_requirements(
+        &self,
+    ) -> &'static [crate::node_graph::effect_node::ConditionalRequirement] {
+        Primitive::conditional_requirements(self)
     }
 }
 

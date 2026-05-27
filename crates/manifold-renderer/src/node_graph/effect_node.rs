@@ -5,6 +5,7 @@ use ahash::AHashMap;
 use manifold_core::{Beats, Seconds};
 
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
+use crate::node_graph::material::MaterialKind;
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput};
 use crate::node_graph::state_store::{OwnerKey, StateStore};
@@ -63,6 +64,31 @@ pub struct FrameTime {
 /// Map of parameter name → current value for one node instance, one frame.
 pub type ParamValues = AHashMap<&'static str, ParamValue>;
 
+/// One conditional input-requirement rule on an [`EffectNode`].
+///
+/// Declared by nodes whose required-input set varies with an upstream-wire
+/// value — currently the 3D mesh renderers, whose required inputs depend
+/// on the wired [`Material`](crate::node_graph::material::Material)'s
+/// [`MaterialKind`]: e.g. PBR requires `light` AND `envmap`, Unlit
+/// requires neither.
+///
+/// The validator reads this list at preset-load time and (for each node
+/// with non-empty rules) walks the wired material's source primitive,
+/// reads its [`EffectNode::emitted_material_kind`], picks the matching
+/// rule, and checks every entry in `required_inputs` has a wire — raising
+/// [`GraphError::ConditionalRequirementUnmet`](crate::node_graph::validation::GraphError::ConditionalRequirementUnmet)
+/// when an input is missing.
+///
+/// The runtime catches the dynamic case (material flows through a mux,
+/// material's source isn't a registered atom) via [`EffectNodeContext::error`].
+#[derive(Debug, Clone, Copy)]
+pub struct ConditionalRequirement {
+    /// Which material kind triggers this rule.
+    pub on_material_kind: MaterialKind,
+    /// Input port names that must be wired when the rule fires.
+    pub required_inputs: &'static [&'static str],
+}
+
 /// What an [`EffectNode`] sees during `evaluate`.
 ///
 /// The runtime populates this each step with the bindings produced by the
@@ -112,6 +138,17 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// builds panic loudly; release builds silently accept (the cost
     /// of a per-frame check on the hot path is the trade-off).
     pub gpu_accessed: bool,
+    /// Per-step scratch into which a primitive pushes structured error
+    /// messages via [`Self::error`]. The executor drains and logs them
+    /// after `evaluate` returns, one line per error. Errors do NOT halt
+    /// the frame — the primitive should also emit a deterministic
+    /// fallback (e.g. magenta clear on a Texture2D output) so the rest
+    /// of the graph isn't poisoned by garbage.
+    ///
+    /// `None` when the context is constructed via legacy paths that
+    /// don't thread an error scratch — the `error` method is a silent
+    /// no-op in that case (test-construction shortcut).
+    pub errors: Option<&'ctx mut Vec<String>>,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -132,6 +169,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             node_id: NodeInstanceId(0),
             owner_key: 0,
             gpu_accessed: false,
+            errors: None,
         }
     }
 
@@ -158,6 +196,37 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             node_id,
             owner_key,
             gpu_accessed: false,
+            errors: None,
+        }
+    }
+
+    /// Attach a per-step error scratch buffer. The executor calls this
+    /// each step before invoking `evaluate` / `late_capture`. Primitives
+    /// push structured errors into the buffer via [`Self::error`]; the
+    /// executor drains and logs them after the primitive returns.
+    pub fn with_errors(mut self, errors: &'ctx mut Vec<String>) -> Self {
+        self.errors = Some(errors);
+        self
+    }
+
+    /// Report a structured error for the current node. The executor
+    /// drains errors after `evaluate` returns, logs each one once per
+    /// invocation, and (in future versions) surfaces them to the
+    /// editor's error toast.
+    ///
+    /// Use when an input is missing OR has a value the node can't
+    /// process (e.g., a conditional requirement is unmet). Does NOT
+    /// halt the frame — the node should ALSO emit a deterministic
+    /// fallback (magenta clear on a Texture2D output, zero values on
+    /// scalar outputs) so the rest of the graph isn't poisoned by
+    /// garbage.
+    ///
+    /// A no-op when the context was constructed without an error
+    /// scratch (legacy test paths). Production execution always wires
+    /// one in.
+    pub fn error(&mut self, message: impl Into<String>) {
+        if let Some(buf) = self.errors.as_deref_mut() {
+            buf.push(message.into());
         }
     }
 
@@ -620,6 +689,35 @@ pub trait EffectNode: Send {
     /// override is in place before `compile()` walks outputs. No-op
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
+
+    /// If this node EMITS a [`Material`](crate::node_graph::material::Material)
+    /// of a statically-known [`MaterialKind`], return it. The validator
+    /// uses this to resolve a downstream renderer's
+    /// [`conditional_requirements`](Self::conditional_requirements) at
+    /// preset-load time — without a static answer here the runtime
+    /// catches the missing-input case via [`EffectNodeContext::error`].
+    ///
+    /// Default: `None` (this node doesn't emit a Material, or its kind
+    /// is dynamic — e.g. a future authored sub-graph material).
+    fn emitted_material_kind(&self) -> Option<MaterialKind> {
+        None
+    }
+
+    /// Conditional input-requirement rules. The validator checks each
+    /// rule whose `on_material_kind` matches the wired material's kind
+    /// (resolved via [`Self::emitted_material_kind`] on the source
+    /// node), raising
+    /// [`GraphError::ConditionalRequirementUnmet`](crate::node_graph::validation::GraphError::ConditionalRequirementUnmet)
+    /// for each `required_inputs` entry that has no wire.
+    ///
+    /// Default: empty — most nodes have unconditional requirements
+    /// (declared via [`NodePort::required`](crate::node_graph::ports::NodePort)).
+    /// The bundled 3D mesh renderers override this to encode their
+    /// per-MaterialKind input requirements (Phong/Pbr/Cel need a
+    /// `light`; Pbr also needs an `envmap`; Unlit needs neither).
+    fn conditional_requirements(&self) -> &'static [ConditionalRequirement] {
+        &[]
+    }
 
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —

@@ -57,6 +57,21 @@ pub enum GraphError {
         producer_format: manifold_gpu::GpuTextureFormat,
         accepted: Vec<manifold_gpu::GpuTextureFormat>,
     },
+    /// A node declared a conditional input requirement that isn't met
+    /// for the wired [`Material`](crate::node_graph::material::Material)'s
+    /// kind. Fires at preset-load when a renderer's `material` wire
+    /// resolves to a statically-known source (a registered material
+    /// atom whose [`EffectNode::emitted_material_kind`](crate::node_graph::effect_node::EffectNode::emitted_material_kind)
+    /// is `Some`) and that material's kind requires inputs that have
+    /// no wire. Example: PBR material wired into `render_3d_mesh` but
+    /// `envmap` left unwired — PBR's BRDF is degenerate without IBL,
+    /// so the validator refuses the graph instead of letting the
+    /// runtime fall back to magenta.
+    ConditionalRequirementUnmet {
+        node: NodeInstanceId,
+        material_kind: crate::node_graph::material::MaterialKind,
+        missing_input: String,
+    },
 }
 
 impl std::fmt::Display for GraphError {
@@ -101,6 +116,15 @@ impl std::fmt::Display for GraphError {
                  Match the formats, change the consumer's accepted list, or \
                  set the producer's `outputFormats` override to one of the \
                  accepted formats."
+            ),
+            Self::ConditionalRequirementUnmet {
+                node,
+                material_kind,
+                missing_input,
+            } => write!(
+                f,
+                "node {node:?}: conditional input `{missing_input}` is required when the \
+                 wired material has kind {material_kind:?}, but no wire is connected to that port."
             ),
         }
     }
@@ -305,6 +329,55 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
             }
         }
     }
+    // Per-node conditional-requirement sweep. Resolves the material's
+    // statically-known kind via the source primitive's
+    // `emitted_material_kind`, picks the matching rule (if any), and
+    // checks every entry in `required_inputs` is wired on this node.
+    // Dynamic-source cases (the material flows through a mux, or its
+    // source is a future Authored kind with no static kind) skip
+    // load-time validation — the runtime catches them via
+    // `ctx.error(...)`.
+    for inst in graph.nodes() {
+        if has_root && !live.contains(&inst.id) {
+            continue;
+        }
+        let rules = inst.node.conditional_requirements();
+        if rules.is_empty() {
+            continue;
+        }
+        // Find the wire to this node's `material` input port and look
+        // up its source primitive's emitted kind.
+        let Some(material_wire) =
+            graph.wires().iter().find(|w| w.to == (inst.id, "material"))
+        else {
+            continue;
+        };
+        let Some(src_inst) = graph.nodes().find(|n| n.id == material_wire.from.0) else {
+            continue;
+        };
+        let Some(kind) = src_inst.node.emitted_material_kind() else {
+            continue;
+        };
+        for rule in rules {
+            if rule.on_material_kind != kind {
+                continue;
+            }
+            for required_port in rule.required_inputs {
+                let wired = graph
+                    .wires()
+                    .iter()
+                    .any(|w| w.to == (inst.id, *required_port));
+                if !wired {
+                    return Err(GraphError::ConditionalRequirementUnmet {
+                        node: inst.id,
+                        material_kind: kind,
+                        missing_input: (*required_port).to_string(),
+                    });
+                }
+            }
+        }
+    }
+
     // Cycle check — `topological_sort` returns `CycleDetected` if the
     // graph isn't a DAG. Done after the per-node sweep so the more
     // specific `RequiredInputUnwired` error wins when both apply.
@@ -831,6 +904,7 @@ mod tests {
             GraphError::ParamNotFound { .. } => "ParamNotFound",
             GraphError::CycleDetected { .. } => "CycleDetected",
             GraphError::PortFormatMismatch { .. } => "PortFormatMismatch",
+            GraphError::ConditionalRequirementUnmet { .. } => "ConditionalRequirementUnmet",
         }
     }
 
@@ -1314,6 +1388,151 @@ mod tests {
             vec![],
         )));
         g.connect((a, "out"), (b, "in")).unwrap();
+        assert!(validate(&g).is_ok());
+    }
+
+    // ===== Conditional requirement tests =====
+    //
+    // The validator's per-kind input check (added with the Material
+    // system) resolves a node's required-input set by walking the wired
+    // material's source primitive and reading its
+    // `emitted_material_kind`. These tests stand up minimal graphs that
+    // exercise the happy path (kind matches and all required inputs
+    // wired), the failure path (missing input), and the no-op cases
+    // (no material wire, dynamic material source).
+
+    use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
+    use crate::node_graph::effect_node::ConditionalRequirement;
+    use crate::node_graph::material::MaterialKind;
+
+    /// Stand-in for a 3D mesh renderer that requires `light` whenever
+    /// the wired material's kind is `Phong`. Mirrors what
+    /// `render_3d_mesh` will declare after the M4 tranche.
+    struct PhongRequiresLightRenderer {
+        type_id: EffectNodeType,
+    }
+
+    impl PhongRequiresLightRenderer {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.renderer_phong_needs_light"),
+            }
+        }
+    }
+
+    impl crate::node_graph::EffectNode for PhongRequiresLightRenderer {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            const IN: &[NodeInput] = &[
+                NodePort {
+                    name: "material",
+                    ty: PortType::Material,
+                    kind: PortKind::Input,
+                    required: true,
+                },
+                NodePort {
+                    name: "light",
+                    ty: PortType::Light,
+                    kind: PortKind::Input,
+                    required: false,
+                },
+            ];
+            IN
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            const OUT: &[NodeOutput] = &[NodePort {
+                name: "color",
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            OUT
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn is_liveness_root(&self) -> bool {
+            self.type_id.as_str() == FINAL_OUTPUT_TYPE_ID
+        }
+        fn conditional_requirements(&self) -> &'static [ConditionalRequirement] {
+            const RULES: &[ConditionalRequirement] = &[ConditionalRequirement {
+                on_material_kind: MaterialKind::Phong,
+                required_inputs: &["light"],
+            }];
+            RULES
+        }
+    }
+
+    /// Convenience: build a minimal "renderer → final output" backbone
+    /// the validator's liveness pruner respects.
+    fn renderer_to_final(
+        g: &mut Graph,
+        renderer_id: NodeInstanceId,
+    ) -> NodeInstanceId {
+        let fin = g.add_node(Box::new(TestNode::new(
+            FINAL_OUTPUT_TYPE_ID,
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((renderer_id, "color"), (fin, "in")).unwrap();
+        fin
+    }
+
+    #[test]
+    fn conditional_requirement_unmet_when_phong_material_lacks_light() {
+        use crate::node_graph::primitives::PhongMaterial;
+
+        let mut g = Graph::new();
+        let mat = g.add_node(Box::new(PhongMaterial::new()));
+        let renderer = g.add_node(Box::new(PhongRequiresLightRenderer::new()));
+        g.connect((mat, "out"), (renderer, "material")).unwrap();
+        let _ = renderer_to_final(&mut g, renderer);
+
+        match validate(&g) {
+            Err(GraphError::ConditionalRequirementUnmet {
+                node,
+                material_kind,
+                missing_input,
+            }) => {
+                assert_eq!(node, renderer);
+                assert_eq!(material_kind, MaterialKind::Phong);
+                assert_eq!(missing_input, "light");
+            }
+            other => panic!("expected ConditionalRequirementUnmet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conditional_requirement_satisfied_with_light_wired() {
+        use crate::node_graph::primitives::{LightNode, PhongMaterial};
+
+        let mut g = Graph::new();
+        let mat = g.add_node(Box::new(PhongMaterial::new()));
+        let light = g.add_node(Box::new(LightNode::new()));
+        let renderer = g.add_node(Box::new(PhongRequiresLightRenderer::new()));
+        g.connect((mat, "out"), (renderer, "material")).unwrap();
+        g.connect((light, "out"), (renderer, "light")).unwrap();
+        let _ = renderer_to_final(&mut g, renderer);
+
+        assert!(validate(&g).is_ok());
+    }
+
+    #[test]
+    fn unlit_material_skips_phong_rule_so_no_light_required() {
+        // A renderer that only requires `light` on Phong should be
+        // happy with an Unlit material and no light wired — the rule
+        // doesn't fire for Unlit.
+        use crate::node_graph::primitives::UnlitMaterial;
+
+        let mut g = Graph::new();
+        let mat = g.add_node(Box::new(UnlitMaterial::new()));
+        let renderer = g.add_node(Box::new(PhongRequiresLightRenderer::new()));
+        g.connect((mat, "out"), (renderer, "material")).unwrap();
+        let _ = renderer_to_final(&mut g, renderer);
+
         assert!(validate(&g).is_ok());
     }
 }
