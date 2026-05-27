@@ -28,11 +28,12 @@ struct InstancedRenderUniforms {
 crate::primitive! {
     name: RenderInstanced3DMesh,
     type_id: "node.render_instanced_3d_mesh",
-    purpose: "Render N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Triangle list topology (every 3 verts = 1 triangle). One directional light + ambient. Takes a `camera: Camera` input. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants-shaped graphs.",
+    purpose: "Render N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Triangle list topology (every 3 verts = 1 triangle). One directional light + ambient. Takes a `camera: Camera` input. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants-shaped graphs. Wire a `node.light` into `light` to drive the directional light from a Light source — overrides the in-shader hardcoded (0.3, 0.7, 0.6) direction and replaces the `color_r/g/b` × `light_intensity` scalars with the light's premultiplied colour. Shadow generation is not yet wired in this tranche; `cast_shadows = true` on a wired light is currently a no-op pending the shadow-map cache infrastructure.",
     inputs: {
         vertices: Array(MeshVertex) required,
         instances: Array(InstanceTransform) required,
         camera: Camera required,
+        light: Light optional,
     },
     outputs: {
         color: Texture2D,
@@ -150,6 +151,29 @@ impl Primitive for RenderInstanced3DMesh {
             _ => 0.92,
         };
 
+        // Wired `node.light` overrides the in-shader hardcoded
+        // direction and the scalar light colour. `light.color` is
+        // premultiplied with intensity so we feed it as light_color
+        // and pin light_intensity to 1.0 to avoid double-multiplying.
+        // The user's `color_r/g/b` surface tint stays in base_color
+        // (the wired light tints the lit surface, not replaces it).
+        // Point lights collapse to their forward direction in this
+        // fragment shader (no per-pixel V/L without a world_pos
+        // G-buffer). `cast_shadows = true` is currently a no-op
+        // pending the shadow-map cache infrastructure (tranche 4).
+        let (light_dir_x, light_dir_y, light_dir_z, light_color_rgb, light_intensity) =
+            if let Some(light) = ctx.inputs.light("light") {
+                (
+                    -light.dir[0],
+                    -light.dir[1],
+                    -light.dir[2],
+                    [light.color[0], light.color[1], light.color[2]],
+                    1.0,
+                )
+            } else {
+                (0.3, 0.7, 0.6, [1.0, 1.0, 1.0], light_intensity)
+            };
+
         let Some(vertices) = ctx.inputs.array("vertices") else {
             return;
         };
@@ -183,8 +207,8 @@ impl Primitive for RenderInstanced3DMesh {
         let uniforms = InstancedRenderUniforms {
             view_proj,
             camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
-            light_dir: [0.3, 0.7, 0.6, light_intensity],
-            light_color: [1.0, 1.0, 1.0, ambient],
+            light_dir: [light_dir_x, light_dir_y, light_dir_z, light_intensity],
+            light_color: [light_color_rgb[0], light_color_rgb[1], light_color_rgb[2], ambient],
             base_color: [color_r, color_g, color_b, 1.0],
         };
 
@@ -261,20 +285,24 @@ mod tests {
             RenderInstanced3DMesh::TYPE_ID,
             "node.render_instanced_3d_mesh"
         );
-        assert_eq!(RenderInstanced3DMesh::INPUTS.len(), 3);
-        assert_eq!(RenderInstanced3DMesh::INPUTS[0].name, "vertices");
-        assert_eq!(
-            RenderInstanced3DMesh::INPUTS[0].ty,
-            PortType::Array(mesh_layout)
-        );
-        assert_eq!(RenderInstanced3DMesh::INPUTS[1].name, "instances");
-        assert_eq!(
-            RenderInstanced3DMesh::INPUTS[1].ty,
-            PortType::Array(instance_layout)
-        );
-        assert_eq!(RenderInstanced3DMesh::INPUTS[2].name, "camera");
-        assert!(RenderInstanced3DMesh::INPUTS[2].required);
-        assert_eq!(RenderInstanced3DMesh::INPUTS[2].ty, PortType::Camera);
+        let by_name = |n: &str| {
+            RenderInstanced3DMesh::INPUTS
+                .iter()
+                .find(|p| p.name == n)
+                .unwrap_or_else(|| panic!("missing input {n}"))
+        };
+        let vertices = by_name("vertices");
+        assert!(vertices.required);
+        assert_eq!(vertices.ty, PortType::Array(mesh_layout));
+        let instances = by_name("instances");
+        assert!(instances.required);
+        assert_eq!(instances.ty, PortType::Array(instance_layout));
+        let camera = by_name("camera");
+        assert!(camera.required);
+        assert_eq!(camera.ty, PortType::Camera);
+        let light = by_name("light");
+        assert!(!light.required, "light should be optional (port-shadow)");
+        assert_eq!(light.ty, PortType::Light);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS.len(), 1);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS[0].name, "color");
     }

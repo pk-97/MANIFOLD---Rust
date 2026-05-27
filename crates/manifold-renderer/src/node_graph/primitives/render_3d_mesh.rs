@@ -35,10 +35,11 @@ struct MeshRenderUniforms {
 crate::primitive! {
     name: Render3DMesh,
     type_id: "node.render_3d_mesh",
-    purpose: "Render an Array<MeshVertex> as a depth-tested triangle list (every 3 consecutive vertices form one triangle). One directional light + ambient. Takes a `camera: Camera` input from `node.camera_orbit` (or any future Camera source) — the renderer reads view + projection from the camera instead of holding its own orbit/tilt/distance/FOV scalars. Emits three outputs: `color` (Lambert + ambient shaded), `world_pos` (interpolated per-pixel world position, alpha=1 where geometry covers), `world_normal` (renormalised per-pixel surface normal in world space, alpha=1). The G-buffer outputs let downstream PBR / SSAO / SSR atoms shade in screen space with per-pixel V and L derived from world coordinates — TouchDesigner / Blender / Unreal deferred-shading style.",
+    purpose: "Render an Array<MeshVertex> as a depth-tested triangle list (every 3 consecutive vertices form one triangle). One directional light + ambient. Takes a `camera: Camera` input from `node.camera_orbit` (or any future Camera source) — the renderer reads view + projection from the camera instead of holding its own orbit/tilt/distance/FOV scalars. Wire a `node.light` into `light` to drive the directional light from a Light source — the in-shader hardcoded (0.3, 0.7, 0.6) direction and the scalar light colour are overridden by the wired light. Emits three outputs: `color` (Lambert + ambient shaded), `world_pos` (interpolated per-pixel world position, alpha=1 where geometry covers), `world_normal` (renormalised per-pixel surface normal in world space, alpha=1). The G-buffer outputs let downstream PBR / SSAO / SSR atoms shade in screen space with per-pixel V and L derived from world coordinates — TouchDesigner / Blender / Unreal deferred-shading style. Shadow generation is not yet wired in this tranche; `cast_shadows = true` on a wired light is currently a no-op pending the shadow-map cache infrastructure.",
     inputs: {
         vertices: Array(MeshVertex) required,
         camera: Camera required,
+        light: Light optional,
     },
     outputs: {
         color: Texture2D,
@@ -148,6 +149,25 @@ impl Primitive for Render3DMesh {
             _ => 0.92,
         };
 
+        // Wired `node.light` overrides direction + scalar light colour.
+        // See `render_instanced_3d_mesh` for the same shape. The user's
+        // `color_r/g/b` stays as base_color (surface tint). The G-buffer
+        // passes (`world_pos`, `world_normal`) don't read lighting, so
+        // overriding only affects the `color` pass. `cast_shadows = true`
+        // is currently a no-op pending the shadow-map cache infra.
+        let (light_dir_x, light_dir_y, light_dir_z, light_color_rgb, light_intensity) =
+            if let Some(light) = ctx.inputs.light("light") {
+                (
+                    -light.dir[0],
+                    -light.dir[1],
+                    -light.dir[2],
+                    [light.color[0], light.color[1], light.color[2]],
+                    1.0,
+                )
+            } else {
+                (0.3, 0.7, 0.6, [1.0, 1.0, 1.0], light_intensity)
+            };
+
         let Some(vertices) = ctx.inputs.array("vertices") else {
             return;
         };
@@ -193,8 +213,8 @@ impl Primitive for Render3DMesh {
         let uniforms = MeshRenderUniforms {
             view_proj,
             camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
-            light_dir: [0.3, 0.7, 0.6, light_intensity],
-            light_color: [1.0, 1.0, 1.0, ambient],
+            light_dir: [light_dir_x, light_dir_y, light_dir_z, light_intensity],
+            light_color: [light_color_rgb[0], light_color_rgb[1], light_color_rgb[2], ambient],
             base_color: [color_r, color_g, color_b, 1.0],
         };
 
@@ -329,16 +349,21 @@ mod tests {
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
 
         assert_eq!(Render3DMesh::TYPE_ID, "node.render_3d_mesh");
-        assert_eq!(Render3DMesh::INPUTS.len(), 2);
-        assert_eq!(Render3DMesh::INPUTS[0].name, "vertices");
-        assert!(Render3DMesh::INPUTS[0].required);
-        assert_eq!(
-            Render3DMesh::INPUTS[0].ty,
-            PortType::Array(mesh_layout)
-        );
-        assert_eq!(Render3DMesh::INPUTS[1].name, "camera");
-        assert!(Render3DMesh::INPUTS[1].required);
-        assert_eq!(Render3DMesh::INPUTS[1].ty, PortType::Camera);
+        let by_name = |n: &str| {
+            Render3DMesh::INPUTS
+                .iter()
+                .find(|p| p.name == n)
+                .unwrap_or_else(|| panic!("missing input {n}"))
+        };
+        let vertices = by_name("vertices");
+        assert!(vertices.required);
+        assert_eq!(vertices.ty, PortType::Array(mesh_layout));
+        let camera = by_name("camera");
+        assert!(camera.required);
+        assert_eq!(camera.ty, PortType::Camera);
+        let light = by_name("light");
+        assert!(!light.required, "light should be optional (port-shadow)");
+        assert_eq!(light.ty, PortType::Light);
         assert_eq!(Render3DMesh::OUTPUTS.len(), 3);
         assert_eq!(Render3DMesh::OUTPUTS[0].name, "color");
         assert_eq!(Render3DMesh::OUTPUTS[0].ty, PortType::Texture2D);
