@@ -17,11 +17,17 @@
 
 use crate::node_graph::ports::{ItemKind, KnownItem};
 
-/// A 3D mesh vertex with surface normal. Used by
+/// A 3D mesh vertex with surface normal and UV. Used by
 /// `node.generate_grid_mesh` and consumed by `node.render_3d_mesh`.
 ///
-/// Layout (32 bytes):
-/// - position(12) + pad(4) + normal(12) + pad(4)
+/// Layout (48 bytes, std430 / 16-byte aligned):
+/// - position(12) + pad(4)
+/// - normal(12)   + pad(4)
+/// - uv(8)        + pad(8)
+///
+/// The 8-byte `_pad2` tail is the reserved slot for adding
+/// `tangent: [f32; 4]` in a follow-up extension (tangent-space
+/// normal mapping) without another layout change.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshVertex {
@@ -29,9 +35,11 @@ pub struct MeshVertex {
     pub _pad0: f32,
     pub normal: [f32; 3],
     pub _pad1: f32,
+    pub uv: [f32; 2],
+    pub _pad2: [f32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<MeshVertex>() == 32);
+const _: () = assert!(std::mem::size_of::<MeshVertex>() == 48);
 
 impl KnownItem for MeshVertex {
     const ITEM_KIND: ItemKind = ItemKind::MeshVertex;

@@ -51,6 +51,10 @@ pub struct Blob32([u8; 32]);
 
 #[repr(C, align(4))]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Blob48([u8; 48]);
+
+#[repr(C, align(4))]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Blob64([u8; 64]);
 
 // ── cast_as_particle (64 bytes) ───────────────────────────────────
@@ -143,20 +147,20 @@ impl Primitive for CastAsU32 {
     }
 }
 
-// ── cast_as_mesh_vertex (32 bytes) ────────────────────────────────
+// ── cast_as_mesh_vertex (48 bytes) ────────────────────────────────
 
 crate::primitive! {
     name: CastAsMeshVertex,
     type_id: "node.cast_as_mesh_vertex",
-    purpose: "Relabel an Array<Anonymous, item_size=32> wire (wgsl_compute writing a 32-byte vertex+normal struct) as Array<MeshVertex> for the 3D mesh pipeline (rotate_3d, project_3d, render_3d_mesh, render_lines with edges). Aliased in/out, runtime no-op.",
+    purpose: "Relabel an Array<Anonymous, item_size=48> wire (wgsl_compute writing a 48-byte position+normal+uv struct) as Array<MeshVertex> for the 3D mesh pipeline (rotate_3d, project_3d, render_3d_mesh, render_lines with edges). Aliased in/out, runtime no-op.",
     inputs: {
-        in: ArrayAnonymous(Blob32) required,
+        in: ArrayAnonymous(Blob48) required,
     },
     outputs: {
         out: Array(MeshVertex),
     },
     params: [],
-    composition_notes: "Bridges a `node.wgsl_compute` writing a mesh-vertex-shaped struct (position + normal, 32 bytes) into the 3D wireframe / mesh-render pipeline. Use case: an open-family vertex generator (wgsl_compute with switch on shape variant) that wants to feed `rotate_3d → project_3d → render_lines` without registering a new Rust primitive per variant.",
+    composition_notes: "Bridges a `node.wgsl_compute` writing a mesh-vertex-shaped struct (position + normal + uv, 48 bytes / std430 aligned) into the 3D wireframe / mesh-render pipeline. Use case: an open-family vertex generator (wgsl_compute with switch on shape variant) that wants to feed `rotate_3d → project_3d → render_lines` without registering a new Rust primitive per variant.",
     examples: [],
     picker: { label: "Cast as Mesh Vertex", category: Atom },
 }

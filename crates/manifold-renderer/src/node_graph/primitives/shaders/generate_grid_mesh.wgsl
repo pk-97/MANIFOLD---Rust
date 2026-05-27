@@ -8,9 +8,17 @@
 // downstream Render3DMesh consumes the buffer; intermediate
 // primitives can displace, normal-recompute, or color it.
 //
-// Layout matches generators::mesh_common::MeshVertex (32 bytes):
+// Layout matches generators::mesh_common::MeshVertex (48 bytes):
 //   position: vec3<f32> + pad
 //   normal:   vec3<f32> + pad
+//   uv:       vec2<f32> + pad
+//
+// UV is the grid index normalized to [0, 1]:
+//   uv = (col / (cols - 1), row / (rows - 1))
+// This matches the parameterization downstream `displace_mesh` uses
+// to read its height texture per-vertex, so a normal_map / roughness_map
+// sampled at the same UV downstream by `render_3d_mesh` aligns 1:1
+// with the displacement source.
 
 struct GridUniforms {
     resolution_x: u32,
@@ -28,6 +36,8 @@ struct Vertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: GridUniforms;
@@ -45,6 +55,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         vertices[i]._pad0 = 0.0;
         vertices[i].normal = vec3<f32>(0.0, 1.0, 0.0);
         vertices[i]._pad1 = 0.0;
+        vertices[i].uv = vec2<f32>(0.0, 0.0);
+        vertices[i]._pad2 = vec2<f32>(0.0, 0.0);
         return;
     }
 
@@ -60,4 +72,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     vertices[i]._pad0 = 0.0;
     vertices[i].normal = vec3<f32>(0.0, 1.0, 0.0);
     vertices[i]._pad1 = 0.0;
+    vertices[i].uv = vec2<f32>(nx, nz);
+    vertices[i]._pad2 = vec2<f32>(0.0, 0.0);
 }

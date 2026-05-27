@@ -34,6 +34,8 @@ struct MeshVertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: PolytopeUniforms;
@@ -170,6 +172,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         vert_dst[i]._pad0 = 0.0;
         vert_dst[i].normal = vec3<f32>(0.0, 1.0, 0.0);
         vert_dst[i]._pad1 = 0.0;
+        vert_dst[i].uv = vec2<f32>(0.0, 0.0);
+        vert_dst[i]._pad2 = vec2<f32>(0.0, 0.0);
         return;
     }
 
@@ -186,4 +190,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let normal = select(raw / len, vec3<f32>(0.0, 1.0, 0.0), len < 1e-8);
     vert_dst[i].normal = normal;
     vert_dst[i]._pad1 = 0.0;
+    // Placeholder UV — polytope vertices feed line rendering, not lit
+    // surfaces. Set (vertex_index / total, 0) so wires that incidentally
+    // carry UV downstream see a deterministic value. Revisit if a
+    // lit-polytope use case arises.
+    vert_dst[i].uv = vec2<f32>(f32(i) / f32(max(nverts, 1u)), 0.0);
+    vert_dst[i]._pad2 = vec2<f32>(0.0, 0.0);
 }
