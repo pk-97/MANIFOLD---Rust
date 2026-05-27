@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn wire_audit_errors_when_array_resource_has_no_bound_buffer() {
         use crate::node_graph::Graph;
-        use crate::node_graph::primitives::{EulerStepParticles, SeedParticles};
+        use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
 
         let device = GpuDevice::new();
         let mut graph = Graph::new();
@@ -1233,6 +1233,11 @@ mod tests {
         // for the audit to catch — see the
         // `unread_outputs_are_not_allocated_resources` plan test.)
         graph.connect((seed, "particles"), (step, "in")).unwrap();
+        // EulerStepParticles also requires a `forces: Array([f32; 2])`
+        // input; wire GridUvField in so the graph validates. The audit
+        // target is still the unbound seed→step particle buffer.
+        let forces = graph.add_node(Box::new(GridUvField::new()));
+        graph.connect((forces, "uv"), (step, "forces")).unwrap();
         let plan = compile(&graph).expect("seed → step graph compiles");
 
         // Construct a backend but deliberately DON'T call

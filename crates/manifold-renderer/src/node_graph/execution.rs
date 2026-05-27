@@ -1062,7 +1062,7 @@ mod tests {
     fn texture_2d_and_texture_3d_use_separate_slot_pools() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut g = Graph::new();
-        let _ = g.add_node(Box::new(RecordingNode::new(
+        let mixed = g.add_node(Box::new(RecordingNode::new(
             "mixed",
             vec![],
             vec![
@@ -1071,6 +1071,23 @@ mod tests {
             ],
             log.clone(),
         )));
+        // Sinks: per d84ae560, an output without a downstream consumer
+        // is never allocated, so each output needs at least one reader
+        // to force slot allocation.
+        let sink2d = g.add_node(Box::new(RecordingNode::new(
+            "sink2d",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+            log.clone(),
+        )));
+        let sink3d = g.add_node(Box::new(RecordingNode::new(
+            "sink3d",
+            vec![input("in", PortType::Texture3D, true)],
+            vec![],
+            log.clone(),
+        )));
+        g.connect((mixed, "color"), (sink2d, "in")).unwrap();
+        g.connect((mixed, "volume"), (sink3d, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
@@ -1081,7 +1098,7 @@ mod tests {
     fn scalar_inputs_and_textures_are_pooled_separately() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut g = Graph::new();
-        let _ = g.add_node(Box::new(RecordingNode::new(
+        let mix = g.add_node(Box::new(RecordingNode::new(
             "mix",
             vec![],
             vec![
@@ -1090,6 +1107,21 @@ mod tests {
             ],
             log.clone(),
         )));
+        // Sinks force slot allocation for each output (see above).
+        let sink_tex = g.add_node(Box::new(RecordingNode::new(
+            "sink_tex",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+            log.clone(),
+        )));
+        let sink_scalar = g.add_node(Box::new(RecordingNode::new(
+            "sink_scalar",
+            vec![input("in", PortType::Scalar(ScalarType::F32), true)],
+            vec![],
+            log.clone(),
+        )));
+        g.connect((mix, "tex"), (sink_tex, "in")).unwrap();
+        g.connect((mix, "k"), (sink_scalar, "in")).unwrap();
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());

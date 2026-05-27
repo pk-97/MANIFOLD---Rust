@@ -235,13 +235,62 @@ mod gpu_tests {
 
     use crate::generators::mesh_common::{MeshVertex, PLATONIC_MAX_VERTS};
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType,
+    };
     use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::parameters::ParamDef;
+    use crate::node_graph::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    };
     use crate::node_graph::{
         ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
         compile,
     };
 
     use super::PolytopeVertices;
+
+    /// Test-only sink: consumes the `vertices` Array(MeshVertex) so
+    /// d84ae560's planner keeps the resource alive.
+    struct VertexSink {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl VertexSink {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.vertex_sink"),
+                inputs: vec![NodePort {
+                    name: "in",
+                    ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
+                    kind: PortKind::Input,
+                    required: true,
+                }],
+                outputs: vec![],
+            }
+        }
+    }
+
+    impl EffectNode for VertexSink {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+        fn is_liveness_root(&self) -> bool {
+            true
+        }
+    }
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -355,6 +404,8 @@ mod gpu_tests {
         let mut g = Graph::new();
         let pv = g.add_node(Box::new(PolytopeVertices::new()));
         g.set_param(pv, "shape", ParamValue::Enum(shape)).unwrap();
+        let sink = g.add_node(Box::new(VertexSink::new()));
+        g.connect((pv, "vertices"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
         let r_verts = output_resource(&plan, pv, "vertices");

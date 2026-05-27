@@ -89,7 +89,13 @@ impl Primitive for CastAsParticle {
         &[("in", "out")]
     }
 
-    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wire-label transformation only — the aliased in→out buffer was
+        // written by the upstream producer this frame. Mark GPU accessed
+        // so the aliased-output debug assertion (execution.rs) sees that
+        // the contract is satisfied via the producer's dispatch.
+        ctx.mark_gpu_accessed();
+    }
 }
 
 // ── cast_as_u32 (4 bytes) ─────────────────────────────────────────
@@ -128,7 +134,13 @@ impl Primitive for CastAsU32 {
         &[("in", "out")]
     }
 
-    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wire-label transformation only — the aliased in→out buffer was
+        // written by the upstream producer this frame. Mark GPU accessed
+        // so the aliased-output debug assertion (execution.rs) sees that
+        // the contract is satisfied via the producer's dispatch.
+        ctx.mark_gpu_accessed();
+    }
 }
 
 // ── cast_as_mesh_vertex (32 bytes) ────────────────────────────────
@@ -167,7 +179,13 @@ impl Primitive for CastAsMeshVertex {
         &[("in", "out")]
     }
 
-    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wire-label transformation only — the aliased in→out buffer was
+        // written by the upstream producer this frame. Mark GPU accessed
+        // so the aliased-output debug assertion (execution.rs) sees that
+        // the contract is satisfied via the producer's dispatch.
+        ctx.mark_gpu_accessed();
+    }
 }
 
 // ── cast_as_curve_point (8 bytes) ─────────────────────────────────
@@ -206,7 +224,13 @@ impl Primitive for CastAsCurvePoint {
         &[("in", "out")]
     }
 
-    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wire-label transformation only — the aliased in→out buffer was
+        // written by the upstream producer this frame. Mark GPU accessed
+        // so the aliased-output debug assertion (execution.rs) sees that
+        // the contract is satisfied via the producer's dispatch.
+        ctx.mark_gpu_accessed();
+    }
 }
 
 // ── cast_as_edge_pair (8 bytes) ───────────────────────────────────
@@ -245,7 +269,13 @@ impl Primitive for CastAsEdgePair {
         &[("in", "out")]
     }
 
-    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wire-label transformation only — the aliased in→out buffer was
+        // written by the upstream producer this frame. Mark GPU accessed
+        // so the aliased-output debug assertion (execution.rs) sees that
+        // the contract is satisfied via the producer's dispatch.
+        ctx.mark_gpu_accessed();
+    }
 }
 
 // ── cast_as_instance_transform (32 bytes) ─────────────────────────
@@ -284,7 +314,13 @@ impl Primitive for CastAsInstanceTransform {
         &[("in", "out")]
     }
 
-    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wire-label transformation only — the aliased in→out buffer was
+        // written by the upstream producer this frame. Mark GPU accessed
+        // so the aliased-output debug assertion (execution.rs) sees that
+        // the contract is satisfied via the producer's dispatch.
+        ctx.mark_gpu_accessed();
+    }
 }
 
 #[cfg(test)]

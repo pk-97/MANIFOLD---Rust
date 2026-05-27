@@ -248,16 +248,26 @@ impl Primitive for FluidSimulate3D {
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
 
+        // Missing-input bail paths: mark GPU accessed so the aliased-IO
+        // debug assertion doesn't fire on first-frame preset loads where
+        // an upstream texture/buffer isn't yet bound. The aliased in→out
+        // buffer wasn't mutated, but downstream reads the same slot — the
+        // contract is vacuously satisfied (no dispatch ran on either
+        // side of the alias this frame).
         let Some(in_buf) = ctx.inputs.array("in") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(field) = ctx.inputs.texture_3d("field") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(density) = ctx.inputs.texture_3d("density") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let Some(out_buf) = ctx.outputs.array("out") else {
+            ctx.mark_gpu_accessed();
             return;
         };
         let _ = out_buf; // aliased to in_buf — see aliased_array_io()

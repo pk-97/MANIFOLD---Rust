@@ -338,6 +338,49 @@ mod gpu_tests {
         }
     }
 
+    /// Test-only sink for `Array<u32>`. Consumes scatter's `accum`
+    /// output so the planner keeps the resource alive — per d84ae560
+    /// an output with no downstream consumer is skipped.
+    struct AccumSink {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl AccumSink {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.accum_sink"),
+                inputs: vec![NodePort {
+                    name: "in",
+                    ty: PortType::Array(ArrayType::of_known::<u32>()),
+                    kind: PortKind::Input,
+                    required: true,
+                }],
+                outputs: vec![],
+            }
+        }
+    }
+
+    impl EffectNode for AccumSink {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+        fn is_liveness_root(&self) -> bool {
+            true
+        }
+    }
+
     fn frame_time() -> FrameTime {
         FrameTime {
             beats: Beats(0.0),
@@ -408,6 +451,10 @@ mod gpu_tests {
         g.connect((v_w, "out"), (scatter, "width")).unwrap();
         g.connect((v_h, "out"), (scatter, "height")).unwrap();
         g.connect((src, "out"), (scatter, "particles")).unwrap();
+        // Sink: keep `scatter.accum` alive in the plan (d84ae560
+        // prunes outputs that nobody reads).
+        let sink = g.add_node(Box::new(AccumSink::new()));
+        g.connect((scatter, "accum"), (sink, "in")).unwrap();
         g.set_param(
             scatter,
             "active_count",

@@ -266,6 +266,49 @@ mod gpu_tests {
         }
     }
 
+    /// Test-only sink: consumes Project4D's `out` Array(CurvePoint)
+    /// so the planner allocates the resource (d84ae560 skips outputs
+    /// with no downstream consumer).
+    struct CurvePointSink {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl CurvePointSink {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.curve_point_sink"),
+                inputs: vec![NodePort {
+                    name: "in",
+                    ty: PortType::Array(ArrayType::of_known::<CurvePoint>()),
+                    kind: PortKind::Input,
+                    required: true,
+                }],
+                outputs: vec![],
+            }
+        }
+    }
+
+    impl EffectNode for CurvePointSink {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+        fn is_liveness_root(&self) -> bool {
+            true
+        }
+    }
+
     fn frame_time() -> FrameTime {
         FrameTime {
             beats: Beats(0.0),
@@ -310,6 +353,8 @@ mod gpu_tests {
         g.connect((src, "out"), (pj, "in")).unwrap();
         g.set_param(pj, "proj_scale", ParamValue::Float(proj_scale)).unwrap();
         g.set_param(pj, "proj_dist", ParamValue::Float(proj_dist)).unwrap();
+        let sink = g.add_node(Box::new(CurvePointSink::new()));
+        g.connect((pj, "out"), (sink, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
         let r_in = resource_for(&plan, src, "out", false);

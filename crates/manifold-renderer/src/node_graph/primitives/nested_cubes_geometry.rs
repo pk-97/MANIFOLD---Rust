@@ -433,7 +433,7 @@ mod gpu_tests {
     use crate::node_graph::parameters::TableData;
     use crate::node_graph::primitives::CycleTableRow;
     use crate::node_graph::{
-        Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, compile,
+        Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, compile,
     };
     use crate::render_target::RenderTarget;
 
@@ -481,6 +481,11 @@ mod gpu_tests {
 
         let geom = g.add_node(Box::new(NestedCubesGeometry::new()));
         g.connect((cycler, "row"), (geom, "target_angles")).unwrap();
+        // FinalOutput sink: as of d84ae560 the planner skips outputs
+        // with no downstream consumer, so wire `geom.out` to something
+        // that keeps the resource alive for readback.
+        let sink = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((geom, "out"), (sink, "in")).unwrap();
 
         let plan = compile(&g).unwrap();
         let r_out = output_resource(&plan, geom, "out");

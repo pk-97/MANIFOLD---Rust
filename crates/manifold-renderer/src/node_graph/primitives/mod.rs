@@ -746,12 +746,19 @@ mod tests {
             // Carve-outs:
             //   - `node.wgsl_compute_*` — escape-hatch primitives whose
             //     wire shape is whatever the user's WGSL declares.
+            //   - `node.cast_as_*` — relabel atoms whose entire purpose
+            //     is to bridge Array<Anonymous, sized blob> inputs from
+            //     wgsl_compute into typed Array<T> outputs. The
+            //     Anonymous-typed input is intrinsic to the atom's
+            //     contract; see crates/manifold-renderer/src/node_graph/
+            //     primitives/cast_array.rs.
             //   - `node.__smoke_test_*` — macro-system test fixtures
             //     that exist purely to exercise authoring scaffolding.
             //   - `system.*` — boundary nodes (source, final_output,
             //     generator_input) whose wires are texture/scalar, not
             //     Array, but the carve-out is cheap defensive depth.
             if type_id.starts_with("node.wgsl_compute_")
+                || type_id.starts_with("node.cast_as_")
                 || type_id.starts_with("node.__smoke_test_")
                 || type_id.starts_with("system.")
             {
