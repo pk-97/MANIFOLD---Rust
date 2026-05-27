@@ -67,7 +67,7 @@
 
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "trig_gate_env", "param": "enable" },
-        "convert": { "type": "Float" } },
+        "convert": { "type": "BoolThreshold" } },
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "mode3_gate", "param": "b" },
         "convert": { "type": "Float" } },

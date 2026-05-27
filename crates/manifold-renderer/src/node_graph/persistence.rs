@@ -282,6 +282,25 @@ pub enum LoadError {
         port: String,
         format: String,
     },
+    /// A `presetMetadata.bindings[i].convert` produces a `ParamValue`
+    /// variant the target inner-node parameter's declared `ParamType`
+    /// can't accept. The bug class this catches: writing `EnumRound`
+    /// against a `Float`-typed param (e.g. a `mux_scalar` selector)
+    /// stores `ParamValue::Enum(n)` into a slot that reads via
+    /// `as_scalar()` — which deliberately refuses to coerce Enum →
+    /// f32, so every read falls back to the inline default and the
+    /// outer-card slider silently does nothing. Catch the type
+    /// mismatch at load time instead of at "slider doesn't work"
+    /// time. Fix the JSON: pick the convert variant whose output
+    /// matches the target param's declared type (Float → Float/Int,
+    /// IntRound → Float/Int, BoolThreshold → Bool, EnumRound → Enum).
+    BindingConvertTypeMismatch {
+        binding_id: String,
+        handle: String,
+        param: String,
+        convert: &'static str,
+        target_param_type: &'static str,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -342,6 +361,19 @@ impl std::fmt::Display for LoadError {
                  ignored — this primitive's shader hardcodes its output format. Either remove \
                  the override or use a primitive that supports format choice (e.g. \
                  `node.feedback`, `node.wgsl_compute_*`)."
+            ),
+            Self::BindingConvertTypeMismatch {
+                binding_id,
+                handle,
+                param,
+                convert,
+                target_param_type,
+            } => write!(
+                f,
+                "binding '{binding_id}' → {handle}.{param}: convert '{convert}' produces a \
+                 value the target param's declared type '{target_param_type}' can't accept. \
+                 Pick a convert variant that matches: Float / IntRound → Float or Int targets, \
+                 BoolThreshold → Bool targets, EnumRound → Enum targets."
             ),
         }
     }
@@ -723,6 +755,57 @@ impl EffectGraphDefExt for EffectGraphDef {
                 })?;
         }
 
+        // Step 5.5: validate every binding's `convert` against its
+        // target inner-node param's declared type. The recurring bug
+        // this catches: binding a Float-typed slot (e.g. a
+        // `mux_scalar.selector`) via `convert: EnumRound` stores
+        // `ParamValue::Enum(n)` into a slot read via `as_scalar()` —
+        // the read refuses to coerce Enum → f32 and falls back to the
+        // inline default, so every slider move silently does nothing.
+        // Catch the static type mismatch at load time. Skips
+        // `Composite` targets (one binding fans out to many inner
+        // params; convert-vs-target validation isn't a single check).
+        // Unknown handles or unknown params on resolved handles aren't
+        // flagged here — those classes go through different paths
+        // (rename aliasing, exposure stripping) and forcing a hard
+        // error here would refuse to load otherwise-valid documents.
+        if let Some(meta) = self.preset_metadata.as_ref() {
+            use manifold_core::effect_graph_def::BindingTarget;
+            use crate::node_graph::param_binding::convert_param_value;
+            for binding in &meta.bindings {
+                let BindingTarget::HandleNode { handle, param } = &binding.target else {
+                    continue;
+                };
+                let Some(node_id) = graph.node_id_by_handle(handle) else {
+                    continue;
+                };
+                let target_ty = graph.get_node(node_id).and_then(|inst| {
+                    inst.node
+                        .parameters()
+                        .iter()
+                        .find(|p| p.name == param.as_str())
+                        .map(|p| p.ty)
+                });
+                let Some(target_ty) = target_ty else {
+                    continue;
+                };
+                // Probe value: 0.0 lands cleanly through every convert
+                // (Float→0.0, IntRound→0.0, BoolThreshold→false,
+                // EnumRound→0). The probe's value doesn't matter —
+                // only the produced `ParamValue` variant does.
+                let probe = convert_param_value(binding.convert, 0.0);
+                if !param_value_matches_type(&probe, target_ty) {
+                    return Err(LoadError::BindingConvertTypeMismatch {
+                        binding_id: binding.id.clone(),
+                        handle: handle.clone(),
+                        param: param.clone(),
+                        convert: param_convert_name(binding.convert),
+                        target_param_type: param_type_name(target_ty),
+                    });
+                }
+            }
+        }
+
         // Step 6 (exposure unification): seed `exposed_params` on the
         // live graph from `preset_metadata.bindings`. Each binding's
         // target param becomes exposed by default.
@@ -763,6 +846,17 @@ impl EffectGraphDefExt for EffectGraphDef {
         }
 
         Ok(graph)
+    }
+}
+
+/// Tag for [`LoadError::BindingConvertTypeMismatch`] `convert` field.
+fn param_convert_name(c: manifold_core::effects::ParamConvert) -> &'static str {
+    use manifold_core::effects::ParamConvert;
+    match c {
+        ParamConvert::Float => "Float",
+        ParamConvert::IntRound => "IntRound",
+        ParamConvert::BoolThreshold => "BoolThreshold",
+        ParamConvert::EnumRound => "EnumRound",
     }
 }
 
@@ -1326,6 +1420,88 @@ mod tests {
         };
         let result = doc.into_graph(&registry());
         assert!(result.is_ok(), "v2 doc should load: {:?}", result.err());
+    }
+
+    /// Regression for the silent BasicShapes `fill` slider bug: a
+    /// binding whose `convert` produces a `ParamValue` variant the
+    /// target inner-node param's declared `ParamType` doesn't accept
+    /// must surface as a clean `LoadError` at load time, not silently
+    /// fall back to the inline default at read time. `node.math.a` is
+    /// `Float`-typed; binding with `EnumRound` writes `Enum(n)`, which
+    /// `as_scalar()` deliberately refuses to coerce — exactly the
+    /// dead-state-param bug class. Pin the fence here.
+    #[test]
+    fn binding_convert_type_mismatch_surfaces_as_load_error() {
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, PresetMetadata,
+        };
+        use manifold_core::effects::ParamConvert;
+        use manifold_core::EffectTypeId;
+
+        let preset_metadata = Some(PresetMetadata {
+            id: EffectTypeId::new("test-preset"),
+            display_name: "Test".into(),
+            category: "Diagnostic".into(),
+            osc_prefix: "test".into(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: vec![],
+            bindings: vec![BindingDef {
+                id: "bad".into(),
+                label: "Bad".into(),
+                default_value: 0.0,
+                target: BindingTarget::HandleNode {
+                    handle: "math_node".into(),
+                    param: "a".into(),
+                },
+                // EnumRound writes Enum into a Float-typed slot —
+                // the exact mismatch this fence catches.
+                convert: ParamConvert::EnumRound,
+                user_added: false,
+            }],
+            skip_mode: Default::default(),
+            param_aliases: vec![],
+            node_aliases: vec![],
+            value_aliases: vec![],
+            string_params: vec![],
+            string_bindings: vec![],
+        });
+        let doc = GraphDocument {
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            name: None,
+            description: None,
+            preset_metadata,
+            nodes: vec![NodeDocument {
+                id: 0,
+                type_id: "node.math".to_string(),
+                handle: Some("math_node".into()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+            }],
+            wires: vec![],
+        };
+        let err = expect_err(doc.into_graph(&registry()));
+        match err {
+            LoadError::BindingConvertTypeMismatch {
+                binding_id,
+                handle,
+                param,
+                convert,
+                target_param_type,
+            } => {
+                assert_eq!(binding_id, "bad");
+                assert_eq!(handle, "math_node");
+                assert_eq!(param, "a");
+                assert_eq!(convert, "EnumRound");
+                assert_eq!(target_param_type, "Float");
+            }
+            other => panic!("expected BindingConvertTypeMismatch, got {other:?}"),
+        }
     }
 
     #[test]
