@@ -7,7 +7,9 @@ use ahash::{AHashMap, AHashSet};
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
-use crate::node_graph::ports::{ItemKind, PortKind, PortType};
+use crate::node_graph::ports::{
+    ArrayType, ChannelElementType, ChannelSpec, ItemKind, MatchMode, PortKind, PortType,
+};
 
 /// Errors produced by graph mutation and validation.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +30,19 @@ pub enum GraphError {
         from: PortType,
         to: PortType,
     },
+    /// Both sides of an Array wire declared a Channels signature
+    /// (`specs` non-empty on producer and consumer) and the signatures
+    /// disagree. The boxed payload carries the specific divergence
+    /// (count / name / type) so the validator error message can point
+    /// at exactly the channel that mismatched. See
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` §5.3.
+    ///
+    /// Boxed to keep `GraphError` small (clippy `result_large_err`).
+    ///
+    /// Empty-specs wires use the legacy `PortTypeMismatch` path
+    /// (item_kind + size + align mismatch) during Phase 1-3; Phase 4
+    /// folds them into this variant when the cast-atom family deletes.
+    ChannelMismatch(Box<ChannelMismatchInfo>),
     /// A required input has no incoming wire.
     RequiredInputUnwired {
         node: NodeInstanceId,
@@ -74,6 +89,43 @@ pub enum GraphError {
     },
 }
 
+/// Payload for [`GraphError::ChannelMismatch`]. Boxed inside the
+/// `GraphError` variant to keep the enum compact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelMismatchInfo {
+    pub from_node: NodeInstanceId,
+    pub from_port: String,
+    pub to_node: NodeInstanceId,
+    pub to_port: String,
+    pub producer_specs: &'static [ChannelSpec],
+    pub consumer_specs: &'static [ChannelSpec],
+    pub reason: ChannelMismatchReason,
+}
+
+/// Why a [`GraphError::ChannelMismatch`] fired. Drives the human-
+/// readable validator error pointing at exactly the channel that
+/// didn't line up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelMismatchReason {
+    /// Producer and consumer signatures have different channel counts.
+    DifferentCount {
+        producer_count: u32,
+        consumer_count: u32,
+    },
+    /// Channel names differ at a specific index.
+    NameMismatch {
+        index: u32,
+        producer_name: Option<&'static str>,
+        consumer_name: Option<&'static str>,
+    },
+    /// Channel element types differ at a specific index.
+    TypeMismatch {
+        index: u32,
+        producer_type: ChannelElementType,
+        consumer_type: ChannelElementType,
+    },
+}
+
 impl std::fmt::Display for GraphError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -91,6 +143,53 @@ impl std::fmt::Display for GraphError {
             ),
             Self::PortTypeMismatch { from, to } => {
                 write!(f, "port type mismatch: {from:?} -> {to:?}")
+            }
+            Self::ChannelMismatch(info) => {
+                writeln!(
+                    f,
+                    "Channels mismatch in wire {:?}.{} -> {:?}.{}:",
+                    info.from_node, info.from_port, info.to_node, info.to_port
+                )?;
+                writeln!(
+                    f,
+                    "  Producer: {}",
+                    format_channels_signature(info.producer_specs)
+                )?;
+                writeln!(
+                    f,
+                    "  Consumer: {}",
+                    format_channels_signature(info.consumer_specs)
+                )?;
+                match &info.reason {
+                    ChannelMismatchReason::DifferentCount {
+                        producer_count,
+                        consumer_count,
+                    } => write!(
+                        f,
+                        "  Channel count differs: producer has {producer_count}, consumer expects {consumer_count}."
+                    ),
+                    ChannelMismatchReason::NameMismatch {
+                        index,
+                        producer_name,
+                        consumer_name,
+                    } => write!(
+                        f,
+                        "  Mismatch at index {index}: producer channel `{}` != consumer channel `{}`. \
+                         Rename one side (e.g. via `node.rename_channel`) or pull both onto the same \
+                         `well_known::*` constant.",
+                        producer_name.unwrap_or("<unknown>"),
+                        consumer_name.unwrap_or("<unknown>"),
+                    ),
+                    ChannelMismatchReason::TypeMismatch {
+                        index,
+                        producer_type,
+                        consumer_type,
+                    } => write!(
+                        f,
+                        "  Mismatch at index {index}: producer element type {producer_type:?} \
+                         != consumer element type {consumer_type:?}."
+                    ),
+                }
             }
             Self::RequiredInputUnwired { node, port } => write!(
                 f,
@@ -216,7 +315,34 @@ pub(super) fn validate_wire_endpoints(
         });
     }
 
-    if !port_types_compatible(from_port.ty, to_port.ty) {
+    // Channels path (specs-aware): if both endpoints declare a
+    // non-empty Channels signature, the new validator runs and surfaces
+    // a structured `ChannelMismatch` on disagreement (per
+    // `docs/CHANNEL_TYPE_SYSTEM.md` §5). Wires where either side has an
+    // empty `specs` fall through to the legacy `item_kind` + size +
+    // align check below, which keeps the Anonymous coercion and the
+    // existing typed-family wires working through Phase 3.
+    if let (PortType::Array(producer), PortType::Array(consumer)) =
+        (from_port.ty, to_port.ty)
+        && !producer.specs.is_empty()
+        && !consumer.specs.is_empty()
+    {
+        if let Err(reason) = channels_compatible(producer, consumer) {
+            return Err(GraphError::ChannelMismatch(Box::new(
+                ChannelMismatchInfo {
+                    from_node: from.0,
+                    from_port: from.1.to_string(),
+                    to_node: to.0,
+                    to_port: to.1.to_string(),
+                    producer_specs: producer.specs,
+                    consumer_specs: consumer.specs,
+                    reason,
+                },
+            )));
+        }
+        // Channels-compatible: skip the legacy check; the wire is
+        // already validated.
+    } else if !port_types_compatible(from_port.ty, to_port.ty) {
         return Err(GraphError::PortTypeMismatch {
             from: from_port.ty,
             to: to_port.ty,
@@ -235,6 +361,90 @@ pub(super) fn validate_wire_endpoints(
     }
 
     Ok(())
+}
+
+/// Channels-aware compatibility check for two Array endpoints.
+///
+/// Runs when both producer and consumer carry a non-empty Channels
+/// signature (`specs`). Returns `Ok(())` on match; on mismatch returns
+/// the specific [`ChannelMismatchReason`] so the validator can produce
+/// an error pointing at exactly the channel that diverged.
+///
+/// Match policy is driven by the *consumer's* `match_mode`:
+/// - [`MatchMode::Exact`] (default): producer and consumer signatures
+///   must be identical in length, names, types, and order.
+/// - [`MatchMode::Permissive`] (opt-in for generic transform
+///   operators): accept any producer signature.
+///
+/// See `docs/CHANNEL_TYPE_SYSTEM.md` §5.2.
+pub fn channels_compatible(
+    producer: ArrayType,
+    consumer: ArrayType,
+) -> Result<(), ChannelMismatchReason> {
+    match consumer.match_mode {
+        MatchMode::Permissive => Ok(()),
+        MatchMode::Exact => {
+            if producer.specs.len() != consumer.specs.len() {
+                return Err(ChannelMismatchReason::DifferentCount {
+                    producer_count: producer.specs.len() as u32,
+                    consumer_count: consumer.specs.len() as u32,
+                });
+            }
+            for (i, (p, c)) in producer
+                .specs
+                .iter()
+                .zip(consumer.specs.iter())
+                .enumerate()
+            {
+                if p.name != c.name {
+                    return Err(ChannelMismatchReason::NameMismatch {
+                        index: i as u32,
+                        producer_name: p.name.debug_name(),
+                        consumer_name: c.name.debug_name(),
+                    });
+                }
+                if p.ty != c.ty {
+                    return Err(ChannelMismatchReason::TypeMismatch {
+                        index: i as u32,
+                        producer_type: p.ty,
+                        consumer_type: c.ty,
+                    });
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Render a Channels signature as a single-line `Channels[name: Type, ...]`
+/// string for error messages.
+fn format_channels_signature(specs: &[ChannelSpec]) -> String {
+    if specs.is_empty() {
+        return "Channels[]".to_string();
+    }
+    let mut out = String::from("Channels[");
+    for (i, spec) in specs.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let name = spec
+            .name
+            .debug_name()
+            .map(String::from)
+            .unwrap_or_else(|| format!("{:#018x}", spec.name.hash()));
+        out.push_str(&name);
+        out.push_str(": ");
+        out.push_str(match spec.ty {
+            ChannelElementType::F32 => "F32",
+            ChannelElementType::I32 => "I32",
+            ChannelElementType::U32 => "U32",
+            ChannelElementType::Vec2F => "Vec2F",
+            ChannelElementType::Vec3F => "Vec3F",
+            ChannelElementType::Vec4F => "Vec4F",
+        });
+    }
+    out.push(']');
+    out
 }
 
 /// Port-type compatibility for the wire validator. Exact equality
@@ -905,6 +1115,7 @@ mod tests {
             GraphError::CycleDetected { .. } => "CycleDetected",
             GraphError::PortFormatMismatch { .. } => "PortFormatMismatch",
             GraphError::ConditionalRequirementUnmet { .. } => "ConditionalRequirementUnmet",
+            GraphError::ChannelMismatch(_) => "ChannelMismatch",
         }
     }
 
@@ -1534,5 +1745,278 @@ mod tests {
         let _ = renderer_to_final(&mut g, renderer);
 
         assert!(validate(&g).is_ok());
+    }
+
+    // ─── Channels-aware validator tests (Phase 1) ────────────────────
+
+    mod channels {
+        use super::*;
+        use crate::node_graph::ports::{
+            ArrayType, ChannelElementType, ChannelSpec, MatchMode,
+        };
+        use crate::node_graph::channel_names::well_known;
+
+        fn ch(name: crate::node_graph::ports::ChannelName, ty: ChannelElementType) -> ChannelSpec {
+            ChannelSpec { name, ty }
+        }
+
+        const EDGE_PAIR_SPECS: &[ChannelSpec] = &[
+            ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
+            ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+        ];
+
+        const PARTICLE_SPECS: &[ChannelSpec] = &[
+            ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
+            ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
+            ChannelSpec { name: well_known::LIFE,     ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::AGE,      ty: ChannelElementType::F32 },
+            ChannelSpec { name: well_known::COLOR,    ty: ChannelElementType::Vec4F },
+        ];
+
+        #[test]
+        fn exact_match_accepts_identical_signatures() {
+            let producer = ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Exact);
+            let consumer = ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Exact);
+            assert!(channels_compatible(producer, consumer).is_ok());
+        }
+
+        #[test]
+        fn exact_match_rejects_different_channel_count() {
+            const THREE: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::Z, ty: ChannelElementType::F32 },
+            ];
+            const TWO: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+            ];
+            let producer = ArrayType::of_channels(THREE, MatchMode::Exact);
+            let consumer = ArrayType::of_channels(TWO, MatchMode::Exact);
+            match channels_compatible(producer, consumer) {
+                Err(ChannelMismatchReason::DifferentCount {
+                    producer_count,
+                    consumer_count,
+                }) => {
+                    assert_eq!(producer_count, 3);
+                    assert_eq!(consumer_count, 2);
+                }
+                other => panic!("expected DifferentCount, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn exact_match_rejects_different_channel_name_at_index() {
+            const PRODUCER: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+            ];
+            const CONSUMER: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::Z, ty: ChannelElementType::F32 },
+            ];
+            let producer = ArrayType::of_channels(PRODUCER, MatchMode::Exact);
+            let consumer = ArrayType::of_channels(CONSUMER, MatchMode::Exact);
+            match channels_compatible(producer, consumer) {
+                Err(ChannelMismatchReason::NameMismatch {
+                    index,
+                    producer_name,
+                    consumer_name,
+                }) => {
+                    assert_eq!(index, 1);
+                    assert_eq!(producer_name, Some("y"));
+                    assert_eq!(consumer_name, Some("z"));
+                }
+                other => panic!("expected NameMismatch, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn exact_match_rejects_different_element_type_at_index() {
+            const PRODUCER: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::Vec3F },
+            ];
+            const CONSUMER: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::Vec2F },
+            ];
+            let producer = ArrayType::of_channels(PRODUCER, MatchMode::Exact);
+            let consumer = ArrayType::of_channels(CONSUMER, MatchMode::Exact);
+            match channels_compatible(producer, consumer) {
+                Err(ChannelMismatchReason::TypeMismatch {
+                    index,
+                    producer_type,
+                    consumer_type,
+                }) => {
+                    assert_eq!(index, 0);
+                    assert_eq!(producer_type, ChannelElementType::Vec3F);
+                    assert_eq!(consumer_type, ChannelElementType::Vec2F);
+                }
+                other => panic!("expected TypeMismatch, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn exact_match_rejects_reordered_specs() {
+            // Same names, same types, different order → Exact fails.
+            const NORMAL: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+            ];
+            const REORDERED: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+                ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+            ];
+            let producer = ArrayType::of_channels(NORMAL, MatchMode::Exact);
+            let consumer = ArrayType::of_channels(REORDERED, MatchMode::Exact);
+            assert!(channels_compatible(producer, consumer).is_err());
+        }
+
+        #[test]
+        fn permissive_consumer_accepts_arbitrary_producer() {
+            let permissive_consumer =
+                ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Permissive);
+            let unrelated_producer =
+                ArrayType::of_channels(PARTICLE_SPECS, MatchMode::Exact);
+            assert!(channels_compatible(unrelated_producer, permissive_consumer).is_ok());
+            let matching_producer =
+                ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Exact);
+            assert!(channels_compatible(matching_producer, permissive_consumer).is_ok());
+        }
+
+        #[test]
+        fn ad_hoc_signatures_using_unknown_channel_name_still_compare_by_hash() {
+            // An inline (non-registry) channel name compares fine — the
+            // FNV hash is the identity, even if `debug_name` returns None.
+            let local = crate::node_graph::ports::ChannelName::from_str("internal_counter");
+            let specs_a: &'static [ChannelSpec] = Box::leak(Box::new([
+                ch(local, ChannelElementType::U32),
+            ]));
+            let specs_b: &'static [ChannelSpec] = Box::leak(Box::new([
+                ch(local, ChannelElementType::U32),
+            ]));
+            let a = ArrayType::of_channels(specs_a, MatchMode::Exact);
+            let b = ArrayType::of_channels(specs_b, MatchMode::Exact);
+            assert!(channels_compatible(a, b).is_ok());
+            assert_eq!(local.debug_name(), None, "not in well_known registry");
+        }
+
+        // ─── End-to-end through validate_wire_endpoints ──────────────
+
+        #[test]
+        fn connect_routes_channels_mismatch_through_graph_error() {
+            // Build a graph where producer and consumer have different
+            // Channels signatures and confirm the validator surfaces
+            // ChannelMismatch, not the generic PortTypeMismatch.
+            const PRODUCER: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
+            ];
+            const CONSUMER: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec2F },
+            ];
+
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "src",
+                vec![],
+                vec![output("out", PortType::Array(ArrayType::of_channels(PRODUCER, MatchMode::Exact)))],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "dst",
+                vec![input("in", PortType::Array(ArrayType::of_channels(CONSUMER, MatchMode::Exact)), true)],
+                vec![],
+            )));
+
+            let r = g.connect((src, "out"), (dst, "in"));
+            match r {
+                Err(GraphError::ChannelMismatch(info)) => {
+                    assert!(matches!(
+                        info.reason,
+                        ChannelMismatchReason::TypeMismatch {
+                            index: 0,
+                            producer_type: ChannelElementType::Vec3F,
+                            consumer_type: ChannelElementType::Vec2F,
+                        }
+                    ));
+                }
+                other => panic!("expected ChannelMismatch, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn connect_falls_through_to_legacy_mismatch_for_pre_channels_wires() {
+            // Pre-migration wires (specs empty on both sides) still
+            // produce the legacy PortTypeMismatch on incompatible
+            // item_kind. The Anonymous coercion path is unchanged.
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "src",
+                vec![],
+                vec![output(
+                    "out",
+                    PortType::Array(ArrayType {
+                        item_size: 32,
+                        item_align: 16,
+                        item_kind: ItemKind::Particle,
+                        specs: &[],
+                        match_mode: MatchMode::Exact,
+                    }),
+                )],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "dst",
+                vec![input(
+                    "in",
+                    PortType::Array(ArrayType {
+                        item_size: 32,
+                        item_align: 16,
+                        item_kind: ItemKind::MeshVertex,
+                        specs: &[],
+                        match_mode: MatchMode::Exact,
+                    }),
+                    true,
+                )],
+                vec![],
+            )));
+            let r = g.connect((src, "out"), (dst, "in"));
+            assert!(matches!(r, Err(GraphError::PortTypeMismatch { .. })));
+        }
+
+        #[test]
+        fn legacy_anonymous_coercion_still_works_for_pre_migration_wires() {
+            // Typed Producer → Anonymous Consumer (both specs empty) =
+            // the established Postel's-law shape. Must keep working
+            // through Phase 3.
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "src",
+                vec![],
+                vec![output(
+                    "out",
+                    PortType::Array(ArrayType {
+                        item_size: 8,
+                        item_align: 4,
+                        item_kind: ItemKind::EdgePair,
+                        specs: &[],
+                        match_mode: MatchMode::Exact,
+                    }),
+                )],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "dst",
+                vec![input(
+                    "in",
+                    PortType::Array(ArrayType {
+                        item_size: 8,
+                        item_align: 4,
+                        item_kind: ItemKind::Anonymous,
+                        specs: &[],
+                        match_mode: MatchMode::Exact,
+                    }),
+                    true,
+                )],
+                vec![],
+            )));
+            assert!(g.connect((src, "out"), (dst, "in")).is_ok());
+        }
     }
 }

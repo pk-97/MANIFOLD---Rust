@@ -34,11 +34,11 @@ mod snapshot;
 mod state_store;
 mod validation;
 
-// Phase 0 throwaway: end-to-end Channel-type-system smoke test.
-// Deleted in Phase 1 when the production types land in `ports.rs` /
-// `validation.rs`. See `docs/CHANNEL_TYPE_SYSTEM.md` §10 Phase 0.
-#[cfg(test)]
-mod channel_smoke;
+/// Canonical channel-name registry for the Channel type system. The
+/// `well_known_channels!` macro generates the constants and the
+/// collision-check test from a single source list; see the module
+/// docs and `docs/CHANNEL_TYPE_SYSTEM.md` §7.
+pub mod channel_names;
 
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
@@ -76,8 +76,9 @@ pub use persistence::{
     NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,
 };
 pub use ports::{
-    ArrayType, ItemKind, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType,
-    ScalarType,
+    ArrayType, ChannelElementType, ChannelName, ChannelSpec, ItemKind, KnownItem, MatchMode,
+    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType, std430_layout,
+    std430_stride, std430_stride_and_align,
 };
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
@@ -85,4 +86,7 @@ pub use snapshot::{
     ParamSnapshotKind, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
 pub use state_store::{NodeState, OwnerKey, StateStore};
-pub use validation::{GraphError, topological_sort, validate};
+pub use validation::{
+    ChannelMismatchInfo, ChannelMismatchReason, GraphError, channels_compatible,
+    topological_sort, validate,
+};

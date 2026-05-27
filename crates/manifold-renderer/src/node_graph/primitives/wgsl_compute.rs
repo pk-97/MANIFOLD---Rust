@@ -513,6 +513,8 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                             item_size: 4,
                             item_align: 4,
                             item_kind: ItemKind::Anonymous,
+                            specs: &[],
+                            match_mode: crate::node_graph::ports::MatchMode::Exact,
                         }),
                         kind: PortKind::Output,
                         required: false,
@@ -711,6 +713,8 @@ fn element_to_array_type(element: &naga::Type, _stride: u32) -> Result<ArrayType
         item_size: span,
         item_align: 4,
         item_kind: ItemKind::Anonymous,
+        specs: &[],
+        match_mode: crate::node_graph::ports::MatchMode::Exact,
     })
 }
 
@@ -1179,6 +1183,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 item_size: 64,
                 item_align: 4,
                 item_kind: ItemKind::Anonymous,
+                specs: &[],
+                match_mode: crate::node_graph::ports::MatchMode::Exact,
             })
         );
         assert_eq!(node.outputs.len(), 1);
@@ -1236,6 +1242,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 item_size: 4,
                 item_align: 4,
                 item_kind: ItemKind::Anonymous,
+                specs: &[],
+                match_mode: crate::node_graph::ports::MatchMode::Exact,
             })
         );
         assert!(node.aliased_array_io().is_empty());
