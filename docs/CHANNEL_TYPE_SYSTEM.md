@@ -1,8 +1,20 @@
 # Channel Type System — Foundational Design
 
-**Status:** Active design. **Phase 0 not yet started.** This document is the source of truth for the named-channel type system migration. Agents executing any phase of this work should read this document end-to-end first.
+**Status:** Active migration. **Phases 0–3 + 4a shipped; Phase 4b deferred.** This document is the source of truth for the named-channel type system migration. Agents executing any remaining phase should read this document end-to-end first.
 
 **Established:** 2026-05-27. Sign-off pass on 2026-05-27 added a Phase 0 (end-to-end smoke test on one typed family before Phase 1 hardens the foundation) and baked in five revisions to the original design: sample count rides on the wire's runtime interface; pad fields use an explicit per-field marker instead of a `_pad*` name-prefix heuristic; one canonical macro form per typed family enforced by lint; the `well_known` registry + collision test are emitted from a single source list via macro; the Permissive allow-list is a `pub const` in the validator that the test enumerates against. §13 resolutions and the relevant sections (§3.1, §7.5, §8.2, §8.6, §9.5, §10, §11.4, §12.1) reflect these decisions.
+
+**Implementation log (2026-05-27 overnight run, single session):**
+
+- **Phase 0 shipped** — commit `c59427e4`. Throwaway smoke test on `EdgePair` validated the design end-to-end before Phase 1 hardened anything.
+- **Phase 1 shipped** — commit `6a7a469c`. Core types (`ChannelName`, `ChannelElementType`, `ChannelSpec`, reshaped `ArrayType`, `MatchMode`, std430 calculators, `well_known_channels!` macro + registry, `channels_compatible` predicate, `GraphError::ChannelMismatch(Box<ChannelMismatchInfo>)`). Channel-name registry + collision test emit from a single source list per §7.5 resolution.
+- **Phase 2 shipped** — commit `05463952`. `primitive!` macro extended with `Channels[name: Type, ...]` inline syntax and `Channels[permissive]` modifier. TT-muncher `__channels_specs!` handles mixed `well_known::*` ident and inline string literal names. Four smoke primitives + six tests exercise the syntax end-to-end through the validator.
+- **Phase 3 shipped** — commit `e6357705`. `KnownItem` trait gains `const SPECS: &'static [ChannelSpec] = &[]` default; `ArrayType::of_known<T>()` folds `T::SPECS` into wire specs. Every typed family (`Particle`, `MeshVertex`, `Vec4Vertex`, `InstanceTransform`, `CurvePoint`, `EdgePair`, `Blob`) defines its `_SPECS` constant and wires it through `KnownItem`. §13(3) resolution applied (paired scalars at 4-byte align for CurvePoint and Vec4Vertex). Seven drift-assertion tests confirm `std430_stride(SPECS) == size_of::<Struct>()` for each family.
+- **Phase 4a shipped** — commit `40af5d37`. `wgsl_compute`'s naga walk extracts ChannelSpec lists from `var<storage>` struct fields (§8.2). The existing `_pad*` name-prefix heuristic is reused (consistent with the uniform-member walker at `wgsl_compute.rs:654`); the explicit-marker mechanism originally signed off in §8.2 is parked for follow-up. `port_types_compatible` gains an `Anonymous → Anonymous` rule that ignores specs, preserving the wgsl_compute → cast atom bridge while typed signatures flow through the new validator path on every other wire.
+
+**Phase 4b deferred** — the deletion cascade (cast atom family deletion, `ItemKind` enum + `KnownItem::ITEM_KIND` deletion, `Blob` struct deletion, JSON surgery on `BlackHole.json` + `ComputeStrangeAttractor.json` + `ParticleText.json` — the last discovered during the overnight audit, not in the original §10 deliverables; legacy `wgsl_compute_*` variant deletion) stays for a follow-up chat where Peter is available to spot-check the JSON edits and visually verify the affected presets. `check-presets` is load-time-only and won't surface visual regressions on those three presets; that's the load-bearing constraint that splits 4 into 4a + 4b.
+
+**Acceptance criteria after this run:** 860/860 manifold-renderer lib tests passing; clippy clean; `check-presets` reports 49/49 OK; bloom parity test (representative effect using Particle) passing. The §5 workspace test gate and §6 docs / snapshot pass also stay pending until after Phase 4b lands.
 
 **Companion docs:**
 
