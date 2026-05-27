@@ -27,6 +27,8 @@ struct MeshVertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 struct CurvePoint {

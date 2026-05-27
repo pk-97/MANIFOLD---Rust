@@ -39,6 +39,10 @@ struct MaterialRenderUniforms {
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
     cel_params: [f32; 4],
+    /// `(use_normal_map, use_roughness_map, 0, 0)` presence flags
+    /// for the per-pixel surface texture sampling. 1.0 = sample at
+    /// per-fragment mesh UV; 0.0 = use the material's scalar value.
+    texture_flags: [f32; 4],
 }
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
@@ -59,13 +63,15 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
 crate::primitive! {
     name: Render3DMesh,
     type_id: "node.render_3d_mesh",
-    purpose: "Bundled 3D mesh renderer (TouchDesigner / Blender shape). Reads an Array<MeshVertex> as a triangle list, takes a Camera + Material + optional Light + optional envmap, and emits a shaded `color` Texture2D plus optional G-buffer outputs (`world_pos`, `world_normal`). The material's MaterialKind picks the fragment shader — Unlit / Phong / PBR / Cel. Per-kind requirements: Unlit needs no light. Phong / Cel need `light`. PBR needs `light` AND `envmap`. Missing required inputs trigger a structured error + magenta-clear fallback (per the no-silent-fallbacks rule). Optional textures (normal_map / base_color_map / roughness_map / metallic_map) are reserved for v2 — only `envmap` is wired in v1 (the load-bearing PBR IBL source).",
+    purpose: "Bundled 3D mesh renderer (TouchDesigner / Blender shape). Reads an Array<MeshVertex> as a triangle list, takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), and emits a shaded `color` Texture2D plus optional G-buffer outputs (`world_pos`, `world_normal`). The material's MaterialKind picks the fragment shader — Unlit / Phong / PBR / Cel. Per-kind requirements: Unlit needs no light. Phong / Cel need `light`. PBR needs `light` AND `envmap`. Surface textures sample at each fragment's mesh UV (the per-vertex `uv` channel interpolated through the rasterizer), so the texture sticks to the geometry as the camera moves — the industry-standard mesh-UV pattern. normal_map is interpreted as a world-space signed normal; roughness_map's red channel replaces the material's scalar roughness when wired.",
     inputs: {
         vertices: Array(MeshVertex) required,
         camera: Camera required,
         material: Material required,
         light: Light optional,
         envmap: Texture2D optional,
+        normal_map: Texture2D optional,
+        roughness_map: Texture2D optional,
     },
     outputs: {
         color: Texture2D,
@@ -171,6 +177,8 @@ fn build_uniforms(
     light_dir: [f32; 3],
     light_color: [f32; 4],
     material: &Material,
+    use_normal_map: bool,
+    use_roughness_map: bool,
 ) -> MaterialRenderUniforms {
     MaterialRenderUniforms {
         view_proj,
@@ -190,6 +198,12 @@ fn build_uniforms(
             material.cel_bands as f32,
             material.band_low,
             material.band_high,
+            0.0,
+        ],
+        texture_flags: [
+            if use_normal_map { 1.0 } else { 0.0 },
+            if use_roughness_map { 1.0 } else { 0.0 },
+            0.0,
             0.0,
         ],
     }
@@ -228,6 +242,8 @@ impl Primitive for Render3DMesh {
         let needs_envmap = material.requires_envmap();
         let light_wired = ctx.inputs.light("light");
         let envmap_wired = ctx.inputs.texture_2d("envmap");
+        let normal_map_wired = ctx.inputs.texture_2d("normal_map");
+        let roughness_map_wired = ctx.inputs.texture_2d("roughness_map");
 
         if needs_light && light_wired.is_none() {
             ctx.error(format!(
@@ -303,7 +319,15 @@ impl Primitive for Render3DMesh {
 
         let aspect = width as f32 / height as f32;
         let view_proj = cam.view_proj(aspect);
-        let uniforms = build_uniforms(view_proj, &cam, light_dir, light_color, &material);
+        let uniforms = build_uniforms(
+            view_proj,
+            &cam,
+            light_dir,
+            light_color,
+            &material,
+            normal_map_wired.is_some(),
+            roughness_map_wired.is_some(),
+        );
 
         let gpu = ctx.gpu_encoder();
 
@@ -338,10 +362,14 @@ impl Primitive for Render3DMesh {
         if let (Some(target), Some(pipeline)) = (color_target, material_pipeline.as_ref()) {
             // PBR needs an envmap binding; the validator already
             // guaranteed it's wired (or we returned magenta earlier).
-            // Unlit / Phong / Cel pipelines never reference envmap, so
-            // binding the dummy is harmless — naga's per-entry-point
-            // MSL drops the unused argument.
+            // Unlit / Phong / Cel pipelines never reference envmap /
+            // normal_map / roughness_map, so binding the dummy is
+            // harmless — naga's per-entry-point MSL drops the unused
+            // arguments. The presence flags in `texture_flags` gate
+            // sampling on the entry points that DO reference them.
             let envmap_texture = envmap_wired.unwrap_or(dummy_envmap);
+            let normal_map_texture = normal_map_wired.unwrap_or(dummy_envmap);
+            let roughness_map_texture = roughness_map_wired.unwrap_or(dummy_envmap);
             let bindings = [
                 GpuBinding::Bytes {
                     binding: 0,
@@ -360,6 +388,14 @@ impl Primitive for Render3DMesh {
                     binding: 3,
                     sampler,
                 },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: normal_map_texture,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: roughness_map_texture,
+                },
             ];
             gpu.native_enc.draw_instanced_depth(
                 pipeline,
@@ -376,9 +412,10 @@ impl Primitive for Render3DMesh {
 
         // ===== G-buffer passes (independent of material) =====
         // Bind the same vertex buffer + uniform (G-buffer shaders only
-        // read view_proj; everything else is inert). Dummy envmap +
-        // sampler are bound for binding-layout completeness but the
-        // entry points don't reference them.
+        // read view_proj; everything else is inert). Dummy envmap /
+        // normal_map / roughness_map + sampler are bound for binding-
+        // layout completeness but the entry points don't reference
+        // them.
         let gbuffer_bindings = [
             GpuBinding::Bytes {
                 binding: 0,
@@ -396,6 +433,14 @@ impl Primitive for Render3DMesh {
             GpuBinding::Sampler {
                 binding: 3,
                 sampler,
+            },
+            GpuBinding::Texture {
+                binding: 4,
+                texture: dummy_envmap,
+            },
+            GpuBinding::Texture {
+                binding: 5,
+                texture: dummy_envmap,
             },
         ];
         if let Some(wp_target) = world_pos_target {
@@ -486,6 +531,12 @@ mod tests {
         let envmap = by_name("envmap");
         assert!(!envmap.required);
         assert_eq!(envmap.ty, PortType::Texture2D);
+        let normal_map = by_name("normal_map");
+        assert!(!normal_map.required);
+        assert_eq!(normal_map.ty, PortType::Texture2D);
+        let roughness_map = by_name("roughness_map");
+        assert!(!roughness_map.required);
+        assert_eq!(roughness_map.ty, PortType::Texture2D);
     }
 
     #[test]

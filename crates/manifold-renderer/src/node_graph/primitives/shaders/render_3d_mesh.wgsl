@@ -13,13 +13,21 @@
 // accesses, so unlit/phong/cel pipelines don't reference the envmap
 // binding even though the WGSL declares it.
 //
-// MeshVertex layout (32 bytes):
+// MeshVertex layout (48 bytes):
 //   position: vec3<f32> + pad
 //   normal:   vec3<f32> + pad
+//   uv:       vec2<f32> + pad
 //
 // Topology: every 3 consecutive vertices form one triangle.
 // The vertex shader looks up vertex `vertex_index` directly from the
 // storage buffer — no vertex buffer binding.
+//
+// Surface textures sample at the per-vertex `uv` channel interpolated
+// through the rasterizer. This is the industry-standard mesh-UV
+// pattern (Blender, Unreal, Unity, TouchDesigner) — the texel a
+// fragment reads depends on where the fragment lies on the parametric
+// surface, not where it lands on screen. Texture detail follows the
+// geometry as the camera orbits.
 //
 // Entry points:
 //   fs_unlit         — flat colour passthrough + emission
@@ -36,10 +44,12 @@ struct Vertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 // Superset uniform — fields inert for kinds that don't read them.
-// 16-byte aligned. Total: 64 + 16*8 = 192 bytes.
+// 16-byte aligned. Total: 64 + 16*9 = 208 bytes.
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -61,6 +71,11 @@ struct Uniforms {
     specular: vec4<f32>,
     // x: cel_bands (count, as f32), y: band_low, z: band_high, w: reserved.
     cel_params: vec4<f32>,
+    // x: use_normal_map (0/1), y: use_roughness_map (0/1), z/w: reserved.
+    // 1.0 = sample the corresponding texture at in.uv; 0.0 = fall back
+    // to the scalar value baked into the material (or the geometry's
+    // own per-vertex normal for the normal channel).
+    texture_flags: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -69,11 +84,26 @@ struct Uniforms {
 // pipeline at draw time; other pipelines never sample it.
 @group(0) @binding(2) var envmap: texture_2d<f32>;
 @group(0) @binding(3) var envmap_sampler: sampler;
+// Surface textures sampled at the per-vertex mesh UV. Both are
+// optional inputs on the renderer; when unwired the renderer binds
+// a 1×1 dummy texture and `texture_flags` gates the sampling so the
+// material's scalar values take over.
+//
+// `normal_map` is a WORLD-SPACE signed normal (matches the convention
+// produced by `node.heightmap_to_normal` in WorldYUp mode). Tangent-
+// space normal maps are a future extension that requires per-vertex
+// tangents.
+//
+// `roughness_map`'s red channel replaces `pbr_metallic_roughness.y`
+// when wired.
+@group(0) @binding(4) var normal_map: texture_2d<f32>;
+@group(0) @binding(5) var roughness_map: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 @vertex
@@ -83,7 +113,34 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     out.clip_pos = u.view_proj * vec4<f32>(v.position, 1.0);
     out.world_pos = v.position;
     out.world_normal = v.normal;
+    out.uv = v.uv;
     return out;
+}
+
+// Resolve the surface normal per-fragment: when `normal_map` is wired
+// (texture_flags.x ≈ 1.0), sample at mesh UV and renormalise; otherwise
+// use the rasterizer-interpolated vertex normal. World-space convention
+// — matches `node.heightmap_to_normal`'s WorldYUp output.
+fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>) -> vec3<f32> {
+    if u.texture_flags.x > 0.5 {
+        let sampled = textureSampleLevel(normal_map, envmap_sampler, uv, 0.0).rgb;
+        let n = sampled + vec3<f32>(1e-8, 0.0, 0.0);
+        return normalize(n);
+    }
+    return normalize(vertex_normal);
+}
+
+// Resolve roughness per-fragment: roughness_map.r at mesh UV when
+// wired, else the material's scalar. Clamped to [0.01, 1.0] (D_GGX
+// blows up at 0).
+fn resolve_roughness(uv: vec2<f32>) -> f32 {
+    var r: f32;
+    if u.texture_flags.y > 0.5 {
+        r = textureSampleLevel(roughness_map, envmap_sampler, uv, 0.0).r;
+    } else {
+        r = u.pbr_metallic_roughness.y;
+    }
+    return max(r, 0.01);
 }
 
 // ===== Material kind fragment entry points =====
@@ -98,7 +155,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 // Phong — Lambert diffuse + Blinn-Phong specular.
 @fragment
 fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+    let N = resolve_normal(in.uv, in.world_normal);
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
@@ -115,12 +172,12 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
 // reflection from envmap. F0 blends 0.04 dielectric ↔ base_color metal.
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+    let N = resolve_normal(in.uv, in.world_normal);
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let metallic = clamp(u.pbr_metallic_roughness.x, 0.0, 1.0);
-    let roughness = max(u.pbr_metallic_roughness.y, 0.01);
+    let roughness = resolve_roughness(in.uv);
 
     let n_dot_l = max(dot(N, L), 0.0);
     let n_dot_v = max(dot(N, V), 0.001);
@@ -173,7 +230,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 // band_low (shadow) and band_high (lit).
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+    let N = resolve_normal(in.uv, in.world_normal);
     let L = normalize(u.light_dir.xyz);
     let n_dot_l = max(dot(N, L), 0.0);
     let bands = max(u.cel_params.x, 2.0);
