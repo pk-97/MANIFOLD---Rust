@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Metallic Glass",
-  "description": "Y2K-aesthetic feedback-displacement metallic surface generator, decomposed from the legacy MetallicGlassGenerator into curated primitives.\n\nUpstream pipeline (unchanged): 3D simplex noise drives a feedback-blend loop (mix Difference + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result. The smoothed height feeds (a) the displaced-grid mesh path and (b) a mirror_axis → Sobel-magnitude chain that produces an edge / roughness modulation texture.\n\nTerminal (decomposed 2026-05-27 from the fused node.render_3d_mesh_pbr_ibl bundle): the geometry pass (node.render_3d_mesh, extended with G-buffer outputs) rasterises the displaced mesh and writes world_pos + world_normal alongside its Lambert color (the color output is unused here — only the G-buffer is consumed). A full-resolution world-space surface normal is recomputed from the height texture via node.heightmap_to_normal (coord_space=WorldYUp, aspect-corrected). A per-pixel roughness map is derived from the edge texture via node.scale_offset_texture, mapping edge ∈ [0,1] to roughness ∈ [0.05, 0.20]. node.cook_torrance_specular + node.equirect_envmap_sample then shade per pixel in 3D-mesh mode (world_pos wired from render_3d_mesh.world_pos, view/light wired from camera_orbit.pos_xyz / light_pos params), the two terms are summed via node.mix mode=Add, and node.reinhard_tone_map produces the final SDR output. The env_map upstream stays node.bake_equirect_envmap (the procedural HDR studio).\n\nKnown parity deltas vs the legacy bundle (all documented and acceptable for live performance):\n(1) The packed RGBA material's second temporal_blend smoothing pass was dropped — each PBR atom now samples height and edge directly from the upstream chain (pre-pack). The primary feedback loop on the height field (node.feedback at amount=0.98) still applies, so the surface evolves slowly; the absence of the second temporal smoothing produces slightly more per-frame noise on the reflections. Visually subtle.\n(2) Displacement and roughness curves: the outer-card `displace` slider now also drives a node.gain on the height feeding heightmap_to_normal, preserving the legacy coupling between displacement and normal steepness. The inverse-square attenuation scale stays at the legacy's 25.0.\n(3) Per-pixel normals come from heightmap_to_normal's WorldYUp mode with aspect correction wired from system.aspect — same math shape as the legacy bundle's inline finite-difference + cross-product, modulo a ≤1 ULP per-pixel difference from atom-decomposition reassociation.\n\nAtom activations and extensions shipped alongside this decomposition (all reusable for any future PBR-on-3D-mesh preset):\n  - render_3d_mesh: added world_pos + world_normal G-buffer outputs (additive — Lambert color path unchanged)\n  - cook_torrance_specular: added optional world_pos + roughness_map inputs + attenuation_scale param; 3D-mesh mode when world_pos wired\n  - equirect_envmap_sample: added optional world_pos + roughness_map inputs + roughness/metallic/base_color/roughness_scale params (Fresnel + roughness coupling folded into the atom)\n  - heightmap_to_normal: added coord_space enum (TangentZ default | WorldYUp new) + aspect input\n  - camera_orbit: added pos_x/pos_y/pos_z scalar outputs",
+  "description": "Y2K-aesthetic feedback-displacement metallic surface generator, decomposed from the legacy MetallicGlassGenerator into curated primitives.\n\nUpstream pipeline: 3D simplex noise drives a feedback-blend loop (mix Difference + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result. The smoothed height feeds (a) a levels-shaped height channel and (b) a mirror_axis → Sobel-magnitude chain that produces an edge / roughness modulation texture. Both channels then go through their own second-stage temporal blend (node.feedback + node.mix Lerp at 0.15) that matches the legacy bundle's packed-material smoothing pass.\n\nTerminal (decomposed 2026-05-27 from the fused node.render_3d_mesh_pbr_ibl bundle): the geometry pass (node.render_3d_mesh, extended with G-buffer outputs) rasterises the displaced mesh and writes world_pos + world_normal alongside its Lambert color (the color output is unused here — only the G-buffer is consumed). A full-resolution world-space surface normal is recomputed from the smoothed height texture via node.heightmap_to_normal (coord_space=WorldYUp, aspect-corrected). The z_scale param is computed in the graph as `aspect / output_width` (matches the legacy `2 * aspect * texel` formula after the helper's built-in 0.5 half-difference). A per-pixel roughness map is derived from the smoothed edge texture via node.scale_offset_texture, mapping edge ∈ [0,1] to roughness ∈ [0.05, 0.20]. node.cook_torrance_specular + node.equirect_envmap_sample then shade per pixel in 3D-mesh mode (world_pos wired from render_3d_mesh.world_pos, view/light wired from camera_orbit.pos_xyz / light_pos params), the two terms are summed via node.mix mode=Add, and node.reinhard_tone_map produces the final SDR output. The env_map upstream stays node.bake_equirect_envmap (the procedural HDR studio).\n\nParity vs legacy bundle: math-equivalent within ≤1 ULP per pixel from atom-decomposition reassociation. The outer-card `displace` slider drives a node.gain on the height feeding heightmap_to_normal, preserving the legacy displacement-coupled normal steepness; inverse-square attenuation scale matches the legacy's 25.0; the second temporal-blend smoothing pass is applied per-channel (height and edge separately) since the decomposed graph no longer has a packed material. z_scale is driven from canvas dimensions matching the legacy texel-based formula.\n\nAtom activations and extensions shipped alongside this decomposition (all reusable for any future PBR-on-3D-mesh preset):\n  - render_3d_mesh: added world_pos + world_normal G-buffer outputs (additive — Lambert color path unchanged)\n  - cook_torrance_specular: added optional world_pos + roughness_map inputs + attenuation_scale param; 3D-mesh mode when world_pos wired\n  - equirect_envmap_sample: added optional world_pos + roughness_map inputs + roughness/metallic/base_color/roughness_scale params (Fresnel + roughness coupling folded into the atom)\n  - heightmap_to_normal: added coord_space enum (TangentZ default | WorldYUp new) + aspect input\n  - camera_orbit: added pos_x/pos_y/pos_z scalar outputs",
   "presetMetadata": {
     "id": "MetallicGlass",
     "displayName": "Metallic Glass",
@@ -228,6 +228,19 @@
     { "id": 49, "typeId": "node.gain", "handle": "height_for_normal_gain",
       "params": { "gain": { "type": "Float", "value": 0.2 } } },
 
+    { "id": 57, "typeId": "node.feedback", "handle": "fb_height_smooth",
+      "outputFormats": { "out": "rgba16float" } },
+    { "id": 58, "typeId": "node.mix", "handle": "temporal_blend_height",
+      "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
+
+    { "id": 59, "typeId": "node.feedback", "handle": "fb_edge_smooth",
+      "outputFormats": { "out": "rgba16float" } },
+    { "id": 60, "typeId": "node.mix", "handle": "temporal_blend_edge",
+      "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
+
+    { "id": 61, "typeId": "node.math", "handle": "z_scale_from_canvas",
+      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1920.0 }, "op": { "type": "Enum", "value": 3 } } },
+
     { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass",
       "params": {
         "light_intensity": { "type": "Float", "value": 0.0 },
@@ -327,8 +340,18 @@
     { "fromNode": 42, "fromPort": "out",    "toNode": 33, "toPort": "size_x" },
 
     { "fromNode": 33, "fromPort": "vertices", "toNode": 34, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out",  "toNode": 34, "toPort": "height" },
+    { "fromNode": 58, "fromPort": "out",  "toNode": 34, "toPort": "height" },
     { "fromNode": 34, "fromPort": "out",  "toNode": 35, "toPort": "in" },
+
+    { "fromNode": 13, "fromPort": "out",  "toNode": 58, "toPort": "b" },
+    { "fromNode": 57, "fromPort": "out",  "toNode": 58, "toPort": "a" },
+    { "fromNode": 58, "fromPort": "out",  "toNode": 57, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out",  "toNode": 57, "toPort": "seed" },
+
+    { "fromNode": 25, "fromPort": "out",  "toNode": 60, "toPort": "b" },
+    { "fromNode": 59, "fromPort": "out",  "toNode": 60, "toPort": "a" },
+    { "fromNode": 60, "fromPort": "out",  "toNode": 59, "toPort": "in" },
+    { "fromNode": 25, "fromPort": "out",  "toNode": 59, "toPort": "seed" },
 
     { "fromNode": 36, "fromPort": "out",  "toNode": 43, "toPort": "orbit" },
     { "fromNode": 37, "fromPort": "out",  "toNode": 43, "toPort": "tilt" },
@@ -337,11 +360,15 @@
     { "fromNode": 35, "fromPort": "out", "toNode": 50, "toPort": "vertices" },
     { "fromNode": 43, "fromPort": "out", "toNode": 50, "toPort": "camera" },
 
-    { "fromNode": 13, "fromPort": "out", "toNode": 49, "toPort": "in" },
+    { "fromNode": 58, "fromPort": "out", "toNode": 49, "toPort": "in" },
     { "fromNode": 49, "fromPort": "out", "toNode": 51, "toPort": "in" },
     { "fromNode": 0,  "fromPort": "aspect", "toNode": 51, "toPort": "aspect" },
 
-    { "fromNode": 25, "fromPort": "out", "toNode": 52, "toPort": "in" },
+    { "fromNode": 0,  "fromPort": "aspect",       "toNode": 61, "toPort": "a" },
+    { "fromNode": 0,  "fromPort": "output_width", "toNode": 61, "toPort": "b" },
+    { "fromNode": 61, "fromPort": "out",          "toNode": 51, "toPort": "z_scale" },
+
+    { "fromNode": 60, "fromPort": "out", "toNode": 52, "toPort": "in" },
 
     { "fromNode": 51, "fromPort": "out",       "toNode": 53, "toPort": "normal" },
     { "fromNode": 50, "fromPort": "world_pos", "toNode": 53, "toPort": "world_pos" },
