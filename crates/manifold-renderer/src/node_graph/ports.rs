@@ -138,18 +138,45 @@ pub enum ItemKind {
 /// kind via `Array(NewType)` in their `primitive!` declaration.
 pub trait KnownItem: bytemuck::Pod {
     const ITEM_KIND: ItemKind;
+    /// Named typed channels per sample, in std430 order. Populated for
+    /// migrated typed families per `docs/CHANNEL_TYPE_SYSTEM.md` §6;
+    /// the default `&[]` keeps pre-migration types compiling unchanged.
+    /// When non-empty, [`ArrayType::of_known`] folds this into the
+    /// wire's `specs` so the new validator path runs end-to-end on
+    /// `Array(T)` syntax (no JSON change needed; existing primitives
+    /// declaring `Array(T)` automatically gain Channels-aware
+    /// validation as their family migrates).
+    const SPECS: &'static [ChannelSpec] = &[];
 }
 
 impl KnownItem for u32 {
     const ITEM_KIND: ItemKind = ItemKind::U32Slot;
+    // Single-channel `value: U32` — the canonical convention for
+    // bare scalar arrays (scatter accumulators, grid indices, ID
+    // streams) per `docs/CHANNEL_TYPE_SYSTEM.md` §6.8.
+    const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
+        name: ChannelName::from_str("value"),
+        ty: ChannelElementType::U32,
+    }];
 }
 
 impl KnownItem for f32 {
     const ITEM_KIND: ItemKind = ItemKind::F32Slot;
+    const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
+        name: ChannelName::from_str("value"),
+        ty: ChannelElementType::F32,
+    }];
 }
 
 impl KnownItem for [f32; 2] {
     const ITEM_KIND: ItemKind = ItemKind::Vec2Slot;
+    // Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
+    // preserves byte parity with the existing `[f32; 2]` layout per
+    // the §6.8 / §13(3) resolution.
+    const SPECS: &'static [ChannelSpec] = &[
+        ChannelSpec { name: ChannelName::from_str("x"), ty: ChannelElementType::F32 },
+        ChannelSpec { name: ChannelName::from_str("y"), ty: ChannelElementType::F32 },
+    ];
 }
 
 /// Layout descriptor for [`PortType::Array`] wires.
@@ -226,7 +253,13 @@ impl ArrayType {
             item_size: std::mem::size_of::<T>() as u32,
             item_align: std::mem::align_of::<T>() as u32,
             item_kind: T::ITEM_KIND,
-            specs: &[],
+            // Phase 3: pull SPECS from the trait. For typed families
+            // that have migrated (Particle, MeshVertex, EdgePair, etc.)
+            // this lights up the Channels-aware validator path on every
+            // existing `Array(T)` declaration without touching any
+            // primitive call site. Pre-migration types use the default
+            // `&[]` and continue through the legacy `item_kind` path.
+            specs: T::SPECS,
             match_mode: MatchMode::Exact,
         }
     }

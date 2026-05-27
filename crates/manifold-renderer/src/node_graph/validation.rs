@@ -1277,7 +1277,20 @@ mod tests {
             vec![],
         )));
         let r = g.connect((a, "out"), (b, "in"));
-        assert!(matches!(r, Err(GraphError::PortTypeMismatch { .. })));
+        // Post-Phase-3: typed families carry SPECS via KnownItem, so
+        // the Channels-aware validator path runs and returns
+        // ChannelMismatch (different channel count / names / types)
+        // for typed-vs-typed mismatches. Pre-Phase-3 the same wires
+        // surfaced PortTypeMismatch. Accept either — both mean
+        // "wire correctly refused."
+        assert!(
+            matches!(
+                r,
+                Err(GraphError::PortTypeMismatch { .. })
+                    | Err(GraphError::ChannelMismatch(_))
+            ),
+            "wire with mismatched typed-family item layouts must be refused; got {r:?}",
+        );
     }
 
     /// Regression for the recurring "coordinate-space contract" bug
@@ -1287,8 +1300,8 @@ mod tests {
     /// the kind on the wire. `CurvePoint` (origin-centered 2D, what
     /// `render_lines` consumes) and `EdgePair` (two u32 indices)
     /// are both 8 bytes / 4-aligned, so under a pure size/align
-    /// check they would connect silently. The kind tag forces the
-    /// validator to refuse the wire.
+    /// check they would connect silently. The kind tag (and now the
+    /// channel specs) forces the validator to refuse the wire.
     #[test]
     fn rejects_array_ports_with_matching_layout_but_mismatched_kind() {
         use crate::generators::mesh_common::{CurvePoint, EdgePair};
@@ -1312,10 +1325,20 @@ mod tests {
             vec![],
         )));
         let r = g.connect((a, "out"), (b, "in"));
+        // Post-Phase-3: both types carry SPECS, so the new validator
+        // path catches this as a ChannelMismatch (different channel
+        // names: x/y vs a_index/b_index). Pre-Phase-3 it was a
+        // PortTypeMismatch via the item_kind difference. Either is
+        // correct: the wire is refused either way.
         assert!(
-            matches!(r, Err(GraphError::PortTypeMismatch { .. })),
+            matches!(
+                r,
+                Err(GraphError::PortTypeMismatch { .. })
+                    | Err(GraphError::ChannelMismatch(_))
+            ),
             "wiring CurvePoint into an EdgePair port must fail \
-             validation — byte layouts match but the kinds don't",
+             validation — byte layouts match but the channel \
+             signatures don't. Got {r:?}",
         );
     }
 

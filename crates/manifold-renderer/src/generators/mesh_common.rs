@@ -15,7 +15,8 @@
 //! coordinate / convention tag on the wire — see
 //! [`ItemKind`](crate::node_graph::ports::ItemKind).
 
-use crate::node_graph::ports::{ItemKind, KnownItem};
+use crate::node_graph::channel_names::well_known;
+use crate::node_graph::ports::{ChannelElementType, ChannelSpec, ItemKind, KnownItem};
 
 /// A 3D mesh vertex with surface normal and UV. Used by
 /// `node.generate_grid_mesh` and consumed by `node.render_3d_mesh`.
@@ -41,8 +42,18 @@ pub struct MeshVertex {
 
 const _: () = assert!(std::mem::size_of::<MeshVertex>() == 48);
 
+/// Channels signature for [`MeshVertex`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.2.
+/// Std430 stride 48 matches the existing `#[repr(C)]` struct (vec3+vec3+vec2
+/// with std430 alignment producing the same 48 bytes).
+pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::NORMAL,   ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::UV,       ty: ChannelElementType::Vec2F },
+];
+
 impl KnownItem for MeshVertex {
     const ITEM_KIND: ItemKind = ItemKind::MeshVertex;
+    const SPECS: &'static [ChannelSpec] = MESH_VERTEX_SPECS;
 }
 
 /// A 4D vertex in homogeneous hypercube space, before 4D rotation
@@ -56,8 +67,20 @@ pub struct Vec4Vertex {
 
 const _: () = assert!(std::mem::size_of::<Vec4Vertex>() == 16);
 
+/// Channels signature for [`Vec4Vertex`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.4.
+/// Paired scalars (x, y, z, w) at 4-byte alignment — preserves byte parity
+/// with `[f32; 4]` consumers. A single `position: Vec4F` would force 16-byte
+/// alignment and break those.
+pub const VEC4_VERTEX_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::Z, ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::W, ty: ChannelElementType::F32 },
+];
+
 impl KnownItem for Vec4Vertex {
     const ITEM_KIND: ItemKind = ItemKind::Vec4Vertex;
+    const SPECS: &'static [ChannelSpec] = VEC4_VERTEX_SPECS;
 }
 
 /// Per-instance transform for instanced mesh rendering. Matches
@@ -76,8 +99,19 @@ pub struct InstanceTransform {
 
 const _: () = assert!(std::mem::size_of::<InstanceTransform>() == 32);
 
+/// Channels signature for [`InstanceTransform`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.6.
+/// Two Vec4F slots — std430 stride 32, align 16. The struct's Rust-side
+/// `align_of` is 4 (from `[f32; 4]`); the std430 alignment of 16 takes
+/// over at GPU bind time, which is what the existing shaders already
+/// expect.
+pub const INSTANCE_TRANSFORM_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::POS_SCALE, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::ROT,       ty: ChannelElementType::Vec4F },
+];
+
 impl KnownItem for InstanceTransform {
     const ITEM_KIND: ItemKind = ItemKind::InstanceTransform;
+    const SPECS: &'static [ChannelSpec] = INSTANCE_TRANSFORM_SPECS;
 }
 
 /// A 2D point in **origin-centered pre-aspect curve space** — the
@@ -107,8 +141,18 @@ pub struct CurvePoint {
 
 const _: () = assert!(std::mem::size_of::<CurvePoint>() == 8);
 
+/// Channels signature for [`CurvePoint`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.3.
+/// Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
+/// the §13(3) resolution: a Vec2F here would force 8-byte alignment
+/// and break consumers expecting the existing `[f32; 2]` layout.
+pub const CURVE_POINT_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::X, ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::Y, ty: ChannelElementType::F32 },
+];
+
 impl KnownItem for CurvePoint {
     const ITEM_KIND: ItemKind = ItemKind::CurvePoint;
+    const SPECS: &'static [ChannelSpec] = CURVE_POINT_SPECS;
 }
 
 /// An explicit edge between two vertices in an `Array<CurvePoint>` or
@@ -140,8 +184,18 @@ impl EdgePair {
 
 const _: () = assert!(std::mem::size_of::<EdgePair>() == 8);
 
+/// Channels signature for [`EdgePair`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.5.
+/// Two `u32` index channels at 4-byte alignment. Matches the struct's
+/// 8-byte size; the `SENTINEL` (a == u32::MAX) for unused slots survives
+/// as an associated constant on the Rust struct.
+pub const EDGE_PAIR_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+];
+
 impl KnownItem for EdgePair {
     const ITEM_KIND: ItemKind = ItemKind::EdgePair;
+    const SPECS: &'static [ChannelSpec] = EDGE_PAIR_SPECS;
 }
 
 // ── Platonic-solid schema (shared by polytope_vertices + polytope_edges) ──
@@ -310,6 +364,79 @@ pub struct Blob {
 
 const _: () = assert!(std::mem::size_of::<Blob>() == 16);
 
+/// Channels signature for [`Blob`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.7.
+/// Four scalar f32 channels (x, y, width, height) — generic for any
+/// rectangle stream (detector boxes, face regions, sprite rects, viewport
+/// extents). Phase 4 deletes the `Blob` struct entirely; the wire type
+/// becomes `Channels[x, y, width, height]` with no Rust struct anchor.
+pub const BLOB_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::X,      ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::Y,      ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::WIDTH,  ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::HEIGHT, ty: ChannelElementType::F32 },
+];
+
 impl KnownItem for Blob {
     const ITEM_KIND: ItemKind = ItemKind::Blob;
+    const SPECS: &'static [ChannelSpec] = BLOB_SPECS;
+}
+
+#[cfg(test)]
+mod mesh_common_specs_drift {
+    use super::*;
+    use crate::node_graph::ports::std430_stride;
+
+    #[test]
+    fn mesh_vertex_specs_stride_matches_struct() {
+        assert_eq!(
+            std430_stride(MESH_VERTEX_SPECS) as usize,
+            std::mem::size_of::<MeshVertex>(),
+            "MESH_VERTEX_SPECS std430 stride drifted from struct MeshVertex size."
+        );
+    }
+
+    #[test]
+    fn vec4_vertex_specs_stride_matches_struct() {
+        assert_eq!(
+            std430_stride(VEC4_VERTEX_SPECS) as usize,
+            std::mem::size_of::<Vec4Vertex>(),
+            "VEC4_VERTEX_SPECS std430 stride drifted from struct Vec4Vertex size."
+        );
+    }
+
+    #[test]
+    fn instance_transform_specs_stride_matches_struct() {
+        assert_eq!(
+            std430_stride(INSTANCE_TRANSFORM_SPECS) as usize,
+            std::mem::size_of::<InstanceTransform>(),
+            "INSTANCE_TRANSFORM_SPECS std430 stride drifted from struct InstanceTransform size."
+        );
+    }
+
+    #[test]
+    fn curve_point_specs_stride_matches_struct() {
+        assert_eq!(
+            std430_stride(CURVE_POINT_SPECS) as usize,
+            std::mem::size_of::<CurvePoint>(),
+            "CURVE_POINT_SPECS std430 stride drifted from struct CurvePoint size."
+        );
+    }
+
+    #[test]
+    fn edge_pair_specs_stride_matches_struct() {
+        assert_eq!(
+            std430_stride(EDGE_PAIR_SPECS) as usize,
+            std::mem::size_of::<EdgePair>(),
+            "EDGE_PAIR_SPECS std430 stride drifted from struct EdgePair size."
+        );
+    }
+
+    #[test]
+    fn blob_specs_stride_matches_struct() {
+        assert_eq!(
+            std430_stride(BLOB_SPECS) as usize,
+            std::mem::size_of::<Blob>(),
+            "BLOB_SPECS std430 stride drifted from struct Blob size."
+        );
+    }
 }
