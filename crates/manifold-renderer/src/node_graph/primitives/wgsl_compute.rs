@@ -136,11 +136,6 @@ pub struct WgslCompute {
     /// MANIFOLD_WGSL_COMPUTE_TRACE diagnostic. Keyed by member name.
     /// Populated only when the env var is set; otherwise stays empty.
     last_logged_uniforms: AHashMap<String, f32>,
-    /// Latch: set to true after the first dispatch trace line so the
-    /// trace doesn't spam stderr at 60 Hz once we've confirmed the
-    /// node is running. Uniform-change prints continue to fire after
-    /// this — those are the interesting events.
-    dispatch_logged: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -249,7 +244,6 @@ impl WgslCompute {
             compile_failed: false,
             uniform_scratch: Vec::new(),
             last_logged_uniforms: AHashMap::new(),
-            dispatch_logged: false,
         };
         node.reparse(DEFAULT_WGSL.to_string());
         node
@@ -1017,17 +1011,6 @@ impl EffectNode for WgslCompute {
         }
 
         let pipeline = self.pipeline.as_ref().expect("pipeline compiled above");
-        if trace && !self.dispatch_logged {
-            eprintln!(
-                "[wgsl_compute node={:?}] first dispatch [{} {} {}] ({} bindings)",
-                node_id,
-                dx,
-                dy,
-                dz,
-                gpu_bindings.len()
-            );
-            self.dispatch_logged = true;
-        }
         let gpu = ctx.gpu_encoder();
         gpu.native_enc
             .dispatch_compute(pipeline, &gpu_bindings, [dx, dy, dz], TYPE_ID);
@@ -1047,18 +1030,37 @@ impl WgslCompute {
         }
         // Then array output (atomic accum or particle in/out).
         if let Some(buf) = ctx.outputs.array(port) {
-            // capacity = byte_len / item_size; we don't have item_size
-            // here directly but the buffer length is what the
-            // pre-allocator wrote, which matches the declared port
-            // size. We dispatch one workgroup per item along X.
-            // Item size unknown from the encoder side; default to one
-            // workgroup per u32-equivalent slot. Particle integrators
-            // dispatch on capacity / wx where capacity = byte_size / 64;
-            // we pick wx = workgroup_size.x so callers get one
-            // invocation per u32 slot at minimum. Generators that need
-            // a different dispatch domain should declare a texture
-            // output to disambiguate, or we add a JSON dispatch hint.
-            let count = (buf.size() as u32) / 4;
+            // Look up the declared item_size for this port from our
+            // introspected outputs list — the WGSL storage struct's
+            // byte span. count = buf_bytes / item_size = number of
+            // items the shader needs to process. The shader's
+            // `arrayLength(&items)` returns the same value, so the
+            // early-return at `i >= arrayLength(...)` lines up with
+            // the dispatch geometry: no wasted workgroups, no missed
+            // items. Falls back to the 4-byte-stride default if the
+            // port type isn't an Array(...) somehow — defensive only.
+            //
+            // The earlier `buf.size() / 4` formula treated every
+            // 4-byte slot as one work item, which dispatched 16×
+            // more workgroups than needed for a 64-byte Particle
+            // buffer (8M particles → 500K workgroups). That
+            // exceeded Apple Silicon's per-dim threadgroup grid
+            // limit (~64K-128K depending on family) and silently
+            // dropped the dispatch — the FluidSim2D seed_pattern
+            // bug manifested as "uniform updates fine, edges fire
+            // fine, but the seed buffer never receives the
+            // shader's writes."
+            let item_size = self
+                .outputs
+                .iter()
+                .find(|p| p.name == port)
+                .and_then(|p| match p.ty {
+                    PortType::Array(at) => Some(at.item_size),
+                    _ => None,
+                })
+                .unwrap_or(4)
+                .max(1);
+            let count = (buf.size() as u32) / item_size;
             return Some((count.div_ceil(wx), wy.max(1), wz.max(1)));
         }
         None
