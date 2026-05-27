@@ -31,6 +31,10 @@ struct InstancedMaterialUniforms {
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
     cel_params: [f32; 4],
+    /// `(use_normal_map, use_roughness_map, 0, 0)` presence flags
+    /// for the per-pixel surface texture sampling. 1.0 = sample at
+    /// per-fragment mesh UV; 0.0 = use the material's scalar value.
+    texture_flags: [f32; 4],
 }
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
@@ -51,7 +55,7 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
 crate::primitive! {
     name: RenderInstanced3DMesh,
     type_id: "node.render_instanced_3d_mesh",
-    purpose: "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap, picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
+    purpose: "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
     inputs: {
         vertices: Array(MeshVertex) required,
         instances: Array(InstanceTransform) required,
@@ -59,6 +63,8 @@ crate::primitive! {
         material: Material required,
         light: Light optional,
         envmap: Texture2D optional,
+        normal_map: Texture2D optional,
+        roughness_map: Texture2D optional,
     },
     outputs: {
         color: Texture2D,
@@ -169,6 +175,8 @@ fn build_uniforms(
     light_dir: [f32; 3],
     light_color: [f32; 4],
     material: &Material,
+    use_normal_map: bool,
+    use_roughness_map: bool,
 ) -> InstancedMaterialUniforms {
     InstancedMaterialUniforms {
         view_proj,
@@ -188,6 +196,12 @@ fn build_uniforms(
             material.cel_bands as f32,
             material.band_low,
             material.band_high,
+            0.0,
+        ],
+        texture_flags: [
+            if use_normal_map { 1.0 } else { 0.0 },
+            if use_roughness_map { 1.0 } else { 0.0 },
+            0.0,
             0.0,
         ],
     }
@@ -224,6 +238,8 @@ impl Primitive for RenderInstanced3DMesh {
         let needs_envmap = material.requires_envmap();
         let light_wired = ctx.inputs.light("light");
         let envmap_wired = ctx.inputs.texture_2d("envmap");
+        let normal_map_wired = ctx.inputs.texture_2d("normal_map");
+        let roughness_map_wired = ctx.inputs.texture_2d("roughness_map");
 
         if needs_light && light_wired.is_none() {
             ctx.error(format!(
@@ -288,7 +304,15 @@ impl Primitive for RenderInstanced3DMesh {
 
         let aspect = width as f32 / height as f32;
         let view_proj = cam.view_proj(aspect);
-        let uniforms = build_uniforms(view_proj, &cam, light_dir, light_color, &material);
+        let uniforms = build_uniforms(
+            view_proj,
+            &cam,
+            light_dir,
+            light_color,
+            &material,
+            normal_map_wired.is_some(),
+            roughness_map_wired.is_some(),
+        );
 
         let gpu = ctx.gpu_encoder();
         if self.depth_stencil.is_none() {
@@ -309,7 +333,12 @@ impl Primitive for RenderInstanced3DMesh {
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
         let dummy_envmap = self.dummy_envmap.as_ref().expect("just inserted");
+        // Unwired texture inputs bind the 1×1 dummy. texture_flags
+        // gates sampling on the entry points that reference them; the
+        // unused-arg cases are dropped by naga's per-entry-point MSL.
         let envmap_texture = envmap_wired.unwrap_or(dummy_envmap);
+        let normal_map_texture = normal_map_wired.unwrap_or(dummy_envmap);
+        let roughness_map_texture = roughness_map_wired.unwrap_or(dummy_envmap);
 
         gpu.native_enc.draw_instanced_depth(
             &pipeline,
@@ -338,6 +367,14 @@ impl Primitive for RenderInstanced3DMesh {
                 GpuBinding::Sampler {
                     binding: 4,
                     sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: normal_map_texture,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: roughness_map_texture,
                 },
             ],
             vertex_count,
@@ -388,6 +425,12 @@ mod tests {
         let envmap = by_name("envmap");
         assert!(!envmap.required);
         assert_eq!(envmap.ty, PortType::Texture2D);
+        let normal_map = by_name("normal_map");
+        assert!(!normal_map.required);
+        assert_eq!(normal_map.ty, PortType::Texture2D);
+        let roughness_map = by_name("roughness_map");
+        assert!(!roughness_map.required);
+        assert_eq!(roughness_map.ty, PortType::Texture2D);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS.len(), 1);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS[0].name, "color");
     }

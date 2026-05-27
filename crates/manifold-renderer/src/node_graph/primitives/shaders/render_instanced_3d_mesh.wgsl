@@ -16,6 +16,8 @@ struct Vertex {
     _pad0: f32,
     normal: vec3<f32>,
     _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
 };
 
 struct Instance {
@@ -24,8 +26,7 @@ struct Instance {
 };
 
 // Superset uniform — must match render_3d_mesh.wgsl's Uniforms layout
-// exactly so the host can share the Rust struct between the two
-// renderers. 16-byte aligned, 192 bytes.
+// exactly. 16-byte aligned, 208 bytes (192 + texture_flags).
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -36,6 +37,8 @@ struct Uniforms {
     pbr_metallic_roughness: vec4<f32>,
     specular: vec4<f32>,
     cel_params: vec4<f32>,
+    // x: use_normal_map (0/1), y: use_roughness_map (0/1), z/w: reserved.
+    texture_flags: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -43,12 +46,36 @@ struct Uniforms {
 @group(0) @binding(2) var<storage, read> instances: array<Instance>;
 @group(0) @binding(3) var envmap: texture_2d<f32>;
 @group(0) @binding(4) var envmap_sampler: sampler;
+// Surface textures sampled at the base mesh's per-vertex UV. Shared
+// across every instance — see render_3d_mesh.wgsl for the world-space
+// signed-RGB normal-map convention.
+@group(0) @binding(5) var normal_map: texture_2d<f32>;
+@group(0) @binding(6) var roughness_map: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
+
+fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>) -> vec3<f32> {
+    if u.texture_flags.x > 0.5 {
+        let sampled = textureSampleLevel(normal_map, envmap_sampler, uv, 0.0).rgb;
+        return normalize(sampled + vec3<f32>(1e-8, 0.0, 0.0));
+    }
+    return normalize(vertex_normal);
+}
+
+fn resolve_roughness(uv: vec2<f32>) -> f32 {
+    var r: f32;
+    if u.texture_flags.y > 0.5 {
+        r = textureSampleLevel(roughness_map, envmap_sampler, uv, 0.0).r;
+    } else {
+        r = u.pbr_metallic_roughness.y;
+    }
+    return max(r, 0.01);
+}
 
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
 fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
@@ -93,6 +120,7 @@ fn vs_main(
     out.clip_pos = u.view_proj * vec4<f32>(world_pos, 1.0);
     out.world_pos = world_pos;
     out.world_normal = world_normal;
+    out.uv = v.uv;
     return out;
 }
 
@@ -108,7 +136,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+    let N = resolve_normal(in.uv, in.world_normal);
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
@@ -123,12 +151,12 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+    let N = resolve_normal(in.uv, in.world_normal);
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let metallic = clamp(u.pbr_metallic_roughness.x, 0.0, 1.0);
-    let roughness = max(u.pbr_metallic_roughness.y, 0.01);
+    let roughness = resolve_roughness(in.uv);
 
     let n_dot_l = max(dot(N, L), 0.0);
     let n_dot_v = max(dot(N, V), 0.001);
@@ -169,7 +197,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    let N = normalize(in.world_normal);
+    let N = resolve_normal(in.uv, in.world_normal);
     let L = normalize(u.light_dir.xyz);
     let n_dot_l = max(dot(N, L), 0.0);
     let bands = max(u.cel_params.x, 2.0);
