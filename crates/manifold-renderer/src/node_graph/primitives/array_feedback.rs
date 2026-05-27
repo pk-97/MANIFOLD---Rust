@@ -174,12 +174,27 @@ impl Primitive for ArrayFeedback {
         // immediately repeated. When `seed` is unwired the edge fires
         // but there's nothing meaningful to reset from — degenerate
         // no-op rather than copying the back-edge `in` over itself.
-        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
+        let trace = std::env::var_os("MANIFOLD_WGSL_COMPUTE_TRACE").is_some();
+        let reset_scalar = ctx.inputs.scalar("reset_trigger");
+        if let Some(ParamValue::Float(v)) = reset_scalar {
             let current = v.round() as i32;
             let edge = match self.last_reset_trigger {
                 Some(prev) => current != prev,
                 None => false,
             };
+            if trace
+                && (edge || self.last_reset_trigger != Some(current))
+            {
+                eprintln!(
+                    "[array_feedback node={:?}] reset_trigger v={} current={} prev={:?} edge={} seed_wired={}",
+                    node_id,
+                    v,
+                    current,
+                    self.last_reset_trigger,
+                    edge,
+                    ctx.inputs.array("seed").is_some(),
+                );
+            }
             self.last_reset_trigger = Some(current);
             if edge && let Some(seed_buf) = ctx.inputs.array("seed") {
                 let state_mut = store
@@ -191,6 +206,13 @@ impl Primitive for ArrayFeedback {
                         .copy_buffer_to_buffer(seed_buf, &state_mut.prev, copy_size);
                 }
             }
+        } else if trace && reset_scalar.is_none() && self.last_reset_trigger.is_none() {
+            eprintln!(
+                "[array_feedback node={:?}] reset_trigger UNWIRED",
+                node_id
+            );
+            // Latch so the unwired warning fires once not every frame.
+            self.last_reset_trigger = Some(i32::MIN);
         }
 
         let state = store
