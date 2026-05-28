@@ -60,6 +60,8 @@ crate::primitive! {
     inputs: {
         position: ScalarF32 optional,
         uv_scale: ScalarF32 optional,
+        next: ScalarF32 optional,
+        prev: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -91,7 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening. The `trigger_count` scalar output is a monotonically increasing counter that bumps each time a NEW slice actually lands on the GPU (not per position-slider movement — fast scrubs that outrun the background loader skip intermediate frames and only tick once per visible swap). Wire it into node.trigger_gate / node.sample_and_hold / node.clip_trigger_index downstream to drive per-image randomization. Fires once at startup when the first slice loads; never resets on folder change (downstream gates compare deltas, monotonic matches the system.generator_input.trigger_count convention).",
+    composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening. The `trigger_count` scalar output is a monotonically increasing counter that bumps each time a NEW slice actually lands on the GPU (not per position-slider movement — fast scrubs that outrun the background loader skip intermediate frames and only tick once per visible swap). Wire it into node.trigger_gate / node.sample_and_hold / node.clip_trigger_index downstream to drive per-image randomization. Fires once at startup when the first slice loads; never resets on folder change (downstream gates compare deltas, monotonic matches the system.generator_input.trigger_count convention). The `next` and `prev` scalar inputs are trigger_count-style monotonic counters: each rising edge bumps the displayed image by ±1 (clamped to [0, N-1]). Wire MIDI buttons, keyboard shortcuts, clip retriggers — anything that already emits a monotonic trigger_count. Last-input-wins between slider and buttons: a button press holds its position until the user moves the slider, at which point the slider takes over again.",
     examples: [],
     picker: { label: "Image Folder", category: Atom },
     extra_fields: {
@@ -121,6 +123,19 @@ crate::primitive! {
         // `system.generator_input.trigger_count` convention — monotonic,
         // never resets, downstream gates compare deltas.
         trigger_count: u32 = 0,
+        // Rising-edge detection for `next` / `prev` trigger inputs.
+        // `None` on first frame after rebuild so the initial absorbed
+        // counter value doesn't fire spurious advances — same cold-start
+        // pattern as node.trigger_gate.
+        last_next: Option<u32> = None,
+        last_prev: Option<u32> = None,
+        // Slider-vs-buttons arbitration. `manual_idx = Some(i)` means
+        // the last input was a button press; we hold that index until
+        // the user moves the slider, at which point `manual_idx` clears
+        // and the slider takes over. `last_position` powers the
+        // change-detection that drives the clear.
+        last_position: Option<f32> = None,
+        manual_idx: Option<i32> = None,
     },
 }
 
@@ -146,6 +161,9 @@ impl Primitive for ImageFolder {
             self.current_index = -1;
             self.pending_load = None;
             self.pending_index = -1;
+            // Fresh folder → slider drives initial display; any
+            // accumulated button-driven override no longer makes sense.
+            self.manual_idx = None;
         }
 
         // Emit the trigger_count scalar with the current value up front;
@@ -198,7 +216,11 @@ impl Primitive for ImageFolder {
             }
         }
 
-        // 3. Resolve the target slice index from position.
+        // 3. Resolve the target slice index from position + prev/next
+        // triggers. Slider drives the base index; rising edges on the
+        // monotonic `next` / `prev` counters bump a separate
+        // `manual_idx` override. Slider movement clears the override
+        // (last-input-wins arbitration).
         if self.paths.is_empty() {
             let gpu = ctx.gpu_encoder();
             gpu.clear_texture(out, 0.0, 0.0, 0.0, 1.0);
@@ -206,8 +228,38 @@ impl Primitive for ImageFolder {
         }
         let position = ctx.scalar_or_param("position", 0.5).clamp(0.0, 1.0);
         let max_idx = (self.paths.len() as i32 - 1).max(0);
-        let target_idx = (position * max_idx as f32).round() as i32;
-        let target_idx = target_idx.clamp(0, max_idx);
+        let slider_target = ((position * max_idx as f32).round() as i32).clamp(0, max_idx);
+
+        // Rising-edge deltas on the trigger inputs. First-frame `None`
+        // absorbs whatever cold-start value the upstream counter is
+        // already at — same cold-start pattern as node.trigger_gate.
+        let next_count = ctx.scalar_or_param("next", 0.0).round().max(0.0) as u32;
+        let prev_count = ctx.scalar_or_param("prev", 0.0).round().max(0.0) as u32;
+        let next_delta = self
+            .last_next
+            .map_or(0, |last| next_count.saturating_sub(last));
+        let prev_delta = self
+            .last_prev
+            .map_or(0, |last| prev_count.saturating_sub(last));
+        self.last_next = Some(next_count);
+        self.last_prev = Some(prev_count);
+
+        // Slider movement clears the manual override so the slider
+        // takes over again. Sub-epsilon "noise" doesn't count — only a
+        // real value change.
+        let position_changed = self
+            .last_position
+            .is_some_and(|last| (position - last).abs() > 1e-6);
+        self.last_position = Some(position);
+        if position_changed {
+            self.manual_idx = None;
+        }
+        if next_delta > 0 || prev_delta > 0 {
+            let base = self.manual_idx.unwrap_or(slider_target);
+            let bumped = base + (next_delta as i32) - (prev_delta as i32);
+            self.manual_idx = Some(bumped.clamp(0, max_idx));
+        }
+        let target_idx = self.manual_idx.unwrap_or(slider_target);
 
         // 4. Kick off a load if the target moved and no load is in
         // flight. Background thread + mpsc keeps the content thread
@@ -384,11 +436,17 @@ mod tests {
     fn image_folder_ports_and_params() {
         assert_eq!(ImageFolder::TYPE_ID, "node.image_folder");
         let inputs = ImageFolder::INPUTS;
-        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs.len(), 4);
         assert_eq!(inputs[0].name, "position");
         assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
         assert!(!inputs[0].required);
         assert_eq!(inputs[1].name, "uv_scale");
+        assert_eq!(inputs[2].name, "next");
+        assert_eq!(inputs[2].ty, PortType::Scalar(ScalarType::F32));
+        assert!(!inputs[2].required);
+        assert_eq!(inputs[3].name, "prev");
+        assert_eq!(inputs[3].ty, PortType::Scalar(ScalarType::F32));
+        assert!(!inputs[3].required);
         assert_eq!(ImageFolder::OUTPUTS.len(), 2);
         assert_eq!(ImageFolder::OUTPUTS[0].name, "out");
         assert_eq!(ImageFolder::OUTPUTS[0].ty, PortType::Texture2D);
