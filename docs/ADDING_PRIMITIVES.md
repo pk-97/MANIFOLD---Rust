@@ -168,7 +168,12 @@ primitive! {
 }
 ```
 
-- `<PortType>` is one of `Texture2D`, `Texture3D`, `ScalarF32`, `ScalarV2`, `ScalarV3`. Scalar input ports are first-class — use them directly in the macro (no manual `ParamDef` workaround needed).
+- `<PortType>` is one of `Texture2D`, `Texture3D`, `ScalarF32`, `ScalarV2`, `ScalarV3`, `Camera`, `Light`, `Material`, `Array(T)`, `Channels<T>`, `Channels[name: Type, ...]`, or `Channels[permissive]`. Scalar input ports are first-class — use them directly in the macro (no manual `ParamDef` workaround needed).
+- **Array / Channels wires** carry a flat list of structured items (particles, vertices, blob rectangles, etc.). Three equivalent ways to declare:
+  - `Array(T)` — `T` is a `#[repr(C)] + bytemuck::Pod` struct with a `KnownItem` impl that supplies `const SPECS: &[ChannelSpec]`. The macro folds T's specs into the wire's Channels signature automatically. Canonical for the seven typed families (`Particle`, `MeshVertex`, `Vec4Vertex`, `InstanceTransform`, `CurvePoint`, `EdgePair`, plus `u32`/`f32`/`[f32; 2]` for bare scalars).
+  - `Channels<T>` — equivalent shorthand for `Array(T)`. Same emission. Pick whichever reads better at the declaration site.
+  - `Channels[name: Type, ...]` — inline syntax for ad-hoc signatures (no `KnownItem` impl). `name` is either a bare ident resolving against `crate::node_graph::channel_names::well_known::*` (e.g. `POSITION`, `WIDTH`, `A_INDEX`) OR a string literal (e.g. `"my_local_channel"`). `Type` is one of `F32`, `I32`, `U32`, `Vec2F`, `Vec3F`, `Vec4F`. Mix idents and literals freely within the same `Channels[...]`. Used for `wgsl_compute` outputs and any primitive whose wire shape doesn't fit a typed family.
+  - `Channels[permissive]` — opt-in for generic transform operators (`node.rename_channel`, `node.reorder_channels`, etc.) whose input port accepts any Channels producer regardless of signature. The `pub const PERMISSIVE_PRIMITIVE_ALLOWLIST` in `validation.rs` gates which primitives may legitimately use this — see `docs/CHANNEL_TYPE_SYSTEM.md` §11.4.
 - Inputs default to `required`; mark optional with the `optional` keyword.
 - **Port-shadows-param convention.** If you declare a scalar input port with the same name as a `ParamDef` (e.g. `gain` in both `inputs:` and `params:`), the wire wins when present, the param is the fallback. Standard pattern for any control-rate modulation. The graph editor disables the expose checkbox + value cell on wire-driven rows automatically.
 - `picker: { label, category }` declares how the palette and effect-card UI surface this primitive. Categories used today: `Color`, `Spatial`, `Stylize`, `Filmic`, `Driver` (texture→scalar bridges), `Math` (scalar arithmetic / LFO / BeatGate), `Source` (constants / generators), `Diagnostic`.

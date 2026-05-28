@@ -2,8 +2,11 @@
 
 **Status:** Living guide. Originally written 2026-05-21 after the Plasma + Lissajous generator decomposition; updated 2026-05-26 after the post-migration inventory revealed the fused-bundle failure mode and the no-fused-monolith rule landed. Read it before starting **any** decomposition — generator, effect, or in-place audit of an existing primitive that looks like a fused bundle.
 
+> **Update 2026-05-28:** The `Array<T>` references throughout this guide (in primitive type signatures, stride conventions, decomposition recipes) describe wire topology that survives the Channel type system migration ([CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md)) byte-identical — but the canonical macro syntax is now `Channels<T>` (for the seven typed families with a `KnownItem::SPECS` impl) or `Channels[name: Type, ...]` (for ad-hoc signatures). Read `Array<Particle>` here as `Channels<Particle>`; `Array<u32>` becomes `Channels<u32>` (`[value: U32]` signature); `Array<f32>` with stride conventions becomes `Channels[name: F32, ...]` with named channels. The "stride conventions in `composition_notes`" anti-pattern §6 used to warn about is now structurally impossible — the channel names live on the wire.
+
 This guide is the *how-to-think*, not the *how-to-add-a-primitive*. Companion docs:
 
+- [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) — wire-type identity, Channels syntax, the post-2026-05-28 source of truth for what a port "is."
 - [NODE_CATALOG.md](NODE_CATALOG.md) — the settled spec for atoms / effects. Source of truth for type IDs and what exists.
 - [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — design rationale (port types, state model, macro shape).
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — mechanics of writing a new primitive (`primitive!` macro, parity test pattern).

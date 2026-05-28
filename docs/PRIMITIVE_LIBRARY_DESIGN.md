@@ -3,6 +3,8 @@
 **Status:** Draft 1, 2026-05-11. Implements §0 of [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md).
 
 > **Update 2026-05-26:** Principles 1, 3, and 4 below are partially superseded by the no-fused-monolith rule. The original plan tolerated fused composites and monolithic remainders pending a future fusion compiler; the post-migration inventory revealed that this carve-out produced the bundle-as-primitive anti-pattern at scale, and the rule has been tightened. The authoritative spec is now `CLAUDE.md` (hard rules) + `DECOMPOSING_GENERATORS.md` §1.1 + [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). This doc is kept as historical record of the Phase 4a thinking; per-principle deltas inlined below.
+>
+> **Update 2026-05-28:** The Array-port type-system sections of this doc — specifically §12.3 (`Array<T>` port type, `Array<Particle>` references) — were superseded by the Channel type system migration. Wire identity is now a named Channels signature; see [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md). The §12.8 generator-decomposition worked examples remain accurate at the topology level; just read `Array<Particle>` as `Channels<Particle>` and `Array<u32>` as `Channels<u32>` in those discussions.
 
 **Goal:** A primitive library that humans and AI agents compose into custom visuals (TouchDesigner-style creative surface), while preserving pixel-exact reproduction of every existing effect and generator. The library is the product.
 

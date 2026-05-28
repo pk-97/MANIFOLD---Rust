@@ -12,8 +12,13 @@ For *how* to compose these into a generator decomposition, see [DECOMPOSING_GENE
 - **All primitives share one `Primitive` trait.** "Atom" vs "Effect" is how the palette groups them, not a structural split.
 - **Port-shadows-param:** any scalar input port whose name matches a primitive `ParamDef` uses the wire when present and the param as the fallback. Standard for `gain`, `amount`, `rotation`, `wet_dry`, control-rate modulation everywhere.
 - **Effects can be monolithic shaders, thin atom presets, or atom composites.** Type IDs stay stable across implementation swaps so save files don't break.
-- **`Array<T>` outputs declare capacity** via `EffectNode::array_output_capacity`; the CI sweep test enforces this on the registry.
+- **Array port wires carry a Channels signature.** The macro syntax in this catalog uses `Array(T)` for typed families that have a `KnownItem` impl (`Particle`, `MeshVertex`, `EdgePair`, etc.) — equivalent to `Channels<T>`, both expand to an `ArrayType::of_known::<T>()` whose `specs` field carries the canonical channel list. For ad-hoc shapes, the inline form is `Channels[name: Type, ...]`. See [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) §4.1 for the type contract and §7 for the `well_known` channel-name registry that the canonical names resolve through.
+- **`Array<T>` / `Channels<T>` outputs declare capacity** via `EffectNode::array_output_capacity`; the CI sweep test enforces this on the registry. Outputs also declare a non-empty Channels signature (either through `KnownItem::SPECS` or inline `Channels[...]`); the `every_conventional_array_port_declares_a_channels_signature` invariant gates that.
 - **Stateful primitives declare** `state_lifecycle` + `state_capture_input_ports` so the StateStore knows where to break cycles. Per-port, not per-node.
+
+### 1.1 Well-known channel-name registry (one-line overview)
+
+Channels signatures reference `crate::node_graph::channel_names::well_known::*` constants for canonical names — `POSITION`, `VELOCITY`, `NORMAL`, `UV`, `WIDTH`, `HEIGHT`, `X`, `Y`, `Z`, `W`, `R`, `G`, `B`, `A`, `COLOR`, `A_INDEX`, `B_INDEX`, `LIFE`, `AGE`, `SEED`, `POS_SCALE`, `ROT`, `VALUE`, `T`, `INDEX`, `MAGNITUDE`, `PHASE`, `FREQ`, `CONFIDENCE`, `WEIGHT`. Adding a new canonical name: append one line inside the `well_known_channels!` macro invocation in [`crates/manifold-renderer/src/node_graph/channel_names.rs`](../crates/manifold-renderer/src/node_graph/channel_names.rs); the constant declaration and the collision-check test are generated from the same source list. Non-canonical names (one-off shapes, `wgsl_compute` shader field names) declare via inline string literals or naga's field-name walk and live in the runtime registry — they display correctly in editor tooltips, just aren't part of the canonical vocabulary.
 
 ---
 

@@ -1,10 +1,30 @@
 # Buffer / Array Port Plan
 
+> **Type-system superseded by [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) — 2026-05-28.**
+>
+> This document's `Array<T>` / `ItemKind` type-system sections were
+> superseded by the Channel type system migration. The wire's
+> identity is now a named Channels signature (`Channels<T>` for
+> typed families with a `KnownItem` impl, `Channels[name: Type, ...]`
+> inline for ad-hoc shapes); `ItemKind`, the cast-atom family, the
+> `Anonymous` coercion, the legacy `wgsl_compute_*` variants, and the
+> `Blob` struct are all deleted. The Phase A–C buffer-pool /
+> `MTLBuffer` infrastructure described here remains unchanged — the
+> producer/consumer architecture and the per-frame allocation
+> lifecycle are byte-identical pre- and post-migration. Only the
+> *type tag* the validator sees and the *names* the editor / AI
+> agents can introspect changed.
+>
+> When this doc says `Array<T>`, read it as `Channels<T>`. When it
+> says `Array(T)` macro syntax, that path still works but the
+> emitted `ArrayType` carries Channels specs internally now.
+
 **Status:**
 - **Phase A** — shipped 2026-05-19. Five particle primitives + topology integration test.
 - **Phase B** — shipped 2026-05-20. Five mesh primitives (GenerateGridMesh, GenerateInstanceTransforms, Rotate4D, Render3DMesh, RenderInstanced3DMesh). First render-pass primitives in node_graph.
 - **Phase C** — partial 2026-05-20. GenerateParametricCurve + RenderLines shipped. **AudioInput deferred** — needs an audio sample channel through `EffectNodeContext` that doesn't exist yet; building it now would be a synth stub, not a real input.
 - **Phase D** — parked. The four 3D-volume primitives need `MetalBackend` Texture3D resource backing (today only Texture2D allocates real GPU resources; Texture3D falls back to mock semantics). Implementing primitives now would compile but be runtime no-ops.
+- **Channel type system** — shipped 2026-05-28 across Phases 0–4b of [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md). Wire identity is now self-describing Channels signatures.
 
 Full pixel-exact FluidSim parity needs additional blur + gradient atoms and the 7-pattern seed shader port — both follow-up sessions on top of this foundation.
 
