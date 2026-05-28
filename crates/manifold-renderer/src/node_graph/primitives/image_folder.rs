@@ -63,6 +63,7 @@ crate::primitive! {
     },
     outputs: {
         out: Texture2D,
+        trigger_count: ScalarF32,
     },
     params: [
         ParamDef {
@@ -90,7 +91,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening.",
+    composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening. The `trigger_count` scalar output is a monotonically increasing counter that bumps each time a NEW slice actually lands on the GPU (not per position-slider movement — fast scrubs that outrun the background loader skip intermediate frames and only tick once per visible swap). Wire it into node.trigger_gate / node.sample_and_hold / node.clip_trigger_index downstream to drive per-image randomization. Fires once at startup when the first slice loads; never resets on folder change (downstream gates compare deltas, monotonic matches the system.generator_input.trigger_count convention).",
     examples: [],
     picker: { label: "Image Folder", category: Atom },
     extra_fields: {
@@ -112,6 +113,14 @@ crate::primitive! {
         // a load is in flight; we don't spawn another until it returns.
         pending_load: Option<mpsc::Receiver<Result<DecodedSlice, String>>> = None,
         pending_index: i32 = -1,
+        // Monotonic count of slices that have actually landed on the GPU.
+        // Bumped once per `current_index` advance (i.e. per visible image
+        // change), emitted on the `trigger_count` scalar output for
+        // downstream `node.trigger_gate` / `node.sample_and_hold` /
+        // `node.clip_trigger_index` consumers. Matches the
+        // `system.generator_input.trigger_count` convention — monotonic,
+        // never resets, downstream gates compare deltas.
+        trigger_count: u32 = 0,
     },
 }
 
@@ -139,6 +148,12 @@ impl Primitive for ImageFolder {
             self.pending_index = -1;
         }
 
+        // Emit the trigger_count scalar with the current value up front;
+        // the bump in step 2 will overwrite with the new value if a slice
+        // lands this frame. Covers every early-return path below.
+        ctx.outputs
+            .set_scalar("trigger_count", ParamValue::Float(self.trigger_count as f32));
+
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
         };
@@ -162,6 +177,11 @@ impl Primitive for ImageFolder {
                     self.tex_height = slice.height;
                     self.current_index = self.pending_index;
                     self.pending_index = -1;
+                    self.trigger_count = self.trigger_count.saturating_add(1);
+                    ctx.outputs.set_scalar(
+                        "trigger_count",
+                        ParamValue::Float(self.trigger_count as f32),
+                    );
                 }
                 Ok(Err(e)) => {
                     log::error!("node.image_folder async load: {e}");
@@ -369,8 +389,11 @@ mod tests {
         assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
         assert!(!inputs[0].required);
         assert_eq!(inputs[1].name, "uv_scale");
-        assert_eq!(ImageFolder::OUTPUTS.len(), 1);
+        assert_eq!(ImageFolder::OUTPUTS.len(), 2);
+        assert_eq!(ImageFolder::OUTPUTS[0].name, "out");
         assert_eq!(ImageFolder::OUTPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(ImageFolder::OUTPUTS[1].name, "trigger_count");
+        assert_eq!(ImageFolder::OUTPUTS[1].ty, PortType::Scalar(ScalarType::F32));
 
         let names: Vec<&str> = ImageFolder::PARAMS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["folder", "position", "uv_scale"]);
