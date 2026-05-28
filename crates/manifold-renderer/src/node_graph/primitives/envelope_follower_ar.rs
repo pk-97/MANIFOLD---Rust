@@ -26,7 +26,7 @@ struct EnvelopeState {
 
 impl NodeState for EnvelopeState {}
 
-const ENVELOPE_INPUTS: [NodeInput; 3] = [
+const ENVELOPE_INPUTS: [NodeInput; 4] = [
     NodePort {
         name: "in",
         ty: PortType::Scalar(ScalarType::F32),
@@ -41,6 +41,16 @@ const ENVELOPE_INPUTS: [NodeInput; 3] = [
     },
     NodePort {
         name: "release",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Input,
+        required: false,
+    },
+    // Reset on integer-edge changes. Drops the envelope to 0 so
+    // the next emit re-attacks from zero. First observation arms
+    // without firing so chain rebuilds don't cause spurious resets.
+    // Matches the cross-primitive reset_trigger convention.
+    NodePort {
+        name: "reset_trigger",
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -76,12 +86,19 @@ const ENVELOPE_PARAMS: [ParamDef; 2] = [
 #[derive(Debug)]
 pub struct EnvelopeFollowerAr {
     type_id: EffectNodeType,
+    /// Last observed `reset_trigger` integer. Matches the
+    /// `array_feedback` / `node.feedback` convention — see
+    /// `Smoothing::last_reset_trigger` for the rationale on storing
+    /// this on the primitive struct rather than the StateStore
+    /// entry (chain-rebuild robustness).
+    last_reset_trigger: Option<i32>,
 }
 
 impl EnvelopeFollowerAr {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(ENVELOPE_FOLLOWER_AR_TYPE_ID),
+            last_reset_trigger: None,
         }
     }
 }
@@ -144,12 +161,31 @@ impl EffectNode for EnvelopeFollowerAr {
             .as_deref_mut()
             .expect("EnvelopeFollowerAr::evaluate requires a StateStore");
 
+        // Reset-on-trigger: on integer-edge changes, drop the
+        // envelope to 0 so the next emit re-attacks from zero.
+        // First observation arms without firing.
+        let mut reset_now = false;
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
+            let current = v.round() as i32;
+            let edge = match self.last_reset_trigger {
+                Some(prev_count) => current != prev_count,
+                None => false,
+            };
+            self.last_reset_trigger = Some(current);
+            reset_now = edge;
+        }
+
         // First frame: initialise to the input so the envelope doesn't
         // bleed from 0 toward the first real measurement.
-        let prev = store
-            .get::<EnvelopeState>(node_id, owner_key)
-            .map(|s| s.prev)
-            .unwrap_or(input_value);
+        // Reset edge: drop to 0 regardless of stored state.
+        let prev = if reset_now {
+            0.0
+        } else {
+            store
+                .get::<EnvelopeState>(node_id, owner_key)
+                .map(|s| s.prev)
+                .unwrap_or(input_value)
+        };
 
         // Pick time constant based on direction.
         let tau = if input_value > prev { attack } else { release };
@@ -182,15 +218,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn envelope_follower_ar_declares_three_inputs_and_one_output() {
+    fn envelope_follower_ar_declares_four_inputs_and_one_output() {
         let node = EnvelopeFollowerAr::new();
-        assert_eq!(node.inputs().len(), 3);
+        assert_eq!(node.inputs().len(), 4);
         assert_eq!(node.inputs()[0].name, "in");
         assert!(node.inputs()[0].required);
         assert_eq!(node.inputs()[1].name, "attack");
         assert!(!node.inputs()[1].required);
         assert_eq!(node.inputs()[2].name, "release");
         assert!(!node.inputs()[2].required);
+        assert_eq!(node.inputs()[3].name, "reset_trigger");
+        assert!(!node.inputs()[3].required);
         assert_eq!(node.outputs().len(), 1);
         assert_eq!(node.outputs()[0].name, "out");
     }

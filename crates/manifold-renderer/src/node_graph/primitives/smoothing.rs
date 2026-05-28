@@ -23,7 +23,7 @@ use crate::node_graph::state_store::NodeState;
 
 pub const SMOOTHING_TYPE_ID: &str = "node.smoothing";
 
-const SMOOTHING_INPUTS: [NodeInput; 2] = [
+const SMOOTHING_INPUTS: [NodeInput; 3] = [
     NodePort {
         name: "in",
         ty: PortType::Scalar(ScalarType::F32),
@@ -36,6 +36,17 @@ const SMOOTHING_INPUTS: [NodeInput; 2] = [
     // axes that have to share a "reactivity" handle on the card).
     NodePort {
         name: "time_constant",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Input,
+        required: false,
+    },
+    // Reset on integer-edge changes. Zeroes `previous` so the next
+    // frame's emit is `0 + (input - 0) * alpha = input * alpha`.
+    // First observation arms without firing so chain rebuilds don't
+    // cause spurious resets. Matches `array_feedback` /
+    // `node.feedback` edge-detect shape.
+    NodePort {
+        name: "reset_trigger",
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -63,12 +74,20 @@ const SMOOTHING_PARAMS: [ParamDef; 1] = [ParamDef {
 #[derive(Debug)]
 pub struct Smoothing {
     type_id: EffectNodeType,
+    /// Last observed `reset_trigger` integer. `None` until the first
+    /// observation. Lives on the primitive struct (not StateStore)
+    /// to match the `array_feedback` convention — chain rebuilds
+    /// reset this to `None` and the first frame post-rebuild arms
+    /// without firing, so a held-high trigger doesn't cause an
+    /// unintended state clear after editing.
+    last_reset_trigger: Option<i32>,
 }
 
 impl Smoothing {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(SMOOTHING_TYPE_ID),
+            last_reset_trigger: None,
         }
     }
 }
@@ -131,12 +150,35 @@ impl EffectNode for Smoothing {
             .as_deref_mut()
             .expect("Smoothing::evaluate requires a StateStore");
 
+        // Reset-on-trigger: on integer-edge changes of
+        // `reset_trigger`, drop `previous` to 0 so the next emit is
+        // `0 + (input - 0) * alpha = input * alpha`. First
+        // observation arms without firing. Read BEFORE the previous
+        // lookup so the same frame's emit reflects the cleared
+        // state (matches the texture-feedback contract — reset
+        // affects this frame's output, not next frame's).
+        let mut reset_now = false;
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
+            let current = v.round() as i32;
+            let edge = match self.last_reset_trigger {
+                Some(prev_count) => current != prev_count,
+                None => false,
+            };
+            self.last_reset_trigger = Some(current);
+            reset_now = edge;
+        }
+
         // First frame for this owner: initialise to the input so we
         // don't bleed from 0 toward the first real measurement.
-        let previous = store
-            .get::<SmoothingState>(node_id, owner_key)
-            .map(|s| s.previous)
-            .unwrap_or(input);
+        // Reset edge: drop to 0 regardless of stored state.
+        let previous = if reset_now {
+            0.0
+        } else {
+            store
+                .get::<SmoothingState>(node_id, owner_key)
+                .map(|s| s.previous)
+                .unwrap_or(input)
+        };
         let smoothed = previous + (input - previous) * alpha;
         store.insert(
             node_id,

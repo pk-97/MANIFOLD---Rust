@@ -12,6 +12,7 @@ use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureFormat};
 
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
 use crate::render_target::RenderTarget;
@@ -33,16 +34,17 @@ pub const FEEDBACK_TYPE_ID: &str = "node.feedback";
 crate::primitive! {
     name: Feedback,
     type_id: "node.feedback",
-    purpose: "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims.",
+    purpose: "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims. Optional `reset_trigger` zeroes the persistent state texture on integer-edge changes (scene cut + state clear pattern).",
     inputs: {
         in: Texture2D required,
         seed: Texture2D optional,
+        reset_trigger: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels). When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise seed, reaction-diffusion's spike pattern, etc.). The seed producer runs every frame in v1 but only matters on the first allocation; gating it to first-frame-only is a planner-pass follow-up. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands.",
+    composition_notes: "Wire the loop's final output back into `in`, and read `out` upstream as the previous frame. State is per-`(NodeInstanceId, OwnerKey)` so multiple layers / clips using the same chain get independent feedback streams. First-frame semantics: when `seed` is unwired, `out` mirrors `in` for one frame (no uninitialised pixels). When `seed` IS wired, the persistent state texture is initialised with the seed's contents on first allocation — use for sims that need a non-black initial state (oily fluid's layered noise seed, reaction-diffusion's spike pattern, etc.). The seed producer runs every frame in v1 but only matters on the first allocation; gating it to first-frame-only is a planner-pass follow-up. For iterative simulations whose state compounds rounding error, set `outputFormats.out: \"rgba32float\"` in the JSON node entry — note the loop's INTERMEDIATE producers (mix, gain, etc.) must also be annotated fp32 or Metal's blit will validation-error on the format-mismatched capture; defaulting to rgba16float for memory parity with the rest of the chain until that propagation lands. `reset_trigger`: wire any integer-counted trigger (clip_trigger, threshold-gated cut_score, beat-1 pulse) — when its rounded integer value advances, the next emission is zero-cleared (rgba 0,0,0,0). First observation arms without firing. To re-seed (rather than zero) on the same trigger event, route the seed-producing atom to also respond to the trigger — the seed atom's own re-emission is the re-seed mechanism, not this primitive's job.",
     examples: ["preset.effect.stylized_feedback", "preset.effect.mandala", "preset.effect.smear_mosh"],
     picker: { label: "Feedback", category: Atom },
     extra_fields: {
@@ -54,6 +56,12 @@ crate::primitive! {
         // feeding an fp32 state. Metal's blit encoder can't bridge
         // formats, so we route via a compute dispatch.
         cross_format_copy_fp32: Option<manifold_gpu::GpuComputePipeline> = None,
+        // Last observed `reset_trigger` integer value. `None` until
+        // the first observation; subsequent integer changes fire the
+        // zero-state clear. First observation arms without firing so
+        // the alloc-frame seed isn't immediately wiped on the same
+        // frame. Matches `array_feedback`'s edge-detect shape.
+        last_reset_trigger: Option<i32> = None,
     },
 }
 
@@ -171,6 +179,28 @@ impl Primitive for Feedback {
                 },
             );
         }
+
+        // Reset-on-trigger: if `reset_trigger` is wired and its
+        // integer value has advanced since last frame, zero the
+        // persistent state texture before emitting. First observation
+        // arms without firing so the alloc-frame seed (above) isn't
+        // immediately wiped on the same frame. Matches the
+        // `array_feedback` edge-detect shape so cross-primitive
+        // wiring (one trigger → many feedbacks) behaves uniformly.
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
+            let current = v.round() as i32;
+            let edge = match self.last_reset_trigger {
+                Some(prev_count) => current != prev_count,
+                None => false,
+            };
+            self.last_reset_trigger = Some(current);
+            if edge
+                && let Some(state_mut) = store.get::<FeedbackState>(node_id, owner_key)
+            {
+                gpu.clear_texture(&state_mut.prev.texture, 0.0, 0.0, 0.0, 0.0);
+            }
+        }
+
         let state = store
             .get::<FeedbackState>(node_id, owner_key)
             .expect("just inserted above");
