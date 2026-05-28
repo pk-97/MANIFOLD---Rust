@@ -144,6 +144,20 @@ impl Primitive for OneEuroFilter {
             let raw = in_slice[i];
             let prev = self.prev[i];
 
+            // Snap (no smoothing) on appearance/disappearance: when
+            // raw or prev is exactly 0.0 — the sentinel upstream
+            // producers (e.g. track_persist) write for empty slots.
+            // Without this, slots that transition through zero produce
+            // visible intermediate frames as the filter decays from
+            // last value to 0, which renders as "stale data drifting
+            // to the corner" for Channels[X, Y, W, H] consumers.
+            if raw == 0.0 || prev == 0.0 {
+                self.prev[i] = raw;
+                self.dx[i] = 0.0;
+                out_slice[i] = raw;
+                continue;
+            }
+
             let raw_dx = (raw - prev) / dt;
             self.dx[i] += d_alpha * (raw_dx - self.dx[i]);
 

@@ -6,7 +6,7 @@
 // stale data from a previous inference never leaks into downstream
 // consumers.
 
-const MAX_BLOB_CAP: u32 = 32u;
+const MAX_BLOB_CAP: u32 = 8u;
 
 struct Blob {
     x:      f32,

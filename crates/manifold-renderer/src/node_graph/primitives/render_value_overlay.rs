@@ -28,6 +28,7 @@ use crate::node_graph::primitive::Primitive;
 
 const MAX_QUADS: usize = 512;
 const FORMATS: &[&str] = &["Index", "Hex", "Coord", "Float3"];
+const ANCHORS: &[&str] = &["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -59,7 +60,10 @@ fn glyph_atlas_rect(char_code: f32) -> [f32; 4] {
 }
 
 fn uv_to_clip(x: f32, y: f32) -> (f32, f32) {
-    (x * 2.0 - 1.0, y * 2.0 - 1.0)
+    // UV convention: (0, 0) is top-left of the image, y grows downward.
+    // Clip-space convention: (-1, -1) is bottom-left, y grows upward.
+    // The Y mapping needs the sign flip; X is a direct linear remap.
+    (x * 2.0 - 1.0, 1.0 - y * 2.0)
 }
 
 fn push_glyph(
@@ -103,6 +107,7 @@ crate::primitive! {
         in: Texture2D required,
         positions: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
         values: Channels[VALUE: F32] optional,
+        alpha: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -163,6 +168,14 @@ crate::primitive! {
             default: ParamValue::Float(0.0),
             range: Some((-0.5, 0.5)),
             enum_values: &[],
+        },
+        ParamDef {
+            name: "anchor",
+            label: "Anchor",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (ANCHORS.len() - 1) as f32)),
+            enum_values: ANCHORS,
         },
     ],
     composition_notes: "Wire detection regions (Channels[X, Y, WIDTH, HEIGHT]) into `positions`; optionally wire a Channels[VALUE: F32] into `values` for Float3 format. Labels are positioned at each item's (X, Y) + (offset_x, offset_y). format=Index shows array index, Hex shows '0X' + hex, Coord shows 'xxx,yyy' from X/Y × 999, Float3 shows value × 1000 as 3 digits. For the Blob Track HUD, use multiple instances with different formats and offsets.",
@@ -307,10 +320,7 @@ impl Primitive for RenderValueOverlay {
             Some(ParamValue::Color(c)) => [c[0], c[1], c[2]],
             _ => [0.85, 0.92, 1.0],
         };
-        let alpha = match ctx.params.get("alpha") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        let alpha = ctx.scalar_or_param("alpha", 1.0);
         let font_scale = match ctx.params.get("font_scale") {
             Some(ParamValue::Float(f)) => f.max(0.1),
             _ => 1.0,
@@ -326,6 +336,11 @@ impl Primitive for RenderValueOverlay {
         let offset_y = match ctx.params.get("offset_y") {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
+        };
+        let anchor_idx = match ctx.params.get("anchor") {
+            Some(ParamValue::Enum(v)) => *v,
+            Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
+            _ => 0,
         };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else { return };
@@ -362,12 +377,24 @@ impl Primitive for RenderValueOverlay {
 
         for i in 0..count {
             if self.quads.len() >= MAX_QUADS { break }
+            let px = pos_floats[i * 4];
+            let py = pos_floats[i * 4 + 1];
             let pw = pos_floats[i * 4 + 2];
             let ph = pos_floats[i * 4 + 3];
             if pw <= 0.0001 && ph <= 0.0001 { continue }
 
-            let lx = pos_floats[i * 4] + offset_x;
-            let ly = pos_floats[i * 4 + 1] + offset_y;
+            // Anchor: select which corner / center of the (px, py, pw, ph)
+            // rectangle the label's top-left text origin sits on. Static
+            // offset_x / offset_y stack on top after anchor resolution.
+            let (anchor_x, anchor_y) = match anchor_idx {
+                1 => (px + pw, py),            // TopRight
+                2 => (px, py + ph),            // BottomLeft
+                3 => (px + pw, py + ph),       // BottomRight
+                4 => (px + pw * 0.5, py + ph * 0.5), // Center
+                _ => (px, py),                  // TopLeft (default)
+            };
+            let lx = anchor_x + offset_x;
+            let ly = anchor_y + offset_y;
 
             match format_idx {
                 0 => {
@@ -388,9 +415,14 @@ impl Primitive for RenderValueOverlay {
                     }
                 }
                 2 => {
-                    // Coord: "xxx,yyy"
-                    let x_val = (pos_floats[i * 4] * 999.0).floor().clamp(0.0, 999.0);
-                    let y_val = (pos_floats[i * 4 + 1] * 999.0).floor().clamp(0.0, 999.0);
+                    // Coord: "xxx,yyy" — show the rect's CENTER (matches
+                    // legacy BlobTrackingFX, where the label position
+                    // was anchored at a corner but the displayed coords
+                    // were the smoothed centre).
+                    let cx = px + pw * 0.5;
+                    let cy = py + ph * 0.5;
+                    let x_val = (cx * 999.0).floor().clamp(0.0, 999.0);
+                    let y_val = (cy * 999.0).floor().clamp(0.0, 999.0);
                     let x_h = (x_val / 100.0).floor();
                     let x_t = ((x_val % 100.0) / 10.0).floor();
                     let x_o = x_val % 10.0;
@@ -485,15 +517,18 @@ mod tests {
 
     #[test]
     fn render_value_overlay_declares_io() {
-        use crate::node_graph::ports::PortType;
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(RenderValueOverlay::TYPE_ID, "node.render_value_overlay");
-        assert_eq!(RenderValueOverlay::INPUTS.len(), 3);
+        assert_eq!(RenderValueOverlay::INPUTS.len(), 4);
         assert_eq!(RenderValueOverlay::INPUTS[0].name, "in");
         assert_eq!(RenderValueOverlay::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(RenderValueOverlay::INPUTS[1].name, "positions");
         assert!(matches!(RenderValueOverlay::INPUTS[1].ty, PortType::Array(_)));
         assert_eq!(RenderValueOverlay::INPUTS[2].name, "values");
         assert!(!RenderValueOverlay::INPUTS[2].required);
+        assert_eq!(RenderValueOverlay::INPUTS[3].name, "alpha");
+        assert_eq!(RenderValueOverlay::INPUTS[3].ty, PortType::Scalar(ScalarType::F32));
+        assert!(!RenderValueOverlay::INPUTS[3].required);
         assert_eq!(RenderValueOverlay::OUTPUTS.len(), 1);
     }
 

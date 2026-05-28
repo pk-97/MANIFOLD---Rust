@@ -18,7 +18,7 @@
 
 #![allow(private_interfaces)]
 
-use manifold_gpu::{GpuBinding, GpuComputePipeline};
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler};
 use manifold_native::blob_detector::BlobDetector;
 
 use crate::background_worker::BackgroundWorker;
@@ -43,8 +43,11 @@ struct BlobRect {
 
 /// Maximum number of blobs the FFI plugin is configured to track AND
 /// the WGSL uniform's fixed array size. Keep these in sync with the
-/// `MAX_BLOB_CAP` constant in `shaders/blob_detect_ffi_upload.wgsl`.
-const MAX_BLOB_CAP: usize = 32;
+/// `MAX_BLOB_CAP` constant in `shaders/blob_detect_ffi_upload.wgsl`,
+/// the BlobTracking preset's `blob_count` param defaults, and the
+/// `min(u.blob_count, Nu)` cap in the preset's brackets WGSL.
+/// Matches the legacy `BlobTrackingFX` cap (perf commit 8cbcd822).
+const MAX_BLOB_CAP: usize = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -101,8 +104,8 @@ crate::primitive! {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
-            default: ParamValue::Float(32.0),
-            range: Some((1.0, 32.0)),
+            default: ParamValue::Float(8.0),
+            range: Some((1.0, 8.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -125,7 +128,7 @@ crate::primitive! {
             name: "analysis_max_dim",
             label: "Analysis Max Dim",
             ty: ParamType::Int,
-            default: ParamValue::Float(360.0),
+            default: ParamValue::Float(320.0),
             range: Some((64.0, 1024.0)),
             enum_values: &[],
         },
@@ -143,6 +146,8 @@ crate::primitive! {
     picker: { label: "Blob Detect (FFI)", category: Atom },
     extra_fields: {
         upload_pipeline: Option<GpuComputePipeline> = None,
+        downsample_pipeline: Option<GpuComputePipeline> = None,
+        downsample_sampler: Option<GpuSampler> = None,
         blob_worker: Option<BackgroundWorker<BlobRequest, BlobResponse>> = None,
         blob_worker_tried: bool = false,
         blob_state: Option<BlobState> = None,
@@ -175,11 +180,22 @@ impl BlobDetectFfi {
                 let n = (count.max(0) as usize).min(MAX_BLOB_CAP);
                 let mut blobs = Vec::with_capacity(n);
                 for i in 0..n {
+                    // Plugin returns [cx, cy, sw, sh] — center + full
+                    // size, with the Y axis pointing UP (origin at
+                    // bottom-left, Unity convention). Downstream
+                    // consumers expect top-left + size with Y down
+                    // (origin at top-left, screen convention). Both
+                    // transforms applied at this boundary so the rest
+                    // of the chain sees standard UV-space rectangles.
+                    let cx = raw[i * 4];
+                    let cy = raw[i * 4 + 1];
+                    let sw = raw[i * 4 + 2];
+                    let sh = raw[i * 4 + 3];
                     blobs.push(BlobRect {
-                        x: raw[i * 4],
-                        y: raw[i * 4 + 1],
-                        width: raw[i * 4 + 2],
-                        height: raw[i * 4 + 3],
+                        x: cx - sw * 0.5,
+                        y: 1.0 - cy - sh * 0.5,
+                        width: sw,
+                        height: sh,
                     });
                 }
                 BlobResponse { blobs }
@@ -280,17 +296,43 @@ impl Primitive for BlobDetectFfi {
             if elapsed >= update_interval && !bs.readback.is_pending() {
                 let aw = bs.analysis_width;
                 let ah = bs.analysis_height;
+                // Rgba8Unorm matches the plugin's expected pixel format
+                // exactly — the gpu_readback path then takes the fast
+                // row-copy branch (no f16→u8 conversion). Bilinear
+                // downsample via compute shader, not blit, so the entire
+                // source is sampled (not just the top-left analysis-sized
+                // patch the previous `copy_texture_to_texture` blit
+                // copied).
                 let staging = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
                     width: aw,
                     height: ah,
                     depth: 1,
-                    format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     dimension: manifold_gpu::GpuTextureDimension::D2,
                     usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                     label: "node.blob_detect_ffi.staging",
                     mip_levels: 1,
                 });
-                gpu.copy_texture_to_texture(source, &staging, aw, ah);
+                let pipeline = self.downsample_pipeline.get_or_insert_with(|| {
+                    gpu.device.create_compute_pipeline(
+                        include_str!("shaders/blob_detect_ffi_downsample.wgsl"),
+                        "cs_main",
+                        "node.blob_detect_ffi.downsample",
+                    )
+                });
+                let sampler = self.downsample_sampler.get_or_insert_with(|| {
+                    gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+                });
+                gpu.native_enc.dispatch_compute(
+                    pipeline,
+                    &[
+                        GpuBinding::Texture { binding: 0, texture: source },
+                        GpuBinding::Sampler { binding: 1, sampler },
+                        GpuBinding::Texture { binding: 2, texture: &staging },
+                    ],
+                    [aw.div_ceil(8), ah.div_ceil(8), 1],
+                    "node.blob_detect_ffi.downsample",
+                );
                 bs.readback.submit(gpu, &staging, aw, ah);
                 bs.readback_pending = true;
                 bs.last_request_frame = bs.frame_counter;

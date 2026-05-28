@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BlobTracking",
-  "description": "Decomposed Blob Track: FFI detection → NN identity tracking → 1€ temporal smoothing → HUD overlay chain. The HUD chain currently composites hollow boxes (blob_overlay_render) and corner brackets (wgsl_compute per-pixel SDF). Future elements (crosshairs, ticks, gauges, dashed connections, hex/coord/distance labels) are wgsl_compute nodes added to the chain — each a small WGSL shader the user can edit in the graph editor.",
+  "description": "Decomposed Blob Track: FFI detection → NN identity tracking → 1€ temporal smoothing → composed HUD overlay. Each HUD element is a separate primitive — eight wgsl_compute SDF passes (brackets, crosshair, center_dot, size_gauge, tick_marks, dashed_connections, midpoint_diamonds, scanline) plus two render_value_overlay labels (hex id, coord readout). Edit any element's WGSL or params in the graph editor to change its look.",
   "presetMetadata": {
     "id": "BlobTracking",
     "displayName": "Blob Track",
@@ -70,7 +70,7 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "overlay", "param": "alpha" },
+        "target": { "kind": "handleNode", "handle": "amount_value", "param": "a" },
         "convert": { "type": "Float" }
       },
       {
@@ -118,8 +118,8 @@
       "params": {
         "threshold": { "type": "Float", "value": 0.65 },
         "sensitivity": { "type": "Float", "value": 0.85 },
-        "max_capacity": { "type": "Float", "value": 32.0 },
-        "analysis_max_dim": { "type": "Float", "value": 360.0 },
+        "max_capacity": { "type": "Float", "value": 8.0 },
+        "analysis_max_dim": { "type": "Float", "value": 320.0 },
         "update_interval": { "type": "Float", "value": 3.0 }
       }
     },
@@ -163,42 +163,217 @@
     },
     {
       "id": 6,
-      "typeId": "node.blob_overlay_render",
-      "handle": "overlay",
+      "typeId": "node.affine_scalar",
+      "handle": "amount_value",
       "params": {
-        "color": { "type": "Color", "value": [0.85, 0.92, 1.0, 1.0] },
-        "alpha": { "type": "Float", "value": 0.8 },
-        "border_width": { "type": "Float", "value": 0.003 },
-        "blob_count": { "type": "Float", "value": 32.0 }
+        "a": { "type": "Float", "value": 0.5 },
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.0 }
       }
     },
     {
       "id": 7,
       "typeId": "node.wgsl_compute",
       "handle": "brackets",
-      "wgslSource": "// Corner brackets HUD element. Per-pixel SDF: for each output pixel,\n// sample the running source and check whether it's on any detection's\n// L-shaped bracket arm. If so, blend the overlay colour. Edit the WGSL\n// to change arm length, line thickness, or bracket shape (e.g. extend\n// arms across the full edge for a 'crosshair-style' bracket).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    arm_fraction: f32,\n    thickness: f32,\n    blob_count: u32,\n    _pad0: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    var on_arm = false;\n    let n = min(u.blob_count, 32u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n\n        let arm = min(d.width, d.height) * u.arm_fraction;\n        let t = u.thickness * 0.5;\n\n        let x0 = d.x;\n        let y0 = d.y;\n        let x1 = d.x + d.width;\n        let y1 = d.y + d.height;\n\n        // Top-left corner: arms going right and down.\n        let tl_h = uv.x >= x0 && uv.x <= x0 + arm && abs(uv.y - y0) <= t;\n        let tl_v = uv.y >= y0 && uv.y <= y0 + arm && abs(uv.x - x0) <= t;\n        // Top-right.\n        let tr_h = uv.x >= x1 - arm && uv.x <= x1 && abs(uv.y - y0) <= t;\n        let tr_v = uv.y >= y0 && uv.y <= y0 + arm && abs(uv.x - x1) <= t;\n        // Bottom-left.\n        let bl_h = uv.x >= x0 && uv.x <= x0 + arm && abs(uv.y - y1) <= t;\n        let bl_v = uv.y >= y1 - arm && uv.y <= y1 && abs(uv.x - x0) <= t;\n        // Bottom-right.\n        let br_h = uv.x >= x1 - arm && uv.x <= x1 && abs(uv.y - y1) <= t;\n        let br_v = uv.y >= y1 - arm && uv.y <= y1 && abs(uv.x - x1) <= t;\n\n        if tl_h || tl_v || tr_h || tr_v || bl_h || bl_v || br_h || br_v {\n            on_arm = true;\n            break;\n        }\n    }\n\n    if on_arm {\n        let a = u.alpha;\n        src = vec4<f32>(\n            mix(src.r, u.color_r, a),\n            mix(src.g, u.color_g, a),\n            mix(src.b, u.color_b, a),\n            src.a,\n        );\n    }\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "wgslSource": "// Corner brackets HUD element. Anti-aliased line segments at the four\n// corners of each detection bbox, blended additively into the running\n// source. `arm_fraction` is the arm length as a fraction of\n// min(half_width, half_height); `thickness_px` is line thickness in\n// 1080p-reference pixels (legacy: arm_fraction=0.4, thickness_px=2).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    arm_fraction: f32,\n    thickness_px: f32,\n    blob_count: u32,\n    _pad0: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\nfn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {\n    let pa = p - a;\n    let ba = b - a;\n    let len_sq = dot(ba, ba);\n    if len_sq < 0.000001 { return 0.0; }\n    let h = saturate(dot(pa, ba) / len_sq);\n    let d = length(pa - ba * h);\n    return 1.0 - saturate(d / thickness);\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let thickness = u.thickness_px * (1.0 / f32(dims.x)) * dpi_scale;\n\n    var coverage = 0.0;\n    let n = min(u.blob_count, 8u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n        let half_size = vec2<f32>(d.width, d.height) * 0.5;\n        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);\n        let arm = min(half_size.x, half_size.y) * u.arm_fraction;\n\n        let tl = center - half_size;\n        let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);\n        let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);\n        let br = center + half_size;\n\n        coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(arm, 0.0), thickness));\n        coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(0.0, arm), thickness));\n        coverage = max(coverage, line_seg(uv, tr, tr - vec2<f32>(arm, 0.0), thickness));\n        coverage = max(coverage, line_seg(uv, tr, tr + vec2<f32>(0.0, arm), thickness));\n        coverage = max(coverage, line_seg(uv, bl, bl + vec2<f32>(arm, 0.0), thickness));\n        coverage = max(coverage, line_seg(uv, bl, bl - vec2<f32>(0.0, arm), thickness));\n        coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(arm, 0.0), thickness));\n        coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(0.0, arm), thickness));\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
       "params": {
         "color_r": { "type": "Float", "value": 0.85 },
         "color_g": { "type": "Float", "value": 0.92 },
         "color_b": { "type": "Float", "value": 1.0 },
         "alpha": { "type": "Float", "value": 1.0 },
         "arm_fraction": { "type": "Float", "value": 0.4 },
-        "thickness": { "type": "Float", "value": 0.004 },
-        "blob_count": { "type": "Float", "value": 32.0 }
+        "thickness_px": { "type": "Float", "value": 2.0 },
+        "blob_count": { "type": "Float", "value": 8.0 }
       }
     },
-    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
+    {
+      "id": 8,
+      "typeId": "node.wgsl_compute",
+      "handle": "crosshair",
+      "wgslSource": "// Crosshair HUD element. Two anti-aliased line segments (horizontal +\n// vertical) crossing at each detection's centre. `ch_fraction` sets\n// arm length as a fraction of min(half_width, half_height) (legacy=0.3);\n// `thickness_px` is line thickness in 1080p-reference pixels (legacy\n// thin_line = 1.5).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    ch_fraction: f32,\n    thickness_px: f32,\n    blob_count: u32,\n    _pad0: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\nfn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {\n    let pa = p - a;\n    let ba = b - a;\n    let len_sq = dot(ba, ba);\n    if len_sq < 0.000001 { return 0.0; }\n    let h = saturate(dot(pa, ba) / len_sq);\n    let d = length(pa - ba * h);\n    return 1.0 - saturate(d / thickness);\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let thickness = u.thickness_px * (1.0 / f32(dims.x)) * dpi_scale;\n\n    var coverage = 0.0;\n    let n = min(u.blob_count, 8u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n        let half_size = vec2<f32>(d.width, d.height) * 0.5;\n        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);\n        let ch_size = min(half_size.x, half_size.y) * u.ch_fraction;\n\n        coverage = max(coverage, line_seg(uv, center - vec2<f32>(ch_size, 0.0), center + vec2<f32>(ch_size, 0.0), thickness));\n        coverage = max(coverage, line_seg(uv, center - vec2<f32>(0.0, ch_size), center + vec2<f32>(0.0, ch_size), thickness));\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "ch_fraction": { "type": "Float", "value": 0.3 },
+        "thickness_px": { "type": "Float", "value": 1.5 },
+        "blob_count": { "type": "Float", "value": 8.0 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.wgsl_compute",
+      "handle": "center_dot",
+      "wgslSource": "// Center-dot HUD element. Soft circle at each detection's centre,\n// coverage falls off linearly with distance. `radius_px` is the dot\n// radius in 1080p-reference pixels (legacy: px_u * 4 → radius_px=4).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    radius_px: f32,\n    blob_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let radius = u.radius_px * (1.0 / f32(dims.x)) * dpi_scale;\n\n    var coverage = 0.0;\n    let n = min(u.blob_count, 8u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n        let center = vec2<f32>(d.x + d.width * 0.5, d.y + d.height * 0.5);\n        let dist = length(uv - center);\n        coverage = max(coverage, 1.0 - saturate(dist / radius));\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "radius_px": { "type": "Float", "value": 4.0 },
+        "blob_count": { "type": "Float", "value": 8.0 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.wgsl_compute",
+      "handle": "size_gauge",
+      "wgslSource": "// Size-gauge HUD element. Anti-aliased outlined rectangle + interior\n// fill drawn below each detection bbox, fill fraction proportional to\n// bbox area. `bottom_offset_px` is the gap between bbox bottom and\n// the bar (legacy=50); `bar_height_px` is the bar height (legacy=8);\n// `min_bar_width_px` floors the bar width so tiny detections still\n// get a readable bar (legacy=80); `fill_scale` multiplies (w*h) into\n// the [0,1] fill fraction (legacy=20).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    bottom_offset_px: f32,\n    bar_height_px: f32,\n    min_bar_width_px: f32,\n    fill_scale: f32,\n    thickness_px: f32,\n    blob_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\nfn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {\n    let pa = p - a;\n    let ba = b - a;\n    let len_sq = dot(ba, ba);\n    if len_sq < 0.000001 { return 0.0; }\n    let h = saturate(dot(pa, ba) / len_sq);\n    let d = length(pa - ba * h);\n    return 1.0 - saturate(d / thickness);\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let px_u = (1.0 / f32(dims.x)) * dpi_scale;\n    let px_v = (1.0 / f32(dims.y)) * dpi_scale;\n    let thickness = u.thickness_px * px_u;\n    let bar_height = u.bar_height_px * px_v;\n    let bottom_offset = u.bottom_offset_px * px_v;\n    let min_bar_w = u.min_bar_width_px * px_u;\n\n    var coverage = 0.0;\n    let n = min(u.blob_count, 8u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n        let half_size = vec2<f32>(d.width, d.height) * 0.5;\n        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);\n\n        let origin = vec2<f32>(center.x - half_size.x, center.y + half_size.y + bottom_offset);\n        let bar_w = max(d.width, min_bar_w);\n        let fill_frac = saturate(d.width * d.height * u.fill_scale);\n\n        let tl = origin;\n        let tr = origin + vec2<f32>(bar_w, 0.0);\n        let bl = origin + vec2<f32>(0.0, bar_height);\n        let br = origin + vec2<f32>(bar_w, bar_height);\n        coverage = max(coverage, line_seg(uv, tl, tr, thickness));\n        coverage = max(coverage, line_seg(uv, bl, br, thickness));\n        coverage = max(coverage, line_seg(uv, tl, bl, thickness));\n        coverage = max(coverage, line_seg(uv, tr, br, thickness));\n\n        let rel = uv - origin;\n        if rel.x >= 0.0 && rel.x <= bar_w * fill_frac && rel.y >= 0.0 && rel.y <= bar_height {\n            coverage = max(coverage, 0.4);\n        }\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "bottom_offset_px": { "type": "Float", "value": 50.0 },
+        "bar_height_px": { "type": "Float", "value": 8.0 },
+        "min_bar_width_px": { "type": "Float", "value": 80.0 },
+        "fill_scale": { "type": "Float", "value": 20.0 },
+        "thickness_px": { "type": "Float", "value": 1.5 },
+        "blob_count": { "type": "Float", "value": 8.0 }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.wgsl_compute",
+      "handle": "tick_marks",
+      "wgslSource": "// Tick-marks HUD element. Four horizontal ticks descending from the\n// top-right corner of each detection bbox, alternating long/short.\n// `right_offset_px` is the gap from bbox right edge to tick base\n// (legacy=8); `long_tick_px` and `short_tick_px` are the alternating\n// tick lengths (legacy 12 / 6). Ticks render at half intensity to\n// match the legacy `* 0.5` modulation.\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    right_offset_px: f32,\n    long_tick_px: f32,\n    short_tick_px: f32,\n    thickness_px: f32,\n    blob_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\nfn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {\n    let pa = p - a;\n    let ba = b - a;\n    let len_sq = dot(ba, ba);\n    if len_sq < 0.000001 { return 0.0; }\n    let h = saturate(dot(pa, ba) / len_sq);\n    let d = length(pa - ba * h);\n    return 1.0 - saturate(d / thickness);\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let px_u = (1.0 / f32(dims.x)) * dpi_scale;\n    let thickness = u.thickness_px * px_u;\n    let right_offset = u.right_offset_px * px_u;\n\n    var coverage = 0.0;\n    let n = min(u.blob_count, 8u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n        let half_size = vec2<f32>(d.width, d.height) * 0.5;\n        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);\n\n        let tick_base = vec2<f32>(center.x + half_size.x + right_offset, center.y - half_size.y);\n        let tick_spacing = half_size.y * 0.5;\n\n        for (var t: u32 = 0u; t < 4u; t = t + 1u) {\n            let tick_start = tick_base + vec2<f32>(0.0, tick_spacing * f32(t));\n            let tick_len = select(u.short_tick_px * px_u, u.long_tick_px * px_u, (t % 2u) == 0u);\n            coverage = max(coverage, line_seg(uv, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);\n        }\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "right_offset_px": { "type": "Float", "value": 8.0 },
+        "long_tick_px": { "type": "Float", "value": 12.0 },
+        "short_tick_px": { "type": "Float", "value": 6.0 },
+        "thickness_px": { "type": "Float", "value": 1.5 },
+        "blob_count": { "type": "Float", "value": 8.0 }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.wgsl_compute",
+      "handle": "dashed_connections",
+      "wgslSource": "// Dashed connection lines between paired detections. Per-pixel SDF:\n// for each EdgePair, resolve a_index/b_index into detection centres,\n// compute the line segment, apply a dash phase mask. Each visible\n// edge renders at half intensity to match the legacy *0.5 modulation.\n// `dash_period_px`: dash cycle in 1080p-reference pixels (legacy=12);\n// `dash_fill`: on-fraction of each cycle (legacy step(0.4, phase)).\n// Slots filled with sentinel (a_index == 0xFFFFFFFFu) are skipped.\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    thickness_px: f32,\n    dash_period_px: f32,\n    dash_fill: f32,\n    edge_count: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\nstruct Edge {\n    a_index: u32,\n    b_index: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var<storage, read> edges: array<Edge>;\n@group(0) @binding(3) var source_tex: texture_2d<f32>;\n@group(0) @binding(4) var src_sampler: sampler;\n@group(0) @binding(5) var output_tex: texture_storage_2d<rgba16float, write>;\n\nfn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {\n    let pa = p - a;\n    let ba = b - a;\n    let len_sq = dot(ba, ba);\n    if len_sq < 0.000001 { return 0.0; }\n    let h = saturate(dot(pa, ba) / len_sq);\n    let d = length(pa - ba * h);\n    return 1.0 - saturate(d / thickness);\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let px_u = (1.0 / f32(dims.x)) * dpi_scale;\n    let thickness = u.thickness_px * px_u;\n    let dash_period = u.dash_period_px * px_u;\n\n    var coverage = 0.0;\n    let n = min(u.edge_count, 32u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let e = edges[i];\n        if e.a_index == 0xFFFFFFFFu { continue; }\n        let da = detections[e.a_index];\n        let db = detections[e.b_index];\n        let center_a = vec2<f32>(da.x + da.width * 0.5, da.y + da.height * 0.5);\n        let center_b = vec2<f32>(db.x + db.width * 0.5, db.y + db.height * 0.5);\n\n        let ba = center_b - center_a;\n        let len_sq = dot(ba, ba);\n        if len_sq < 0.000001 { continue; }\n        let pa = uv - center_a;\n        let t_val = saturate(dot(pa, ba) / len_sq);\n        let len = sqrt(len_sq);\n        let dash_phase = fract(t_val * len / dash_period);\n        let dash_mask = step(u.dash_fill, dash_phase);\n\n        coverage = max(coverage, line_seg(uv, center_a, center_b, thickness) * 0.5 * dash_mask);\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "thickness_px": { "type": "Float", "value": 1.5 },
+        "dash_period_px": { "type": "Float", "value": 12.0 },
+        "dash_fill": { "type": "Float", "value": 0.4 },
+        "edge_count": { "type": "Float", "value": 32.0 }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "node.wgsl_compute",
+      "handle": "midpoint_diamonds",
+      "wgslSource": "// Midpoint-diamond HUD element. Soft circle at the midpoint of each\n// connection edge, modulated to 0.4 intensity to match the legacy\n// midpoint dot. `radius_px` is the diamond radius in 1080p-reference\n// pixels (legacy = px_u * 5).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    radius_px: f32,\n    edge_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\nstruct Edge {\n    a_index: u32,\n    b_index: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var<storage, read> edges: array<Edge>;\n@group(0) @binding(3) var source_tex: texture_2d<f32>;\n@group(0) @binding(4) var src_sampler: sampler;\n@group(0) @binding(5) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let dpi_scale = f32(dims.y) / 1080.0;\n    let radius = u.radius_px * (1.0 / f32(dims.x)) * dpi_scale;\n\n    var coverage = 0.0;\n    let n = min(u.edge_count, 32u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let e = edges[i];\n        if e.a_index == 0xFFFFFFFFu { continue; }\n        let da = detections[e.a_index];\n        let db = detections[e.b_index];\n        let center_a = vec2<f32>(da.x + da.width * 0.5, da.y + da.height * 0.5);\n        let center_b = vec2<f32>(db.x + db.width * 0.5, db.y + db.height * 0.5);\n        let mid = (center_a + center_b) * 0.5;\n\n        let mid_dist = length(uv - mid);\n        coverage = max(coverage, (1.0 - saturate(mid_dist / radius)) * 0.4);\n    }\n\n    let add = coverage * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "radius_px": { "type": "Float", "value": 5.0 },
+        "edge_count": { "type": "Float", "value": 32.0 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.render_value_overlay",
+      "handle": "hex_label",
+      "params": {
+        "format": { "type": "Enum", "value": 1 },
+        "color": { "type": "Color", "value": [0.85, 0.92, 1.0, 1.0] },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "font_scale": { "type": "Float", "value": 2.0 },
+        "label_count": { "type": "Float", "value": 8.0 },
+        "offset_x": { "type": "Float", "value": 0.0 },
+        "offset_y": { "type": "Float", "value": -0.020 },
+        "anchor": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 15,
+      "typeId": "node.render_value_overlay",
+      "handle": "coord_label",
+      "params": {
+        "format": { "type": "Enum", "value": 2 },
+        "color": { "type": "Color", "value": [0.85, 0.92, 1.0, 1.0] },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "font_scale": { "type": "Float", "value": 2.0 },
+        "label_count": { "type": "Float", "value": 8.0 },
+        "offset_x": { "type": "Float", "value": 0.0 },
+        "offset_y": { "type": "Float", "value": 0.010 },
+        "anchor": { "type": "Enum", "value": 2 }
+      }
+    },
+    {
+      "id": 16,
+      "typeId": "node.wgsl_compute",
+      "handle": "scanline",
+      "wgslSource": "// Subtle scanline overlay across the whole frame. Brightness modulates\n// by a horizontal repeating pattern. `period_px` controls scanline\n// density in pixels (legacy = 1 / (resolution.y * 0.5), i.e. ~2 px\n// between scanlines); `intensity` is the additive contribution\n// (legacy = 0.04).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    period_px: f32,\n    intensity: f32,\n    _pad0: f32,\n    _pad1: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var source_tex: texture_2d<f32>;\n@group(0) @binding(2) var src_sampler: sampler;\n@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    let scanline = abs(fract(uv.y * f32(dims.y) / u.period_px) - 0.5) * 2.0;\n    let scan_alpha = (1.0 - smoothstep(0.4, 0.5, scanline)) * u.intensity;\n\n    let add = scan_alpha * u.alpha;\n    src = vec4<f32>(\n        src.r + u.color_r * add,\n        src.g + u.color_g * add,\n        src.b + u.color_b * add,\n        src.a,\n    );\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "period_px": { "type": "Float", "value": 2.0 },
+        "intensity": { "type": "Float", "value": 0.04 }
+      }
+    },
+    { "id": 17, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
     { "fromNode": 1, "fromPort": "blobs", "toNode": 2, "toPort": "in" },
     { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
     { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "min_cutoff" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "blobs" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "in" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "source_tex" },
+
+    { "fromNode": 0, "fromPort": "out", "toNode": 7, "toPort": "source_tex" },
     { "fromNode": 4, "fromPort": "out", "toNode": 7, "toPort": "detections" },
-    { "fromNode": 7, "fromPort": "output_tex", "toNode": 8, "toPort": "in" }
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "alpha" },
+
+    { "fromNode": 7, "fromPort": "output_tex", "toNode": 8, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 8, "toPort": "detections" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "alpha" },
+
+    { "fromNode": 8, "fromPort": "output_tex", "toNode": 9, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 9, "toPort": "detections" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 9, "toPort": "alpha" },
+
+    { "fromNode": 9, "fromPort": "output_tex", "toNode": 10, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 10, "toPort": "detections" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 10, "toPort": "alpha" },
+
+    { "fromNode": 10, "fromPort": "output_tex", "toNode": 11, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 11, "toPort": "detections" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 11, "toPort": "alpha" },
+
+    { "fromNode": 11, "fromPort": "output_tex", "toNode": 12, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 12, "toPort": "detections" },
+    { "fromNode": 5, "fromPort": "edges", "toNode": 12, "toPort": "edges" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 12, "toPort": "alpha" },
+
+    { "fromNode": 12, "fromPort": "output_tex", "toNode": 13, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 13, "toPort": "detections" },
+    { "fromNode": 5, "fromPort": "edges", "toNode": 13, "toPort": "edges" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 13, "toPort": "alpha" },
+
+    { "fromNode": 13, "fromPort": "output_tex", "toNode": 14, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 14, "toPort": "positions" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 14, "toPort": "alpha" },
+
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 15, "toPort": "positions" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 15, "toPort": "alpha" },
+
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "source_tex" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 16, "toPort": "alpha" },
+
+    { "fromNode": 16, "fromPort": "output_tex", "toNode": 17, "toPort": "in" }
   ]
 }
