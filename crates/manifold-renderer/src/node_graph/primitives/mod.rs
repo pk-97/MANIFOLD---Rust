@@ -49,7 +49,6 @@ mod convolution_2d_9tap;
 mod cycle_table_row;
 mod cylinder_wrap_field;
 mod depth_estimate_midas;
-mod depth_of_field;
 mod digital_plants_render;
 mod displace_mesh;
 mod distance_to_point;
@@ -238,9 +237,6 @@ pub use convolution_2d_9tap::Convolution2D9Tap;
 pub use cycle_table_row::CycleTableRow;
 pub use cylinder_wrap_field::CylinderWrapField;
 pub use depth_estimate_midas::DepthEstimateMidas;
-pub use depth_of_field::{
-    DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID, DepthOfField,
-};
 pub use digital_plants_render::DigitalPlantsRender;
 pub use displace_mesh::DisplaceMesh;
 pub use distance_to_point::DistanceToPoint;

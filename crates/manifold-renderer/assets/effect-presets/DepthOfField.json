@@ -69,7 +69,7 @@
         "target": { "kind": "handleNode", "handle": "blur_v", "param": "quality" },
         "convert": { "type": "EnumRound" } }
     ],
-    "skipMode": { "kind": "onZero", "paramId": "amount" }
+    "skipMode": { "kind": "never" }
   },
   "nodes": [
     { "id": 0, "typeId": "system.source", "handle": "source" },

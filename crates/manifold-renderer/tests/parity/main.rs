@@ -29,7 +29,6 @@ mod bloom;
 mod chromatic_offset;
 mod clamp_stretch;
 mod color_grade;
-mod depth_of_field;
 mod dither_pattern;
 mod edge_detect;
 mod glitch;
