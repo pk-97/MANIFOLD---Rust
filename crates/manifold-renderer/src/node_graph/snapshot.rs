@@ -160,6 +160,10 @@ pub enum ParamSnapshotKind {
     Int,
     Bool,
     Enum,
+    /// Momentary "fire once" button. See [`ParamType::Trigger`] in
+    /// `manifold-renderer/.../parameters.rs` for the storage / cold-start
+    /// contract; the outer-card click handler increments by one per press.
+    Trigger,
     /// Multi-component types (Vec2/Vec3/Vec4/Color) — not exposable
     /// in the V2 user surface.
     Other,
@@ -497,6 +501,7 @@ fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
         ParamType::Int => ParamSnapshotKind::Int,
         ParamType::Bool => ParamSnapshotKind::Bool,
         ParamType::Enum => ParamSnapshotKind::Enum,
+        ParamType::Trigger => ParamSnapshotKind::Trigger,
         _ => ParamSnapshotKind::Other,
     }
 }

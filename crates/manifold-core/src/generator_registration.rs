@@ -29,6 +29,7 @@ pub struct ParamSpec {
     pub default_value: f32,
     pub whole_numbers: bool,
     pub is_toggle: bool,
+    pub is_trigger: bool,
     pub value_labels: &'static [&'static str],
     pub format_string: Option<&'static str>,
     pub osc_suffix: &'static str,
@@ -53,6 +54,7 @@ impl ParamSpec {
             default_value,
             whole_numbers: false,
             is_toggle: false,
+            is_trigger: false,
             value_labels: &[],
             format_string: Some(format_string),
             osc_suffix,
@@ -76,6 +78,7 @@ impl ParamSpec {
             default_value,
             whole_numbers: false,
             is_toggle: true,
+            is_trigger: false,
             value_labels: &[],
             format_string: None,
             osc_suffix,
@@ -99,6 +102,7 @@ impl ParamSpec {
             default_value,
             whole_numbers: true,
             is_toggle: false,
+            is_trigger: false,
             value_labels: &[],
             format_string: None,
             osc_suffix,
@@ -123,7 +127,32 @@ impl ParamSpec {
             default_value,
             whole_numbers: true,
             is_toggle: false,
+            is_trigger: false,
             value_labels: labels,
+            format_string: None,
+            osc_suffix,
+        }
+    }
+
+    /// Momentary "fire once" button parameter. Storage is a monotonic
+    /// `u32` counter held as `f32`; each outer-card click increments by
+    /// one. Consuming primitives detect rising edges (cold-start absorbs
+    /// the initial value — see `node.trigger_gate`).
+    pub const fn trigger(
+        id: &'static str,
+        name: &'static str,
+        osc_suffix: &'static str,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            min: 0.0,
+            max: f32::MAX,
+            default_value: 0.0,
+            whole_numbers: true,
+            is_toggle: false,
+            is_trigger: true,
+            value_labels: &[],
             format_string: None,
             osc_suffix,
         }
@@ -139,6 +168,7 @@ impl ParamSpec {
             default_value: self.default_value,
             whole_numbers: self.whole_numbers,
             is_toggle: self.is_toggle,
+            is_trigger: self.is_trigger,
             value_labels: if self.value_labels.is_empty() {
                 None
             } else {

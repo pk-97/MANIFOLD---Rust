@@ -640,6 +640,7 @@ impl JsonGraphGenerator {
                 ParamConvert::IntRound => ParamValue::Float(v.round()),
                 ParamConvert::BoolThreshold => ParamValue::Bool(v > 0.5),
                 ParamConvert::EnumRound => ParamValue::Enum(v.round().max(0.0) as u32),
+                ParamConvert::Trigger => ParamValue::Float(v),
             };
             let _ = self
                 .graph

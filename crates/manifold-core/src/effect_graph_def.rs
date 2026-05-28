@@ -328,6 +328,8 @@ pub struct ParamSpecDef {
     pub whole_numbers: bool,
     #[serde(default)]
     pub is_toggle: bool,
+    #[serde(default)]
+    pub is_trigger: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -581,6 +583,7 @@ mod tests {
                 default_value: 1.0,
                 whole_numbers: false,
                 is_toggle: false,
+                is_trigger: false,
                 value_labels: Vec::new(),
                 format_string: Some("F2".to_string()),
                 osc_suffix: String::new(),

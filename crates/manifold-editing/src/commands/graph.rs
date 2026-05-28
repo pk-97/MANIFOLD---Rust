@@ -1584,10 +1584,15 @@ fn prepare_generator_mirror(
                 inner_convert,
                 manifold_core::effects::ParamConvert::IntRound
                     | manifold_core::effects::ParamConvert::EnumRound
+                    | manifold_core::effects::ParamConvert::Trigger
             ),
             is_toggle: matches!(
                 inner_convert,
                 manifold_core::effects::ParamConvert::BoolThreshold
+            ),
+            is_trigger: matches!(
+                inner_convert,
+                manifold_core::effects::ParamConvert::Trigger
             ),
             value_labels: Vec::new(),
             format_string: None,
@@ -2494,6 +2499,7 @@ mod tests {
                         default_value: 0.0,
                         whole_numbers: true,
                         is_toggle: false,
+                        is_trigger: false,
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
@@ -2506,6 +2512,7 @@ mod tests {
                         default_value: 1.0,
                         whole_numbers: false,
                         is_toggle: false,
+                        is_trigger: false,
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
@@ -2731,6 +2738,7 @@ mod tests {
                         default_value: 0.0,
                         whole_numbers: true,
                         is_toggle: false,
+                        is_trigger: false,
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
@@ -2743,6 +2751,7 @@ mod tests {
                         default_value: 0.0,
                         whole_numbers: false,
                         is_toggle: true,
+                        is_trigger: false,
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
@@ -3139,6 +3148,7 @@ mod tests {
                     default_value: 0.0,
                     whole_numbers: true,
                     is_toggle: false,
+                    is_trigger: false,
                     value_labels: vec![],
                     format_string: None,
                     osc_suffix: String::new(),

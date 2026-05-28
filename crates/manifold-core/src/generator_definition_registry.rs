@@ -321,6 +321,7 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         default_value: p.default_value,
         whole_numbers: p.whole_numbers,
         is_toggle: p.is_toggle,
+        is_trigger: p.is_trigger,
         value_labels: if p.value_labels.is_empty() {
             None
         } else {

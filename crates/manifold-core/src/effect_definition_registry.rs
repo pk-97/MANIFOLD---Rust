@@ -364,6 +364,7 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         default_value: p.default_value,
         whole_numbers: p.whole_numbers,
         is_toggle: p.is_toggle,
+        is_trigger: p.is_trigger,
         value_labels: if p.value_labels.is_empty() {
             None
         } else {
@@ -746,6 +747,7 @@ mod tests {
                 default_value: 0.5,
                 whole_numbers: false,
                 is_toggle: false,
+                is_trigger: false,
                 value_labels: Vec::new(),
                 format_string: Some("F2".to_string()),
                 osc_suffix: String::new(),
@@ -845,6 +847,7 @@ mod tests {
                 default_value: 0.5,
                 whole_numbers: false,
                 is_toggle: false,
+                is_trigger: false,
                 value_labels: Vec::new(),
                 format_string: Some("F2".to_string()),
                 osc_suffix: String::new(),

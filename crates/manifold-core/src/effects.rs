@@ -44,6 +44,8 @@ pub struct ParamDef {
     pub whole_numbers: bool,
     #[serde(default)]
     pub is_toggle: bool,
+    #[serde(default)]
+    pub is_trigger: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_labels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +64,7 @@ impl Default for ParamDef {
             default_value: 0.0,
             whole_numbers: false,
             is_toggle: false,
+            is_trigger: false,
             value_labels: None,
             format_string: None,
             osc_suffix: None,
@@ -137,6 +140,13 @@ pub enum ParamConvert {
     BoolThreshold,
     /// Round to nearest enum index.
     EnumRound,
+    /// Momentary button. Storage is a monotonic `u32` counter held as
+    /// `f32`; the outer-card click handler increments by one per press
+    /// (no toggle state). Consuming primitives detect rising edges via
+    /// the standard `last_count: Option<u32>` cold-start pattern — same
+    /// as `node.trigger_gate`. Behaves like an `IntRound` for modulation
+    /// resolution (whole-number domain).
+    Trigger,
 }
 
 /// Free-function form of [`EffectInstance::resolve_param`]. Takes the
@@ -168,6 +178,7 @@ pub fn resolve_param_in(
             ParamConvert::IntRound
                 | ParamConvert::EnumRound
                 | ParamConvert::BoolThreshold
+                | ParamConvert::Trigger
         ),
     })
 }
@@ -1481,9 +1492,10 @@ impl ParamSource for EffectInstance {
             if let Some(ub) = self.user_param_bindings.get(user_idx) {
                 let whole_numbers = matches!(
                     ub.convert,
-                    ParamConvert::IntRound | ParamConvert::EnumRound
+                    ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
                 );
                 let is_toggle = matches!(ub.convert, ParamConvert::BoolThreshold);
+                let is_trigger = matches!(ub.convert, ParamConvert::Trigger);
                 return ParamDef {
                     id: ub.id.clone(),
                     name: ub.label.clone(),
@@ -1492,6 +1504,7 @@ impl ParamSource for EffectInstance {
                     default_value: ub.default_value,
                     whole_numbers,
                     is_toggle,
+                    is_trigger,
                     value_labels: None,
                     format_string: None,
                     osc_suffix: None,

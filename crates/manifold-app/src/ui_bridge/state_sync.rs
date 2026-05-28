@@ -1513,6 +1513,7 @@ fn gen_params_to_config(
                             default: pd.default_value,
                             whole_numbers: pd.whole_numbers,
                             is_toggle: pd.is_toggle,
+                            is_trigger: pd.is_trigger,
                             value_labels: if pd.value_labels.is_empty() {
                                 None
                             } else {
@@ -1563,6 +1564,7 @@ fn gen_params_to_config(
                             default: pd.default_value,
                             whole_numbers: pd.whole_numbers,
                             is_toggle: pd.is_toggle,
+                            is_trigger: pd.is_trigger,
                             value_labels: pd.value_labels.clone(),
                             osc_address,
                             ableton_display,

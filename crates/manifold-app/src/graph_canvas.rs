@@ -181,6 +181,7 @@ fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) ->
         }
         ParamSnapshotKind::Int => format!("{}", pick.current_value as i64),
         ParamSnapshotKind::Float => format!("{:.2}", pick.current_value),
+        ParamSnapshotKind::Trigger => format!("{}", pick.current_value as i64),
         ParamSnapshotKind::Other => "—".to_string(),
     };
     Some(format!("{}: {}", pick.label, value_str))

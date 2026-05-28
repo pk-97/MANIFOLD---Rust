@@ -492,6 +492,7 @@ mod tests {
                         | (ParamType::Enum, ParamValue::Enum(_))
                         | (ParamType::Table, ParamValue::Float(_))
                         | (ParamType::Table, ParamValue::Table(_))
+                        | (ParamType::Trigger, ParamValue::Float(_))
                 );
                 assert!(
                     ok,

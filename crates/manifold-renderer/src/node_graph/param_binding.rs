@@ -165,6 +165,11 @@ pub fn convert_param_value(convert: ParamConvert, value: f32) -> ParamValue {
             let v = value.round().max(0.0) as u32;
             ParamValue::Enum(v)
         }
+        // Trigger storage is a monotonic counter held as Float —
+        // pass through and let the consuming primitive detect rising
+        // edges via the standard `last_count: Option<u32>` cold-start
+        // pattern. Same wire shape as `system.generator_input.trigger_count`.
+        ParamConvert::Trigger => ParamValue::Float(value),
     }
 }
 
@@ -313,6 +318,7 @@ impl ResolvedBinding {
             manifold_core::effects::ParamConvert::IntRound => ParamConvert::IntRound,
             manifold_core::effects::ParamConvert::BoolThreshold => ParamConvert::BoolThreshold,
             manifold_core::effects::ParamConvert::EnumRound => ParamConvert::EnumRound,
+            manifold_core::effects::ParamConvert::Trigger => ParamConvert::Trigger,
         };
         Some(Self {
             id: Cow::Owned(core.id.clone()),

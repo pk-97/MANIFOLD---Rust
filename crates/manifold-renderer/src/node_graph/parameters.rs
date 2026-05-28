@@ -74,6 +74,13 @@ pub enum ParamType {
     /// Single editable text value (paths, font names, identifiers). See
     /// module docs.
     String,
+    /// Momentary "fire once" button. Storage is a monotonic `u32`
+    /// counter held in `ParamValue::Float`. The outer-card click
+    /// handler increments by one per press (no toggle state — the
+    /// button always reads "fire"). Consuming primitives detect rising
+    /// edges via the standard `last_count: Option<u32>` cold-start
+    /// pattern — same as `node.trigger_gate`.
+    Trigger,
 }
 
 /// Read-only N×M `f32` table.

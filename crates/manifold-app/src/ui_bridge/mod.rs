@@ -200,6 +200,7 @@ pub fn dispatch(
         | PanelAction::GenParamChanged(..)
         | PanelAction::GenParamCommit(_)
         | PanelAction::GenParamToggle(_)
+        | PanelAction::GenParamFire(_)
         | PanelAction::GenParamRightClick(..)
         | PanelAction::GenDriverToggle(_)
         | PanelAction::GenEnvelopeToggle(_)

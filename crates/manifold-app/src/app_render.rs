@@ -2198,6 +2198,7 @@ fn build_graph_editor_view(
                 ParamSnapshotKind::Int => GraphEditorParamKind::Int,
                 ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
                 ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,
+                ParamSnapshotKind::Trigger => GraphEditorParamKind::Trigger,
                 ParamSnapshotKind::Other => GraphEditorParamKind::Other,
             },
             default_value: p.default_value,

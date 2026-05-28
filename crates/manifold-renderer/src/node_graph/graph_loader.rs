@@ -594,6 +594,7 @@ pub(crate) fn param_value_matches_type(v: &ParamValue, ty: ParamType) -> bool {
             | (ParamType::Enum, ParamValue::Enum(_))
             | (ParamType::Table, ParamValue::Table(_))
             | (ParamType::String, ParamValue::String(_))
+            | (ParamType::Trigger, ParamValue::Float(_))
     )
 }
 
@@ -610,6 +611,7 @@ pub(crate) fn param_type_name(ty: ParamType) -> &'static str {
         ParamType::Enum => "Enum",
         ParamType::Table => "Table",
         ParamType::String => "String",
+        ParamType::Trigger => "Trigger",
     }
 }
 

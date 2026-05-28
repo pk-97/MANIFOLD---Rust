@@ -92,6 +92,22 @@ crate::primitive! {
             range: Some((0.1, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "next",
+            label: "Next",
+            ty: ParamType::Trigger,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "prev",
+            label: "Prev",
+            ty: ParamType::Trigger,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
     ],
     composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening. The `trigger_count` scalar output is a monotonically increasing counter that bumps each time a NEW slice actually lands on the GPU (not per position-slider movement — fast scrubs that outrun the background loader skip intermediate frames and only tick once per visible swap). Wire it into node.trigger_gate / node.sample_and_hold / node.clip_trigger_index downstream to drive per-image randomization. Fires once at startup when the first slice loads; never resets on folder change (downstream gates compare deltas, monotonic matches the system.generator_input.trigger_count convention). The `next` and `prev` scalar inputs are trigger_count-style monotonic counters: each rising edge bumps the displayed image by ±1 (clamped to [0, N-1]). Wire MIDI buttons, keyboard shortcuts, clip retriggers — anything that already emits a monotonic trigger_count. Last-input-wins between slider and buttons: a button press holds its position until the user moves the slider, at which point the slider takes over again.",
     examples: [],
@@ -454,7 +470,7 @@ mod tests {
         assert_eq!(ImageFolder::OUTPUTS[1].ty, PortType::Scalar(ScalarType::F32));
 
         let names: Vec<&str> = ImageFolder::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["folder", "position", "uv_scale"]);
+        assert_eq!(names, vec!["folder", "position", "uv_scale", "next", "prev"]);
     }
 
     #[test]

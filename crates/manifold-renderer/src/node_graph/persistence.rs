@@ -746,6 +746,7 @@ fn param_convert_name(c: manifold_core::effects::ParamConvert) -> &'static str {
         ParamConvert::IntRound => "IntRound",
         ParamConvert::BoolThreshold => "BoolThreshold",
         ParamConvert::EnumRound => "EnumRound",
+        ParamConvert::Trigger => "Trigger",
     }
 }
 
@@ -763,6 +764,7 @@ fn param_type_name(ty: crate::node_graph::parameters::ParamType) -> &'static str
         ParamType::Enum => "Enum",
         ParamType::Table => "Table",
         ParamType::String => "String",
+        ParamType::Trigger => "Trigger",
     }
 }
 
@@ -784,6 +786,7 @@ fn param_value_matches_type(v: &ParamValue, ty: crate::node_graph::parameters::P
             | (ParamType::Enum, ParamValue::Enum(_))
             | (ParamType::Table, ParamValue::Table(_))
             | (ParamType::String, ParamValue::String(_))
+            | (ParamType::Trigger, ParamValue::Float(_))
     )
 }
 

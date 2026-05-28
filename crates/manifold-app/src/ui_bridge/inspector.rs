@@ -1857,6 +1857,35 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
+        PanelAction::GenParamFire(param_id) => {
+            // Trigger button click: increment the monotonic counter
+            // by one. Mirrors GenParamToggle's plumbing exactly except
+            // the value transform is `+1` instead of `0↔1`.
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+            {
+                let layer_id = layer.layer_id.clone();
+                let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                if let Some(slot) = slot
+                    && let Some(gp) = layer.gen_params_mut()
+                {
+                    let old_val = gp.get_param_base(slot);
+                    let new_val = old_val + 1.0;
+                    let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
+                    let old_params = base.clone();
+                    gp.set_param_base(slot, new_val);
+                    let new_params = gp
+                        .base_param_values
+                        .as_ref()
+                        .unwrap_or(&gp.param_values)
+                        .clone();
+                    let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            DispatchResult::handled()
+        }
         PanelAction::GenParamRightClick(param_id, default_val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx

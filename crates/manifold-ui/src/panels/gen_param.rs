@@ -37,6 +37,11 @@ pub struct GenParamInfo {
     pub default: f32,
     pub whole_numbers: bool,
     pub is_toggle: bool,
+    /// Momentary "fire once" button. Renders as a button row (no
+    /// slider). Click handler increments the underlying monotonic
+    /// counter by one (no toggle state). Consumes via the same
+    /// `ParamConvert::Trigger` plumbing as wired trigger inputs.
+    pub is_trigger: bool,
     /// Named value labels for discrete params (e.g., ["Classic", "Rings", "Diamond"]).
     /// When present, the slider displays the label instead of a numeric value.
     /// Unity: ParamDef.valueLabels → GeneratorDefinitionRegistry.FormatValue().
@@ -288,7 +293,7 @@ impl GenParamPanel {
         let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
         if !self.is_collapsed {
             for (i, info) in self.param_info.iter().enumerate() {
-                if info.is_toggle {
+                if info.is_toggle || info.is_trigger {
                     h += ROW_HEIGHT + ROW_SPACING;
                 } else {
                     h += ROW_HEIGHT + ROW_SPACING;
@@ -557,8 +562,13 @@ impl GenParamPanel {
             for i in 0..self.param_info.len() {
                 let info = self.param_info[i].clone();
 
-                if info.is_toggle {
-                    // Toggle row
+                if info.is_toggle || info.is_trigger {
+                    // Toggle / Trigger row — both share the button-row
+                    // layout. The button label differentiates: ON/OFF
+                    // for sticky toggles, ▶ for momentary fire-once
+                    // triggers. Click handler dispatches differently
+                    // (GenParamToggle vs GenParamFire) based on the
+                    // is_trigger flag — see the handle_event path.
                     let label_id = tree.add_label(
                         -1,
                         cx,
@@ -575,14 +585,21 @@ impl GenParamPanel {
                     ) as i32;
 
                     let on = info.default > 0.5;
+                    let (button_text, button_style) = if info.is_trigger {
+                        // Trigger renders as a momentary button — always
+                        // neutral (the counter value isn't user-visible).
+                        ("▶", toggle_btn_style(false))
+                    } else {
+                        (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
+                    };
                     let button_id = tree.add_button(
                         -1,
                         cx + content_w - TOGGLE_BTN_W,
                         cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
                         TOGGLE_BTN_W,
                         TOGGLE_BTN_H,
-                        toggle_btn_style(on),
-                        if on { "ON" } else { "OFF" },
+                        button_style,
+                        button_text,
                     ) as i32;
 
                     // Make toggle label interactive for click-to-copy OSC address
@@ -855,8 +872,9 @@ impl GenParamPanel {
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             let info = &self.param_info[i];
 
-            // Label dirty-check
-            if !info.is_toggle {
+            // Label dirty-check (slider rows only — toggle/trigger rows
+            // have their label baked into the row at build time).
+            if !info.is_toggle && !info.is_trigger {
                 let new_label = Some(info.name.clone());
                 if self.label_cache[i] != new_label {
                     self.label_cache[i] = new_label;
@@ -877,6 +895,10 @@ impl GenParamPanel {
                         tree.set_text(ids.button_id as u32, if on { "ON" } else { "OFF" });
                     }
                 }
+            } else if info.is_trigger {
+                // Trigger button stays neutral — the counter value isn't
+                // user-visible, the button is a momentary action affordance.
+                // Nothing to re-render per frame.
             } else if val != self.param_cache[i] || self.param_cache[i].is_nan() {
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
@@ -997,21 +1019,34 @@ impl GenParamPanel {
             return vec![PanelAction::GenCardClicked];
         }
 
-        // Toggle buttons
+        // Toggle / Trigger buttons — same button slot, different
+        // semantics. is_trigger fires GenParamFire (counter +1);
+        // is_toggle fires GenParamToggle (0↔1 flip).
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
                 && id == t.button_id
             {
-                return vec![PanelAction::GenParamToggle(self.pid_at(pi))];
+                let is_trigger = self
+                    .param_info
+                    .get(pi)
+                    .map(|i| i.is_trigger)
+                    .unwrap_or(false);
+                let action = if is_trigger {
+                    PanelAction::GenParamFire(self.pid_at(pi))
+                } else {
+                    PanelAction::GenParamToggle(self.pid_at(pi))
+                };
+                return vec![action];
             }
         }
 
-        // D/E buttons (skip toggles)
+        // D/E buttons (skip toggles and triggers — neither makes sense
+        // to modulate)
         for (pi, &btn_id) in self.driver_btn_ids.iter().enumerate() {
             if self
                 .param_info
                 .get(pi)
-                .map(|i| i.is_toggle)
+                .map(|i| i.is_toggle || i.is_trigger)
                 .unwrap_or(false)
             {
                 continue;
@@ -1024,7 +1059,7 @@ impl GenParamPanel {
             if self
                 .param_info
                 .get(pi)
-                .map(|i| i.is_toggle)
+                .map(|i| i.is_toggle || i.is_trigger)
                 .unwrap_or(false)
             {
                 continue;
@@ -1188,12 +1223,13 @@ impl GenParamPanel {
             }
         }
 
-        // Check param slider tracks (skip toggles)
+        // Check param slider tracks (skip toggles + triggers — neither
+        // has a slider widget on the row)
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if self
                 .param_info
                 .get(pi)
-                .map(|i| i.is_toggle)
+                .map(|i| i.is_toggle || i.is_trigger)
                 .unwrap_or(false)
             {
                 continue;
@@ -1514,7 +1550,7 @@ impl GenParamPanel {
             if self
                 .param_info
                 .get(pi)
-                .map(|i| i.is_toggle)
+                .map(|i| i.is_toggle || i.is_trigger)
                 .unwrap_or(false)
             {
                 continue;
@@ -1558,6 +1594,7 @@ mod tests {
                     default: 1.0,
                     whole_numbers: false,
                     is_toggle: false,
+                    is_trigger: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -1571,6 +1608,7 @@ mod tests {
                     default: 0.0,
                     whole_numbers: false,
                     is_toggle: true,
+                    is_trigger: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -1584,6 +1622,7 @@ mod tests {
                     default: 1.0,
                     whole_numbers: false,
                     is_toggle: false,
+                    is_trigger: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,

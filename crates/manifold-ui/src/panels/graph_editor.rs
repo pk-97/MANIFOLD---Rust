@@ -47,6 +47,9 @@ pub enum GraphEditorParamKind {
     Int,
     Bool,
     Enum,
+    /// Momentary "fire once" button. Renders as a click-once button on
+    /// the outer card; click handler increments storage by one.
+    Trigger,
     /// Multi-component types — shown as a disabled row, not exposable
     /// in the V2 single-slot user surface.
     Other,
@@ -493,6 +496,7 @@ impl GraphEditorPanel {
                     | GraphEditorParamKind::Int
                     | GraphEditorParamKind::Bool
                     | GraphEditorParamKind::Enum
+                    | GraphEditorParamKind::Trigger
             );
             let is_exposed = self
                 .exposed_keys
@@ -623,6 +627,7 @@ impl GraphEditorPanel {
                     GraphEditorParamKind::Int => ParamConvert::IntRound,
                     GraphEditorParamKind::Bool => ParamConvert::BoolThreshold,
                     GraphEditorParamKind::Enum => ParamConvert::EnumRound,
+                    GraphEditorParamKind::Trigger => ParamConvert::Trigger,
                     GraphEditorParamKind::Other => ParamConvert::Float, // unreachable
                 };
                 let (min, max) = ps.range.unwrap_or((0.0, 1.0));
@@ -913,6 +918,9 @@ fn value_cell_click_to_param(
             let next = (current + 1).rem_euclid(enum_count as i32);
             Some(SerializedParamValue::Enum { value: next as u32 })
         }
+        GraphEditorParamKind::Trigger => Some(SerializedParamValue::Float {
+            value: current_value + 1.0,
+        }),
         GraphEditorParamKind::Float | GraphEditorParamKind::Int | GraphEditorParamKind::Other => {
             None
         }
@@ -942,6 +950,7 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
         }
         GraphEditorParamKind::Int => format!("{}", p.current_value as i64),
         GraphEditorParamKind::Float => format!("{:.2}", p.current_value),
+        GraphEditorParamKind::Trigger => "▶ Fire".to_string(),
         GraphEditorParamKind::Other => "—".to_string(),
     }
 }

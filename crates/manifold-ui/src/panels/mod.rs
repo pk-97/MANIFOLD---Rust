@@ -298,6 +298,11 @@ pub enum PanelAction {
     GenParamCommit(manifold_core::effects::ParamId),
     GenParamRightClick(manifold_core::effects::ParamId, f32), // param_id, default_value
     GenParamToggle(manifold_core::effects::ParamId),
+    /// Outer-card click on a `is_trigger` param's button — increment
+    /// the underlying monotonic counter by one. Consumed by the same
+    /// `ChangeGeneratorParamsCommand` path as toggles, but with `+1`
+    /// instead of `0↔1` flip. Wired in [`crate::panels::gen_param`].
+    GenParamFire(manifold_core::effects::ParamId),
     GenDriverToggle(manifold_core::effects::ParamId),
     GenEnvelopeToggle(manifold_core::effects::ParamId),
     GenDriverConfig(manifold_core::effects::ParamId, DriverConfigAction),
