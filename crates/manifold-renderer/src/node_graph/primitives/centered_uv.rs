@@ -1,12 +1,16 @@
-//! `node.centered_uv` — UV recentered around 0 with per-axis scale.
+//! `node.centered_uv` — UV recentered around (cx, cy) with per-axis scale.
 //!
-//! `out.r = (uv.x - 0.5) * scale_x`,
-//! `out.g = (uv.y - 0.5) * scale_y`.
+//! `out.r = (uv.x - cx) * scale_x`,
+//! `out.g = (uv.y - cy) * scale_y`.
 //!
 //! The canonical "screen-centered, aspect-corrected" coordinate space
-//! for any procedural pattern that wants to compose around screen
-//! center. Replaces the value+math chain that an explicit
-//! `(uv - 0.5) * (aspect, 1) * inverse_scale` decomposition would
+//! for any procedural pattern that wants to compose around a chosen
+//! origin. Defaults (cx = cy = 0.5) preserve the legacy screen-centered
+//! behaviour; override for off-center procedurals, focus-pulled SDFs,
+//! and any pattern that needs to follow a moving anchor.
+//!
+//! Replaces the value+math chain that an explicit
+//! `(uv - center) * (aspect, 1) * inverse_scale` decomposition would
 //! otherwise need — every centered procedural reads from this one
 //! primitive and slices out the channels it wants via `field_combine`,
 //! `distance_to_point`, etc.
@@ -20,21 +24,24 @@ use crate::node_graph::primitive::Primitive;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CenteredUvUniforms {
+    cx: f32,
+    cy: f32,
     scale_x: f32,
     scale_y: f32,
-    _pad0: f32,
-    _pad1: f32,
 }
 
 crate::primitive! {
     name: CenteredUv,
     type_id: "node.centered_uv",
-    purpose: "UV recentered around 0 with per-axis scale. out.r = (uv.x - 0.5) * scale_x, out.g = (uv.y - 0.5) * scale_y. The canonical centered/aspect-corrected coordinate space for procedural patterns — replaces the explicit (uv - 0.5) * (aspect, 1) * inverse_scale chain a centered field would otherwise need.",
+    purpose: "UV recentered around (cx, cy) with per-axis scale. out.r = (uv.x - cx) * scale_x, out.g = (uv.y - cy) * scale_y. The canonical centered/aspect-corrected coordinate space for procedural patterns — replaces the explicit (uv - center) * (aspect, 1) * inverse_scale chain a centered field would otherwise need. Defaults cx = cy = 0.5 preserve screen-centered behaviour.",
     inputs: {
-        // Both scales port-shadowable so the typical Plasma-style
+        // All four params port-shadowable so the typical Plasma-style
         // composition (`scale_x = aspect * inverse_scale`,
         // `scale_y = inverse_scale`) can be driven from upstream
-        // Math nodes each frame.
+        // Math nodes each frame, and cx / cy can follow an animated
+        // anchor (a face-tracker centroid, a focus-pull driver, etc.).
+        cx: ScalarF32 optional,
+        cy: ScalarF32 optional,
         scale_x: ScalarF32 optional,
         scale_y: ScalarF32 optional,
     },
@@ -42,6 +49,22 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [
+        ParamDef {
+            name: "cx",
+            label: "Center X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((-1.0, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "cy",
+            label: "Center Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((-1.0, 2.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: "scale_x",
             label: "Scale X",
@@ -59,27 +82,17 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Pairs naturally with node.field_combine to slice X / Y / X+Y projections out of the centered space (a=1 b=0 for X, a=0 b=1 for Y, a=1 b=1 for X+Y), and with node.distance_to_point (cx=0 cy=0) for the radial projection. For aspect-correct patterns, wire `scale_x` from a Math node that multiplies aspect by an inverse-scale.",
+    composition_notes: "Pairs naturally with node.field_combine to slice X / Y / X+Y projections out of the centered space (a=1 b=0 for X, a=0 b=1 for Y, a=1 b=1 for X+Y), and with node.distance_to_point (cx=0 cy=0) for the radial projection. For aspect-correct patterns, wire `scale_x` from a Math node that multiplies aspect by an inverse-scale. Override cx / cy to recenter procedurals on any point — e.g. a centered SDF that follows a face-tracker centroid.",
     examples: [],
     picker: { label: "Centered UV", category: Atom },
 }
 
 impl Primitive for CenteredUv {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let scale_x = match ctx.inputs.scalar("scale_x") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("scale_x") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 1.0,
-            },
-        };
-        let scale_y = match ctx.inputs.scalar("scale_y") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("scale_y") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 1.0,
-            },
-        };
+        let cx = ctx.scalar_or_param("cx", 0.5);
+        let cy = ctx.scalar_or_param("cy", 0.5);
+        let scale_x = ctx.scalar_or_param("scale_x", 1.0);
+        let scale_y = ctx.scalar_or_param("scale_y", 1.0);
 
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
@@ -99,10 +112,10 @@ impl Primitive for CenteredUv {
         });
 
         let uniforms = CenteredUvUniforms {
+            cx,
+            cy,
             scale_x,
             scale_y,
-            _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -130,25 +143,25 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn centered_uv_declares_two_optional_scalar_inputs_and_one_texture_output() {
+    fn centered_uv_declares_four_optional_scalar_inputs_and_one_texture_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(CenteredUv::TYPE_ID, "node.centered_uv");
         let ins = CenteredUv::INPUTS;
-        assert_eq!(ins.len(), 2);
-        assert_eq!(ins[0].name, "scale_x");
-        assert!(!ins[0].required);
-        assert_eq!(ins[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(ins[1].name, "scale_y");
-        assert!(!ins[1].required);
-        assert_eq!(ins[1].ty, PortType::Scalar(ScalarType::F32));
+        assert_eq!(ins.len(), 4);
+        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["cx", "cy", "scale_x", "scale_y"]);
+        for port in ins {
+            assert!(!port.required);
+            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
+        }
         assert_eq!(CenteredUv::OUTPUTS.len(), 1);
         assert_eq!(CenteredUv::OUTPUTS[0].ty, PortType::Texture2D);
     }
 
     #[test]
-    fn centered_uv_has_scale_x_and_scale_y_params() {
+    fn centered_uv_has_cx_cy_scale_x_scale_y_params() {
         let names: Vec<&str> = CenteredUv::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["scale_x", "scale_y"]);
+        assert_eq!(names, vec!["cx", "cy", "scale_x", "scale_y"]);
     }
 
     #[test]
