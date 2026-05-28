@@ -126,6 +126,13 @@ pub struct WgslCompute {
     /// first storage texture output, falling back to the first array
     /// output. Settable via the `dispatch_port` extra field from JSON.
     dispatch_port: Option<String>,
+    /// Author-supplied display title surfaced in the graph-canvas
+    /// header. `None` falls back to the generic "Wgsl_compute" derived
+    /// from `type_id`; `Some` renders as `"<title> (WGSL)"` so the
+    /// four escape-hatch nodes in BlackHole (or any other preset that
+    /// stacks them) read as `Particle Sim (WGSL)` / `Deflection Bake
+    /// (WGSL)` / etc. Round-tripped through `EffectGraphNode.title`.
+    display_title: Option<String>,
 
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
@@ -239,6 +246,7 @@ impl WgslCompute {
             _leaked_strings: Vec::new(),
             output_formats: AHashMap::new(),
             dispatch_port: None,
+            display_title: None,
             pipeline: None,
             sampler: None,
             compiled_hash: None,
@@ -1128,6 +1136,18 @@ impl EffectNode for WgslCompute {
             return;
         }
         self.reparse(source.to_string());
+    }
+
+    fn display_title(&self) -> Option<&str> {
+        self.display_title.as_deref()
+    }
+
+    fn set_display_title(&mut self, title: &str) {
+        self.display_title = if title.is_empty() {
+            None
+        } else {
+            Some(title.to_string())
+        };
     }
 
     fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {

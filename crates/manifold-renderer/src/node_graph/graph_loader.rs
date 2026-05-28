@@ -293,6 +293,16 @@ pub fn instantiate_def(
             boxed.set_wgsl_source(source);
         }
 
+        // (1b) Author-supplied display title — currently only honored by
+        // `node.wgsl_compute` (where multiple escape-hatch nodes in one
+        // preset would otherwise render with identical generic headers).
+        // Every other primitive's `set_display_title` is a no-op, so a
+        // stray override on a regular node is silently ignored rather
+        // than erroring.
+        if let Some(title) = node_doc.title.as_deref() {
+            boxed.set_display_title(title);
+        }
+
         // Snapshot the declared param surface BEFORE moving `boxed` into
         // the graph — we need this for type-checked param overrides
         // below, plus for the exposed-params validation pass.

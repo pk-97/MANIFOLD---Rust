@@ -293,7 +293,10 @@ impl GraphSnapshot {
             .nodes()
             .map(|inst| {
                 let type_id = inst.node.type_id().as_str().to_string();
-                let title = title_from_type_id(&type_id);
+                let title = match inst.node.display_title() {
+                    Some(custom) => format!("{custom} (WGSL)"),
+                    None => title_from_type_id(&type_id),
+                };
                 let inputs = inst
                     .node
                     .inputs()
@@ -780,6 +783,7 @@ mod tests {
                     exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
+                    title: None,
                     output_formats: Default::default(),
                     output_canvas_scales: std::collections::BTreeMap::new(),
                 },
@@ -791,6 +795,7 @@ mod tests {
                     exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
+                    title: None,
                     output_formats: Default::default(),
                     output_canvas_scales: std::collections::BTreeMap::new(),
                 },
@@ -828,6 +833,7 @@ mod tests {
                 exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                title: None,
                 output_formats: Default::default(),
                 output_canvas_scales: std::collections::BTreeMap::new(),
             }],

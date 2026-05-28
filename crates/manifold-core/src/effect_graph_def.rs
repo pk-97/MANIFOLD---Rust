@@ -119,6 +119,16 @@ pub struct EffectGraphNode {
     /// (i.e. nearly every shipping primitive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wgsl_source: Option<String>,
+    /// Author-supplied display title for `node.wgsl_compute` nodes —
+    /// rendered in the graph-canvas header as `"<title> (WGSL)"` so
+    /// multiple escape-hatch nodes in one preset are distinguishable at
+    /// a glance (e.g. BlackHole's `Particle Sim` / `Deflection Bake` /
+    /// `Splat` / `Display` all share `type_id = node.wgsl_compute` and
+    /// would otherwise read identically). Honored only on
+    /// `node.wgsl_compute`; ignored on every other primitive (whose
+    /// title is derived from its stable `type_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Per-output texture format override, keyed by output port name.
     /// Format strings match Metal/WGSL conventions: `"rgba16float"`,
     /// `"rgba32float"`, `"r32float"`, `"rg32float"`, `"r16float"`,
@@ -522,6 +532,7 @@ mod tests {
                 exposed_params: BTreeSet::new(),
                 editor_pos: Some((100.0, 200.0)),
                 wgsl_source: None,
+                title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
             }],

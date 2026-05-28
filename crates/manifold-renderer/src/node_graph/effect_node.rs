@@ -664,6 +664,28 @@ pub trait EffectNode: Send {
     /// whose shader is fixed at compile time.
     fn set_wgsl_source(&mut self, _source: &str) {}
 
+    /// Optional author-supplied display title — currently only honored
+    /// by `node.wgsl_compute`, where the graph-canvas header otherwise
+    /// reads identically for every escape-hatch node in a preset
+    /// (BlackHole's `simulate` / `deflection` / `splat` / `display` all
+    /// share `type_id = node.wgsl_compute`). `None` for every node
+    /// whose canonical `type_id` already conveys identity (`node.mix`,
+    /// `node.gaussian_blur`, …) — those derive their title from the
+    /// id and never override.
+    ///
+    /// Round-tripped through [`EffectGraphNode::title`](manifold_core::effect_graph_def::EffectGraphNode::title)
+    /// by persistence; read by the snapshot builder which renders
+    /// `"<title> (WGSL)"` in the node header.
+    fn display_title(&self) -> Option<&str> {
+        None
+    }
+
+    /// Optional setter for [`display_title`](Self::display_title).
+    /// Called by `into_graph` after `new()` so the title is in place
+    /// before the first snapshot. No-op for every node whose title is
+    /// fixed by `type_id`.
+    fn set_display_title(&mut self, _title: &str) {}
+
     /// Output texture format for the named port. Returns `None` to use
     /// the backend's default format (typically `Rgba16Float`). Only
     /// meaningful for `Texture2D` outputs — other port types ignore
