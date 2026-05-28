@@ -35,7 +35,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{
@@ -823,6 +823,267 @@ fn leak_str(s: &str) -> &'static str {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// `// @channel_skip` preprocessor
+// ─────────────────────────────────────────────────────────────────────
+
+/// Per-struct field skip-set extracted from `// @channel_skip` markers
+/// in WGSL source. See [`extract_channel_skip`].
+type ChannelSkipMap = AHashMap<String, AHashSet<String>>;
+
+/// Scan WGSL source for `// @channel_skip` markers preceding storage-
+/// array struct fields. Returns a map from struct name → set of field
+/// names to skip when emitting the Channels signature.
+///
+/// Per `docs/CHANNEL_TYPE_SYSTEM.md` §8.2 / §14.9 — the explicit marker
+/// is the only mechanism for skipping fields (the old `_pad*` name-
+/// prefix heuristic was retired alongside this preprocessor's landing).
+///
+/// Marker semantics:
+/// - Must be a line-comment marker: `// @channel_skip`. Surrounding
+///   whitespace is fine (`//@channel_skip`, `//   @channel_skip`,
+///   trailing whitespace). Trailing text after the marker (e.g.
+///   `// @channel_skip — reason`) is NOT accepted; use a separate
+///   comment line for prose.
+/// - Must appear on its own line — same-line markers
+///   (`x: f32, // @channel_skip`) are ignored. The marker precedes
+///   the field.
+/// - May be separated from the field by blank lines or other comment
+///   lines; the marker stays "pending" until a field arrives.
+/// - Multiple stacked markers are idempotent — they all apply to the
+///   next field, not the next N fields.
+/// - Block comments (`/* @channel_skip */`) are NOT honored. Block
+///   comments are stripped from the source before marker extraction so
+///   they cannot smuggle a `//` sequence either.
+/// - Orphan markers (inside a struct, not followed by a field before
+///   the struct closes; or outside any struct entirely) emit a
+///   `log::warn` but don't fail the parse — the shader still loads,
+///   just without the requested skip.
+///
+/// The function is a pure transformation; no shared state, no I/O.
+fn extract_channel_skip(source: &str) -> ChannelSkipMap {
+    let stripped = strip_block_comments(source);
+    let mut map: ChannelSkipMap = AHashMap::default();
+    let mut current_struct: Option<String> = None;
+    let mut waiting_struct: Option<String> = None;
+    let mut brace_depth: i32 = 0;
+    let mut pending_skip = false;
+
+    for (line_idx, raw_line) in stripped.lines().enumerate() {
+        let line = raw_line.trim_start();
+        let (code, comment) = split_line_comment(line);
+        let code = code.trim();
+
+        // 1. Marker-only lines (no code on the line). Only honor the
+        //    marker when we're inside a struct body; outside, it's an
+        //    orphan and we warn.
+        if code.is_empty() {
+            if let Some(c) = comment {
+                if is_channel_skip_marker(c) {
+                    if current_struct.is_some() {
+                        pending_skip = true;
+                    } else {
+                        log::warn!(
+                            "[node.wgsl_compute] @channel_skip marker at line {} \
+                             is outside any struct — ignored",
+                            line_idx + 1
+                        );
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 2. Detect `struct Name` at top level. waiting_struct remembers
+        //    the name until the opening `{` arrives (possibly on a
+        //    later line).
+        if current_struct.is_none() && waiting_struct.is_none() && brace_depth == 0 {
+            if let Some(name) = parse_struct_keyword(code) {
+                waiting_struct = Some(name);
+            }
+        }
+
+        // 3. Walk braces on this line's code part. Strings / chars don't
+        //    exist in WGSL declarations, so a raw scan is safe.
+        for ch in code.chars() {
+            match ch {
+                '{' => {
+                    brace_depth += 1;
+                    if brace_depth == 1 {
+                        if let Some(name) = waiting_struct.take() {
+                            current_struct = Some(name);
+                            pending_skip = false;
+                        }
+                    }
+                }
+                '}' => {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        if let Some(name) = current_struct.take() {
+                            if pending_skip {
+                                log::warn!(
+                                    "[node.wgsl_compute] @channel_skip marker inside \
+                                     `struct {}` was not followed by a field before \
+                                     the struct closed — ignored",
+                                    name
+                                );
+                            }
+                            pending_skip = false;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 4. If we're now inside a struct body, look for a field decl on
+        //    this line. (Lines that just opened the struct — `struct X {`
+        //    — typically have no field text after the `{`; parse_field_name
+        //    returns None for those.)
+        if let Some(ref struct_name) = current_struct {
+            if let Some(field) = parse_field_name(code) {
+                if pending_skip {
+                    map.entry(struct_name.clone())
+                        .or_insert_with(AHashSet::default)
+                        .insert(field);
+                    pending_skip = false;
+                }
+            }
+        }
+    }
+
+    // Orphan marker at EOF (struct never closed cleanly, or trailing
+    // marker outside any struct).
+    if pending_skip {
+        log::warn!(
+            "[node.wgsl_compute] @channel_skip marker at end of source was not \
+             followed by a field — ignored"
+        );
+    }
+
+    map
+}
+
+/// Replace each `/* ... */` block-comment run with whitespace, preserving
+/// newlines so line numbers stay aligned with the original source. WGSL
+/// block comments nest (per the WGSL spec); the depth counter handles
+/// that. Anything inside a block comment is neutralised before the
+/// line-comment / marker scan runs.
+fn strip_block_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut depth: u32 = 0;
+    while let Some(c) = chars.next() {
+        if depth == 0 {
+            if c == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                depth = 1;
+                out.push(' ');
+                out.push(' ');
+            } else {
+                out.push(c);
+            }
+        } else {
+            if c == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                depth += 1;
+                out.push(' ');
+                out.push(' ');
+            } else if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                depth -= 1;
+                out.push(' ');
+                out.push(' ');
+            } else if c == '\n' {
+                out.push('\n');
+            } else {
+                out.push(' ');
+            }
+        }
+    }
+    out
+}
+
+/// Split a line into `(code_before_double_slash, comment_after)`. WGSL
+/// `//` runs to end of line, so the first occurrence wins.
+fn split_line_comment(line: &str) -> (&str, Option<&str>) {
+    match line.find("//") {
+        Some(idx) => (&line[..idx], Some(&line[idx + 2..])),
+        None => (line, None),
+    }
+}
+
+/// Does this comment body (everything after `//`) hold the channel-skip
+/// marker exactly?
+fn is_channel_skip_marker(comment: &str) -> bool {
+    comment.trim() == "@channel_skip"
+}
+
+/// If `code` begins with `struct <ident>`, return the identifier. Used
+/// to detect the start of a struct declaration so the brace walker can
+/// associate the upcoming `{...}` body with this name.
+fn parse_struct_keyword(code: &str) -> Option<String> {
+    let s = code.trim_start();
+    let rest = s.strip_prefix("struct")?;
+    let next = rest.chars().next()?;
+    if !next.is_whitespace() {
+        // e.g., `structure: ...` — not the keyword.
+        return None;
+    }
+    let rest = rest.trim_start();
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Extract the field name from a WGSL struct-field declaration. Tolerates
+/// any leading `@attr(args)` annotations (e.g., `@align(16) position:
+/// vec3<f32>,`). Returns None for lines that don't look like field decls.
+fn parse_field_name(code: &str) -> Option<String> {
+    let mut s = code.trim();
+    // Strip `{` left over from a struct-open line like `struct X {`.
+    s = s.trim_start_matches('{').trim_start();
+    while s.starts_with('@') {
+        let after_at = &s[1..];
+        let ident_end = after_at
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(after_at.len());
+        let after_ident = after_at[ident_end..].trim_start();
+        if let Some(rest) = after_ident.strip_prefix('(') {
+            let mut depth = 1i32;
+            let mut end = None;
+            for (i, ch) in rest.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let end = end?;
+            s = rest[end..].trim_start();
+        } else {
+            s = after_ident;
+        }
+    }
+    let colon = s.find(':')?;
+    let ident = s[..colon].trim();
+    if ident.is_empty() {
+        return None;
+    }
+    if !ident.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(ident.to_string())
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // EffectNode impl
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1352,6 +1613,272 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // No texture output; dispatch port falls back to the first
         // array output.
         assert_eq!(node.dispatch_port.as_deref(), Some("accum_top"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // `// @channel_skip` preprocessor unit tests
+    // ─────────────────────────────────────────────────────────────────
+
+    fn skip(src: &str) -> AHashMap<String, AHashSet<String>> {
+        extract_channel_skip(src)
+    }
+
+    fn fields(map: &AHashMap<String, AHashSet<String>>, struct_name: &str) -> Vec<String> {
+        let mut v: Vec<String> = map
+            .get(struct_name)
+            .into_iter()
+            .flat_map(|s| s.iter().cloned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn skip_marker_on_preceding_line() {
+        let src = r#"
+struct Particle {
+    position: vec3<f32>,
+    // @channel_skip
+    padding: f32,
+    velocity: vec3<f32>,
+};
+"#;
+        let m = skip(src);
+        assert_eq!(fields(&m, "Particle"), vec!["padding"]);
+    }
+
+    #[test]
+    fn skip_marker_with_leading_whitespace() {
+        let src = "
+struct X {
+\t\t// @channel_skip
+\t\tfoo: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["foo"]);
+    }
+
+    #[test]
+    fn skip_marker_with_whitespace_variations() {
+        // `//@channel_skip`, `//   @channel_skip`, trailing whitespace.
+        let src = "
+struct X {
+    //@channel_skip
+    a: f32,
+    //   @channel_skip
+    b: f32,
+    // @channel_skip
+    c: f32,
+    d: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn marker_with_trailing_text_is_rejected() {
+        // Strict v1: marker must be the bare `@channel_skip` after trim.
+        // Trailing prose like `— reason` disqualifies the marker.
+        let src = "
+struct X {
+    // @channel_skip — reason
+    a: f32,
+};
+";
+        let m = skip(src);
+        assert!(m.is_empty(), "marker with trailing text should not skip");
+    }
+
+    #[test]
+    fn multi_line_struct_declaration() {
+        // Brace on its own line, plus a field on the same line as the `{`.
+        let src = "
+struct X
+{
+    // @channel_skip
+    a: f32,
+    b: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["a"]);
+    }
+
+    #[test]
+    fn mixed_line_and_block_comments() {
+        // Block comments are stripped before the line-comment scan, so
+        // `// @channel_skip` inside a `/* ... */` block does NOT count.
+        let src = "
+struct X {
+    /* // @channel_skip */
+    a: f32,
+    // @channel_skip
+    /* explanatory block comment */
+    b: f32,
+    c: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["b"]);
+    }
+
+    #[test]
+    fn two_structs_dont_share_skip_set() {
+        let src = r#"
+struct A {
+    // @channel_skip
+    pad_a: f32,
+    real_a: f32,
+};
+struct B {
+    real_b: f32,
+    // @channel_skip
+    pad_b: f32,
+};
+"#;
+        let m = skip(src);
+        assert_eq!(fields(&m, "A"), vec!["pad_a"]);
+        assert_eq!(fields(&m, "B"), vec!["pad_b"]);
+    }
+
+    #[test]
+    fn whitespace_variation_around_marker_token() {
+        // `// @channel_skip`, `// @channel_skip\t`, `// @channel_skip   `.
+        let src = "
+struct X {
+    // @channel_skip\t
+    a: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["a"]);
+    }
+
+    #[test]
+    fn same_line_marker_is_ignored() {
+        let src = "
+struct X {
+    a: f32, // @channel_skip
+    b: f32,
+};
+";
+        let m = skip(src);
+        assert!(
+            m.is_empty(),
+            "same-line markers must NOT apply to the field they trail"
+        );
+    }
+
+    #[test]
+    fn stacked_markers_all_apply_to_next_field_idempotently() {
+        // Three stacked markers, then a single field — only that field
+        // is skipped. The markers don't queue up to skip the next 3.
+        let src = "
+struct X {
+    // @channel_skip
+    // @channel_skip
+    // @channel_skip
+    only_this: f32,
+    not_this: f32,
+    not_this_either: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["only_this"]);
+    }
+
+    #[test]
+    fn marker_with_intervening_comment_lines_still_applies() {
+        let src = "
+struct X {
+    // @channel_skip
+    // descriptive comment in between
+    // another descriptive comment
+    target: f32,
+    other: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["target"]);
+    }
+
+    #[test]
+    fn marker_outside_any_struct_is_ignored() {
+        // No panic; no entry created.
+        let src = "
+// @channel_skip
+const X: f32 = 1.0;
+
+struct Y {
+    a: f32,
+};
+";
+        let m = skip(src);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn marker_with_no_following_field_in_struct_is_ignored() {
+        let src = "
+struct X {
+    a: f32,
+    // @channel_skip
+};
+";
+        let m = skip(src);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn field_with_attribute_annotation_still_parses() {
+        // `@align(16)` attributes before the field name don't confuse
+        // the marker→field association.
+        let src = "
+struct X {
+    // @channel_skip
+    @align(16) padding: vec3<f32>,
+    real: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["padding"]);
+    }
+
+    #[test]
+    fn empty_source_returns_empty_map() {
+        let m = skip("");
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn no_markers_returns_empty_map() {
+        let src = "
+struct X {
+    a: f32,
+    b: f32,
+};
+";
+        let m = skip(src);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn marker_skipped_field_can_have_pad_name() {
+        // Author named a non-padding field `padding`; the marker rescues
+        // it from the future where the heuristic would have eaten it.
+        // (Since the heuristic is gone, this just confirms the marker
+        // works on arbitrary names.)
+        let src = "
+struct X {
+    // @channel_skip
+    padding: f32,
+    real: f32,
+};
+";
+        let m = skip(src);
+        assert_eq!(fields(&m, "X"), vec!["padding"]);
     }
 
     #[test]
