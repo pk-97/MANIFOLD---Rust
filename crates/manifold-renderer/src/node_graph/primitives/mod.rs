@@ -172,6 +172,7 @@ mod track_persist;
 mod strobe;
 mod temporal;
 mod texture_advect;
+mod texture_dimensions;
 mod tone_map;
 mod torus_wrap_field;
 mod triangulate_grid;
@@ -372,6 +373,7 @@ pub use strobe::{
 };
 pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
 pub use texture_advect::{TEXTURE_ADVECT_BOUNDARIES, TextureAdvect};
+pub use texture_dimensions::TextureDimensions;
 pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
 pub use torus_wrap_field::TorusWrapField;
 pub use triangulate_grid::TriangulateGrid;
