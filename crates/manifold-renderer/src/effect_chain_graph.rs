@@ -414,7 +414,16 @@ impl ChainGraph {
         // bindings, skip mode, and the canonical splice all off the
         // view; an effect without one is unrunnable.
         for (_, fx) in &active_effects {
-            loaded_preset_view_by_id(fx.effect_type())?;
+            if loaded_preset_view_by_id(fx.effect_type()).is_none() {
+                eprintln!(
+                    "[chain-build-fail] no LoadedPresetView for effect_type={:?} \
+                     (effect_id={:?}) — chain build returns None, layer falls back \
+                     to source passthrough",
+                    fx.effect_type(),
+                    fx.id,
+                );
+                return None;
+            }
         }
 
         // Build the graph: Source → [eff_1 → eff_2 → … → eff_n,
@@ -468,8 +477,16 @@ impl ChainGraph {
                 // Close the previously-open partial-wet-dry group
                 // (if any) by emitting its Mix sub-graph.
                 if let Some(closing) = open_group.take() {
-                    let (mix_id, mix_out) =
-                        close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))?;
+                    let Some((mix_id, mix_out)) =
+                        close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))
+                    else {
+                        eprintln!(
+                            "[chain-build-fail] close_mix_group failed mid-loop \
+                             for group_id={:?}",
+                            closing.group_id,
+                        );
+                        return None;
+                    };
                     group_mix_nodes.push((closing.group_id.clone(), mix_id));
                     prev_node = mix_id;
                     prev_out_port = mix_out;
@@ -490,7 +507,14 @@ impl ChainGraph {
             // presetMetadata + bindings + skip_mode in its JSON file —
             // see `assets/effect-presets/`. The preflight above
             // guarantees the view exists.
-            let view = loaded_preset_view_by_id(fx.effect_type())?;
+            let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
+                eprintln!(
+                    "[chain-build-fail] post-preflight view lookup for \
+                     effect_type={:?} returned None — should be unreachable",
+                    fx.effect_type(),
+                );
+                return None;
+            };
             if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
                 // to the next effect.
@@ -517,21 +541,44 @@ impl ChainGraph {
                                 effect_type: fx.effect_type().clone(),
                             },
                         );
-                        splice_def_into_chain(
+                        match splice_def_into_chain(
                             &mut graph,
                             (prev_node, prev_out_port),
                             canonical_def,
                             primitives,
-                        )?
+                        ) {
+                            Some(r) => r,
+                            None => {
+                                eprintln!(
+                                    "[chain-build-fail] canonical splice failed \
+                                     for effect_type={:?} (effect_id={:?}) after \
+                                     divergent-graph fallback",
+                                    fx.effect_type(),
+                                    fx.id,
+                                );
+                                return None;
+                            }
+                        }
                     }
                 }
             } else {
-                splice_def_into_chain(
+                match splice_def_into_chain(
                     &mut graph,
                     (prev_node, prev_out_port),
                     canonical_def,
                     primitives,
-                )?
+                ) {
+                    Some(r) => r,
+                    None => {
+                        eprintln!(
+                            "[chain-build-fail] canonical splice failed for \
+                             effect_type={:?} (effect_id={:?})",
+                            fx.effect_type(),
+                            fx.id,
+                        );
+                        return None;
+                    }
+                }
             };
             let SpliceResult {
                 output,
@@ -543,20 +590,39 @@ impl ChainGraph {
             // then user tail (per-instance UserParamBinding →
             // ResolvedBinding::from_user). Each binding carries its
             // own `source_index` into `EffectInstance.param_values` —
-            // for the current 1:1 effects these match the enumerate
-            // position, but the apply loop indexes via `source_index`
-            // not position, so a future fan-out shape stays correct.
-            //
-            // Slot bookkeeping: `static_view_slot` advances past every
-            // attempt (resolved or not) so that even if `from_static`
-            // drops an orphan binding, the next ones keep landing on
-            // the right slot in `param_values` — which DOES contain a
-            // value for the dropped binding's slot (the host
-            // pre-allocates one slot per `view.bindings` entry).
+            // resolved by matching `BindingDef::id` against the
+            // outer-card param list (NOT the binding's own enumerate
+            // position) so a single outer slider can fan out to
+            // multiple inner-node params and the second/third binding
+            // still reads the right slot. Mirrors the generator-side
+            // shape — see
+            // `JsonGraphGenerator::from_def`'s `outer_param_index`.
+            let outer_param_index: ahash::AHashMap<&str, usize> = view
+                .canonical_def
+                .preset_metadata
+                .as_ref()
+                .map(|m| {
+                    m.params
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| (p.id.as_str(), i))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let n_static_slots = view
+                .canonical_def
+                .preset_metadata
+                .as_ref()
+                .map(|m| m.params.len())
+                .unwrap_or(view.bindings.len());
             let mut bindings: Vec<ResolvedBinding> =
                 Vec::with_capacity(view.bindings.len() + fx.user_param_bindings.len());
-            for (static_view_slot, b) in view.bindings.iter().enumerate() {
-                match ResolvedBinding::from_static(b, &handles, static_view_slot) {
+            for b in view.bindings.iter() {
+                let source_index = outer_param_index
+                    .get(b.id.as_ref())
+                    .copied()
+                    .unwrap_or(0);
+                match ResolvedBinding::from_static(b, &handles, source_index) {
                     Some(rb) => bindings.push(rb),
                     None => record_chain_error(
                         &mut errors,
@@ -568,7 +634,6 @@ impl ChainGraph {
                 }
             }
             let n_static = bindings.len();
-            let n_static_slots = view.bindings.len();
             for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
                 let source_index = n_static_slots + user_slot;
                 match ResolvedBinding::from_user(core, &graph, &handles, source_index) {
@@ -615,20 +680,47 @@ impl ChainGraph {
 
         // Close any still-open partial-wet-dry group at chain end.
         if let Some(closing) = open_group.take() {
-            let (mix_id, mix_out) =
-                close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))?;
+            let Some((mix_id, mix_out)) =
+                close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))
+            else {
+                eprintln!(
+                    "[chain-build-fail] close_mix_group failed for \
+                     group_id={:?} at chain end",
+                    closing.group_id,
+                );
+                return None;
+            };
             group_mix_nodes.push((closing.group_id.clone(), mix_id));
             prev_node = mix_id;
             prev_out_port = mix_out;
         }
 
         let final_out = graph.add_node(Box::new(FinalOutput::new()));
-        graph
-            .connect((prev_node, prev_out_port), (final_out, "in"))
-            .ok()?;
+        if let Err(e) = graph.connect((prev_node, prev_out_port), (final_out, "in")) {
+            eprintln!(
+                "[chain-build-fail] final_out connect failed: {e:?} \
+                 (last effect = {:?}.{:?})",
+                prev_node, prev_out_port,
+            );
+            return None;
+        }
 
         // Compile and find the resources we need to pin / read.
-        let plan = compile(&graph).ok()?;
+        let plan = match compile(&graph) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "[chain-build-fail] compile(&chain_graph) failed: {e:?} — \
+                     chain returns None, layer falls back to source passthrough. \
+                     Active effects: {:?}",
+                    active_effects
+                        .iter()
+                        .map(|(_, fx)| fx.effect_type())
+                        .collect::<Vec<_>>(),
+                );
+                return None;
+            }
+        };
         let source_resource = output_resource(&plan, source_node, "out");
         let final_output_resource = output_resource(&plan, prev_node, prev_out_port);
 
