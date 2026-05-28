@@ -76,6 +76,11 @@ impl PortView {
     fn from_kind(name: String, kind: &PortKindSnapshot) -> Self {
         let color = match kind {
             PortKindSnapshot::Texture2D => PORT_TEXTURE2D_COLOR,
+            // Typed Texture2D shares the texture-port colour — the
+            // four-slot channel signature is a tooltip-level detail,
+            // not a separate port category. See
+            // `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+            PortKindSnapshot::Texture2DTyped { .. } => PORT_TEXTURE2D_COLOR,
             PortKindSnapshot::Texture3D => PORT_TEXTURE3D_COLOR,
             PortKindSnapshot::Scalar => PORT_SCALAR_COLOR,
             PortKindSnapshot::Array { .. } => PORT_ARRAY_COLOR,
