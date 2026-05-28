@@ -72,6 +72,7 @@ mod scatter_particles_camera;
 mod gain;
 mod gaussian_blur_variable_width;
 mod edges_from_grid_uv;
+mod ellipse_mask;
 mod generate_cube_mesh;
 mod generate_grid_mesh;
 mod generate_grid_uv;
@@ -263,6 +264,7 @@ pub use scatter_particles_camera::{SCATTER_CAMERA_MODES, ScatterParticlesCamera}
 pub use gain::Gain;
 pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
 pub use edges_from_grid_uv::EdgesFromGridUv;
+pub use ellipse_mask::EllipseMask;
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
 pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_grid_uv::{
