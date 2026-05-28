@@ -125,6 +125,16 @@ pub fn splice_def_into_chain(
         }
         let node = registry.construct(&n.type_id)?;
         let chain_id = graph.add_node(node);
+        // Apply per-node WGSL source for dynamic-shape escape-hatch
+        // primitives (`node.wgsl_compute`). Must happen BEFORE wires
+        // are resolved — the source drives the port list via naga
+        // introspection, and the default kernel's ports won't match
+        // the JSON's wire targets. Static-shape primitives' impl is a
+        // no-op, so this is free for the common case. Mirrors the
+        // persistence.rs path used by JsonGraphGenerator.
+        if let Some(source) = n.wgsl_source.as_deref() {
+            graph.set_wgsl_source(chain_id, source).ok()?;
+        }
         def_to_chain.insert(n.id, chain_id);
         if let Some(handle_name) = n.handle.as_deref() {
             handles.push((Cow::Owned(handle_name.to_owned()), chain_id));
