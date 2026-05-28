@@ -68,7 +68,7 @@ fn main() {
     #[cfg(target_os = "macos")]
     let _instance_lock = acquire_instance_lock();
 
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     log::info!("MANIFOLD starting...");
 
     // --- IOPMAssertion — prevent display sleep (10.2) ---
