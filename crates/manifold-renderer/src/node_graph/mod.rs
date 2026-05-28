@@ -62,8 +62,8 @@ pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use chain_spec::{SkipMode, SpliceResult, is_skipped_for, splice_def_into_chain};
 pub use graph::{Graph, NodeInstance, WireWalkMode};
 pub use graph_loader::{
-    BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, WireSide as BuildWireSide,
-    instantiate_def, log_build_error,
+    BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,
+    WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources,
 };
 pub use loaded_preset_view::{
     LoadedPresetView, loaded_preset_view_by_id, outer_routings_from_view, snapshot_for_view,

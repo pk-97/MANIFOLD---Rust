@@ -515,382 +515,18 @@ impl JsonGraphGenerator {
         g.final_output_slot = Some(slot);
         g.target_format = Some(format);
 
-        // Pre-allocate every `Array<T>` output buffer on the plan.
-        // `Backend::acquire` for Texture2D lazily allocates from the
-        // pool, but the Array path is pre-bind-only by contract
-        // (see `MetalBackend::pre_bind_array` doc). The producing
-        // node's `max_capacity` param drives the buffer size; if
-        // a producer can't size itself we fail loudly at load time
-        // (a partially-allocated chain renders silently wrong, which
-        // was the FluidSim2D black-output bug class).
-        Self::pre_allocate_array_buffers(&g.graph, &g.plan, device, &mut backend)?;
-
-        // Texture3D resources have no lazy-alloc path (volume dims are
-        // per-instance data, same shape as Array<T>); the producing
-        // primitive's `texture_3d_output_dims` drives the allocation
-        // and `MetalBackend::pre_bind_texture_3d` pins the slot.
-        Self::pre_allocate_texture_3d_volumes(&g.graph, &g.plan, device, &mut backend)?;
-
-        // Post-allocation audit — catch-all that walks every Array<T>
-        // resource in the compiled plan and asserts each has a bound
-        // slot AND a real buffer. The cause-layer errors above
-        // (`UnsizedArrayOutput`, future variants) catch the specific
-        // failure reasons we've enumerated; this audit catches anything
-        // we haven't — alias chain breaks, canvas-zero skips, future
-        // allocation branches that silently fail. The architectural
-        // invariant: `from_def_with_device` returns Ok only when every
-        // resource is bound, or Err otherwise. No third state.
-        Self::audit_array_resource_bindings(&g.graph, &g.plan, &backend)?;
+        // Pre-allocate every Array<T> buffer + Texture3D volume the
+        // compiled plan declares, then run the post-allocation audit.
+        // All three steps run inside `graph_loader::pre_allocate_resources`
+        // — the canonical pipeline that both the generator path (here)
+        // and the effect chain path (`ChainGraph::try_build`) share, so
+        // any feature added to one applies to the other automatically.
+        // See `crates/manifold-renderer/src/node_graph/graph_loader.rs`.
+        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, device, &mut backend)
+            .map_err(generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
         Ok(g)
-    }
-
-    /// Post-allocation catch-all. Walks every Array<T> resource in the
-    /// compiled plan and verifies (a) the backend has a slot mapping for
-    /// it, and (b) the slot has an underlying buffer. First failure
-    /// returns Err with the producer (node type + handle + port) named
-    /// for the operator-facing message.
-    ///
-    /// Why this lives separately from `pre_allocate_array_buffers`:
-    /// the cause-layer checks INSIDE that loop know WHY allocation
-    /// failed (sizing returned None, canvas dims 0, etc.) and surface
-    /// targeted errors. This audit knows NOTHING about why — it only
-    /// knows whether the post-condition holds — which is the right
-    /// shape for a catch-all that future-proofs against allocation
-    /// paths we haven't written yet. Both layers ship; cause errors
-    /// give actionable context, the audit guarantees completeness.
-    fn audit_array_resource_bindings(
-        graph: &Graph,
-        plan: &ExecutionPlan,
-        backend: &MetalBackend,
-    ) -> Result<(), JsonGeneratorLoadError> {
-        use crate::node_graph::{Backend, PortType, ResourceId};
-
-        // Reverse map for friendly error messages: handle name per
-        // node id. Most nodes have a handle (set via the JSON
-        // `handle:` field); built-in / unhandled nodes return None.
-        let handle_by_node: ahash::AHashMap<NodeInstanceId, &'static str> =
-            graph.handles().map(|(h, id)| (id, h)).collect();
-
-        let total = plan.resource_count();
-        for raw in 0..total {
-            let res_id = ResourceId(raw as u32);
-            // Only Array resources are pre-bind-only; Texture2D /
-            // Texture3D resources lazy-allocate from a pool when the
-            // executor calls `acquire`, so they aren't audit-checkable
-            // at this point (a separate audit could verify their
-            // backing slots survive past `acquire`, but that's a
-            // runtime concern, not a build-time one).
-            let Some(PortType::Array(_)) = plan.resource_type(res_id) else {
-                continue;
-            };
-
-            let bound = backend.slot_for(res_id).is_some()
-                && backend
-                    .slot_for(res_id)
-                    .and_then(|s| backend.array_buffer(s))
-                    .is_some();
-            if bound {
-                continue;
-            }
-
-            // Reverse-lookup the (node, port) that produces this
-            // resource. Walking steps is O(steps × outputs) but only
-            // runs on the audit failure path so the cost is fine.
-            let (producer_node_type, producer_port, producer_handle) = plan
-                .steps()
-                .iter()
-                .find_map(|step| {
-                    step.outputs
-                        .iter()
-                        .find(|(_, id)| *id == res_id)
-                        .map(|(port_name, _)| {
-                            let node_type = graph
-                                .get_node(step.node)
-                                .map(|n| n.node.type_id().as_str().to_string())
-                                .unwrap_or_else(|| "<unknown>".to_string());
-                            let handle = handle_by_node
-                                .get(&step.node)
-                                .map(|h| h.to_string());
-                            (node_type, port_name.to_string(), handle)
-                        })
-                })
-                .unwrap_or_else(|| {
-                    (
-                        "<no producer step>".to_string(),
-                        "<unknown port>".to_string(),
-                        None,
-                    )
-                });
-
-            return Err(JsonGeneratorLoadError::UnboundArrayResource {
-                producer_handle,
-                producer_node_type,
-                producer_port,
-                cause: if backend.slot_for(res_id).is_none() {
-                    "no slot mapping (allocation skipped — possibly canvas dims 0×0, \
-                     zero-byte capacity, or a failed alias)"
-                } else {
-                    "slot exists but has no buffer (alias chain broken or \
-                     pre_bind_array not called)"
-                },
-            });
-        }
-        Ok(())
-    }
-
-    /// Walk the compiled plan, find every `Array<T>` output, and
-    /// allocate + pre-bind a `GpuBuffer` sized via
-    /// [`crate::node_graph::EffectNode::array_output_capacity`].
-    ///
-    /// Per-node logic: gather every Array input that's already
-    /// pre-bound (the plan is topologically sorted, so producer
-    /// outputs are bound before transform inputs), pass that capacity
-    /// table to `array_output_capacity`, allocate `(item_size × N)`
-    /// bytes for each Array output the node claims. Three patterns
-    /// resolve through the same method — Producer reads
-    /// `params["max_capacity"]`; Transform reads the matching input
-    /// port's bound count; Computed runs an inline expression on
-    /// `params`. See the trait docs.
-    ///
-    /// A node whose `array_output_capacity` returns `None` for an
-    /// Array output is a load-time error: pre-bound allocation is a
-    /// hard contract, and a partially-allocated chain renders
-    /// silently wrong (the silent-black-output bug class). Use
-    /// `JsonGeneratorLoadError::UnsizedArrayOutput` so the load
-    /// site decides how to surface it.
-    fn pre_allocate_array_buffers(
-        graph: &Graph,
-        plan: &ExecutionPlan,
-        device: &GpuDevice,
-        backend: &mut MetalBackend,
-    ) -> Result<(), JsonGeneratorLoadError> {
-        use crate::node_graph::{Backend, PortType};
-
-        // Re-usable scratch — every step rebuilds its own (port, count)
-        // list of pre-bound Array inputs. Allocated once outside the
-        // step loop to keep the construction-time cost predictable.
-        let mut input_capacities: Vec<(&str, u32)> = Vec::with_capacity(8);
-
-        for step in plan.steps() {
-            let Some(node_inst) = graph.get_node(step.node) else {
-                continue;
-            };
-            let node_type = node_inst.node.type_id().as_str();
-
-            // Gather Array inputs' bound capacities for this step. The
-            // plan walk is topological so any Array input from a prior
-            // step is already pre-bound; missing entries are silent
-            // (a transform with an unbound input simply can't size
-            // itself, and the override returns None below).
-            input_capacities.clear();
-            for (port_name, res_id) in &step.inputs {
-                let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
-                    continue;
-                };
-                let Some(slot) = backend.slot_for(*res_id) else {
-                    continue;
-                };
-                let Some(buf) = Backend::array_buffer(backend, slot) else {
-                    continue;
-                };
-                let count = (buf.size / layout.item_size as u64) as u32;
-                input_capacities.push((*port_name, count));
-            }
-
-            // Aliased in/out port pairs declared by this primitive
-            // (typically empty; stateful array simulators —
-            // `integrate_particles`, `integrate_particles_attractor`,
-            // future ping-pong sims — return a pair so the chain
-            // builder routes both port slots to one physical buffer.)
-            let aliased_pairs = node_inst.node.aliased_array_io();
-
-            // Canvas-sized outputs: scatter accumulators and any other
-            // primitive whose Array output must align pixel-for-pixel
-            // with the host's canvas (so downstream Texture2D
-            // consumers — pre-allocated at canvas dims by the
-            // backend — don't render into a sub-rectangle when the
-            // host runs at a non-default resolution).
-            let canvas_sized_outputs = node_inst.node.canvas_sized_array_outputs();
-            let (canvas_w, canvas_h) = {
-                use crate::node_graph::Backend;
-                Backend::canvas_dims(backend as &dyn Backend)
-            };
-
-            for (port_name, res_id) in &step.outputs {
-                let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
-                    continue;
-                };
-
-                // If this output is the right-hand side of an aliased
-                // pair AND the matching input is wired, route the
-                // output's resource id to the input's slot. No new
-                // buffer allocated; the simulator reads + writes the
-                // same storage in place and downstream consumers see
-                // the result.
-                let aliased_input_port = aliased_pairs
-                    .iter()
-                    .find(|(_, out_port)| *out_port == *port_name)
-                    .map(|(in_port, _)| *in_port);
-
-                if let Some(in_port) = aliased_input_port {
-                    let in_res = step
-                        .inputs
-                        .iter()
-                        .find(|(name, _)| *name == in_port)
-                        .map(|(_, id)| *id);
-                    if let Some(in_res) = in_res
-                        && let Some(in_slot) = backend.slot_for(in_res)
-                    {
-                        backend.alias_array_resource(*res_id, in_slot);
-                        continue;
-                    }
-                    log::warn!(
-                        "JsonGraphGenerator: node `{node_type}` declared port \
-                         `{in_port}` → `{port_name}` aliased, but `{in_port}` \
-                         is not wired or has no pre-bound slot. Falling back \
-                         to a fresh allocation; the simulator's in-place \
-                         dispatch will write to the standalone buffer.",
-                    );
-                }
-
-                // Canvas-sized output: allocate width × height cells
-                // from the backend's canvas dims, bypassing
-                // `array_output_capacity`. This makes the buffer
-                // automatically resize on host resolution change (the
-                // chain rebuild on `Generator::resize` re-runs this
-                // pass against the new canvas dims).
-                if canvas_sized_outputs.contains(port_name) {
-                    if canvas_w == 0 || canvas_h == 0 {
-                        log::warn!(
-                            "JsonGraphGenerator: node `{node_type}` port \
-                             `{port_name}` is canvas-sized but the backend's \
-                             canvas dims are 0×0 (mock backend or unconfigured \
-                             — production paths always set non-zero dims). \
-                             Skipping allocation.",
-                        );
-                        continue;
-                    }
-                    let capacity = (canvas_w as u64) * (canvas_h as u64);
-                    let bytes = capacity * layout.item_size as u64;
-                    let buffer = device.create_buffer_shared(bytes);
-                    backend.pre_bind_array(*res_id, buffer);
-                    continue;
-                }
-
-                let Some(capacity) = node_inst.node.array_output_capacity(
-                    port_name,
-                    &node_inst.params,
-                    &input_capacities,
-                ) else {
-                    return Err(JsonGeneratorLoadError::UnsizedArrayOutput {
-                        node_type: node_type.to_string(),
-                        port: port_name.to_string(),
-                    });
-                };
-                let bytes = capacity as u64 * layout.item_size as u64;
-                if bytes == 0 {
-                    log::warn!(
-                        "JsonGraphGenerator: node `{node_type}` on port \
-                         `{port_name}` resolved to a zero-byte Array<T> \
-                         buffer (capacity={capacity}, item_size={}). \
-                         Skipping allocation.",
-                        layout.item_size,
-                    );
-                    continue;
-                }
-                let buffer = device.create_buffer_shared(bytes);
-                backend.pre_bind_array(*res_id, buffer);
-            }
-        }
-        Ok(())
-    }
-
-    /// Walk the compiled plan, find every `Texture3D` output, and
-    /// allocate + pre-bind a `GpuTexture` sized via
-    /// [`crate::node_graph::EffectNode::texture_3d_output_dims`].
-    ///
-    /// Mirror of [`pre_allocate_array_buffers`] for the Texture3D port
-    /// type. Same shape: gather every Texture3D input that's already
-    /// pre-bound (topological order makes this safe), pass that dims
-    /// table to `texture_3d_output_dims`, allocate a volume at the
-    /// returned dims with the format declared by `output_format`
-    /// (default `Rgba16Float` matches the FluidSim3D shaders).
-    ///
-    /// A node whose `texture_3d_output_dims` returns `None` for a
-    /// Texture3D output is a load-time error — same contract as
-    /// `pre_allocate_array_buffers`, since Texture3D has no lazy-alloc
-    /// path in `MetalBackend`.
-    fn pre_allocate_texture_3d_volumes(
-        graph: &Graph,
-        plan: &ExecutionPlan,
-        device: &GpuDevice,
-        backend: &mut MetalBackend,
-    ) -> Result<(), JsonGeneratorLoadError> {
-        use crate::node_graph::{Backend, PortType};
-
-        let mut input_dims: Vec<(&str, (u32, u32, u32))> = Vec::with_capacity(4);
-
-        for step in plan.steps() {
-            let Some(node_inst) = graph.get_node(step.node) else {
-                continue;
-            };
-            let node_type = node_inst.node.type_id().as_str();
-
-            input_dims.clear();
-            for (port_name, res_id) in &step.inputs {
-                if !matches!(plan.resource_type(*res_id), Some(PortType::Texture3D)) {
-                    continue;
-                }
-                let Some(slot) = backend.slot_for(*res_id) else {
-                    continue;
-                };
-                let Some(tex) = backend.texture_3d(slot) else {
-                    continue;
-                };
-                input_dims.push((*port_name, (tex.width, tex.height, tex.depth)));
-            }
-
-            for (port_name, res_id) in &step.outputs {
-                if !matches!(plan.resource_type(*res_id), Some(PortType::Texture3D)) {
-                    continue;
-                }
-                // Already pre-bound (e.g. a producer pinned by an alias
-                // earlier in the walk) — skip.
-                if backend.slot_for(*res_id).is_some() {
-                    continue;
-                }
-                let Some((w, h, d)) = node_inst.node.texture_3d_output_dims(
-                    port_name,
-                    &node_inst.params,
-                    &input_dims,
-                ) else {
-                    return Err(JsonGeneratorLoadError::UnsizedTexture3DOutput {
-                        node_type: node_type.to_string(),
-                        port: port_name.to_string(),
-                    });
-                };
-                let format = node_inst
-                    .node
-                    .output_format(port_name)
-                    .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
-                let label = format!("json_graph 3d volume: {node_type}.{port_name}");
-                let label_static: &'static str = Box::leak(label.into_boxed_str());
-                let texture = device.create_texture(&manifold_gpu::GpuTextureDesc {
-                    width: w,
-                    height: h,
-                    depth: d,
-                    format,
-                    dimension: manifold_gpu::GpuTextureDimension::D3,
-                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                    label: label_static,
-                    mip_levels: 1,
-                });
-                backend.pre_bind_texture_3d(*res_id, texture);
-            }
-        }
-        Ok(())
     }
 
     /// Stable identity for the GeneratorRegistry.
@@ -1182,21 +818,46 @@ impl Generator for JsonGraphGenerator {
         );
         let slot = metal.pre_bind_texture_2d(self.final_output_input_resource, placeholder);
         self.final_output_slot = Some(slot);
-        // `resize` also wiped every pinned `Array<T>` buffer (the chain
-        // build's vertex/particle pre-allocations). Re-run the same
-        // pre-allocate pass we did at construction so downstream
-        // primitives don't render against an empty wire — symptom is a
-        // black generator output on the first frame after a project
-        // load, which only recovers when the user edits the graph
-        // (forcing a fresh `from_def_with_device` rebuild). Log any
-        // sizing failure rather than propagating it — `resize` runs on
-        // the hot path and has no error return; the original load-time
-        // check already caught the same condition.
+        // `resize` also wiped every pinned `Array<T>` buffer and every
+        // `Texture3D` volume (the chain build's vertex/particle/density
+        // pre-allocations). Re-run the canonical pre-allocate pass so
+        // downstream primitives don't render against an empty wire —
+        // symptom is a black generator output on the first frame after
+        // a project load, only recovering when the user edits the graph.
+        // Log any sizing failure rather than propagating it — `resize`
+        // runs on the hot path and has no error return; the original
+        // load-time check already caught the same condition.
         if let Err(e) =
-            Self::pre_allocate_array_buffers(&self.graph, &self.plan, device, metal)
+            crate::node_graph::pre_allocate_resources(&self.graph, &self.plan, device, metal)
         {
-            log::warn!("JsonGraphGenerator::resize array re-allocation failed: {e}");
+            log::warn!("JsonGraphGenerator::resize re-allocation failed: {e}");
         }
+    }
+}
+
+/// Map a [`crate::node_graph::PreAllocationError`] into the existing
+/// [`JsonGeneratorLoadError`] surface so `from_def_with_device`'s
+/// public error type is unchanged.
+fn generator_error_from_prealloc(e: crate::node_graph::PreAllocationError) -> JsonGeneratorLoadError {
+    use crate::node_graph::PreAllocationError as P;
+    match e {
+        P::UnsizedArrayOutput {
+            node_type, port, ..
+        } => JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port },
+        P::UnsizedTexture3DOutput {
+            node_type, port, ..
+        } => JsonGeneratorLoadError::UnsizedTexture3DOutput { node_type, port },
+        P::UnboundArrayResource {
+            producer_handle,
+            producer_node_type,
+            producer_port,
+            cause,
+        } => JsonGeneratorLoadError::UnboundArrayResource {
+            producer_handle,
+            producer_node_type,
+            producer_port,
+            cause,
+        },
     }
 }
 
@@ -1209,86 +870,9 @@ mod tests {
     use manifold_core::Beats;
     use manifold_core::Seconds;
 
-    /// The post-allocation wire audit must fire when an `Array<T>`
-    /// resource has no bound slot — the catch-all that future-proofs
-    /// against allocation paths we haven't enumerated. Test setup
-    /// bypasses `pre_allocate_array_buffers` (the normal cause-layer
-    /// errors handle the cases it covers) and confirms the audit
-    /// alone catches the dangling resource.
-    ///
-    /// Verifies the contract: `from_def_with_device` returns Ok only
-    /// when every Array<T> resource is bound. No third state.
-    #[test]
-    fn wire_audit_errors_when_array_resource_has_no_bound_buffer() {
-        use crate::node_graph::Graph;
-        use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
-
-        let device = GpuDevice::new();
-        let mut graph = Graph::new();
-        let seed = graph.add_node(Box::new(SeedParticles::new()));
-        let step = graph.add_node(Box::new(EulerStepParticles::new()));
-        // Wire seed → step so the planner allocates a resource for
-        // seed.particles. (Unconsumed outputs are skipped by the
-        // planner, so unwiring would mean no Array<T> resource exists
-        // for the audit to catch — see the
-        // `unread_outputs_are_not_allocated_resources` plan test.)
-        graph.connect((seed, "particles"), (step, "in")).unwrap();
-        // EulerStepParticles also requires a `forces: Array([f32; 2])`
-        // input; wire GridUvField in so the graph validates. The audit
-        // target is still the unbound seed→step particle buffer.
-        let forces = graph.add_node(Box::new(GridUvField::new()));
-        graph.connect((forces, "uv"), (step, "forces")).unwrap();
-        let plan = compile(&graph).expect("seed → step graph compiles");
-
-        // Construct a backend but deliberately DON'T call
-        // `pre_allocate_array_buffers`. The audit should see the
-        // missing slot and error.
-        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
-
-        let err = JsonGraphGenerator::audit_array_resource_bindings(&graph, &plan, &backend)
-            .expect_err("audit must reject plan with unbound Array<T> resource");
-
-        match err {
-            JsonGeneratorLoadError::UnboundArrayResource {
-                producer_node_type, ..
-            } => {
-                // Any of the three Array<T> producers in this graph
-                // (seed_particles, euler_step_particles, grid_uv_field)
-                // is a valid catch — the audit's contract is "fires on
-                // any unbound Array<T> resource", not "names a specific
-                // one". Iteration order in the audit is an
-                // implementation detail.
-                assert!(
-                    producer_node_type.contains("seed_particles")
-                        || producer_node_type.contains("euler_step_particles")
-                        || producer_node_type.contains("grid_uv_field"),
-                    "error must name an Array<T> producer from the graph; got {producer_node_type}"
-                );
-            }
-            other => panic!("expected UnboundArrayResource, got {other:?}"),
-        }
-    }
-
-    /// Sanity: the audit accepts a fully-bound plan. Paired with the
-    /// negative test above so a regression that makes the audit
-    /// always-error or always-pass fails CI loudly.
-    #[test]
-    fn wire_audit_accepts_fully_pre_allocated_plan() {
-        use crate::node_graph::Graph;
-        use crate::node_graph::primitives::SeedParticles;
-
-        let device = GpuDevice::new();
-        let mut graph = Graph::new();
-        graph.add_node(Box::new(SeedParticles::new()));
-        let plan = compile(&graph).expect("seed-only graph compiles");
-
-        let mut backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
-        JsonGraphGenerator::pre_allocate_array_buffers(&graph, &plan, &device, &mut backend)
-            .expect("pre-allocation succeeds for seed-only graph");
-
-        JsonGraphGenerator::audit_array_resource_bindings(&graph, &plan, &backend)
-            .expect("audit accepts plan after successful pre-allocation");
-    }
+    // (Audit-fires-on-unbound and audit-accepts-fully-bound regressions
+    // now live in `node_graph::graph_loader::tests` — same contract,
+    // closer to the shared implementation.)
 
     /// Regression for the "Lissajous repeats back-to-back in
     /// clip-trigger mode" bug. The preset declares two bindings keyed

@@ -539,16 +539,20 @@ impl ChainGraph {
                 .expect("plan output resource has an assigned slot"),
         );
 
-        // Pre-allocate every `Array<T>` output buffer on the plan. The
-        // effect-side equivalent of JsonGraphGenerator::pre_allocate_array_buffers.
-        // Without this, atoms like blob_detect_ffi / track_persist / one_euro_filter
-        // have no input buffers bound and silently render black.
-        if let Err(reason) =
-            pre_allocate_array_buffers_effect(&graph, &plan, device, &mut backend)
+        // Pre-allocate every Array<T> buffer + Texture3D volume the
+        // plan declares, then run the post-allocation audit. Routed
+        // through the canonical `graph_loader::pre_allocate_resources`
+        // so the chain graph and JSON generators share one pipeline —
+        // any feature added on either side applies to both. Replaces
+        // the effect-only `pre_allocate_array_buffers_effect` shim that
+        // shipped with commit 3500e7a7 and lacked Texture3D + audit
+        // coverage.
+        if let Err(e) =
+            crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
         {
             log::warn!(
-                "ChainGraph::try_build: array buffer pre-allocation failed: {reason}. \
-                 Falling back to catalog rendering."
+                "[chain-graph] resource pre-allocation failed: {e}. \
+                 Chain build returns None — operator will see the affected layer go black."
             );
             return None;
         }
@@ -1004,97 +1008,10 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
 #[allow(dead_code)]
 type _EffectMetadataAlias = EffectMetadata;
 
-/// Walk the compiled plan, find every `Array<T>` output port, and
-/// pre-bind a `GpuBuffer` sized via the producing primitive's
-/// `array_output_capacity`. Mirrors
-/// `JsonGraphGenerator::pre_allocate_array_buffers` for the
-/// effect-side execution path. Without this step, atoms like
-/// `node.blob_detect_ffi` / `node.track_persist` / `node.one_euro_filter`
-/// have no input buffers bound at runtime and silently render black.
-fn pre_allocate_array_buffers_effect(
-    graph: &Graph,
-    plan: &ExecutionPlan,
-    device: &GpuDevice,
-    backend: &mut MetalBackend,
-) -> Result<(), String> {
-    use crate::node_graph::Backend;
-
-    let mut input_capacities: Vec<(&str, u32)> = Vec::with_capacity(8);
-
-    for step in plan.steps() {
-        let Some(node_inst) = graph.get_node(step.node) else {
-            continue;
-        };
-        let node_type = node_inst.node.type_id().as_str();
-
-        // Gather Array inputs' bound capacities for this step.
-        input_capacities.clear();
-        for (port_name, res_id) in &step.inputs {
-            let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
-                continue;
-            };
-            let Some(slot) = backend.slot_for(*res_id) else {
-                continue;
-            };
-            let Some(buf) = Backend::array_buffer(backend, slot) else {
-                continue;
-            };
-            let count = (buf.size / layout.item_size as u64) as u32;
-            input_capacities.push((*port_name, count));
-        }
-
-        let aliased_pairs = node_inst.node.aliased_array_io();
-
-        for (port_name, res_id) in &step.outputs {
-            let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
-                continue;
-            };
-
-            // Honour aliased in/out port pairs (stateful array sims).
-            let aliased_input_port = aliased_pairs
-                .iter()
-                .find(|(_, out_port)| *out_port == *port_name)
-                .map(|(in_port, _)| *in_port);
-            if let Some(in_port) = aliased_input_port {
-                let in_res = step
-                    .inputs
-                    .iter()
-                    .find(|(name, _)| *name == in_port)
-                    .map(|(_, id)| *id);
-                if let Some(in_res) = in_res
-                    && let Some(in_slot) = backend.slot_for(in_res)
-                {
-                    backend.alias_array_resource(*res_id, in_slot);
-                    continue;
-                }
-            }
-
-            let Some(capacity) = node_inst.node.array_output_capacity(
-                port_name,
-                &node_inst.params,
-                &input_capacities,
-            ) else {
-                return Err(format!(
-                    "node `{node_type}` cannot size Array output port `{port_name}` \
-                     (array_output_capacity returned None)"
-                ));
-            };
-            let bytes = capacity as u64 * layout.item_size as u64;
-            if bytes == 0 {
-                log::warn!(
-                    "ChainGraph: node `{node_type}` port `{port_name}` resolved to \
-                     a zero-byte Array<T> buffer (capacity={capacity}, item_size={}). \
-                     Skipping allocation.",
-                    layout.item_size,
-                );
-                continue;
-            }
-            let buffer = device.create_buffer_shared(bytes);
-            backend.pre_bind_array(*res_id, buffer);
-        }
-    }
-    Ok(())
-}
+// (`pre_allocate_array_buffers_effect` was the stop-gap shim added in
+// commit 3500e7a7 to fix the Blob Track drift bug. Both callers now
+// route through `node_graph::graph_loader::pre_allocate_resources`
+// which adds Texture3D + canvas-sized + post-allocation audit.)
 
 #[cfg(test)]
 mod multi_segment_tests {

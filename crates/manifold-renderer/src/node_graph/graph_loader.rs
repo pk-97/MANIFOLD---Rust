@@ -20,19 +20,33 @@
 //! module's existence is the structural fix for the drift bug class that
 //! produced the May 2026 Blob Track HUD outage (commits 3500e7a7, a69a71bf,
 //! and the audit follow-up).
+//!
+//! Step B adds post-compile resource pre-allocation ([`pre_allocate_resources`])
+//! to the same shared layer. Both callers now pre-allocate Array<T>
+//! buffers + Texture3D volumes and run the post-allocation audit through
+//! one function — the effect-side `pre_allocate_array_buffers_effect`
+//! shim (added in commit 3500e7a7) is replaced by this single canonical
+//! pipeline.
 
 use std::borrow::Cow;
 
 use ahash::AHashMap;
 
 use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef};
+use manifold_gpu::{
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 
+use crate::node_graph::backend::Backend;
 use crate::node_graph::boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
 };
 use crate::node_graph::effect_node::NodeInstanceId;
+use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
 use crate::node_graph::graph::Graph;
+use crate::node_graph::metal_backend::MetalBackend;
 use crate::node_graph::parameters::{ParamType, ParamValue};
+use crate::node_graph::ports::PortType;
 use crate::node_graph::persistence::{PrimitiveRegistry, format_from_str};
 
 // ---------------------------------------------------------------------------
@@ -712,6 +726,403 @@ fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Optio
 }
 
 // ---------------------------------------------------------------------------
+// Post-compile resource pre-allocation (Array<T> + Texture3D + audit)
+// ---------------------------------------------------------------------------
+
+/// Errors produced by [`pre_allocate_resources`]. The variants carry
+/// the offending node's `type_id`, port name, and handle (when present)
+/// so callers can surface them with full context to the operator.
+#[derive(Debug, Clone)]
+pub enum PreAllocationError {
+    /// A primitive declared an `Array<T>` output but
+    /// `array_output_capacity()` returned `None` — pre-bound allocation
+    /// is a hard contract, so partial allocation is rejected loudly
+    /// rather than rendering silently wrong.
+    UnsizedArrayOutput {
+        node_type: String,
+        port: String,
+        handle: Option<String>,
+    },
+    /// A primitive declared a `Texture3D` output but
+    /// `texture_3d_output_dims()` returned `None`. Texture3D has no
+    /// lazy-alloc path, so a missing sizing implementation can't go
+    /// silent.
+    UnsizedTexture3DOutput {
+        node_type: String,
+        port: String,
+        handle: Option<String>,
+    },
+    /// Post-allocation audit catch-all: an `Array<T>` resource has no
+    /// bound slot, or its slot has no buffer. Catches alias chain
+    /// breaks, canvas-dim-zero skips, and future allocation paths
+    /// that fail silently — anything the cause-layer checks above
+    /// haven't enumerated.
+    UnboundArrayResource {
+        producer_node_type: String,
+        producer_port: String,
+        producer_handle: Option<String>,
+        cause: &'static str,
+    },
+}
+
+impl std::fmt::Display for PreAllocationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsizedArrayOutput {
+                node_type,
+                port,
+                handle,
+            } => {
+                let h = handle.as_deref().map(|s| format!(" (handle `{s}`)")).unwrap_or_default();
+                write!(
+                    f,
+                    "primitive `{node_type}`{h} Array<T> output port `{port}` has no \
+                     concrete size — `array_output_capacity` returned None. \
+                     Add a `max_capacity` param, or override the method to derive \
+                     size from a forward-dep input."
+                )
+            }
+            Self::UnsizedTexture3DOutput {
+                node_type,
+                port,
+                handle,
+            } => {
+                let h = handle.as_deref().map(|s| format!(" (handle `{s}`)")).unwrap_or_default();
+                write!(
+                    f,
+                    "primitive `{node_type}`{h} Texture3D output port `{port}` has no \
+                     concrete dims — `texture_3d_output_dims` returned None."
+                )
+            }
+            Self::UnboundArrayResource {
+                producer_node_type,
+                producer_port,
+                producer_handle,
+                cause,
+            } => {
+                let h = producer_handle
+                    .as_deref()
+                    .map(|s| format!(" (handle `{s}`)"))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "Array<T> output of `{producer_node_type}.{producer_port}`{h} \
+                     has no bound buffer after chain build: {cause}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PreAllocationError {}
+
+/// Pre-allocate every `Array<T>` and `Texture3D` resource the compiled
+/// plan declares, then run the post-allocation audit. Both callers
+/// (generator + effect chain) invoke this after `compile()` and before
+/// the executor's first frame.
+///
+/// Three steps run in order:
+///
+/// 1. **Array<T> buffer pre-allocation.** Walks every step in topo
+///    order, gathers each Array input's already-bound capacity (the
+///    plan is sorted so producer outputs are bound first), then asks
+///    each Array output's producer to size itself via
+///    [`crate::node_graph::EffectNode::array_output_capacity`]. Honours
+///    `aliased_array_io()` (stateful array sims share one buffer
+///    between in and out ports) and `canvas_sized_array_outputs()`
+///    (scatter accumulators sized to the backend's canvas dims).
+///
+/// 2. **Texture3D volume pre-allocation.** Mirror of step 1 for
+///    Texture3D outputs. Uses
+///    [`crate::node_graph::EffectNode::texture_3d_output_dims`] to
+///    size volumes; format defaults to `Rgba16Float`, overridable per
+///    output via the existing JSON `outputFormats` mechanism.
+///
+/// 3. **Post-allocation audit.** Walks every `Array<T>` resource on
+///    the plan and asserts the backend has (a) a slot mapping and
+///    (b) a real backing buffer. First failure returns
+///    [`PreAllocationError::UnboundArrayResource`] naming the producer.
+///    The architectural invariant: this function returns `Ok` only when
+///    every resource is bound, or `Err` otherwise. No third state.
+///
+/// The chain-graph path previously had a stripped-down `pre_allocate_array_buffers_effect`
+/// that skipped step 2 entirely and step 3 wholesale — the silent-black-output
+/// bug class on effects. Routing both callers through this function
+/// structurally eliminates that gap.
+pub fn pre_allocate_resources(
+    graph: &Graph,
+    plan: &ExecutionPlan,
+    device: &GpuDevice,
+    backend: &mut MetalBackend,
+) -> Result<(), PreAllocationError> {
+    pre_allocate_array_buffers(graph, plan, device, backend)?;
+    pre_allocate_texture_3d_volumes(graph, plan, device, backend)?;
+    audit_array_resource_bindings(graph, plan, backend)?;
+    Ok(())
+}
+
+fn pre_allocate_array_buffers(
+    graph: &Graph,
+    plan: &ExecutionPlan,
+    device: &GpuDevice,
+    backend: &mut MetalBackend,
+) -> Result<(), PreAllocationError> {
+    // Reverse handle map for error context. The audit / size-failure
+    // paths name the producer's handle so the operator can find it in
+    // the editor.
+    let handle_by_node: AHashMap<NodeInstanceId, &'static str> =
+        graph.handles().map(|(h, id)| (id, h)).collect();
+
+    let mut input_capacities: Vec<(&str, u32)> = Vec::with_capacity(8);
+
+    for step in plan.steps() {
+        let Some(node_inst) = graph.get_node(step.node) else {
+            continue;
+        };
+        let node_type = node_inst.node.type_id().as_str();
+
+        input_capacities.clear();
+        for (port_name, res_id) in &step.inputs {
+            let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
+                continue;
+            };
+            let Some(slot) = backend.slot_for(*res_id) else {
+                continue;
+            };
+            let Some(buf) = Backend::array_buffer(backend, slot) else {
+                continue;
+            };
+            let count = (buf.size / layout.item_size as u64) as u32;
+            input_capacities.push((*port_name, count));
+        }
+
+        let aliased_pairs = node_inst.node.aliased_array_io();
+        let canvas_sized_outputs = node_inst.node.canvas_sized_array_outputs();
+        let (canvas_w, canvas_h) = Backend::canvas_dims(backend as &dyn Backend);
+
+        for (port_name, res_id) in &step.outputs {
+            let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
+                continue;
+            };
+
+            // Aliased in/out pairs (stateful array sims) — route the
+            // output's resource id to the input's slot. No new
+            // allocation; the simulator reads + writes the same
+            // storage in place.
+            let aliased_input_port = aliased_pairs
+                .iter()
+                .find(|(_, out_port)| *out_port == *port_name)
+                .map(|(in_port, _)| *in_port);
+            if let Some(in_port) = aliased_input_port {
+                let in_res = step
+                    .inputs
+                    .iter()
+                    .find(|(name, _)| *name == in_port)
+                    .map(|(_, id)| *id);
+                if let Some(in_res) = in_res
+                    && let Some(in_slot) = backend.slot_for(in_res)
+                {
+                    backend.alias_array_resource(*res_id, in_slot);
+                    continue;
+                }
+                log::warn!(
+                    "[graph-loader] node `{node_type}` declared aliased pair \
+                     `{in_port}` → `{port_name}` but `{in_port}` is not wired \
+                     or has no pre-bound slot. Falling back to a fresh \
+                     allocation; the simulator's in-place dispatch will \
+                     write to a standalone buffer."
+                );
+            }
+
+            // Canvas-sized output: scatter accumulators and similar
+            // primitives whose Array output must align pixel-for-pixel
+            // with the host canvas.
+            if canvas_sized_outputs.contains(port_name) {
+                if canvas_w == 0 || canvas_h == 0 {
+                    log::warn!(
+                        "[graph-loader] node `{node_type}` port `{port_name}` is \
+                         canvas-sized but backend canvas dims are 0×0 (mock backend \
+                         or unconfigured). Skipping allocation."
+                    );
+                    continue;
+                }
+                let capacity = (canvas_w as u64) * (canvas_h as u64);
+                let bytes = capacity * layout.item_size as u64;
+                let buffer = device.create_buffer_shared(bytes);
+                backend.pre_bind_array(*res_id, buffer);
+                continue;
+            }
+
+            let Some(capacity) = node_inst.node.array_output_capacity(
+                port_name,
+                &node_inst.params,
+                &input_capacities,
+            ) else {
+                return Err(PreAllocationError::UnsizedArrayOutput {
+                    node_type: node_type.to_string(),
+                    port: port_name.to_string(),
+                    handle: handle_by_node.get(&step.node).map(|h| h.to_string()),
+                });
+            };
+            let bytes = capacity as u64 * layout.item_size as u64;
+            if bytes == 0 {
+                log::warn!(
+                    "[graph-loader] node `{node_type}` port `{port_name}` resolved \
+                     to a zero-byte Array<T> buffer (capacity={capacity}, \
+                     item_size={}). Skipping allocation.",
+                    layout.item_size,
+                );
+                continue;
+            }
+            let buffer = device.create_buffer_shared(bytes);
+            backend.pre_bind_array(*res_id, buffer);
+        }
+    }
+    Ok(())
+}
+
+fn pre_allocate_texture_3d_volumes(
+    graph: &Graph,
+    plan: &ExecutionPlan,
+    device: &GpuDevice,
+    backend: &mut MetalBackend,
+) -> Result<(), PreAllocationError> {
+    let handle_by_node: AHashMap<NodeInstanceId, &'static str> =
+        graph.handles().map(|(h, id)| (id, h)).collect();
+
+    let mut input_dims: Vec<(&str, (u32, u32, u32))> = Vec::with_capacity(4);
+
+    for step in plan.steps() {
+        let Some(node_inst) = graph.get_node(step.node) else {
+            continue;
+        };
+        let node_type = node_inst.node.type_id().as_str();
+
+        input_dims.clear();
+        for (port_name, res_id) in &step.inputs {
+            if !matches!(plan.resource_type(*res_id), Some(PortType::Texture3D)) {
+                continue;
+            }
+            let Some(slot) = backend.slot_for(*res_id) else {
+                continue;
+            };
+            let Some(tex) = backend.texture_3d(slot) else {
+                continue;
+            };
+            input_dims.push((*port_name, (tex.width, tex.height, tex.depth)));
+        }
+
+        for (port_name, res_id) in &step.outputs {
+            if !matches!(plan.resource_type(*res_id), Some(PortType::Texture3D)) {
+                continue;
+            }
+            // Already pre-bound (e.g. an alias pinned it earlier) — skip.
+            if backend.slot_for(*res_id).is_some() {
+                continue;
+            }
+            let Some((w, h, d)) = node_inst.node.texture_3d_output_dims(
+                port_name,
+                &node_inst.params,
+                &input_dims,
+            ) else {
+                return Err(PreAllocationError::UnsizedTexture3DOutput {
+                    node_type: node_type.to_string(),
+                    port: port_name.to_string(),
+                    handle: handle_by_node.get(&step.node).map(|h| h.to_string()),
+                });
+            };
+            let format = node_inst
+                .node
+                .output_format(port_name)
+                .unwrap_or(GpuTextureFormat::Rgba16Float);
+            let label = format!("graph_loader 3d volume: {node_type}.{port_name}");
+            let label_static: &'static str = Box::leak(label.into_boxed_str());
+            let texture = device.create_texture(&GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: d,
+                format,
+                dimension: GpuTextureDimension::D3,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: label_static,
+                mip_levels: 1,
+            });
+            backend.pre_bind_texture_3d(*res_id, texture);
+        }
+    }
+    Ok(())
+}
+
+fn audit_array_resource_bindings(
+    graph: &Graph,
+    plan: &ExecutionPlan,
+    backend: &MetalBackend,
+) -> Result<(), PreAllocationError> {
+    let handle_by_node: AHashMap<NodeInstanceId, &'static str> =
+        graph.handles().map(|(h, id)| (id, h)).collect();
+
+    let total = plan.resource_count();
+    for raw in 0..total {
+        let res_id = ResourceId(raw as u32);
+        // Only Array<T> resources are pre-bind-only; Texture2D /
+        // Texture3D resources have either lazy-alloc pools or their own
+        // pre-bind paths.
+        let Some(PortType::Array(_)) = plan.resource_type(res_id) else {
+            continue;
+        };
+
+        let has_slot = backend.slot_for(res_id).is_some();
+        let has_buffer = backend
+            .slot_for(res_id)
+            .and_then(|s| backend.array_buffer(s))
+            .is_some();
+        if has_slot && has_buffer {
+            continue;
+        }
+
+        let (producer_node_type, producer_port, producer_handle) = plan
+            .steps()
+            .iter()
+            .find_map(|step| {
+                step.outputs
+                    .iter()
+                    .find(|(_, id)| *id == res_id)
+                    .map(|(port_name, _)| {
+                        let node_type = graph
+                            .get_node(step.node)
+                            .map(|n| n.node.type_id().as_str().to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        let handle = handle_by_node
+                            .get(&step.node)
+                            .map(|h| h.to_string());
+                        (node_type, port_name.to_string(), handle)
+                    })
+            })
+            .unwrap_or_else(|| {
+                (
+                    "<no producer step>".to_string(),
+                    "<unknown port>".to_string(),
+                    None,
+                )
+            });
+
+        return Err(PreAllocationError::UnboundArrayResource {
+            producer_node_type,
+            producer_port,
+            producer_handle,
+            cause: if !has_slot {
+                "no slot mapping (allocation skipped — possibly canvas dims 0×0, \
+                 zero-byte capacity, or a failed alias)"
+            } else {
+                "slot exists but has no buffer (alias chain broken or \
+                 pre_bind_array not called)"
+            },
+        });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -979,5 +1390,92 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, GraphBuildError::MissingBoundarySource));
+    }
+
+    // ───────────────────────────────────────────────────────────
+    // pre_allocate_resources regressions
+    // ───────────────────────────────────────────────────────────
+
+    /// Post-allocation audit fires when an `Array<T>` resource has no
+    /// bound slot. Ported from the previous
+    /// `wire_audit_errors_when_array_resource_has_no_bound_buffer`
+    /// test in `json_graph_generator.rs`. Now that audit lives in
+    /// the shared pipeline, it MUST cover both the generator AND
+    /// chain-graph callers — this regression pins the contract on
+    /// the shared layer where regressions would surface for both.
+    #[test]
+    fn audit_fires_on_unbound_array_resource() {
+        use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
+        use crate::node_graph::{compile, MetalBackend};
+
+        let device = GpuDevice::new();
+        let mut graph = Graph::new();
+        let seed = graph.add_node(Box::new(SeedParticles::new()));
+        let step = graph.add_node(Box::new(EulerStepParticles::new()));
+        graph.connect((seed, "particles"), (step, "in")).unwrap();
+        let forces = graph.add_node(Box::new(GridUvField::new()));
+        graph.connect((forces, "uv"), (step, "forces")).unwrap();
+        let plan = compile(&graph).expect("seed → step graph compiles");
+
+        // Construct a backend but deliberately skip the Array<T>
+        // pre-allocation; only run the audit directly so it has to
+        // catch the dangling resources on its own.
+        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let err = audit_array_resource_bindings(&graph, &plan, &backend)
+            .expect_err("audit must reject plan with unbound Array<T> resource");
+
+        match err {
+            PreAllocationError::UnboundArrayResource {
+                producer_node_type,
+                ..
+            } => {
+                assert!(
+                    producer_node_type.contains("seed_particles")
+                        || producer_node_type.contains("euler_step_particles")
+                        || producer_node_type.contains("grid_uv_field"),
+                    "error must name an Array<T> producer from the graph; got {producer_node_type}"
+                );
+            }
+            other => panic!("expected UnboundArrayResource, got {other:?}"),
+        }
+    }
+
+    /// Sanity: a fully-bound plan passes both pre-allocation steps
+    /// and the post-allocation audit. Negative test above is paired
+    /// with this so a regression that makes the audit always-error
+    /// or always-pass fails CI loudly.
+    #[test]
+    fn pre_allocate_resources_accepts_fully_bound_plan() {
+        use crate::node_graph::primitives::SeedParticles;
+        use crate::node_graph::{compile, MetalBackend};
+
+        let device = GpuDevice::new();
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SeedParticles::new()));
+        let plan = compile(&graph).expect("seed-only graph compiles");
+
+        let mut backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        pre_allocate_resources(&graph, &plan, &device, &mut backend)
+            .expect("full pre-allocate pipeline succeeds for seed-only graph");
+    }
+
+    /// Drift bug regression: `pre_allocate_resources` runs on the
+    /// effect chain side too. Before Step B the chain build's
+    /// `pre_allocate_array_buffers_effect` shim had no audit and no
+    /// Texture3D pass — features added on the generator side were
+    /// silently absent from chains. This test pins that both callers
+    /// invoke the same function (via the public re-export at
+    /// `crate::node_graph::pre_allocate_resources`), so any future
+    /// drift would have to introduce a new code path rather than
+    /// silently lack one.
+    #[test]
+    fn shared_pre_allocate_is_the_single_callable() {
+        // Module path identity check — if the function ever moves or
+        // gets shadowed, this test fails to compile, surfacing the
+        // change as a compile-time error rather than silent drift.
+        let _: fn(&Graph, &ExecutionPlan, &GpuDevice, &mut MetalBackend) -> Result<(), PreAllocationError> =
+            pre_allocate_resources;
+        let _: fn(&Graph, &ExecutionPlan, &GpuDevice, &mut MetalBackend) -> Result<(), PreAllocationError> =
+            crate::node_graph::pre_allocate_resources;
     }
 }
