@@ -3,18 +3,31 @@
 //! for a full 2D blur.
 //!
 //! Adapted from `effects/shaders/fx_depth_of_field_compute.wgsl`'s
-//! 17-tap blur, with the width source decoupled from input.alpha
-//! (separate Texture2D input now) so the primitive composes with
-//! any width source — DoF's CoC pass, a procedural mask, a depth-
-//! gradient texture, etc.
+//! 9-/17-/25-tap blur kernels, with the width source decoupled from
+//! input.alpha (separate Texture2D input now) so the primitive
+//! composes with any width source — DoF's CoC pass, a procedural
+//! mask, a depth-gradient texture, etc.
+//!
+//! Two specialization knobs flatten dead branches at pipeline
+//! creation time:
+//!
+//!   * `quality`        — Low (9-tap) / Medium (17-tap) / High (25-tap).
+//!   * `weighting_mode` — None (plain Gaussian) / ScatterAsGatherByCoC
+//!                        (foreground-bleed guard for CoC-driven blurs).
+//!
+//! The 6 specialized pipelines are lazily compiled on first use and
+//! cached. Defaults preserve the original behaviour (Medium + None).
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use ahash::AHashMap;
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 pub const BLUR_VARIABLE_AXES: &[&str] = &["Horizontal", "Vertical"];
+pub const BLUR_VARIABLE_QUALITIES: &[&str] = &["Low", "Medium", "High"];
+pub const BLUR_VARIABLE_WEIGHTINGS: &[&str] = &["None", "ScatterAsGatherByCoC"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,10 +38,13 @@ struct BlurUniforms {
     _pad1: u32,
 }
 
+const BLUR_WGSL: &str =
+    include_str!("shaders/gaussian_blur_variable_width.wgsl");
+
 crate::primitive! {
     name: GaussianBlurVariableWidth,
     type_id: "node.gaussian_blur_variable_width",
-    purpose: "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Used by DoF (CoC-driven blur), depth-of-field-style effects, and any compositional where blur radius varies by spatial mask.",
+    purpose: "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Three quality levels (9-/17-/25-tap kernels at σ≈2/4/6) and an optional CoC-driven scatter-as-gather weighting that prevents sharp pixels bleeding into blurry regions — load-bearing for DoF-class effects.",
     inputs: {
         in: Texture2D required,
         width: Texture2D required,
@@ -53,22 +69,52 @@ crate::primitive! {
             range: Some((1.0, 64.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "quality",
+            label: "Quality",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(1),
+            range: None,
+            enum_values: BLUR_VARIABLE_QUALITIES,
+        },
+        ParamDef {
+            name: "weighting_mode",
+            label: "Weighting Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: None,
+            enum_values: BLUR_VARIABLE_WEIGHTINGS,
+        },
     ],
-    composition_notes: "17-tap kernel (sigma ≈ 4.0). step_size = width_sample × max_radius + 1.0, applied along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures.",
+    composition_notes: "step_size = width_sample × max_radius + 1.0 along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures. ScatterAsGatherByCoC: each neighbor only contributes if its CoC (sampled from the `width` texture's R channel) ≥ the center pixel's CoC, OR the center is itself very blurry (CoC > 0.5). For DoF parity set max_radius = 6.0 and weighting_mode = ScatterAsGatherByCoC; the kernel matches the legacy DoF blur byte-for-byte.",
     examples: [],
     picker: { label: "Gaussian Blur (Variable Width)", category: Atom },
+    extra_fields: {
+        pipelines: AHashMap<u32, GpuComputePipeline> = AHashMap::new(),
+    },
+}
+
+fn read_enum(ctx: &EffectNodeContext<'_, '_>, name: &str, default: u32) -> u32 {
+    match ctx.params.get(name) {
+        Some(ParamValue::Enum(n)) => *n,
+        Some(ParamValue::Float(f)) => f.round() as u32,
+        _ => default,
+    }
+}
+
+fn pipeline_key(quality: u32, weighting: u32) -> u32 {
+    weighting * 3 + quality
 }
 
 impl Primitive for GaussianBlurVariableWidth {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let direction = match ctx.params.get("axis") {
-            Some(ParamValue::Enum(n)) => *n,
-            _ => 0,
-        };
+        let direction = read_enum(ctx, "axis", 0);
         let max_radius = match ctx.params.get("max_radius") {
             Some(ParamValue::Float(f)) => *f,
             _ => 12.0,
         };
+        let quality = read_enum(ctx, "quality", 1).min(2);
+        let weighting = read_enum(ctx, "weighting_mode", 0).min(1);
 
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
@@ -86,13 +132,30 @@ impl Primitive for GaussianBlurVariableWidth {
         }
 
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/gaussian_blur_variable_width.wgsl"),
-                "cs_main",
-                "node.gaussian_blur_variable_width",
-            )
-        });
+        let key = pipeline_key(quality, weighting);
+        let pipeline = self
+            .pipelines
+            .entry(key)
+            .or_insert_with(|| {
+                let quality_str = match quality {
+                    0 => "0u",
+                    2 => "2u",
+                    _ => "1u",
+                };
+                let weighting_str = if weighting == 1 { "1u" } else { "0u" };
+                let label = format!(
+                    "node.gaussian_blur_variable_width.q{quality}.w{weighting}"
+                );
+                gpu.device.create_specialized_compute_pipeline(
+                    BLUR_WGSL,
+                    "cs_main",
+                    &[
+                        ("QUALITY_LEVEL", quality_str),
+                        ("WEIGHTING_MODE", weighting_str),
+                    ],
+                    &label,
+                )
+            });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
@@ -157,9 +220,12 @@ mod tests {
     }
 
     #[test]
-    fn gaussian_blur_variable_width_has_axis_and_max_radius_params() {
+    fn gaussian_blur_variable_width_has_axis_radius_quality_weighting_params() {
         let names: Vec<&str> = GaussianBlurVariableWidth::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["axis", "max_radius"]);
+        assert_eq!(
+            names,
+            vec!["axis", "max_radius", "quality", "weighting_mode"]
+        );
     }
 
     #[test]
