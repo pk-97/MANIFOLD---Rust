@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BlobTracking",
-  "description": "Decomposed Blob Track: FFI detection → nearest-neighbour identity tracking → 1€ temporal smoothing → overlay render. Each stage is a separate atom; the HUD visual is blob_overlay_render (hollow boxes). Future: replace blob_overlay_render with wgsl_compute bracket/crosshair/label geometry → render_lines + render_filled_rects + render_value_overlay for the full diagnostic HUD.",
+  "description": "Decomposed Blob Track: FFI detection → NN identity tracking → 1€ temporal smoothing → HUD overlay chain. The HUD chain currently composites hollow boxes (blob_overlay_render) and corner brackets (wgsl_compute per-pixel SDF). Future elements (crosshairs, ticks, gauges, dashed connections, hex/coord/distance labels) are wgsl_compute nodes added to the chain — each a small WGSL shader the user can edit in the graph editor.",
   "presetMetadata": {
     "id": "BlobTracking",
     "displayName": "Blob Track",
@@ -70,71 +70,39 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "overlay",
-          "param": "alpha"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "overlay", "param": "alpha" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "threshold",
         "label": "Threshold",
         "defaultValue": 0.65,
-        "target": {
-          "kind": "handleNode",
-          "handle": "detect",
-          "param": "threshold"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "detect", "param": "threshold" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "sensitivity",
         "label": "Sensitivity",
         "defaultValue": 0.85,
-        "target": {
-          "kind": "handleNode",
-          "handle": "detect",
-          "param": "sensitivity"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "detect", "param": "sensitivity" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "smoothing",
         "label": "Smoothing",
         "defaultValue": 0.7,
-        "target": {
-          "kind": "handleNode",
-          "handle": "smoothing_remap",
-          "param": "a"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "smoothing_remap", "param": "a" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "connect",
         "label": "Connect",
         "defaultValue": 0.35,
-        "target": {
-          "kind": "handleNode",
-          "handle": "connect_nearest",
-          "param": "max_distance"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "connect_nearest", "param": "max_distance" },
+        "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
+    "skipMode": { "kind": "never" },
     "paramAliases": [
       { "old": "thresh", "new": "threshold" },
       { "old": "sens", "new": "sensitivity" },
@@ -142,11 +110,7 @@
     ]
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
       "typeId": "node.blob_detect_ffi",
@@ -210,9 +174,20 @@
     },
     {
       "id": 7,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
+      "typeId": "node.wgsl_compute",
+      "handle": "brackets",
+      "wgslSource": "// Corner brackets HUD element. Per-pixel SDF: for each output pixel,\n// sample the running source and check whether it's on any detection's\n// L-shaped bracket arm. If so, blend the overlay colour. Edit the WGSL\n// to change arm length, line thickness, or bracket shape (e.g. extend\n// arms across the full edge for a 'crosshair-style' bracket).\n\nstruct U {\n    color_r: f32,\n    color_g: f32,\n    color_b: f32,\n    alpha: f32,\n    arm_fraction: f32,\n    thickness: f32,\n    blob_count: u32,\n    _pad0: u32,\n};\n\nstruct Detection {\n    x: f32,\n    y: f32,\n    width: f32,\n    height: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read> detections: array<Detection>;\n@group(0) @binding(2) var source_tex: texture_2d<f32>;\n@group(0) @binding(3) var src_sampler: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if gid.x >= dims.x || gid.y >= dims.y { return; }\n    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);\n    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);\n\n    var on_arm = false;\n    let n = min(u.blob_count, 32u);\n    for (var i: u32 = 0u; i < n; i = i + 1u) {\n        let d = detections[i];\n        if d.width < 0.0001 && d.height < 0.0001 { continue; }\n\n        let arm = min(d.width, d.height) * u.arm_fraction;\n        let t = u.thickness * 0.5;\n\n        let x0 = d.x;\n        let y0 = d.y;\n        let x1 = d.x + d.width;\n        let y1 = d.y + d.height;\n\n        // Top-left corner: arms going right and down.\n        let tl_h = uv.x >= x0 && uv.x <= x0 + arm && abs(uv.y - y0) <= t;\n        let tl_v = uv.y >= y0 && uv.y <= y0 + arm && abs(uv.x - x0) <= t;\n        // Top-right.\n        let tr_h = uv.x >= x1 - arm && uv.x <= x1 && abs(uv.y - y0) <= t;\n        let tr_v = uv.y >= y0 && uv.y <= y0 + arm && abs(uv.x - x1) <= t;\n        // Bottom-left.\n        let bl_h = uv.x >= x0 && uv.x <= x0 + arm && abs(uv.y - y1) <= t;\n        let bl_v = uv.y >= y1 - arm && uv.y <= y1 && abs(uv.x - x0) <= t;\n        // Bottom-right.\n        let br_h = uv.x >= x1 - arm && uv.x <= x1 && abs(uv.y - y1) <= t;\n        let br_v = uv.y >= y1 - arm && uv.y <= y1 && abs(uv.x - x1) <= t;\n\n        if tl_h || tl_v || tr_h || tr_v || bl_h || bl_v || br_h || br_v {\n            on_arm = true;\n            break;\n        }\n    }\n\n    if on_arm {\n        let a = u.alpha;\n        src = vec4<f32>(\n            mix(src.r, u.color_r, a),\n            mix(src.g, u.color_g, a),\n            mix(src.b, u.color_b, a),\n            src.a,\n        );\n    }\n    textureStore(output_tex, vec2<i32>(gid.xy), src);\n}\n",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.92 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "alpha": { "type": "Float", "value": 1.0 },
+        "arm_fraction": { "type": "Float", "value": 0.4 },
+        "thickness": { "type": "Float", "value": 0.004 },
+        "blob_count": { "type": "Float", "value": 32.0 }
+      }
+    },
+    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -222,6 +197,8 @@
     { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "blobs" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
     { "fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "in" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "source_tex" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 7, "toPort": "detections" },
+    { "fromNode": 7, "fromPort": "output_tex", "toNode": 8, "toPort": "in" }
   ]
 }
