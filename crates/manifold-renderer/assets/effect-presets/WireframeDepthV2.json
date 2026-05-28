@@ -1,0 +1,140 @@
+{
+  "version": 2,
+  "name": "WireframeDepth",
+  "description": "Tranche 7 decomposition (work in progress). Depth + flow + person mask as standalone DNN atoms (depth_estimate_midas, optical_flow_estimate with cut_score output, person_segment). Scene-cut reset routes cut_score → math(Subtract 0.28) → math(Floor) → reset_trigger on the five state-feedback loops. Outer-card params drive a scalar graph for derived uniforms (flow_lock_strength = 0.76 + 0.225*ts01, etc.) with the legacy lerp endpoints copied byte-exact. Per-pass wgsl_compute shaders extracted from fx_wireframe_depth_compute.wgsl with bindings renumbered. THREE OF TEN passes implemented in this iteration (mesh_init, depth_temporal, semantic_mask); the remaining seven (flow_advect_coord, mesh_cell_affine, mesh_face_warp, mesh_regularize, surface_cache_update, wire_mask, update_history, composite) need extraction in a follow-up. Source → final_output passes through unchanged until the wire_mask + composite chain lands. Mesh-rate amortization dropped (was a 4K-era optimization). wire_resolution param dropped (line_history will run at chain res when wired). The DNN atoms + scene-cut reset chain + scalar graph for derived constants are validated by check-presets.",
+  "presetMetadata": {
+    "id": "WireframeDepth",
+    "displayName": "Wireframe Depth (V2 WIP)",
+    "category": "Diagnostic",
+    "oscPrefix": "wireframeDepth",
+    "legacyDiscriminant": 29,
+    "available": false,
+    "params": [
+      { "id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "density", "name": "Density", "min": 16.0, "max": 280.0, "defaultValue": 260.0, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Density" },
+      { "id": "width", "name": "Width", "min": 0.4, "max": 3.0, "defaultValue": 1.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Width" },
+      { "id": "z_scale", "name": "Z Scale", "min": 0.0, "max": 2.5, "defaultValue": 1.35, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "ZScale" },
+      { "id": "smooth", "name": "Smooth", "min": 0.0, "max": 1.0, "defaultValue": 0.9, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Smooth" },
+      { "id": "subject", "name": "Subject", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "SubjectIsolation" },
+      { "id": "blend", "name": "Blend", "min": 0.0, "max": 6.0, "defaultValue": 6.0, "wholeNumbers": true, "isToggle": false, "valueLabels": ["Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque"], "oscSuffix": "BlendMode" },
+      { "id": "edge_follow", "name": "Edge Follow", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "EdgeFollow" }
+    ],
+    "bindings": [
+      { "id": "amount", "label": "Amount", "defaultValue": 1.0, "target": { "kind": "handleNode", "handle": "amount_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "density", "label": "Density", "defaultValue": 260.0, "target": { "kind": "handleNode", "handle": "density_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "width", "label": "Width", "defaultValue": 1.5, "target": { "kind": "handleNode", "handle": "width_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "z_scale", "label": "Z Scale", "defaultValue": 1.35, "target": { "kind": "handleNode", "handle": "z_scale_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "smooth", "label": "Smooth", "defaultValue": 0.9, "target": { "kind": "handleNode", "handle": "smooth_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "subject", "label": "Subject", "defaultValue": 0.5, "target": { "kind": "handleNode", "handle": "subject_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "blend", "label": "Blend", "defaultValue": 6.0, "target": { "kind": "handleNode", "handle": "blend_v", "param": "value" }, "convert": { "type": "Float" } },
+      { "id": "edge_follow", "label": "Edge Follow", "defaultValue": 0.5, "target": { "kind": "handleNode", "handle": "edge_follow_v", "param": "value" }, "convert": { "type": "Float" } }
+    ],
+    "skipMode": { "kind": "never" },
+    "paramAliases": [
+      { "old": "wire_res", "new": "amount" },
+      { "old": "wire_resolution", "new": "amount" },
+      { "old": "mesh_rate", "new": "amount" },
+      { "old": "flow", "new": "amount" },
+      { "old": "lock", "new": "amount" }
+    ]
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 1, "typeId": "node.depth_estimate_midas", "handle": "depth_dnn", "params": { "analysis_max_dim": { "type": "Float", "value": 360 }, "update_interval": { "type": "Float", "value": 1 } } },
+    { "id": 2, "typeId": "node.optical_flow_estimate", "handle": "flow", "params": { "analysis_max_dim": { "type": "Float", "value": 360 }, "update_interval": { "type": "Float", "value": 1 } } },
+    { "id": 3, "typeId": "node.person_segment", "handle": "person", "params": { "analysis_max_dim": { "type": "Float", "value": 360 }, "update_interval": { "type": "Float", "value": 1 }, "smoothing": { "type": "Float", "value": 0.55 } } },
+    { "id": 4, "typeId": "node.wgsl_compute", "handle": "analysis", "title": "Source to Luminance", "wgslSource": "// Pass 0 Analysis — Rec.709 luminance conversion, byte-exact with\n// the legacy cs_analysis entry point. Output channels R=G=B=luma,\n// A=1 so downstream samplers reading .r get the luma scalar.\n\nstruct U { _pad0: f32, };\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var source: texture_2d<f32>;\n@group(0) @binding(2) var samp: sampler;\n@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    _ = u._pad0;\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    let rgb = textureSampleLevel(source, samp, uv, 0.0).rgb;\n    let l = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(l, l, l, 1.0));\n}\n" },
+
+    { "id": 10, "typeId": "node.value", "handle": "amount_v", "params": { "value": { "type": "Float", "value": 1.0 } } },
+    { "id": 11, "typeId": "node.value", "handle": "density_v", "params": { "value": { "type": "Float", "value": 260.0 } } },
+    { "id": 12, "typeId": "node.value", "handle": "width_v", "params": { "value": { "type": "Float", "value": 1.5 } } },
+    { "id": 13, "typeId": "node.value", "handle": "z_scale_v", "params": { "value": { "type": "Float", "value": 1.35 } } },
+    { "id": 14, "typeId": "node.value", "handle": "smooth_v", "params": { "value": { "type": "Float", "value": 0.9 } } },
+    { "id": 15, "typeId": "node.value", "handle": "subject_v", "params": { "value": { "type": "Float", "value": 0.5 } } },
+    { "id": 16, "typeId": "node.value", "handle": "blend_v", "params": { "value": { "type": "Float", "value": 6.0 } } },
+    { "id": 17, "typeId": "node.value", "handle": "edge_follow_v", "params": { "value": { "type": "Float", "value": 0.5 } } },
+
+    { "id": 20, "typeId": "node.math", "handle": "ts01_min", "params": { "op": { "type": "Enum", "value": 4 }, "b": { "type": "Float", "value": 1.0 } } },
+    { "id": 21, "typeId": "node.math", "handle": "ts01", "params": { "op": { "type": "Enum", "value": 5 }, "b": { "type": "Float", "value": 0.0 } } },
+
+    { "id": 30, "typeId": "node.math", "handle": "flow_lock_mul", "params": { "op": { "type": "Enum", "value": 2 }, "b": { "type": "Float", "value": 0.225 } } },
+    { "id": 31, "typeId": "node.math", "handle": "flow_lock_strength", "params": { "op": { "type": "Enum", "value": 0 }, "b": { "type": "Float", "value": 0.76 } } },
+
+    { "id": 32, "typeId": "node.math", "handle": "mesh_reg_mul", "params": { "op": { "type": "Enum", "value": 2 }, "b": { "type": "Float", "value": 0.34 } } },
+    { "id": 33, "typeId": "node.math", "handle": "mesh_regularize_strength", "params": { "op": { "type": "Enum", "value": 0 }, "b": { "type": "Float", "value": 0.40 } } },
+
+    { "id": 34, "typeId": "node.math", "handle": "cell_affine_mul", "params": { "op": { "type": "Enum", "value": 2 }, "b": { "type": "Float", "value": 0.48 } } },
+    { "id": 35, "typeId": "node.math", "handle": "cell_affine_strength", "params": { "op": { "type": "Enum", "value": 0 }, "b": { "type": "Float", "value": 0.40 } } },
+
+    { "id": 36, "typeId": "node.math", "handle": "face_warp_mul1", "params": { "op": { "type": "Enum", "value": 2 }, "b": { "type": "Float", "value": 0.65 } } },
+    { "id": 37, "typeId": "node.math", "handle": "face_warp_pre", "params": { "op": { "type": "Enum", "value": 0 }, "b": { "type": "Float", "value": 0.25 } } },
+    { "id": 38, "typeId": "node.math", "handle": "face_warp_strength", "params": { "op": { "type": "Enum", "value": 2 } } },
+
+    { "id": 39, "typeId": "node.math", "handle": "surf_pers_mul", "params": { "op": { "type": "Enum", "value": 2 }, "b": { "type": "Float", "value": 0.185 } } },
+    { "id": 40, "typeId": "node.math", "handle": "surface_persistence", "params": { "op": { "type": "Enum", "value": 0 }, "b": { "type": "Float", "value": 0.80 } } },
+
+    { "id": 41, "typeId": "node.math", "handle": "wire_taa_mul", "params": { "op": { "type": "Enum", "value": 2 }, "b": { "type": "Float", "value": 0.44 } } },
+    { "id": 42, "typeId": "node.math", "handle": "wire_taa", "params": { "op": { "type": "Enum", "value": 0 }, "b": { "type": "Float", "value": 0.48 } } },
+
+    { "id": 50, "typeId": "node.math", "handle": "cut_minus_threshold", "params": { "op": { "type": "Enum", "value": 1 }, "b": { "type": "Float", "value": 0.28 } } },
+    { "id": 51, "typeId": "node.math", "handle": "cut_floor", "params": { "op": { "type": "Enum", "value": 10 } } },
+
+    { "id": 100, "typeId": "node.wgsl_compute", "handle": "mesh_init", "title": "Seed Identity Mesh", "wgslSource": "// Identity-UV writer for the mesh_coord persistent state on first\n// frame and after scene cuts. Mirrors PASS_INIT_MESH_COORD from\n// fx_wireframe_depth_compute.wgsl byte-exact:\n//   RG = (u, v), B = 1.0 (full trust), A = encode_cooldown(0.0) = 0.55.\n// The 0.55 alpha decodes back to 0 cooldown via decode_cooldown so\n// downstream FlowAdvectCoord sees a freshly-recovered tile.\n\nstruct U { _pad0: f32, };\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    _ = u._pad0;\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(uv, 1.0, 0.55));\n}\n" },
+
+    { "id": 101, "typeId": "node.wgsl_compute", "handle": "depth_temporal", "title": "Smooth Depth Over Time", "wgslSource": "// Pass 4 DnnDepthPost, extracted byte-exact from\n// fx_wireframe_depth_compute.wgsl. Mixes the current DNN depth with\n// the previous frame's smoothed depth weighted by temporal_smooth\n// * 0.85 (the 0.85 constant is preserved literally).\n\nstruct U {\n    temporal_smooth: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var current_depth: texture_2d<f32>;\n@group(0) @binding(2) var prev_depth: texture_2d<f32>;\n@group(0) @binding(3) var samp: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    let depth_current = textureSampleLevel(current_depth, samp, uv, 0.0).r;\n    let depth_previous = textureSampleLevel(prev_depth, samp, uv, 0.0).r;\n    let depth_smoothed = mix(depth_current, depth_previous, u.temporal_smooth * 0.85);\n    let depth_value = clamp(depth_smoothed, 0.0, 1.0);\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(depth_value, depth_value, depth_value, 1.0));\n}\n" },
+
+    { "id": 102, "typeId": "node.wgsl_compute", "handle": "semantic_mask", "title": "Body & Face Mask", "wgslSource": "// Pass 10 SemanticMask extracted byte-exact from\n// fx_wireframe_depth_compute.wgsl. Heuristic body / face / boundary\n// detection from luma gradient + depth + flow confidence — NOT a\n// DNN, fast per-pixel evidence fusion. Output channels:\n//   R = body, G = face, B = boundary, A = 1.\n// All thresholds (0.14, 0.64, 0.05, 0.92, 0.32, 0.98, 0.10, 0.70,\n// 0.07, 0.28) preserved literally.\n\nstruct U {\n    texel_x: f32,\n    texel_y: f32,\n    _pad0: f32,\n    _pad1: f32,\n};\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var analysis_tex: texture_2d<f32>;\n@group(0) @binding(2) var depth_tex: texture_2d<f32>;\n@group(0) @binding(3) var flow_tex: texture_2d<f32>;\n@group(0) @binding(4) var samp: sampler;\n@group(0) @binding(5) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    let texel = vec2<f32>(u.texel_x, u.texel_y);\n\n    let lum = textureSampleLevel(analysis_tex, samp, uv, 0.0).r;\n    let depth_val = textureSampleLevel(depth_tex, samp, uv, 0.0).r;\n    let flow = textureSampleLevel(flow_tex, samp, uv, 0.0);\n    let flow_conf = clamp(flow.b * flow.a, 0.0, 1.0);\n\n    let l_l = textureSampleLevel(analysis_tex, samp, uv - vec2<f32>(texel.x, 0.0), 0.0).r;\n    let l_r = textureSampleLevel(analysis_tex, samp, uv + vec2<f32>(texel.x, 0.0), 0.0).r;\n    let l_b = textureSampleLevel(analysis_tex, samp, uv - vec2<f32>(0.0, texel.y), 0.0).r;\n    let l_t = textureSampleLevel(analysis_tex, samp, uv + vec2<f32>(0.0, texel.y), 0.0).r;\n    let grad = sqrt((l_r - l_l) * (l_r - l_l) + (l_t - l_b) * (l_t - l_b));\n\n    var body = smoothstep(0.14, 0.64, flow_conf * 0.92 + (1.0 - depth_val) * 0.16 + grad * 0.20);\n    body = body * smoothstep(0.05, 0.92, 1.0 - abs(lum - 0.5) * 1.4);\n\n    let p_val = (uv - vec2<f32>(0.5)) * vec2<f32>(1.20, 1.55);\n    let center_bias = 1.0 - smoothstep(0.32, 0.98, length(p_val));\n    let face = body * center_bias * smoothstep(0.10, 0.70, (1.0 - depth_val) * 0.35 + flow_conf * 0.65);\n\n    var boundary_val = smoothstep(0.07, 0.28, grad) * body;\n    boundary_val = clamp(boundary_val * (0.6 + (1.0 - face) * 0.4), 0.0, 1.0);\n\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(clamp(body, 0.0, 1.0), clamp(face, 0.0, 1.0), clamp(boundary_val, 0.0, 1.0), 1.0));\n}\n" },
+
+    { "id": 200, "typeId": "node.feedback", "handle": "prev_analysis" },
+    { "id": 201, "typeId": "node.feedback", "handle": "prev_depth" },
+
+    { "id": 999, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "source" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
+
+    { "fromNode": 14, "fromPort": "out", "toNode": 20, "toPort": "a" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 30, "toPort": "a" },
+    { "fromNode": 30, "fromPort": "out", "toNode": 31, "toPort": "a" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 32, "toPort": "a" },
+    { "fromNode": 32, "fromPort": "out", "toNode": 33, "toPort": "a" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 34, "toPort": "a" },
+    { "fromNode": 34, "fromPort": "out", "toNode": 35, "toPort": "a" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 36, "toPort": "a" },
+    { "fromNode": 36, "fromPort": "out", "toNode": 37, "toPort": "a" },
+    { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "a" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 38, "toPort": "b" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 39, "toPort": "a" },
+    { "fromNode": 39, "fromPort": "out", "toNode": 40, "toPort": "a" },
+
+    { "fromNode": 21, "fromPort": "out", "toNode": 41, "toPort": "a" },
+    { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "a" },
+
+    { "fromNode": 2, "fromPort": "cut_score", "toNode": 50, "toPort": "a" },
+    { "fromNode": 50, "fromPort": "out", "toNode": 51, "toPort": "a" },
+    { "fromNode": 51, "fromPort": "out", "toNode": 200, "toPort": "reset_trigger" },
+    { "fromNode": 51, "fromPort": "out", "toNode": 201, "toPort": "reset_trigger" },
+
+    { "fromNode": 14, "fromPort": "out", "toNode": 101, "toPort": "temporal_smooth" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 101, "toPort": "current_depth" },
+    { "fromNode": 201, "fromPort": "out", "toNode": 101, "toPort": "prev_depth" },
+    { "fromNode": 101, "fromPort": "output_tex", "toNode": 201, "toPort": "in" },
+
+    { "fromNode": 4, "fromPort": "output_tex", "toNode": 200, "toPort": "in" },
+
+    { "fromNode": 4, "fromPort": "output_tex", "toNode": 102, "toPort": "analysis_tex" },
+    { "fromNode": 101, "fromPort": "output_tex", "toNode": 102, "toPort": "depth_tex" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 102, "toPort": "flow_tex" },
+
+    { "fromNode": 0, "fromPort": "out", "toNode": 999, "toPort": "in" }
+  ]
+}
