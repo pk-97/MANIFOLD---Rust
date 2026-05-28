@@ -157,6 +157,13 @@ pub mod well_known {
         FLOW_X = "flow_x";
         FLOW_Y = "flow_y";
         VALID  = "valid";
+
+        // ─── Per-pixel mask / coverage (Texture2D channel layouts) ──────
+        // Broadcast SDF / focus / coverage values from a mask generator
+        // to a downstream consumer's R channel. Pair with VALID on alpha
+        // for the standard mask-texture convention.
+        MASK = "mask";
+        DEPTH = "depth";
     }
 }
 

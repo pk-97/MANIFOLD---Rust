@@ -49,7 +49,7 @@ crate::primitive! {
         softness: ScalarF32 optional,
     },
     outputs: {
-        out: Texture2D,
+        out: Texture2D[R: MASK, G: MASK, B: MASK, A: VALID],
     },
     params: [
         ParamDef {
@@ -185,7 +185,7 @@ mod tests {
         }
         assert_eq!(EllipseMask::OUTPUTS.len(), 1);
         assert_eq!(EllipseMask::OUTPUTS[0].name, "out");
-        assert_eq!(EllipseMask::OUTPUTS[0].ty, PortType::Texture2D);
+        assert!(EllipseMask::OUTPUTS[0].ty.is_texture_2d());
     }
 
     #[test]
