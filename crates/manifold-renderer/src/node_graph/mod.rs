@@ -93,6 +93,7 @@ pub use snapshot::{
 };
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{
-    ChannelMismatchInfo, ChannelMismatchReason, GraphError, channels_compatible,
+    ChannelMismatchInfo, ChannelMismatchReason, GraphError, TextureChannelMismatchInfo,
+    TextureChannelMismatchReason, channels_compatible, texture_channels_compatible,
     topological_sort, validate,
 };

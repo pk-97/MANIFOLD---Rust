@@ -8,7 +8,8 @@ use ahash::{AHashMap, AHashSet};
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::ports::{
-    ArrayType, ChannelElementType, ChannelSpec, MatchMode, PortKind, PortType,
+    ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, PortKind, PortType,
+    TextureChannels,
 };
 
 /// Errors produced by graph mutation and validation.
@@ -44,6 +45,19 @@ pub enum GraphError {
     /// through the simpler `PortTypeMismatch` path when they don't
     /// match by size+align.
     ChannelMismatch(Box<ChannelMismatchInfo>),
+    /// Both sides of a [`PortType::Texture2DTyped`] wire declared a
+    /// four-slot Channels signature and the signatures disagree.
+    /// Same shape as [`ChannelMismatch`](Self::ChannelMismatch) for
+    /// the Array case — the boxed payload carries the specific slot
+    /// (R / G / B / A) at which producer and consumer diverged so
+    /// the validator error message can point at exactly the mis-
+    /// labelled texel component. See `docs/CHANNEL_TYPE_SYSTEM.md`
+    /// §17 for the texture-channel extension.
+    ///
+    /// Untyped [`PortType::Texture2D`] on either side is the migration
+    /// back-compat valve and accepts any typed counterparty without
+    /// firing this error; it routes through `port_types_compatible`.
+    TextureChannelMismatch(Box<TextureChannelMismatchInfo>),
     /// A required input has no incoming wire.
     RequiredInputUnwired {
         node: NodeInstanceId,
@@ -127,6 +141,37 @@ pub enum ChannelMismatchReason {
     },
 }
 
+/// Payload for [`GraphError::TextureChannelMismatch`]. Boxed inside
+/// the `GraphError` variant to keep the enum compact (matches the
+/// Array path's [`ChannelMismatchInfo`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextureChannelMismatchInfo {
+    pub from_node: NodeInstanceId,
+    pub from_port: String,
+    pub to_node: NodeInstanceId,
+    pub to_port: String,
+    pub producer_slots: [ChannelName; 4],
+    pub consumer_slots: [ChannelName; 4],
+    pub reason: TextureChannelMismatchReason,
+}
+
+/// Why a [`GraphError::TextureChannelMismatch`] fired. Only one shape
+/// of mismatch is possible (per-slot name divergence) since
+/// [`TextureChannels`](crate::node_graph::ports::TextureChannels) has
+/// a fixed four-slot RGBA layout. Element types are implicit in the
+/// texture format (a validator concern handled separately via
+/// `accepted_input_formats`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextureChannelMismatchReason {
+    /// Channel names differ at a specific slot index. Slot 0 = R,
+    /// 1 = G, 2 = B, 3 = A.
+    SlotNameMismatch {
+        slot: u32,
+        producer_name: Option<&'static str>,
+        consumer_name: Option<&'static str>,
+    },
+}
+
 impl std::fmt::Display for GraphError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -189,6 +234,45 @@ impl std::fmt::Display for GraphError {
                         f,
                         "  Mismatch at index {index}: producer element type {producer_type:?} \
                          != consumer element type {consumer_type:?}."
+                    ),
+                }
+            }
+            Self::TextureChannelMismatch(info) => {
+                writeln!(
+                    f,
+                    "Texture-channels mismatch in wire {:?}.{} -> {:?}.{}:",
+                    info.from_node, info.from_port, info.to_node, info.to_port
+                )?;
+                writeln!(
+                    f,
+                    "  Producer: {}",
+                    format_texture_channels_signature(&info.producer_slots)
+                )?;
+                writeln!(
+                    f,
+                    "  Consumer: {}",
+                    format_texture_channels_signature(&info.consumer_slots)
+                )?;
+                match &info.reason {
+                    TextureChannelMismatchReason::SlotNameMismatch {
+                        slot,
+                        producer_name,
+                        consumer_name,
+                    } => write!(
+                        f,
+                        "  Mismatch at slot {} ({}): producer `{}` != consumer `{}`. \
+                         Align both sides to the same canonical name from \
+                         `well_known::*`, or relabel the producer's WGSL to match.",
+                        slot,
+                        match slot {
+                            0 => "R",
+                            1 => "G",
+                            2 => "B",
+                            3 => "A",
+                            _ => "?",
+                        },
+                        producer_name.unwrap_or("<unknown>"),
+                        consumer_name.unwrap_or("<unknown>"),
                     ),
                 }
             }
@@ -344,6 +428,27 @@ pub(super) fn validate_wire_endpoints(
         }
         // Channels-compatible: skip the legacy check; the wire is
         // already validated.
+    } else if let (PortType::Texture2DTyped(producer), PortType::Texture2DTyped(consumer)) =
+        (from_port.ty, to_port.ty)
+    {
+        // Typed-vs-typed Texture2D: enforce exact per-slot match. An
+        // untyped Texture2D on either side is the back-compat valve
+        // and routes through `port_types_compatible` below. See
+        // `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+        if let Err(reason) = texture_channels_compatible(producer, consumer) {
+            return Err(GraphError::TextureChannelMismatch(Box::new(
+                TextureChannelMismatchInfo {
+                    from_node: from.0,
+                    from_port: from.1.to_string(),
+                    to_node: to.0,
+                    to_port: to.1.to_string(),
+                    producer_slots: producer.slots,
+                    consumer_slots: consumer.slots,
+                    reason,
+                },
+            )));
+        }
+        // Slot-by-slot match: validated; skip the legacy check.
     } else if !port_types_compatible(from_port.ty, to_port.ty) {
         return Err(GraphError::PortTypeMismatch {
             from: from_port.ty,
@@ -418,6 +523,56 @@ pub fn channels_compatible(
     }
 }
 
+/// Channels-aware compatibility check for two typed Texture2D endpoints.
+///
+/// Runs when both producer and consumer carry a
+/// [`PortType::Texture2DTyped`] signature. Returns `Ok(())` on exact
+/// per-slot match; on disagreement returns the specific slot index so
+/// the validator can produce an error pointing at exactly the RGBA
+/// component that diverged.
+///
+/// No `MatchMode` distinction (unlike the Array path) — typed texture
+/// ports always match exactly. The back-compat valve for untyped
+/// [`PortType::Texture2D`] runs in `port_types_compatible` instead.
+/// See `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+pub fn texture_channels_compatible(
+    producer: TextureChannels,
+    consumer: TextureChannels,
+) -> Result<(), TextureChannelMismatchReason> {
+    for (i, (p, c)) in producer.slots.iter().zip(consumer.slots.iter()).enumerate() {
+        if p != c {
+            return Err(TextureChannelMismatchReason::SlotNameMismatch {
+                slot: i as u32,
+                producer_name: p.debug_name(),
+                consumer_name: c.debug_name(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Render a four-slot texture-channel signature as a single-line
+/// `Texture2D[R: name, G: name, B: name, A: name]` string for error
+/// messages.
+fn format_texture_channels_signature(slots: &[ChannelName; 4]) -> String {
+    let labels = ["R", "G", "B", "A"];
+    let mut out = String::from("Texture2D[");
+    for (i, (slot, label)) in slots.iter().zip(labels.iter()).enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(label);
+        out.push_str(": ");
+        let name = slot
+            .debug_name()
+            .map(String::from)
+            .unwrap_or_else(|| format!("{:#018x}", slot.hash()));
+        out.push_str(&name);
+    }
+    out.push(']');
+    out
+}
+
 /// Render a Channels signature as a single-line `Channels[name: Type, ...]`
 /// string for error messages.
 fn format_channels_signature(specs: &[ChannelSpec]) -> String {
@@ -475,6 +630,20 @@ fn format_channels_signature(specs: &[ChannelSpec]) -> String {
 /// transform first.
 fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if from == to {
+        return true;
+    }
+    // Texture2D back-compat valve for the §17 migration: an untyped
+    // `Texture2D` on either side accepts any `Texture2DTyped`
+    // counterparty (the producer hasn't declared a signature yet, or
+    // the consumer hasn't migrated). When BOTH sides are typed and
+    // diverge, the earlier `validate_wire_endpoints` block has
+    // already surfaced the slot-level diff as a
+    // `TextureChannelMismatch` and we don't reach here.
+    if matches!(
+        (from, to),
+        (PortType::Texture2D, PortType::Texture2DTyped(_))
+            | (PortType::Texture2DTyped(_), PortType::Texture2D)
+    ) {
         return true;
     }
     if let (PortType::Array(a), PortType::Array(b)) = (from, to)
@@ -1115,6 +1284,7 @@ mod tests {
             GraphError::PortFormatMismatch { .. } => "PortFormatMismatch",
             GraphError::ConditionalRequirementUnmet { .. } => "ConditionalRequirementUnmet",
             GraphError::ChannelMismatch(_) => "ChannelMismatch",
+            GraphError::TextureChannelMismatch(_) => "TextureChannelMismatch",
         }
     }
 
@@ -1984,6 +2154,177 @@ mod tests {
                     }),
                     true,
                 )],
+                vec![],
+            )));
+            assert!(g.connect((src, "out"), (dst, "in")).is_ok());
+        }
+
+        // ─── §17: Texture2D channel-signature validator tests ────────
+
+        use crate::node_graph::ports::TextureChannels;
+
+        #[test]
+        fn texture_channels_compatible_accepts_identical_signatures() {
+            let producer = TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            );
+            let consumer = TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            );
+            assert!(texture_channels_compatible(producer, consumer).is_ok());
+        }
+
+        #[test]
+        fn texture_channels_compatible_reports_first_diverging_slot() {
+            // Watercolor convention (R=flow_x, G=confidence, B=flow_y, A=valid)
+            // vs MiDaS convention (R=flow_x, G=flow_y, B=confidence, A=valid)
+            // — the exact bug class the §17 extension is designed to catch.
+            let watercolor = TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            );
+            let midas = TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::FLOW_Y,
+                well_known::CONFIDENCE,
+                well_known::VALID,
+            );
+            match texture_channels_compatible(watercolor, midas) {
+                Err(TextureChannelMismatchReason::SlotNameMismatch {
+                    slot,
+                    producer_name,
+                    consumer_name,
+                }) => {
+                    // First diverging slot is G (index 1).
+                    assert_eq!(slot, 1);
+                    assert_eq!(producer_name, Some("confidence"));
+                    assert_eq!(consumer_name, Some("flow_y"));
+                }
+                other => panic!("expected SlotNameMismatch at G, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn typed_texture_into_typed_texture_routes_through_texture_channel_mismatch() {
+            // End-to-end through the validator: two typed Texture2D
+            // endpoints whose signatures diverge surface as a
+            // structured TextureChannelMismatch, not a generic
+            // PortTypeMismatch.
+            let producer_ty = PortType::Texture2DTyped(TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            ));
+            let consumer_ty = PortType::Texture2DTyped(TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::FLOW_Y,
+                well_known::CONFIDENCE,
+                well_known::VALID,
+            ));
+
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "watercolor_producer",
+                vec![],
+                vec![output("out", producer_ty)],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "midas_consumer",
+                vec![input("in", consumer_ty, true)],
+                vec![],
+            )));
+
+            match g.connect((src, "out"), (dst, "in")) {
+                Err(GraphError::TextureChannelMismatch(info)) => {
+                    match info.reason {
+                        TextureChannelMismatchReason::SlotNameMismatch {
+                            slot, ..
+                        } => assert_eq!(slot, 1, "first divergence at G slot"),
+                    }
+                }
+                other => panic!("expected TextureChannelMismatch, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn untyped_texture_into_typed_texture_accepts_via_back_compat_valve() {
+            // The migration valve: an untyped Texture2D producer (a
+            // primitive that hasn't migrated yet) wires into a typed
+            // Texture2DTyped consumer unconditionally. Same in the
+            // opposite direction.
+            let typed_ty = PortType::Texture2DTyped(TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            ));
+
+            // Untyped producer → typed consumer.
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "legacy_producer",
+                vec![],
+                vec![output("out", PortType::Texture2D)],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "typed_consumer",
+                vec![input("in", typed_ty, true)],
+                vec![],
+            )));
+            assert!(
+                g.connect((src, "out"), (dst, "in")).is_ok(),
+                "untyped producer must connect to typed consumer (back-compat valve)"
+            );
+
+            // Typed producer → untyped consumer.
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "typed_producer",
+                vec![],
+                vec![output("out", typed_ty)],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "legacy_consumer",
+                vec![input("in", PortType::Texture2D, true)],
+                vec![],
+            )));
+            assert!(
+                g.connect((src, "out"), (dst, "in")).is_ok(),
+                "typed producer must connect to untyped consumer (back-compat valve)"
+            );
+        }
+
+        #[test]
+        fn typed_matching_signatures_connect_without_error() {
+            // Sanity counterpart: two typed endpoints with the same
+            // signature connect cleanly (no PortTypeMismatch falling
+            // out of Eq-based equality through derive).
+            let signature = TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            );
+            let port_ty = PortType::Texture2DTyped(signature);
+
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "typed_producer",
+                vec![],
+                vec![output("out", port_ty)],
+            )));
+            let dst = g.add_node(Box::new(TestNode::new(
+                "typed_consumer",
+                vec![input("in", port_ty, true)],
                 vec![],
             )));
             assert!(g.connect((src, "out"), (dst, "in")).is_ok());
