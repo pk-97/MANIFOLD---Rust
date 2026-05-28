@@ -137,6 +137,11 @@
       "id": 2,
       "typeId": "system.final_output",
       "handle": "final_output"
+    },
+    {
+      "id": 3,
+      "typeId": "system.generator_input",
+      "handle": "input"
     }
   ],
   "wires": [
@@ -145,6 +150,12 @@
       "fromPort": "out",
       "toNode": 1,
       "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "beat",
+      "toNode": 1,
+      "toPort": "beat"
     },
     {
       "fromNode": 1,

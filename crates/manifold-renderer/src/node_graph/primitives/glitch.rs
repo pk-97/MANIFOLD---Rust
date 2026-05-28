@@ -21,6 +21,7 @@ crate::primitive! {
     purpose: "Composite glitch: block displacement, scanline jitter, RGB channel split, and per-block invert. Time-driven; the `time` and `speed` inputs together set the rate at which the random hash advances.",
     inputs: {
         in: Texture2D required,
+        time: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -100,7 +101,14 @@ impl Primitive for Glitch {
         let rgb_shift = read_f32(ctx, "rgb_shift", 0.01);
         let scanline = read_f32(ctx, "scanline", 0.3);
         let speed = read_f32(ctx, "speed", 2.0);
-        let time = read_f32(ctx, "time", 0.0);
+        // Port-shadows-param: wire wins when present, param is the
+        // fallback. Lets a preset wire `system.generator_input.time`
+        // into this port — same surface every other ctx-driven
+        // primitive uses.
+        let time = match ctx.inputs.scalar("time") {
+            Some(ParamValue::Float(f)) => f,
+            _ => read_f32(ctx, "time", 0.0),
+        };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;

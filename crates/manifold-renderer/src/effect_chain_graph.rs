@@ -221,19 +221,6 @@ struct EffectSlot {
     /// binding list before applying.
     user_bindings_version: u32,
     binding_cache: LastAppliedCache,
-    /// Where to apply ctx-driven params (time / beat). The first
-    /// handle for now — composite effects with multiple ctx-driven
-    /// workers will need a richer resolution rule when we get there.
-    ///
-    /// **Deprecation path**: this is the hardcoded `apply_ctx_params_at`
-    /// hook used by the four legacy effects (Glitch / Strobe /
-    /// Watercolor / VoronoiPrism) that take `time` / `beat` directly
-    /// on a primitive param. New presets should include a
-    /// `system.generator_input` node in their JSON and wire its
-    /// scalar outputs through the standard port-shadows-param
-    /// machinery — that path runs via [`Self::generator_input_node`]
-    /// below and is the long-term replacement for `ctx_target_node`.
-    ctx_target_node: Option<NodeInstanceId>,
     /// Effect-side `system.generator_input` node id, if the preset
     /// included one. Effects with a generator_input get per-frame
     /// scalars (time / beat / aspect / output dims) pushed to this
@@ -241,6 +228,12 @@ struct EffectSlot {
     /// to inner primitives — the same surface generators have.
     /// Lets effects react to project BPM, beat phase, output
     /// resolution, etc., without any per-effect Rust code.
+    ///
+    /// Every shipping effect that needs frame-context scalars uses this
+    /// surface now (Glitch / Strobe / Watercolor / VoronoiPrism
+    /// migrated 2026-05-28; see commits below). The previous
+    /// `ctx_target_node` field + `apply_ctx_params_at` hardcoded match
+    /// were deleted in the same change.
     generator_input_node: Option<NodeInstanceId>,
 }
 
@@ -475,7 +468,6 @@ impl ChainGraph {
             // symmetric user-binding default-seed gap.
             apply_binding_defaults(&bindings, &mut graph, None);
             let user_bindings_version = fx.user_param_bindings_version;
-            let ctx_target_node = handles.first().map(|(_, id)| *id);
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
@@ -486,7 +478,6 @@ impl ChainGraph {
                 n_static_slots,
                 user_bindings_version,
                 binding_cache,
-                ctx_target_node,
                 generator_input_node: generator_input_id,
             });
             prev_node = output.0;
@@ -697,26 +688,14 @@ impl ChainGraph {
                 &fx.param_values,
                 &mut slot.binding_cache,
             );
-            if let Some(node) = slot.ctx_target_node {
-                apply_ctx_params_at(
-                    &mut self.graph,
-                    node,
-                    &slot.effect_type,
-                    ctx.time,
-                    ctx.beat,
-                );
-            }
-            // New surface: if the preset includes a `system.generator_input`
-            // node, push every frame-context scalar (time / beat / aspect
-            // / output dims) into its params. The standard port-shadows-
+            // If the preset includes a `system.generator_input` node,
+            // push every frame-context scalar (time / beat / aspect /
+            // output dims) into its params. The standard port-shadows-
             // param machinery propagates these to inner primitives via
             // scalar wires — same surface generators have, no per-effect
-            // Rust code. Effects opt in by wiring `system.generator_input`
-            // outputs in their JSON; the four legacy effects on
-            // `ctx_target_node` migrate to this path one preset at a time.
-            // `trigger_count` / `anim_progress` are clip-side concepts
-            // that don't reach the effect chain — they stay at the
-            // generator_input primitive's default (0.0).
+            // Rust code. `trigger_count` / `anim_progress` are clip-side
+            // concepts that don't reach the effect chain — they stay at
+            // the generator_input primitive's default (0.0).
             if let Some(node) = slot.generator_input_node {
                 let aspect = if ctx.height > 0 {
                     ctx.width as f32 / ctx.height as f32
@@ -819,28 +798,6 @@ impl ChainGraph {
             }
         }
         self.state_store.cleanup_all();
-    }
-}
-
-/// Inject ctx-derived primitive-only params (`time` / `beat`) onto the
-/// effect's `ctx_target_node`. A handful of primitives — Glitch,
-/// Strobe, VoronoiPrism, Watercolor — expose these as regular params
-/// that the splice runtime fills from the per-frame `EffectContext`
-/// each frame so their shaders see the same clock the legacy path did.
-fn apply_ctx_params_at(
-    graph: &mut Graph,
-    node_id: NodeInstanceId,
-    effect_type: &EffectTypeId,
-    time: f32,
-    beat: f32,
-) {
-    let mut set = |name: &'static str, value: ParamValue| {
-        let _ = graph.set_param(node_id, name, value);
-    };
-    match effect_type.as_str() {
-        "Glitch" | "Watercolor" => set("time", ParamValue::Float(time)),
-        "Strobe" | "VoronoiPrism" => set("beat", ParamValue::Float(beat)),
-        _ => {}
     }
 }
 

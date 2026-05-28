@@ -21,6 +21,7 @@ crate::primitive! {
     purpose: "Per-cell UV remapping with beat-synchronized pop-in. Each Voronoi cell samples a hash-offset source UV and fades on at the start of each beat; ~40% of cells go dark each beat for a flicker pattern.",
     inputs: {
         in: Texture2D required,
+        beat: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -80,7 +81,13 @@ impl Primitive for VoronoiPrism {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let amount = read_f32(ctx, "amount", 0.0);
         let cell_count = read_f32(ctx, "cell_count", 16.0);
-        let beat = read_f32(ctx, "beat", 0.0);
+        // Port-shadows-param: wire wins, param is the fallback. Lets a
+        // preset wire `system.generator_input.beat` into this port —
+        // replaces the hardcoded `apply_ctx_params_at` injection.
+        let beat = match ctx.inputs.scalar("beat") {
+            Some(ParamValue::Float(f)) => f,
+            _ => read_f32(ctx, "beat", 0.0),
+        };
         let source_width = read_f32(ctx, "source_width", 0.5625);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {

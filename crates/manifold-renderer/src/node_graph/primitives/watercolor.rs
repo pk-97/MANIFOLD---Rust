@@ -29,7 +29,7 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, G
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::node_graph::primitive::PrimitiveDescription;
 use crate::render_target::RenderTarget;
 
@@ -192,12 +192,24 @@ impl Default for Watercolor {
     }
 }
 
-const WATERCOLOR_INPUTS: [NodeInput; 1] = [NodePort {
-    name: "in",
-    ty: PortType::Texture2D,
-    kind: PortKind::Input,
-    required: true,
-}];
+const WATERCOLOR_INPUTS: [NodeInput; 2] = [
+    NodePort {
+        name: "in",
+        ty: PortType::Texture2D,
+        kind: PortKind::Input,
+        required: true,
+    },
+    // Port-shadows-param for the `time` param. Wire wins, param is the
+    // fallback. Lets a preset wire `system.generator_input.time` into
+    // this port — replaces the hardcoded `apply_ctx_params_at` time
+    // injection on the chain runner.
+    NodePort {
+        name: "time",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Input,
+        required: false,
+    },
+];
 
 const WATERCOLOR_OUTPUTS: [NodeOutput; 1] = [NodePort {
     name: "out",
@@ -295,7 +307,13 @@ impl EffectNode for Watercolor {
         let displace_weight = read_f32(ctx, "displace", 0.001).clamp(0.0001, 0.01);
         let blur_radius = read_f32(ctx, "blur", 2.0).clamp(0.5, 8.0);
         let decay = read_f32(ctx, "decay", 0.99).clamp(0.9, 1.0);
-        let time = read_f32(ctx, "time", 0.0);
+        // Port-shadows-param: wire wins, param is the fallback. Lets a
+        // preset wire `system.generator_input.time` into this port —
+        // replaces the hardcoded `apply_ctx_params_at` injection.
+        let time = match ctx.inputs.scalar("time") {
+            Some(ParamValue::Float(f)) => f,
+            _ => read_f32(ctx, "time", 0.0),
+        };
 
         let Some(source) = ctx.inputs.texture_2d("in") else {
             return;

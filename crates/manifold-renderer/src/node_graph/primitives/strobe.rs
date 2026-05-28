@@ -39,6 +39,7 @@ crate::primitive! {
     purpose: "Beat-synced square wave flash. Three modes: Opacity (flash to black), White (flash to white), Gain (3× brightness when on). Rate is a musical note division.",
     inputs: {
         in: Texture2D required,
+        beat: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -112,7 +113,14 @@ impl Primitive for Strobe {
             Some(ParamValue::Float(f)) => (f.round() as u32).min(2),
             _ => 0,
         };
-        let beat = read_f32(ctx, "beat", 0.0);
+        // Port-shadows-param: wire wins when present, param is the
+        // fallback. Lets a preset wire `system.generator_input.beat`
+        // into this port — replaces the hardcoded
+        // `apply_ctx_params_at` injection from the chain runner.
+        let beat = match ctx.inputs.scalar("beat") {
+            Some(ParamValue::Float(f)) => f,
+            _ => read_f32(ctx, "beat", 0.0),
+        };
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
