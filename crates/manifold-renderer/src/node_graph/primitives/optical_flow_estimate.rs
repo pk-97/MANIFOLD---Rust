@@ -44,6 +44,12 @@ struct FlowResponse {
     /// length = width * height * 4. None on first frame (no prev),
     /// model failure, or invalid dims.
     flow_packed: Option<Vec<f32>>,
+    /// Global-motion-compensated frame-difference score from the
+    /// FFI worker. Crosses ~0.28 on hard scene cuts; near zero on
+    /// continuous motion. Used downstream to gate state resets in
+    /// any stateful primitive (wire cut_score → node.filter →
+    /// reset_trigger). Zero when flow_packed is None.
+    cut_score: f32,
 }
 
 struct FlowState {
@@ -57,17 +63,22 @@ struct FlowState {
     flow_texture: GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
+    /// Latest cut_score from the FFI worker. Held here so the
+    /// scalar output port can re-emit it every frame, including on
+    /// frames when no new inference completed.
+    cut_score: f32,
 }
 
 crate::primitive! {
     name: OpticalFlowEstimate,
     type_id: "node.optical_flow_estimate",
-    purpose: "Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. Wraps FfiDepthEstimator::compute_flow on a background worker that holds the previous frame internally and pairs it with the current. Input: any Texture2D. Output: Rgba16Float flow map with R=flow_x, G=confidence, B=flow_y, A=valid_mask. R/B layout matches node.flow_field_noise and node.uv_displace_by_flow so this composes directly into displacement pipelines.",
+    purpose: "Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. Wraps FfiDepthEstimator::compute_flow on a background worker that holds the previous frame internally and pairs it with the current. Input: any Texture2D. Outputs: (a) Rgba16Float flow map with R=flow_x, G=confidence, B=flow_y, A=valid_mask (R/B layout matches node.flow_field_noise and node.uv_displace_by_flow); (b) scalar cut_score — global-motion-compensated frame-difference, crosses ~0.28 on hard scene cuts, near zero on continuous motion.",
     inputs: {
         in: Texture2D required,
     },
     outputs: {
         out: Texture2D,
+        cut_score: ScalarF32,
     },
     params: [
         ParamDef {
@@ -87,7 +98,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Wire output → node.uv_displace_by_flow.flow to advect a source by per-pixel motion (background → particles-along-flow effects, motion-blur-style trails). Wire G channel through node.channel_mix to use confidence as a mask. Until two frames have been inferenced, output is black. If the native plugin is unavailable, primitive logs a warning once and outputs black.",
+    composition_notes: "Wire `out` → node.uv_displace_by_flow.flow to advect a source by per-pixel motion (background → particles-along-flow effects, motion-blur-style trails). Wire G channel through node.channel_mix to use confidence as a mask. Wire `cut_score` → node.filter (threshold ~0.28) → reset_trigger on any downstream stateful primitive to clear frame-to-frame state on hard scene cuts. Until two frames have been inferenced, both outputs are zero. If the native plugin is unavailable, primitive logs a warning once and outputs zero/black.",
     examples: [],
     picker: { label: "Optical Flow", category: Atom },
     extra_fields: {
@@ -113,12 +124,18 @@ impl OpticalFlowEstimate {
                 let pc = (req.width * req.height) as usize;
                 let expected_bytes = pc * 4;
                 if req.pixel_data.len() != expected_bytes {
-                    return FlowResponse { flow_packed: None };
+                    return FlowResponse {
+                        flow_packed: None,
+                        cut_score: 0.0,
+                    };
                 }
                 let curr = req.pixel_data;
                 let Some(prev) = prev_frame.replace(curr.clone()) else {
                     // First frame: no prev yet, nothing to compute.
-                    return FlowResponse { flow_packed: None };
+                    return FlowResponse {
+                        flow_packed: None,
+                        cut_score: 0.0,
+                    };
                 };
                 let mut flow = vec![0f32; pc * 4];
                 let mut cut_score = [0f32; 1];
@@ -132,8 +149,16 @@ impl OpticalFlowEstimate {
                     req.height,
                     &mut cut_score,
                 );
-                FlowResponse {
-                    flow_packed: if ok != 0 { Some(flow) } else { None },
+                if ok != 0 {
+                    FlowResponse {
+                        flow_packed: Some(flow),
+                        cut_score: cut_score[0],
+                    }
+                } else {
+                    FlowResponse {
+                        flow_packed: None,
+                        cut_score: 0.0,
+                    }
                 }
             })
         });
@@ -189,6 +214,7 @@ impl OpticalFlowEstimate {
             flow_texture,
             last_request_frame: -1024,
             frame_counter: 0,
+            cut_score: 0.0,
         });
     }
 }
@@ -216,6 +242,14 @@ fn pack_f32x4_to_rgba16f_bytes(src: &[f32], pixel_count: usize) -> Vec<u8> {
 
 impl Primitive for OpticalFlowEstimate {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Always emit cut_score on its scalar port — zero before the
+        // first inference completes, latest worker value after. Done
+        // before any early-returns so downstream consumers see a
+        // usable value even on frames where the texture path is unwired.
+        let cut_score = self.flow_state.as_ref().map(|s| s.cut_score).unwrap_or(0.0);
+        ctx.outputs
+            .set_scalar("cut_score", ParamValue::Float(cut_score));
+
         let analysis_max_dim = match ctx.params.get("analysis_max_dim") {
             Some(ParamValue::Float(i)) => i.round().max(64_f32) as u32,
             _ => 360,
@@ -254,12 +288,17 @@ impl Primitive for OpticalFlowEstimate {
             }
 
             // Poll worker result → mark flow_dirty.
-            if let Some(response) = fw.try_recv()
-                && let Some(buf) = response.flow_packed
-            {
-                fs.flow_buffer = buf;
-                fs.has_flow = true;
-                fs.flow_dirty = true;
+            if let Some(response) = fw.try_recv() {
+                // cut_score is updated whether or not flow_packed
+                // succeeded — a failed inference legitimately means
+                // "no cut signal this frame," and zero is the right
+                // value for downstream gating.
+                fs.cut_score = response.cut_score;
+                if let Some(buf) = response.flow_packed {
+                    fs.flow_buffer = buf;
+                    fs.has_flow = true;
+                    fs.flow_dirty = true;
+                }
             }
 
             // Upload latest flow buffer → analysis-resolution texture.
@@ -357,15 +396,20 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn optical_flow_estimate_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
+    fn optical_flow_estimate_declares_one_input_and_two_outputs() {
+        use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(OpticalFlowEstimate::TYPE_ID, "node.optical_flow_estimate");
         assert_eq!(OpticalFlowEstimate::INPUTS.len(), 1);
         assert_eq!(OpticalFlowEstimate::INPUTS[0].name, "in");
         assert_eq!(OpticalFlowEstimate::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(OpticalFlowEstimate::OUTPUTS.len(), 1);
+        assert_eq!(OpticalFlowEstimate::OUTPUTS.len(), 2);
         assert_eq!(OpticalFlowEstimate::OUTPUTS[0].name, "out");
         assert_eq!(OpticalFlowEstimate::OUTPUTS[0].ty, PortType::Texture2D);
+        assert_eq!(OpticalFlowEstimate::OUTPUTS[1].name, "cut_score");
+        assert_eq!(
+            OpticalFlowEstimate::OUTPUTS[1].ty,
+            PortType::Scalar(ScalarType::F32)
+        );
     }
 
     #[test]
