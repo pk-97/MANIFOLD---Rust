@@ -168,6 +168,125 @@ pub struct ChainGraph {
     /// on the store so seek / project-load paths reset both styles
     /// of stateful primitive uniformly.
     state_store: StateStore,
+    /// Structured error log accumulated during `try_build` and the
+    /// per-frame `run`. Each variant carries enough context
+    /// (effect_id / effect_type / binding identity / node handle) for
+    /// a future editor surface to attach the error to the affected
+    /// effect card and inner node. Today this is consumed by tests
+    /// and `errors()` for any host code that wants to surface them;
+    /// the terminal log is the immediate user-visible benefit, written
+    /// with the consistent `[chain-error]` prefix so logs grep
+    /// cleanly.
+    errors: Vec<ChainError>,
+}
+
+/// Structured error variants the chain runner produces. Every variant
+/// carries the affected effect's identity so the future editor surface
+/// can highlight the right card / node. Today this drives the
+/// consistent `[chain-error]` terminal log; tomorrow it's the data
+/// the editor reads via [`ChainGraph::errors`].
+#[derive(Debug, Clone)]
+pub enum ChainError {
+    /// A per-instance divergent graph failed to splice; the chain
+    /// fell back to the canonical preset. Most often caused by a
+    /// stale handle reference after a primitive rename, or a
+    /// type-id that no longer exists.
+    DivergentGraphFellBack {
+        effect_id: EffectId,
+        effect_type: EffectTypeId,
+    },
+    /// A spec-level `ParamBinding` references a handle the splice
+    /// didn't register. The binding silently doesn't apply — the
+    /// outer-card slider exists but writes go nowhere. Usually the
+    /// preset JSON's `bindings[].target.handle` was renamed without
+    /// updating the inner node's handle.
+    StaticBindingHandleMissing {
+        effect_type: EffectTypeId,
+        binding_id: String,
+    },
+    /// A user-exposed param binding (the editor's "expose to card")
+    /// couldn't resolve. `rehydrate=false` means it failed at build
+    /// time; `rehydrate=true` means it failed when the user toggled
+    /// an exposure mid-show.
+    UserBindingResolveFailed {
+        effect_id: EffectId,
+        effect_type: EffectTypeId,
+        binding_id: String,
+        node_handle: String,
+        inner_param: String,
+        rehydrate: bool,
+    },
+    /// Pre-allocation failed for the whole chain — re-emitted from
+    /// [`crate::node_graph::PreAllocationError`] so the chain-level
+    /// error log carries it too. The chain build returned `None`
+    /// and the operator sees the layer as a black passthrough.
+    PreAllocationFailed { reason: String },
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DivergentGraphFellBack {
+                effect_id,
+                effect_type,
+            } => write!(
+                f,
+                "{} (id={}): divergent graph failed to splice — fell back to canonical preset",
+                effect_type.as_str(),
+                effect_id.as_str(),
+            ),
+            Self::StaticBindingHandleMissing {
+                effect_type,
+                binding_id,
+            } => write!(
+                f,
+                "{}: ParamBinding `{}` references a handle the splice did not register; \
+                 this binding will not apply",
+                effect_type.as_str(),
+                binding_id,
+            ),
+            Self::UserBindingResolveFailed {
+                effect_type,
+                binding_id,
+                node_handle,
+                inner_param,
+                rehydrate,
+                ..
+            } => {
+                let when = if *rehydrate {
+                    "on rehydrate"
+                } else {
+                    "at build time"
+                };
+                write!(
+                    f,
+                    "{}: UserParamBinding `{}` could not resolve {when} \
+                     (node_handle=`{}`, inner_param=`{}`); slider will not apply \
+                     until the binding re-points to a live target",
+                    effect_type.as_str(),
+                    binding_id,
+                    node_handle,
+                    inner_param,
+                )
+            }
+            Self::PreAllocationFailed { reason } => write!(
+                f,
+                "resource pre-allocation failed: {reason}. Chain build returned None; \
+                 operator will see the affected layer go black"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ChainError {}
+
+/// Push a [`ChainError`] onto an accumulator and emit one consistent
+/// `[chain-error]` line. Replaces the scattered `eprintln!` calls that
+/// previously lacked structure — same data lands in the log, plus
+/// it's now reachable through [`ChainGraph::errors`] for the editor.
+fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
+    eprintln!("[chain-error] {err}");
+    errors.push(err);
 }
 
 struct EffectSlot {
@@ -307,6 +426,11 @@ impl ChainGraph {
         let source_node = graph.add_node(Box::new(Source::new()));
         let mut effect_nodes: Vec<EffectSlot> = Vec::with_capacity(active_effects.len());
         let mut group_mix_nodes: Vec<(EffectGroupId, NodeInstanceId)> = Vec::new();
+        // Structured error accumulator. Moves into `ChainGraph::errors`
+        // at the end of this function; mid-build failures push here so
+        // the editor (and the consistent `[chain-error]` terminal log)
+        // can show them tied to the affected effect.
+        let mut errors: Vec<ChainError> = Vec::new();
 
         let mut prev_node: NodeInstanceId = source_node;
         let mut prev_out_port: &'static str = "out";
@@ -386,10 +510,12 @@ impl ChainGraph {
                 ) {
                     Some(r) => r,
                     None => {
-                        eprintln!(
-                            "[chain-graph] {} divergent graph failed to splice; \
-                             falling back to canonical preset.",
-                            fx.effect_type().as_str()
+                        record_chain_error(
+                            &mut errors,
+                            ChainError::DivergentGraphFellBack {
+                                effect_id: fx.id.clone(),
+                                effect_type: fx.effect_type().clone(),
+                            },
                         );
                         splice_def_into_chain(
                             &mut graph,
@@ -432,11 +558,12 @@ impl ChainGraph {
             for (static_view_slot, b) in view.bindings.iter().enumerate() {
                 match ResolvedBinding::from_static(b, &handles, static_view_slot) {
                     Some(rb) => bindings.push(rb),
-                    None => eprintln!(
-                        "[chain-graph] {}: ParamBinding `{}` references handle that splice \
-                         did not register; this binding will not apply.",
-                        view.type_id.as_str(),
-                        b.id,
+                    None => record_chain_error(
+                        &mut errors,
+                        ChainError::StaticBindingHandleMissing {
+                            effect_type: view.type_id.clone(),
+                            binding_id: b.id.to_string(),
+                        },
                     ),
                 }
             }
@@ -446,14 +573,16 @@ impl ChainGraph {
                 let source_index = n_static_slots + user_slot;
                 match ResolvedBinding::from_user(core, &graph, &handles, source_index) {
                     Some(rb) => bindings.push(rb),
-                    None => eprintln!(
-                        "[chain-graph] {}: UserParamBinding `{}` could not resolve \
-                         (node_handle=`{}`, inner_param=`{}`); slider will not apply \
-                         until the binding re-points to a live target.",
-                        fx.effect_type().as_str(),
-                        core.id,
-                        core.node_handle,
-                        core.inner_param,
+                    None => record_chain_error(
+                        &mut errors,
+                        ChainError::UserBindingResolveFailed {
+                            effect_id: fx.id.clone(),
+                            effect_type: fx.effect_type().clone(),
+                            binding_id: core.id.clone(),
+                            node_handle: core.node_handle.clone(),
+                            inner_param: core.inner_param.clone(),
+                            rehydrate: false,
+                        },
                     ),
                 }
             }
@@ -563,10 +692,16 @@ impl ChainGraph {
         if let Err(e) =
             crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
         {
-            log::warn!(
-                "[chain-graph] resource pre-allocation failed: {e}. \
-                 Chain build returns None — operator will see the affected layer go black."
+            record_chain_error(
+                &mut errors,
+                ChainError::PreAllocationFailed {
+                    reason: e.to_string(),
+                },
             );
+            // Pre-allocation failure is fatal for the chain — we still
+            // return None, but the structured error is now reachable
+            // by any host that wants to surface it (today via the
+            // terminal `[chain-error]` log; tomorrow the editor).
             return None;
         }
 
@@ -584,7 +719,16 @@ impl ChainGraph {
             height,
             topology_hash,
             state_store: StateStore::new(),
+            errors,
         })
+    }
+
+    /// Structured errors produced by `try_build` and per-frame `run`.
+    /// Each entry carries the affected effect's identity so the
+    /// editor can attach the error to the right card. Empty when the
+    /// chain built and ran cleanly.
+    pub fn errors(&self) -> &[ChainError] {
+        &self.errors
     }
 
     /// Compare a cached graph's topology hash to the current chain's.
@@ -661,11 +805,16 @@ impl ChainGraph {
                         source_index,
                     ) {
                         Some(rb) => slot.bindings.push(rb),
-                        None => eprintln!(
-                            "[chain-graph] {}: UserParamBinding `{}` could not resolve \
-                             on rehydrate; slider will not apply until rebound.",
-                            slot.effect_type.as_str(),
-                            core.id,
+                        None => record_chain_error(
+                            &mut self.errors,
+                            ChainError::UserBindingResolveFailed {
+                                effect_id: fx.id.clone(),
+                                effect_type: slot.effect_type.clone(),
+                                binding_id: core.id.clone(),
+                                node_handle: core.node_handle.clone(),
+                                inner_param: core.inner_param.clone(),
+                                rehydrate: true,
+                            },
                         ),
                     }
                 }
@@ -1837,5 +1986,93 @@ mod generator_input_tests {
         assert!((read("aspect").unwrap() - (1920.0 / 1080.0)).abs() < 1e-5);
         assert_eq!(read("output_width"), Some(3840.0));
         assert_eq!(read("output_height"), Some(2160.0));
+    }
+}
+
+#[cfg(test)]
+mod chain_error_tests {
+    //! The chain runner accumulates structured errors during build
+    //! and per-frame run. Each entry carries the effect's identity
+    //! so a future editor surface can attach it to the right card.
+    //!
+    //! Today the immediate user-visible benefit is the consistent
+    //! `[chain-error]` terminal log; tomorrow these are the data
+    //! the editor reads via [`ChainGraph::errors`]. The tests below
+    //! pin one variant from the per-build path so the surface
+    //! doesn't silently regress.
+    use super::*;
+    use manifold_core::EffectTypeId;
+    use manifold_core::effect_definition_registry;
+    use manifold_core::effects::{EffectInstance, ParamConvert, UserParamBinding};
+
+    fn make_default(ty: EffectTypeId) -> EffectInstance {
+        effect_definition_registry::create_default(&ty)
+    }
+
+    /// A user-exposed binding pointing at a handle the splice didn't
+    /// register surfaces as a structured `UserBindingResolveFailed`
+    /// entry on the chain's error log. Pre-change: this was a bare
+    /// `eprintln!` with no programmatic surface — the editor couldn't
+    /// highlight the broken slider.
+    #[test]
+    fn unresolved_user_binding_surfaces_as_structured_chain_error() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let mut fx = make_default(EffectTypeId::INVERT_COLORS);
+        // Reference a handle that the canonical Invert splice does
+        // NOT register. Resolution fails at build time → records a
+        // UserBindingResolveFailed error and the slider stays inert.
+        fx.append_user_binding(UserParamBinding {
+            id: "user.broken.1".to_string(),
+            label: "Broken".to_string(),
+            node_handle: "does_not_exist".to_string(),
+            inner_param: "amount".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            convert: ParamConvert::Float,
+        });
+
+        let cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)
+            .expect("Invert chain still builds; the binding just fails to resolve");
+
+        let errors = cg.errors();
+        let matching = errors.iter().find(|e| {
+            matches!(
+                e,
+                ChainError::UserBindingResolveFailed {
+                    binding_id,
+                    node_handle,
+                    rehydrate: false,
+                    ..
+                } if binding_id == "user.broken.1" && node_handle == "does_not_exist"
+            )
+        });
+        assert!(
+            matching.is_some(),
+            "expected a UserBindingResolveFailed entry naming the broken binding; \
+             got {errors:?}",
+        );
+    }
+
+    /// Sanity: a chain whose effects all resolve cleanly has an
+    /// empty error log. Paired with the negative test so a
+    /// regression that always-records or always-reads-empty
+    /// surfaces visibly.
+    #[test]
+    fn clean_chain_has_no_errors() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = make_default(EffectTypeId::INVERT_COLORS);
+
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+            .expect("clean Invert chain builds");
+
+        assert!(
+            cg.errors().is_empty(),
+            "clean chain must have no structured errors; got {:?}",
+            cg.errors()
+        );
     }
 }
