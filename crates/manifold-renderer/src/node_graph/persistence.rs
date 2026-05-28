@@ -38,11 +38,12 @@ use std::collections::BTreeMap;
 use ahash::AHashMap;
 
 use manifold_core::effect_graph_def::{
-    EFFECT_GRAPH_VERSION, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode,
-    EffectGraphWire,
+    EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
 };
+#[cfg(test)]
+use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION_WITH_METADATA;
 
-use crate::node_graph::effect_node::{EffectNode, NodeInstanceId};
+use crate::node_graph::effect_node::EffectNode;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 
@@ -551,209 +552,20 @@ impl EffectGraphDefExt for EffectGraphDef {
     }
 
     fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError> {
-        if self.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
-            return Err(LoadError::UnsupportedVersion {
-                found: self.version,
-                max: EFFECT_GRAPH_VERSION_WITH_METADATA,
-            });
-        }
-
+        // Per-node instantiation + wire translation runs through the
+        // shared `graph_loader` pipeline (see node_graph/graph_loader.rs).
+        // The same pipeline backs the effect-side splice path, so any
+        // per-node feature added here automatically applies there too —
+        // the drift bug class is structurally eliminated.
         let mut graph = Graph::new();
-        // doc_id → runtime NodeInstanceId
-        let mut id_map: AHashMap<u32, NodeInstanceId> = AHashMap::default();
-
-        for node_doc in &self.nodes {
-            if id_map.contains_key(&node_doc.id) {
-                return Err(LoadError::DuplicateNodeId(node_doc.id));
-            }
-            let mut boxed = match registry.construct(&node_doc.type_id) {
-                Some(b) => b,
-                None => {
-                    return Err(LoadError::UnknownTypeId {
-                        node_id: node_doc.id,
-                        type_id: node_doc.type_id.clone(),
-                    });
-                }
-            };
-
-            // Install the WGSL source BEFORE snapshotting params + ports
-            // — dynamic-shape escape-hatch nodes (`node.wgsl_compute`)
-            // derive their port and parameter shape from the source via
-            // naga introspection, so the default-kernel shape we'd see
-            // pre-source-set won't match the JSON's wires or params.
-            // Static-shape primitives' set_wgsl_source is a no-op, so
-            // this is free for the common case.
-            if let Some(source) = node_doc.wgsl_source.as_deref() {
-                boxed.set_wgsl_source(source);
-            }
-
-            // Find the static param names + types so we can validate
-            // overrides against the declared shape and resolve the
-            // `&'static str` keys `Graph::set_param` expects.
-            //
-            // Validation reads the declared `ParamType`, not the default
-            // value's variant. Table-typed params ship a `Float(0.0)`
-            // sentinel default (Arc isn't const-constructible) — falling
-            // back to the variant would reject every real Table value
-            // at load time.
-            let param_defs: Vec<(&'static str, crate::node_graph::parameters::ParamType)> = boxed
-                .parameters()
-                .iter()
-                .map(|p| (p.name, p.ty))
-                .collect();
-
-            let runtime_id = if let Some(handle) = node_doc.handle.as_deref() {
-                // `add_node_named` needs a `&'static str`; we can't
-                // promote a runtime String, so we lean on `Box::leak`
-                // here. Handles are document-author-defined and
-                // bounded — at most one leak per inner node per
-                // loaded preset, never on the per-frame path.
-                let static_handle: &'static str = Box::leak(handle.to_string().into_boxed_str());
-                graph.add_node_named(static_handle, boxed)
-            } else {
-                graph.add_node(boxed)
-            };
-            id_map.insert(node_doc.id, runtime_id);
-
-            // Apply parameter overrides.
-            for (key, value) in &node_doc.params {
-                let Some(&(name_static, expected_ty)) =
-                    param_defs.iter().find(|(n, _)| *n == key.as_str())
-                else {
-                    return Err(LoadError::UnknownParam {
-                        node_id: node_doc.id,
-                        type_id: node_doc.type_id.clone(),
-                        param: key.clone(),
-                    });
-                };
-                let pv: ParamValue = value.clone().into();
-                if !param_value_matches_type(&pv, expected_ty) {
-                    return Err(LoadError::ParamTypeMismatch {
-                        node_id: node_doc.id,
-                        type_id: node_doc.type_id.clone(),
-                        param: key.clone(),
-                        expected: param_type_name(expected_ty),
-                        got: param_type_label(&pv),
-                    });
-                }
-                // set_param can only fail with NodeNotFound (we just
-                // added it) or ParamNotFound (we just validated the
-                // name). Both impossible here.
-                graph
-                    .set_param(runtime_id, name_static, pv)
-                    .expect("validated above");
-            }
-
-            // (WGSL source already installed pre-`add_node` so that the
-            // chain compiler sees the source-derived port and parameter
-            // shape during wire validation — see the `set_wgsl_source`
-            // call right after `boxed` is constructed.)
-
-            // Apply exposed_params from the document. Unknown param
-            // names are silently ignored — a renamed param shouldn't
-            // refuse to load just because an old saved exposure points
-            // at a defunct name. Validates via the param_defs scan so
-            // the static-lifetime name lookup matches what the live
-            // node declares.
-            for exposed_name in &node_doc.exposed_params {
-                if let Some(&(name_static, _)) =
-                    param_defs.iter().find(|(n, _)| *n == exposed_name.as_str())
-                {
-                    graph
-                        .set_param_exposed(runtime_id, name_static, true)
-                        .expect("validated above");
-                }
-            }
-
-            // Install any per-output format overrides. Most documents
-            // carry no entries; the native-precision escape-hatch
-            // family is where these matter.
-            for (port_name, fmt_str) in &node_doc.output_formats {
-                let Some(fmt) = format_from_str(fmt_str) else {
-                    return Err(LoadError::UnknownOutputFormat {
-                        node_id: node_doc.id,
-                        type_id: node_doc.type_id.clone(),
-                        port: port_name.clone(),
-                        format: fmt_str.clone(),
-                    });
-                };
-                graph
-                    .set_output_format(runtime_id, port_name, fmt)
-                    .expect("node was just added");
-                // Verify the override actually stuck. Primitives whose
-                // shaders hardcode their output format have a no-op
-                // default `set_output_format`, so writing
-                // `outputFormats` against them silently dropped before
-                // — and at runtime the persistent slot, the producer
-                // chain, and the state-store texture would all
-                // disagree, causing the per-frame blit to corrupt or
-                // panic with a format mismatch. Catch the mistake at
-                // load time instead.
-                let inst = graph.get_node(runtime_id).expect("just added");
-                if inst.node.output_format(port_name) != Some(fmt) {
-                    return Err(LoadError::OutputFormatNotSupported {
-                        node_id: node_doc.id,
-                        type_id: node_doc.type_id.clone(),
-                        port: port_name.clone(),
-                        format: fmt_str.clone(),
-                    });
-                }
-            }
-
-            // Per-output canvas-relative scale overrides. The chain
-            // pre-allocator consults `output_canvas_scale(port)` during
-            // `compile()`, so the scale must be installed on the node
-            // before compile runs. Currently honored by
-            // `node.wgsl_compute` only; static-shape primitives' default
-            // `set_output_canvas_scale` is a no-op.
-            for (port_name, scale) in &node_doc.output_canvas_scales {
-                let &[num, denom] = scale;
-                graph
-                    .set_output_canvas_scale(runtime_id, port_name, (num, denom))
-                    .expect("node was just added");
-            }
-        }
-
-        for (i, wire) in self.wires.iter().enumerate() {
-            let from_runtime = *id_map
-                .get(&wire.from_node)
-                .ok_or(LoadError::UnknownNodeRef {
-                    wire_index: i,
-                    node_id: wire.from_node,
-                    side: WireSide::From,
-                })?;
-            let to_runtime = *id_map.get(&wire.to_node).ok_or(LoadError::UnknownNodeRef {
-                wire_index: i,
-                node_id: wire.to_node,
-                side: WireSide::To,
-            })?;
-
-            let from_port: &'static str =
-                leak_port_name(&wire.from_port, &graph, from_runtime, true)?.ok_or_else(|| {
-                    LoadError::InvalidWire {
-                        wire_index: i,
-                        reason: format!(
-                            "from node {} has no output port '{}'",
-                            wire.from_node, wire.from_port
-                        ),
-                    }
-                })?;
-            let to_port: &'static str = leak_port_name(&wire.to_port, &graph, to_runtime, false)?
-                .ok_or_else(|| LoadError::InvalidWire {
-                wire_index: i,
-                reason: format!(
-                    "to node {} has no input port '{}'",
-                    wire.to_node, wire.to_port
-                ),
-            })?;
-
-            graph
-                .connect((from_runtime, from_port), (to_runtime, to_port))
-                .map_err(|e| LoadError::InvalidWire {
-                    wire_index: i,
-                    reason: format!("{e:?}"),
-                })?;
-        }
+        crate::node_graph::graph_loader::instantiate_def(
+            &mut graph,
+            &self,
+            registry,
+            crate::node_graph::graph_loader::HandleScope::Global,
+            crate::node_graph::graph_loader::BoundaryHandling::Standalone,
+        )
+        .map_err(load_error_from_build)?;
 
         // Step 5.5: validate every binding's `convert` against its
         // target inner-node param's declared type. The recurring bug
@@ -849,6 +661,82 @@ impl EffectGraphDefExt for EffectGraphDef {
     }
 }
 
+/// Convert a [`crate::node_graph::graph_loader::GraphBuildError`] into
+/// the existing [`LoadError`] surface. Preserves the legacy public API
+/// of `into_graph` so external callers don't have to update.
+fn load_error_from_build(e: crate::node_graph::graph_loader::GraphBuildError) -> LoadError {
+    use crate::node_graph::graph_loader::{GraphBuildError as G, WireSide as BWs};
+    match e {
+        G::UnsupportedVersion { found, max } => LoadError::UnsupportedVersion { found, max },
+        G::DuplicateNodeId(id) => LoadError::DuplicateNodeId(id),
+        G::UnknownTypeId { node_id, type_id } => LoadError::UnknownTypeId { node_id, type_id },
+        G::UnknownNodeRef {
+            wire_index,
+            node_id,
+            side,
+        } => LoadError::UnknownNodeRef {
+            wire_index,
+            node_id,
+            side: match side {
+                BWs::From => WireSide::From,
+                BWs::To => WireSide::To,
+            },
+        },
+        G::UnknownParam {
+            node_id,
+            type_id,
+            param,
+        } => LoadError::UnknownParam {
+            node_id,
+            type_id,
+            param,
+        },
+        G::ParamTypeMismatch {
+            node_id,
+            type_id,
+            param,
+            expected,
+            got,
+        } => LoadError::ParamTypeMismatch {
+            node_id,
+            type_id,
+            param,
+            expected,
+            got,
+        },
+        G::InvalidWire { wire_index, reason } => LoadError::InvalidWire { wire_index, reason },
+        G::UnknownOutputFormat {
+            node_id,
+            type_id,
+            port,
+            format,
+        } => LoadError::UnknownOutputFormat {
+            node_id,
+            type_id,
+            port,
+            format,
+        },
+        G::OutputFormatNotSupported {
+            node_id,
+            type_id,
+            port,
+            format,
+        } => LoadError::OutputFormatNotSupported {
+            node_id,
+            type_id,
+            port,
+            format,
+        },
+        // The Standalone path never asks for boundary folding, so these
+        // variants are unreachable when called from `into_graph`.
+        G::MissingBoundarySource | G::MissingBoundaryFinalOutput => LoadError::InvalidWire {
+            wire_index: 0,
+            reason: "graph_loader reported a Splice-only boundary error from a Standalone build"
+                .to_string(),
+        },
+    }
+}
+
 /// Tag for [`LoadError::BindingConvertTypeMismatch`] `convert` field.
 fn param_convert_name(c: manifold_core::effects::ParamConvert) -> &'static str {
     use manifold_core::effects::ParamConvert;
@@ -857,21 +745,6 @@ fn param_convert_name(c: manifold_core::effects::ParamConvert) -> &'static str {
         ParamConvert::IntRound => "IntRound",
         ParamConvert::BoolThreshold => "BoolThreshold",
         ParamConvert::EnumRound => "EnumRound",
-    }
-}
-
-/// Tag for `LoadError::ParamTypeMismatch` `expected`/`got` fields.
-fn param_type_label(v: &ParamValue) -> &'static str {
-    match v {
-        ParamValue::Float(_) => "Float",
-        ParamValue::Bool(_) => "Bool",
-        ParamValue::Vec2(_) => "Vec2",
-        ParamValue::Vec3(_) => "Vec3",
-        ParamValue::Vec4(_) => "Vec4",
-        ParamValue::Color(_) => "Color",
-        ParamValue::Enum(_) => "Enum",
-        ParamValue::Table(_) => "Table",
-        ParamValue::String(_) => "String",
     }
 }
 
@@ -911,33 +784,6 @@ fn param_value_matches_type(v: &ParamValue, ty: crate::node_graph::parameters::P
             | (ParamType::Table, ParamValue::Table(_))
             | (ParamType::String, ParamValue::String(_))
     )
-}
-
-/// Resolve a port name on a node by matching against the declared
-/// `&'static str` ports, so the resulting reference is the `'static`
-/// the [`Graph::connect`] API requires. Returns `None` if the named
-/// port doesn't exist on the node.
-///
-/// Note: the returned reference is the node's own declared static
-/// string, NOT a copy of `requested` — no leaks here.
-fn leak_port_name(
-    requested: &str,
-    graph: &Graph,
-    node_id: NodeInstanceId,
-    output: bool,
-) -> Result<Option<&'static str>, LoadError> {
-    let Some(inst) = graph.get_node(node_id) else {
-        // The caller already mapped doc_id → runtime id from
-        // `id_map`, so this branch is unreachable for well-formed
-        // loaders. Return None and let the caller raise InvalidWire.
-        return Ok(None);
-    };
-    let port = if output {
-        inst.node.outputs().iter().find(|p| p.name == requested)
-    } else {
-        inst.node.inputs().iter().find(|p| p.name == requested)
-    };
-    Ok(port.map(|p| p.name))
 }
 
 // ---------------------------------------------------------------------------

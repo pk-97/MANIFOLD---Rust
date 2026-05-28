@@ -17,15 +17,16 @@
 
 use std::borrow::Cow;
 
-use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::EffectInstance;
 
-use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
-use crate::node_graph::persistence::{PrimitiveRegistry, SerializedParamValue};
+use crate::node_graph::graph_loader::{
+    BoundaryHandling, HandleScope, instantiate_def, log_build_error,
+};
+use crate::node_graph::persistence::PrimitiveRegistry;
 
 /// Outcome of a single splice into the chain graph.
 pub struct SpliceResult {
@@ -101,147 +102,38 @@ pub fn splice_def_into_chain(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<SpliceResult> {
-    // First pass: identify the def's Source and FinalOutput ids so we
-    // know which wires to re-anchor / treat as the output.
-    let mut def_source_id: Option<u32> = None;
-    let mut def_final_id: Option<u32> = None;
-    for n in &def.nodes {
-        if n.type_id == SOURCE_TYPE_ID {
-            def_source_id = Some(n.id);
-        } else if n.type_id == FINAL_OUTPUT_TYPE_ID {
-            def_final_id = Some(n.id);
+    // Delegate every per-node + per-wire concern to the shared
+    // graph_loader pipeline. The same pipeline runs for the generator
+    // path (`persistence::into_graph`), so any per-node feature added
+    // here automatically applies there too — the drift bug class is
+    // structurally eliminated. Validation errors (unknown type_id,
+    // param mismatch, output-format-not-supported, etc.) bubble up as
+    // structured `GraphBuildError`s; the chain build's policy is to
+    // log + fall back, preserving the legacy `Option<SpliceResult>`
+    // contract.
+    let inst = match instantiate_def(
+        graph,
+        def,
+        registry,
+        HandleScope::PerSplice,
+        BoundaryHandling::Splice {
+            source_endpoint: source,
+        },
+    ) {
+        Ok(i) => i,
+        Err(e) => {
+            let context = def
+                .name
+                .as_deref()
+                .or_else(|| def.preset_metadata.as_ref().map(|m| m.id.as_str()))
+                .unwrap_or("<unnamed splice def>");
+            log_build_error(context, &e);
+            return None;
         }
-    }
-    let def_source_id = def_source_id?;
-    let def_final_id = def_final_id?;
-
-    // Second pass: instantiate every non-boundary node. Track
-    // (def_id → chain_node_id) so wires can be translated.
-    let mut def_to_chain: AHashMap<u32, NodeInstanceId> = AHashMap::default();
-    let mut handles: Vec<(Cow<'static, str>, NodeInstanceId)> = Vec::new();
-    for n in &def.nodes {
-        if n.id == def_source_id || n.id == def_final_id {
-            continue;
-        }
-        let node = registry.construct(&n.type_id)?;
-        let chain_id = graph.add_node(node);
-        // Apply per-node WGSL source for dynamic-shape escape-hatch
-        // primitives (`node.wgsl_compute`). Must happen BEFORE wires
-        // are resolved — the source drives the port list via naga
-        // introspection, and the default kernel's ports won't match
-        // the JSON's wire targets. Static-shape primitives' impl is a
-        // no-op, so this is free for the common case. Mirrors the
-        // persistence.rs path used by JsonGraphGenerator.
-        if let Some(source) = n.wgsl_source.as_deref() {
-            graph.set_wgsl_source(chain_id, source).ok()?;
-        }
-        def_to_chain.insert(n.id, chain_id);
-        if let Some(handle_name) = n.handle.as_deref() {
-            handles.push((Cow::Owned(handle_name.to_owned()), chain_id));
-        }
-    }
-
-    // Apply per-node params from the def.
-    for n in &def.nodes {
-        if let Some(&chain_id) = def_to_chain.get(&n.id) {
-            for (param_name, value) in &n.params {
-                let pv = match value {
-                    SerializedParamValue::Float { value } => {
-                        Some(crate::node_graph::ParamValue::Float(*value))
-                    }
-                    SerializedParamValue::Int { value } => {
-                        // Back-compat: old saves wrote `Int` for whole-number
-                        // params. In-memory storage is `Float` only — coerce.
-                        Some(crate::node_graph::ParamValue::Float(*value as f32))
-                    }
-                    SerializedParamValue::Bool { value } => {
-                        Some(crate::node_graph::ParamValue::Bool(*value))
-                    }
-                    SerializedParamValue::Enum { value } => {
-                        Some(crate::node_graph::ParamValue::Enum(*value))
-                    }
-                    // Vec2/Vec3/Vec4/Color are not yet plumbed through
-                    // the runtime `ParamValue` enum. Skip for now —
-                    // the primitive keeps its declared default.
-                    SerializedParamValue::Vec2 { .. }
-                    | SerializedParamValue::Vec3 { .. }
-                    | SerializedParamValue::Vec4 { .. }
-                    | SerializedParamValue::Color { .. } => None,
-                    SerializedParamValue::Table { rows } => {
-                        crate::node_graph::parameters::TableData::new(rows.clone()).map(|t| {
-                            crate::node_graph::ParamValue::Table(std::sync::Arc::new(t))
-                        })
-                    }
-                    SerializedParamValue::String { value } => Some(
-                        crate::node_graph::ParamValue::String(std::sync::Arc::new(value.clone())),
-                    ),
-                };
-                if let Some(pv) = pv
-                    && let Some(static_name) = resolve_param_name(graph, chain_id, param_name)
-                {
-                    let _ = graph.set_param(chain_id, static_name, pv);
-                }
-            }
-        }
-    }
-
-    // Third pass: translate wires. Port names need to be resolved into
-    // the primitive's declared `&'static str` references — those are
-    // what `graph.connect` accepts, and looking them up on the just-
-    // instantiated nodes is cleaner than leaking heap strings.
-    let mut output_endpoint: Option<(NodeInstanceId, &'static str)> = None;
-    for w in &def.wires {
-        if w.from_node == def_source_id {
-            let to_chain = *def_to_chain.get(&w.to_node)?;
-            let to_port = resolve_input_port(graph, to_chain, &w.to_port)?;
-            graph.connect(source, (to_chain, to_port)).ok()?;
-            continue;
-        }
-        if w.to_node == def_final_id {
-            let from_chain = *def_to_chain.get(&w.from_node)?;
-            let from_port = resolve_output_port(graph, from_chain, &w.from_port)?;
-            output_endpoint = Some((from_chain, from_port));
-            continue;
-        }
-        let from_chain = *def_to_chain.get(&w.from_node)?;
-        let to_chain = *def_to_chain.get(&w.to_node)?;
-        let from_port = resolve_output_port(graph, from_chain, &w.from_port)?;
-        let to_port = resolve_input_port(graph, to_chain, &w.to_port)?;
-        graph.connect((from_chain, from_port), (to_chain, to_port)).ok()?;
-    }
+    };
 
     Some(SpliceResult {
-        output: output_endpoint?,
-        handles,
+        output: inst.output_endpoint?,
+        handles: inst.effect_local_handles,
     })
-}
-
-fn resolve_param_name(graph: &Graph, node: NodeInstanceId, name: &str) -> Option<&'static str> {
-    graph
-        .get_node(node)?
-        .node
-        .parameters()
-        .iter()
-        .map(|p| p.name)
-        .find(|n| *n == name)
-}
-
-fn resolve_input_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Option<&'static str> {
-    graph
-        .get_node(node)?
-        .node
-        .inputs()
-        .iter()
-        .map(|p| p.name)
-        .find(|n| *n == name)
-}
-
-fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Option<&'static str> {
-    graph
-        .get_node(node)?
-        .node
-        .outputs()
-        .iter()
-        .map(|p| p.name)
-        .find(|n| *n == name)
 }
