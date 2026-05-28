@@ -125,14 +125,13 @@ mod tests {
 
     #[test]
     fn grid_uv_field_declares_vec2_array_output_only() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType};
         let layout = ArrayType::of_known::<[f32; 2]>();
         assert_eq!(GridUvField::TYPE_ID, "node.grid_uv_field");
         assert!(GridUvField::INPUTS.is_empty());
         assert_eq!(GridUvField::OUTPUTS.len(), 1);
         assert_eq!(GridUvField::OUTPUTS[0].name, "uv");
         assert_eq!(GridUvField::OUTPUTS[0].ty, PortType::Array(layout));
-        assert_eq!(layout.item_kind, ItemKind::Vec2Slot);
         assert_eq!(layout.item_size, 8);
     }
 

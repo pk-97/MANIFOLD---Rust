@@ -8,7 +8,7 @@ use ahash::{AHashMap, AHashSet};
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::ports::{
-    ArrayType, ChannelElementType, ChannelSpec, ItemKind, MatchMode, PortKind, PortType,
+    ArrayType, ChannelElementType, ChannelSpec, MatchMode, PortKind, PortType,
 };
 
 /// Errors produced by graph mutation and validation.
@@ -39,9 +39,10 @@ pub enum GraphError {
     ///
     /// Boxed to keep `GraphError` small (clippy `result_large_err`).
     ///
-    /// Empty-specs wires use the legacy `PortTypeMismatch` path
-    /// (item_kind + size + align mismatch) during Phase 1-3; Phase 4
-    /// folds them into this variant when the cast-atom family deletes.
+    /// Empty-specs Array wires (the post-ItemKind raw-byte escape
+    /// hatch for wgsl_compute outputs that naga can't type) flow
+    /// through the simpler `PortTypeMismatch` path when they don't
+    /// match by size+align.
     ChannelMismatch(Box<ChannelMismatchInfo>),
     /// A required input has no incoming wire.
     RequiredInputUnwired {
@@ -321,9 +322,8 @@ pub(super) fn validate_wire_endpoints(
     // accept any Channels producer regardless of their own specs).
     // Surfaces a structured `ChannelMismatch` on disagreement per
     // `docs/CHANNEL_TYPE_SYSTEM.md` §5. Wires that match neither
-    // condition fall through to the legacy `item_kind` + size + align
-    // check below, which keeps the Anonymous coercion and the existing
-    // typed-family wires working through Phase 3.
+    // condition fall through to `port_types_compatible` (raw-byte
+    // size+align match) below.
     if let (PortType::Array(producer), PortType::Array(consumer)) =
         (from_port.ty, to_port.ty)
         && (consumer.match_mode == MatchMode::Permissive
@@ -449,30 +449,30 @@ fn format_channels_signature(specs: &[ChannelSpec]) -> String {
     out
 }
 
-/// Port-type compatibility for the wire validator. Exact equality
-/// by default, with one **asymmetric** relaxation at the Anonymous
-/// boundary: a typed `Array(KnownKind)` source can flow into an
-/// `Array(Anonymous)` consumer of matching `(item_size, item_align)`,
-/// but not the other way around.
+/// Port-type compatibility fallback for wires that don't take the
+/// Channels-aware path in `validate_wire_endpoints`.
 ///
-/// Why asymmetric: the typed→Anonymous direction is **safe** — the
-/// downstream consumer is treating the buffer as raw bytes anyway
-/// (typical `wgsl_compute` reading a `var<storage>` declaration),
-/// and the upstream's bytes are still what they are regardless of
-/// the label. The Anonymous→typed direction is **dangerous** — it
-/// silently reinterprets raw bytes as a specific struct layout, and
-/// the user gets no error when the bytes mean something else
-/// (`MyCustomVertex` getting read as `Particle`). That direction
-/// MUST go through a cast atom (`cast_as_particle`, `cast_as_u32`,
-/// `cast_as_mesh_vertex`, …) so the type assertion is explicit and
-/// visible in the graph.
+/// The Channels-aware predicate (`channels_compatible`) handles every
+/// wire where the consumer is Permissive or both endpoints declare
+/// non-empty specs. This function covers the residual cases:
 ///
-/// Two typed kinds (Particle ↔ MeshVertex) still don't connect —
-/// that's a semantic mismatch the validator must catch regardless
-/// of size+align.
+/// - **Exact equality** — `from == to` accepts identical wires
+///   (Texture2D == Texture2D, scalar == scalar, plus Array→Array
+///   with identical size+align+specs+match_mode).
+/// - **Raw-byte Array compatibility** — two Array endpoints with
+///   matching `item_size` + `item_align` AND empty `specs` on both
+///   sides connect. This is the post-cast-atom escape hatch: a
+///   `wgsl_compute` whose storage struct couldn't be typed by the
+///   naga walk (matrices, runtime arrays, etc.) emits an empty-specs
+///   ArrayType; a consumer expecting raw bytes of matching shape can
+///   read it.
 ///
-/// Postel's-law shape: liberal in (typed → Anonymous accepted),
-/// conservative out (Anonymous → typed requires explicit cast).
+/// Empty-specs on ONE side mixed with non-empty-specs on the other
+/// is intentionally rejected — that's the "did the user mean to
+/// type-check or not?" ambiguity the old `Anonymous → typed`
+/// requires-cast rule guarded against. If you want raw-byte access
+/// to a typed wire, take that wire through an explicit Permissive
+/// transform first.
 fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if from == to {
         return true;
@@ -480,23 +480,10 @@ fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if let (PortType::Array(a), PortType::Array(b)) = (from, to)
         && a.item_size == b.item_size
         && a.item_align == b.item_align
+        && a.specs.is_empty()
+        && b.specs.is_empty()
     {
-        // Typed source → Anonymous consumer: the typed bytes are
-        // still the same bytes; the consumer just treats them
-        // generically. Safe direction (the asymmetric Postel's-law
-        // shape from pre-migration).
-        if a.item_kind != ItemKind::Anonymous && b.item_kind == ItemKind::Anonymous {
-            return true;
-        }
-        // Anonymous → Anonymous: both endpoints are raw-byte
-        // escape-hatch wires of the same shape; specs differences
-        // (e.g. wgsl_compute's Phase 4a naga-derived typed signature
-        // flowing into a cast atom's empty-spec Anonymous input)
-        // are by definition meaningless when neither side is a
-        // declared typed family. Accept.
-        if a.item_kind == ItemKind::Anonymous && b.item_kind == ItemKind::Anonymous {
-            return true;
-        }
+        return true;
     }
     false
 }
@@ -1287,41 +1274,34 @@ mod tests {
             vec![],
         )));
         let r = g.connect((a, "out"), (b, "in"));
-        // Post-Phase-3: typed families carry SPECS via KnownItem, so
-        // the Channels-aware validator path runs and returns
-        // ChannelMismatch (different channel count / names / types)
-        // for typed-vs-typed mismatches. Pre-Phase-3 the same wires
-        // surfaced PortTypeMismatch. Accept either — both mean
-        // "wire correctly refused."
+        // Typed families carry SPECS via KnownItem; the Channels-
+        // aware validator path runs and returns ChannelMismatch for
+        // typed-vs-typed mismatches.
         assert!(
-            matches!(
-                r,
-                Err(GraphError::PortTypeMismatch { .. })
-                    | Err(GraphError::ChannelMismatch(_))
-            ),
+            matches!(r, Err(GraphError::ChannelMismatch(_))),
             "wire with mismatched typed-family item layouts must be refused; got {r:?}",
         );
     }
 
     /// Regression for the recurring "coordinate-space contract" bug
     /// class. Two `Array` ports with byte-identical layouts but
-    /// different [`ItemKind`](crate::node_graph::ports::ItemKind)
-    /// tags MUST NOT connect — that's the whole point of carrying
-    /// the kind on the wire. `CurvePoint` (origin-centered 2D, what
-    /// `render_lines` consumes) and `EdgePair` (two u32 indices)
-    /// are both 8 bytes / 4-aligned, so under a pure size/align
-    /// check they would connect silently. The kind tag (and now the
-    /// channel specs) forces the validator to refuse the wire.
+    /// different Channels signatures MUST NOT connect — that's the
+    /// whole point of carrying the channel names on the wire.
+    /// `CurvePoint` (channels `x, y` in origin-centered 2D, what
+    /// `render_lines` consumes) and `EdgePair` (channels `a_index,
+    /// b_index`) are both 8 bytes / 4-aligned, so under a pure
+    /// size/align check they would connect silently. The Channels
+    /// signature forces the validator to refuse the wire.
     #[test]
     fn rejects_array_ports_with_matching_layout_but_mismatched_kind() {
         use crate::generators::mesh_common::{CurvePoint, EdgePair};
         use crate::node_graph::ports::ArrayType;
-        // Sanity: same byte layout, different kinds.
+        // Sanity: same byte layout, different Channels signatures.
         let curve = ArrayType::of_known::<CurvePoint>();
         let edge = ArrayType::of_known::<EdgePair>();
         assert_eq!((curve.item_size, curve.item_align), (8, 4));
         assert_eq!((edge.item_size, edge.item_align), (8, 4));
-        assert_ne!(curve, edge, "kinds must distinguish the ArrayTypes");
+        assert_ne!(curve, edge, "Channels signatures must distinguish the ArrayTypes");
 
         let mut g = Graph::new();
         let a = g.add_node(Box::new(TestNode::new(
@@ -1335,17 +1315,11 @@ mod tests {
             vec![],
         )));
         let r = g.connect((a, "out"), (b, "in"));
-        // Post-Phase-3: both types carry SPECS, so the new validator
-        // path catches this as a ChannelMismatch (different channel
-        // names: x/y vs a_index/b_index). Pre-Phase-3 it was a
-        // PortTypeMismatch via the item_kind difference. Either is
-        // correct: the wire is refused either way.
+        // Both types carry SPECS via KnownItem; the validator catches
+        // the mismatch as a ChannelMismatch on channel names
+        // (`x, y` vs `a_index, b_index`).
         assert!(
-            matches!(
-                r,
-                Err(GraphError::PortTypeMismatch { .. })
-                    | Err(GraphError::ChannelMismatch(_))
-            ),
+            matches!(r, Err(GraphError::ChannelMismatch(_))),
             "wiring CurvePoint into an EdgePair port must fail \
              validation — byte layouts match but the channel \
              signatures don't. Got {r:?}",
@@ -1978,10 +1952,12 @@ mod tests {
         }
 
         #[test]
-        fn connect_falls_through_to_legacy_mismatch_for_pre_channels_wires() {
-            // Pre-migration wires (specs empty on both sides) still
-            // produce the legacy PortTypeMismatch on incompatible
-            // item_kind. The Anonymous coercion path is unchanged.
+        fn raw_byte_arrays_with_matching_size_and_align_connect() {
+            // Post-ItemKind: both endpoints with empty specs and
+            // matching size+align connect as raw bytes. This is the
+            // wgsl_compute escape hatch — structs whose fields naga
+            // can't map to ChannelElementType produce empty specs;
+            // matching consumers read the bytes directly.
             let mut g = Graph::new();
             let src = g.add_node(Box::new(TestNode::new(
                 "src",
@@ -1991,7 +1967,6 @@ mod tests {
                     PortType::Array(ArrayType {
                         item_size: 32,
                         item_align: 16,
-                        item_kind: ItemKind::Particle,
                         specs: &[],
                         match_mode: MatchMode::Exact,
                     }),
@@ -2004,46 +1979,6 @@ mod tests {
                     PortType::Array(ArrayType {
                         item_size: 32,
                         item_align: 16,
-                        item_kind: ItemKind::MeshVertex,
-                        specs: &[],
-                        match_mode: MatchMode::Exact,
-                    }),
-                    true,
-                )],
-                vec![],
-            )));
-            let r = g.connect((src, "out"), (dst, "in"));
-            assert!(matches!(r, Err(GraphError::PortTypeMismatch { .. })));
-        }
-
-        #[test]
-        fn legacy_anonymous_coercion_still_works_for_pre_migration_wires() {
-            // Typed Producer → Anonymous Consumer (both specs empty) =
-            // the established Postel's-law shape. Must keep working
-            // through Phase 3.
-            let mut g = Graph::new();
-            let src = g.add_node(Box::new(TestNode::new(
-                "src",
-                vec![],
-                vec![output(
-                    "out",
-                    PortType::Array(ArrayType {
-                        item_size: 8,
-                        item_align: 4,
-                        item_kind: ItemKind::EdgePair,
-                        specs: &[],
-                        match_mode: MatchMode::Exact,
-                    }),
-                )],
-            )));
-            let dst = g.add_node(Box::new(TestNode::new(
-                "dst",
-                vec![input(
-                    "in",
-                    PortType::Array(ArrayType {
-                        item_size: 8,
-                        item_align: 4,
-                        item_kind: ItemKind::Anonymous,
                         specs: &[],
                         match_mode: MatchMode::Exact,
                     }),
@@ -2052,6 +1987,43 @@ mod tests {
                 vec![],
             )));
             assert!(g.connect((src, "out"), (dst, "in")).is_ok());
+        }
+
+        #[test]
+        fn raw_byte_array_into_typed_consumer_is_rejected() {
+            // Empty-specs producer → non-empty-specs consumer is
+            // ambiguous (the old "Anonymous → typed requires cast"
+            // case). Reject — the user should narrow through an
+            // explicit Permissive transform if they really mean
+            // raw-byte access to a typed wire.
+            let mut g = Graph::new();
+            let src = g.add_node(Box::new(TestNode::new(
+                "src",
+                vec![],
+                vec![output(
+                    "out",
+                    PortType::Array(ArrayType {
+                        item_size: 8,
+                        item_align: 4,
+                        specs: &[],
+                        match_mode: MatchMode::Exact,
+                    }),
+                )],
+            )));
+            const TYPED: &[ChannelSpec] = &[
+                ChannelSpec { name: well_known::A_INDEX, ty: ChannelElementType::U32 },
+                ChannelSpec { name: well_known::B_INDEX, ty: ChannelElementType::U32 },
+            ];
+            let dst = g.add_node(Box::new(TestNode::new(
+                "dst",
+                vec![input(
+                    "in",
+                    PortType::Array(ArrayType::of_channels(TYPED, MatchMode::Exact)),
+                    true,
+                )],
+                vec![],
+            )));
+            assert!(g.connect((src, "out"), (dst, "in")).is_err());
         }
     }
 }

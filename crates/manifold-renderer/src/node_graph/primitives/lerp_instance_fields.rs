@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn lerp_instance_fields_ports() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType, ScalarType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(LerpInstanceFields::TYPE_ID, "node.lerp_instance_fields");
 
@@ -159,7 +159,6 @@ mod tests {
             assert!(port.required);
             assert_eq!(port.ty, PortType::Array(inst_layout));
         }
-        assert_eq!(inst_layout.item_kind, ItemKind::InstanceTransform);
 
         let t_in = LerpInstanceFields::INPUTS
             .iter()

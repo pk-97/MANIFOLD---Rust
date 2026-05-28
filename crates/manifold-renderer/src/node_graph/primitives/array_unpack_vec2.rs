@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn array_unpack_vec2_declares_vec2_in_two_f32_out() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType};
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         let f32_layout = ArrayType::of_known::<f32>();
         assert_eq!(ArrayUnpackVec2::TYPE_ID, "node.array_unpack_vec2");
@@ -137,7 +137,6 @@ mod tests {
         assert_eq!(ArrayUnpackVec2::INPUTS[0].name, "in");
         assert!(ArrayUnpackVec2::INPUTS[0].required);
         assert_eq!(ArrayUnpackVec2::INPUTS[0].ty, PortType::Array(vec2_layout));
-        assert_eq!(vec2_layout.item_kind, ItemKind::Vec2Slot);
 
         assert_eq!(ArrayUnpackVec2::OUTPUTS.len(), 2);
         assert_eq!(ArrayUnpackVec2::OUTPUTS[0].name, "x");

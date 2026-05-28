@@ -54,8 +54,6 @@ pub const PARTICLE_SPECS: &[crate::node_graph::ports::ChannelSpec] = &[
 ];
 
 impl crate::node_graph::ports::KnownItem for Particle {
-    const ITEM_KIND: crate::node_graph::ports::ItemKind =
-        crate::node_graph::ports::ItemKind::Particle;
     const SPECS: &'static [crate::node_graph::ports::ChannelSpec] = PARTICLE_SPECS;
 }
 

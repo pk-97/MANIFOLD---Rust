@@ -43,8 +43,8 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
-    ArrayType, ChannelElementType, ChannelSpec, ItemKind, NodeInput, NodeOutput, NodePort,
-    PortKind, PortType, ScalarType,
+    ArrayType, ChannelElementType, ChannelSpec, NodeInput, NodeOutput, NodePort, PortKind,
+    PortType, ScalarType,
 };
 
 pub const TYPE_ID: &str = "node.wgsl_compute";
@@ -519,7 +519,6 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                         ty: PortType::Array(ArrayType {
                             item_size: 4,
                             item_align: 4,
-                            item_kind: ItemKind::Anonymous,
                             specs: &[ChannelSpec {
                                 name: crate::node_graph::channel_names::well_known::VALUE,
                                 ty: ChannelElementType::U32,
@@ -710,18 +709,13 @@ fn element_to_array_type(
     _stride: u32,
     module: &naga::Module,
 ) -> Result<ArrayType, String> {
-    // wgsl_compute is the byte-buffer escape hatch. The legacy
-    // ItemKind::Anonymous tag + (item_size, item_align) bridge survives
-    // so existing cast atoms (cast_as_particle, cast_as_u32, ...) keep
-    // working through Phase 4a. Phase 4b deletes the cast atoms and
-    // ItemKind entirely once preset JSONs migrate.
-    //
-    // Phase 4a addition: walk the WGSL struct's fields via naga and emit
-    // a typed Channels signature alongside the legacy bridge fields.
-    // Downstream typed consumers that already declare matching specs
-    // (post-Phase-3 KnownItem migration) wire through the new validator
-    // path directly when reached without a cast atom in between; Phase
-    // 4b JSON-prunes the cast atoms once preset surgery is reviewed.
+    // wgsl_compute is the byte-buffer escape hatch. The naga struct
+    // walk in `struct_members_to_specs` emits a typed Channels
+    // signature describing the storage-array element struct; if the
+    // struct contains unsupported types (matrices, runtime arrays),
+    // specs falls back to `&[]` and the wire connects only against
+    // other empty-specs Array wires of matching size+align via the
+    // raw-byte rule in `port_types_compatible`.
     //
     // align=4 not naga's vec3-padded alignment of 16 — matches the
     // Rust-side layout convention every other primitive uses.
@@ -732,7 +726,6 @@ fn element_to_array_type(
     Ok(ArrayType {
         item_size: *span,
         item_align: 4,
-        item_kind: ItemKind::Anonymous,
         specs,
         match_mode: crate::node_graph::ports::MatchMode::Exact,
     })
@@ -1266,16 +1259,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // maps to both an input and output port of the same name).
         //
         // Phase 4a: naga walks the Particle struct and emits a typed
-        // Channels signature alongside the legacy Anonymous bridge
-        // fields. ItemKind stays Anonymous so existing cast_as_*
-        // wires keep working through Phase 4b's deletion pass.
+        // Channels signature derived from the WGSL Particle struct's
+        // fields via naga.
         assert_eq!(input_names(&node), vec!["dt", "particles"]);
         assert_eq!(node.inputs[0].ty, PortType::Scalar(ScalarType::F32));
         match node.inputs[1].ty {
             PortType::Array(at) => {
                 assert_eq!(at.item_size, 64);
                 assert_eq!(at.item_align, 4);
-                assert_eq!(at.item_kind, ItemKind::Anonymous);
                 assert_eq!(at.match_mode, crate::node_graph::ports::MatchMode::Exact);
                 // naga-derived Channels signature: vec3 position +
                 // vec3 velocity + f32 life + f32 age + vec4 color.
@@ -1349,7 +1340,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             PortType::Array(at) => {
                 assert_eq!(at.item_size, 4);
                 assert_eq!(at.item_align, 4);
-                assert_eq!(at.item_kind, ItemKind::Anonymous);
                 assert_eq!(at.specs.len(), 1);
                 assert_eq!(at.specs[0].name.debug_name(), Some("value"));
                 use crate::node_graph::ports::ChannelElementType as CET;

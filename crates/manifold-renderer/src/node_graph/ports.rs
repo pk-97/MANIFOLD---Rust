@@ -11,8 +11,8 @@
 /// `Array` is the storage-buffer wire type used by particle, mesh, line, and
 /// audio primitives — the underlying `MTLBuffer` carries `count` items of a
 /// fixed-layout struct, accessed by index. Connection validation matches on
-/// `(item_size, item_align, item_kind)`; the shader owns the per-byte
-/// interpretation. See `docs/BUFFER_PORT_PLAN.md`.
+/// the wire's Channels signature (per `docs/CHANNEL_TYPE_SYSTEM.md`); the
+/// shader owns the per-byte interpretation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortType {
     Texture2D,
@@ -49,108 +49,33 @@ pub enum ScalarType {
     Color,
 }
 
-/// Semantic tag carried on every [`ArrayType`] wire.
-///
-/// Wire validation requires producer and consumer to agree on `ItemKind` in
-/// addition to `(item_size, item_align)`. Two buffers can be byte-identical but
-/// carry different conventions — the canonical case is `CurvePoint` (2D point
-/// in origin-centered pre-aspect curve space, the contract `node.render_lines`
-/// expects) vs. a hypothetical `ScreenPoint` (2D point already shifted into
-/// `[0, 1]` screen space). Both are 8 bytes of `vec2<f32>`; both would have
-/// connected silently under the old size/align-only check. With `ItemKind` on
-/// the wire they don't.
-///
-/// New variants ship one at a time as new conventions enter the primitive
-/// library. Anonymous is the deliberate opt-out for genuinely untyped raw
-/// buffers (escape-hatch nodes, ad-hoc scratch) — it matches only other
-/// Anonymous wires of the same size/align. The `every_array_port_declares_a_kind`
-/// CI sweep test in `crate::node_graph::primitive` walks the registry and
-/// refuses any conventional Array port that lands as Anonymous, so the opt-out
-/// stays deliberate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ItemKind {
-    /// Raw byte buffer with no declared semantic. Matches only other
-    /// Anonymous wires of the same size/align. Use when the buffer is
-    /// scratch state local to a single primitive or its escape-hatch
-    /// WGSL nodes — anything that flows between curated primitives
-    /// should carry a real kind.
-    Anonymous,
-    /// 2D point in origin-centered pre-aspect curve space. The contract
-    /// every line-renderer (`node.render_lines`) consumes; produced by
-    /// `pack_curve_xy`, `project_3d`, `project_4d`,
-    /// `concentric_outlines`, `polygon_shape`. Origin is the visual
-    /// centre; aspect correction + screen offset live in the consumer.
-    CurvePoint,
-    /// 3D mesh vertex with surface normal. 32 bytes. Produced by
-    /// `generate_grid_mesh` / `generate_cube_mesh` / `wireframe_shape`;
-    /// consumed by the `node.render_3d_mesh` family and `project_3d`.
-    MeshVertex,
-    /// 4D vertex in homogeneous hypercube space, before 4D rotation
-    /// and projection-to-3D. Produced by `generate_tesseract_vertices`
-    /// (closed polytope) or `pack_vec4` (parametric-surface authoring,
-    /// see Duocylinder); consumed by `rotate_4d` / `project_4d`.
-    Vec4Vertex,
-    /// Explicit `(a, b)` edge between two vertices in a sibling
-    /// `Array<CurvePoint>` or `Array<MeshVertex>` buffer. The topology
-    /// wire that lets line-renderers draw arbitrary wireframes.
-    EdgePair,
-    /// Per-instance transform for instanced mesh rendering. 32 bytes.
-    /// Produced by `generate_instance_transforms`; consumed by
-    /// `render_instanced_3d_mesh`, `digital_plants_render`,
-    /// `neighbor_smooth`.
-    InstanceTransform,
-    /// Particle struct (position + velocity + life + color, 64 bytes)
-    /// flowing through every node in the particle-sim chain.
-    Particle,
-    /// Detected blob (bounding box) emitted by the FFI blob detector
-    /// and consumed by overlay-render primitives.
-    Blob,
-    /// Raw `u32` slot — scatter / accumulator buffers and grid
-    /// indices. Distinct from `Anonymous` because the convention
-    /// "one u32 per cell" is real and shared across the
-    /// `scatter_*` / `resolve_*` family.
-    U32Slot,
-    /// Raw `f32` slot — variable-length numeric arrays, e.g. per-
-    /// instance rotation angles emitted by `cycle_table_row` and
-    /// `scalar_array_accumulator`, consumed by primitives that take
-    /// a target-pose buffer (e.g. `nested_cubes_geometry`).
-    F32Slot,
-    /// Raw `vec2<f32>` slot — variable-length 2D vector arrays, e.g.
-    /// per-instance UV coordinates emitted by `grid_uv_field`,
-    /// consumed by per-instance noise samplers and topology-wrap
-    /// primitives. Distinct from `CurvePoint` because the convention
-    /// here is "raw 2D data with no declared coordinate space"; if a
-    /// specific space (origin-centered curve, screen, world) becomes
-    /// load-bearing, promote to a named struct + named `ItemKind`.
-    Vec2Slot,
-}
+// `pub enum ItemKind` deleted in Phase 4b. The wire's semantic
+// identity is now carried entirely by the [`ArrayType::specs`] slice
+// (a list of named typed [`ChannelSpec`]s); the legacy
+// `(item_size, item_align, item_kind)` triple collapses to just the
+// (size, align) pair plus the specs. See
+// `docs/CHANNEL_TYPE_SYSTEM.md` §5.
 
 /// Compile-time descriptor for an item type that flows through an
 /// [`ArrayType`] wire. Every canonical item struct in the primitive
 /// library implements this; the `Array(T)` syntax in the
 /// [`primitive!`](crate::primitive) macro requires it.
 ///
-/// Two implementations of `KnownItem` with the same `ITEM_KIND` are
-/// declared interchangeable; the wire validator checks the kind in
-/// addition to size/align. Adding a new conventional item type means
-/// (a) adding a variant to [`ItemKind`], (b) implementing this trait
-/// for the struct, and (c) consumers / producers picking up the new
-/// kind via `Array(NewType)` in their `primitive!` declaration.
+/// Implementations supply a [`SPECS`](KnownItem::SPECS) slice naming
+/// the per-sample channels; [`ArrayType::of_known`] folds it into the
+/// wire type so every `Array(T)` declaration becomes Channels-typed
+/// without any per-primitive macro change. Adding a new conventional
+/// item type means writing the `#[repr(C)]` struct + a `KnownItem`
+/// impl that points `SPECS` at a `const _SPECS: &[ChannelSpec]`
+/// describing the same byte layout.
 pub trait KnownItem: bytemuck::Pod {
-    const ITEM_KIND: ItemKind;
-    /// Named typed channels per sample, in std430 order. Populated for
-    /// migrated typed families per `docs/CHANNEL_TYPE_SYSTEM.md` §6;
-    /// the default `&[]` keeps pre-migration types compiling unchanged.
-    /// When non-empty, [`ArrayType::of_known`] folds this into the
-    /// wire's `specs` so the new validator path runs end-to-end on
-    /// `Array(T)` syntax (no JSON change needed; existing primitives
-    /// declaring `Array(T)` automatically gain Channels-aware
-    /// validation as their family migrates).
+    /// Named typed channels per sample, in std430 order. See
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` §6 for the per-typed-family
+    /// signatures.
     const SPECS: &'static [ChannelSpec] = &[];
 }
 
 impl KnownItem for u32 {
-    const ITEM_KIND: ItemKind = ItemKind::U32Slot;
     // Single-channel `value: U32` — the canonical convention for
     // bare scalar arrays (scatter accumulators, grid indices, ID
     // streams) per `docs/CHANNEL_TYPE_SYSTEM.md` §6.8.
@@ -161,7 +86,6 @@ impl KnownItem for u32 {
 }
 
 impl KnownItem for f32 {
-    const ITEM_KIND: ItemKind = ItemKind::F32Slot;
     const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
         name: ChannelName::from_str("value"),
         ty: ChannelElementType::F32,
@@ -169,7 +93,6 @@ impl KnownItem for f32 {
 }
 
 impl KnownItem for [f32; 2] {
-    const ITEM_KIND: ItemKind = ItemKind::Vec2Slot;
     // Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
     // preserves byte parity with the existing `[f32; 2]` layout per
     // the §6.8 / §13(3) resolution.
@@ -182,21 +105,15 @@ impl KnownItem for [f32; 2] {
 /// Layout descriptor for [`PortType::Array`] wires.
 ///
 /// Two `Array` ports can connect iff their type identity matches. The
-/// wire's type identity is *transitioning* across this migration:
+/// identity is the [`specs`](ArrayType::specs) slice (a list of named
+/// typed [`ChannelSpec`]s describing the per-sample channels) plus
+/// the validator policy carried in [`match_mode`](ArrayType::match_mode).
+/// `item_size` and `item_align` are derived from `specs` via std430
+/// layout rules — they stay on the struct for fast lookup at the GPU
+/// bind site but are not part of the type identity beyond what specs
+/// already encodes.
 ///
-/// - Pre-migration (and still the fallback path for Phase 1-3): the
-///   `(item_size, item_align, item_kind)` triple is the identity, with
-///   an asymmetric coercion at the `Anonymous` boundary (see
-///   `port_types_compatible` in `validation.rs`).
-/// - Post-migration (Phase 3+): the `specs` slice is the identity — a
-///   list of named typed [`ChannelSpec`]s describing the per-sample
-///   channels. See `docs/CHANNEL_TYPE_SYSTEM.md`.
-///
-/// Phase 1 reshapes this struct to carry BOTH the legacy triple AND
-/// the new `specs` + `match_mode` fields. Per-primitive `_SPECS`
-/// constants populate `specs` as each typed family migrates in Phase
-/// 3; `item_kind` deletes in Phase 4 alongside the cast atoms and the
-/// `Anonymous` coercion path.
+/// See `docs/CHANNEL_TYPE_SYSTEM.md` for the type-system contract.
 ///
 /// The shader on either side owns the per-byte interpretation —
 /// canonical struct layouts live in
@@ -205,74 +122,64 @@ impl KnownItem for [f32; 2] {
 /// (`CurvePoint`, `MeshVertex`, `EdgePair`, …) with `#[repr(C)]` and
 /// `bytemuck::Pod` and a [`KnownItem`] impl. The `primitive!` macro
 /// provides `Array<Particle>` syntactic sugar that expands to
-/// `ArrayType::of_known::<Particle>()`.
+/// `ArrayType::of_known::<Particle>()`; inline `Channels[name: Type, …]`
+/// syntax is the equivalent for ad-hoc signatures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ArrayType {
     pub item_size: u32,
     pub item_align: u32,
-    pub item_kind: ItemKind,
-    /// Named typed channels per sample. Empty for legacy (pre-Phase-3)
-    /// declarations; populated by `_SPECS` constants as typed families
-    /// migrate. When non-empty on BOTH the producer and consumer of a
-    /// wire, drives the validator's [`channels_compatible`] check.
-    /// When empty on either side, the validator falls back to the
-    /// legacy `item_kind` + size + align match (with the Anonymous
-    /// coercion). See `docs/CHANNEL_TYPE_SYSTEM.md` §4-§5.
+    /// Named typed channels per sample, in std430 order. Drives the
+    /// validator's [`channels_compatible`] check. See
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` §4-§5.
     pub specs: &'static [ChannelSpec],
-    /// Wire-validator matching policy for this port's Channels
-    /// signature. Default [`MatchMode::Exact`]; [`MatchMode::Permissive`]
-    /// is the opt-in for generic transform operators (`rename_channel`,
-    /// `reorder_channels`, etc.) whose input port accepts any Channels
-    /// signature. Only consulted when `specs` is non-empty.
+    /// Wire-validator matching policy. Default [`MatchMode::Exact`];
+    /// [`MatchMode::Permissive`] is the opt-in for generic transform
+    /// operators (`rename_channel`, `reorder_channels`, etc.) whose
+    /// input port accepts any Channels signature.
     pub match_mode: MatchMode,
 }
 
 impl ArrayType {
-    /// Construct an `ArrayType` from a struct's compile-time layout,
-    /// carrying [`ItemKind::Anonymous`]. Use [`ArrayType::of_known`]
-    /// instead whenever the item has a declared convention — the
-    /// macro does this automatically for every `Array(T)` declaration.
+    /// Construct an `ArrayType` for a `T: Pod` with no declared
+    /// Channels signature — the wire carries raw bytes of `T`'s size
+    /// and alignment. Use [`ArrayType::of_known`] instead whenever
+    /// the item has a `KnownItem` impl with a `SPECS` constant; the
+    /// `primitive!` macro does this automatically for every
+    /// `Array(T)` declaration.
+    ///
+    /// Surviving callers (post-cast-atom-deletion): the few WGSL-
+    /// escape-hatch primitives whose output is genuinely untyped
+    /// (raw atomic scratch slots, etc.). The validator's raw-byte
+    /// fallback in `port_types_compatible` accepts these against
+    /// other empty-specs Array wires of matching size+align.
     pub const fn of<T: bytemuck::Pod>() -> Self {
         Self {
             item_size: std::mem::size_of::<T>() as u32,
             item_align: std::mem::align_of::<T>() as u32,
-            item_kind: ItemKind::Anonymous,
             specs: &[],
             match_mode: MatchMode::Exact,
         }
     }
 
     /// Construct an `ArrayType` from a struct's compile-time layout,
-    /// tagging it with the struct's declared [`ItemKind`]. The
-    /// `primitive!` macro emits this for every `Array(T)` port so
-    /// authors don't pick the kind manually — picking the wrong kind
-    /// would either fail to compile (no `KnownItem` impl) or fail
-    /// wire validation downstream.
+    /// folding the struct's `KnownItem::SPECS` into the wire's
+    /// Channels signature. The `primitive!` macro emits this for
+    /// every `Array(T)` port declaration; downstream wires validate
+    /// through the Channels-aware path in `validation::channels_compatible`.
     pub const fn of_known<T: KnownItem>() -> Self {
         Self {
             item_size: std::mem::size_of::<T>() as u32,
             item_align: std::mem::align_of::<T>() as u32,
-            item_kind: T::ITEM_KIND,
-            // Phase 3: pull SPECS from the trait. For typed families
-            // that have migrated (Particle, MeshVertex, EdgePair, etc.)
-            // this lights up the Channels-aware validator path on every
-            // existing `Array(T)` declaration without touching any
-            // primitive call site. Pre-migration types use the default
-            // `&[]` and continue through the legacy `item_kind` path.
             specs: T::SPECS,
             match_mode: MatchMode::Exact,
         }
     }
 
     /// Construct a Channels-shaped `ArrayType` from a static slice of
-    /// channel specs. `item_size` and `item_align` are derived from the
-    /// specs via std430 layout rules; the legacy `item_kind` is set to
-    /// [`ItemKind::Anonymous`] so existing `port_types_compatible`
-    /// behaviour for typed wires is unaffected during Phase 1-3.
-    ///
-    /// Phase 3 wires this onto each typed family's `_SPECS` constant.
-    /// Phase 4 deletes `item_kind` entirely and this becomes the only
-    /// constructor for non-Pod-only ports.
+    /// channel specs. `item_size` and `item_align` are derived from
+    /// the specs via std430 layout rules. The canonical constructor
+    /// for ad-hoc signatures declared via inline `Channels[name: Type, …]`
+    /// macro syntax (per `docs/CHANNEL_TYPE_SYSTEM.md` §12.1).
     pub const fn of_channels(
         specs: &'static [ChannelSpec],
         match_mode: MatchMode,
@@ -281,7 +188,6 @@ impl ArrayType {
         Self {
             item_size,
             item_align,
-            item_kind: ItemKind::Anonymous,
             specs,
             match_mode,
         }
@@ -629,10 +535,5 @@ mod channel_layout_tests {
         assert_eq!(array_type.item_align, expected_align);
         assert_eq!(array_type.specs, SPECS);
         assert_eq!(array_type.match_mode, MatchMode::Exact);
-        assert_eq!(
-            array_type.item_kind,
-            ItemKind::Anonymous,
-            "Phase 1-3: Channels-shaped ArrayTypes carry Anonymous kind to stay neutral with the existing validator"
-        );
     }
 }

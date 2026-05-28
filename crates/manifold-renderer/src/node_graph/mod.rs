@@ -76,9 +76,9 @@ pub use persistence::{
     NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,
 };
 pub use ports::{
-    ArrayType, ChannelElementType, ChannelName, ChannelSpec, ItemKind, KnownItem, MatchMode,
-    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType, std430_layout,
-    std430_stride, std430_stride_and_align,
+    ArrayType, ChannelElementType, ChannelName, ChannelSpec, KnownItem, MatchMode, NodeInput,
+    NodeOutput, NodePort, PortKind, PortType, ScalarType, std430_layout, std430_stride,
+    std430_stride_and_align,
 };
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{

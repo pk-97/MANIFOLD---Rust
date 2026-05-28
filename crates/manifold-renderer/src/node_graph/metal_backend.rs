@@ -708,10 +708,11 @@ mod array_buffer_tests {
     }
 
     fn particle_layout() -> ArrayType {
-        // Canonical Particle layout. The kind tag is load-bearing —
-        // pre-bind_array keys its pool on (size, align, kind) so two
-        // ArrayTypes with the same byte layout but different ItemKind
-        // get separate buffers.
+        // Canonical Particle layout. The Channels signature is load-
+        // bearing — pre-bind_array keys its pool on the full
+        // ArrayType (size, align, specs, match_mode) so two
+        // ArrayTypes with the same byte layout but different
+        // Channels signatures get separate buffers.
         ArrayType::of_known::<crate::generators::compute_common::Particle>()
     }
 

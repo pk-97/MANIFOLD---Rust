@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn cylinder_wrap_field_ports() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType, ScalarType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         let f32_layout = ArrayType::of_known::<f32>();
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
@@ -198,7 +198,6 @@ mod tests {
         let uv_in = CylinderWrapField::INPUTS.iter().find(|p| p.name == "uv").unwrap();
         assert!(uv_in.required);
         assert_eq!(uv_in.ty, PortType::Array(vec2_layout));
-        assert_eq!(vec2_layout.item_kind, ItemKind::Vec2Slot);
 
         let disp_in = CylinderWrapField::INPUTS
             .iter()
@@ -222,7 +221,6 @@ mod tests {
             CylinderWrapField::OUTPUTS[0].ty,
             PortType::Array(inst_layout),
         );
-        assert_eq!(inst_layout.item_kind, ItemKind::InstanceTransform);
     }
 
     #[test]

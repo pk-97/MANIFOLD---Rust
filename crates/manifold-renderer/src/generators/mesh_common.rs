@@ -11,12 +11,12 @@
 //!
 //! Every struct here implements
 //! [`KnownItem`](crate::node_graph::ports::KnownItem) so the
-//! `primitive!` macro's `Array(T)` declaration carries the
-//! coordinate / convention tag on the wire — see
-//! [`ItemKind`](crate::node_graph::ports::ItemKind).
+//! `primitive!` macro's `Array(T)` declaration carries the named
+//! Channels signature on the wire — see
+//! `docs/CHANNEL_TYPE_SYSTEM.md` §6 for the per-family layouts.
 
 use crate::node_graph::channel_names::well_known;
-use crate::node_graph::ports::{ChannelElementType, ChannelSpec, ItemKind, KnownItem};
+use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 /// A 3D mesh vertex with surface normal and UV. Used by
 /// `node.generate_grid_mesh` and consumed by `node.render_3d_mesh`.
@@ -52,7 +52,6 @@ pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
 ];
 
 impl KnownItem for MeshVertex {
-    const ITEM_KIND: ItemKind = ItemKind::MeshVertex;
     const SPECS: &'static [ChannelSpec] = MESH_VERTEX_SPECS;
 }
 
@@ -79,7 +78,6 @@ pub const VEC4_VERTEX_SPECS: &[ChannelSpec] = &[
 ];
 
 impl KnownItem for Vec4Vertex {
-    const ITEM_KIND: ItemKind = ItemKind::Vec4Vertex;
     const SPECS: &'static [ChannelSpec] = VEC4_VERTEX_SPECS;
 }
 
@@ -110,7 +108,6 @@ pub const INSTANCE_TRANSFORM_SPECS: &[ChannelSpec] = &[
 ];
 
 impl KnownItem for InstanceTransform {
-    const ITEM_KIND: ItemKind = ItemKind::InstanceTransform;
     const SPECS: &'static [ChannelSpec] = INSTANCE_TRANSFORM_SPECS;
 }
 
@@ -130,9 +127,10 @@ impl KnownItem for InstanceTransform {
 /// This contract is enforced by the
 /// [`KnownItem`](crate::node_graph::ports::KnownItem) impl: any
 /// producer whose `Array(CurvePoint)` output wires into
-/// `Array(CurvePoint)` declares this convention; the wire validator
-/// refuses to connect a `CurvePoint` output to a port expecting
-/// any other [`ItemKind`](crate::node_graph::ports::ItemKind).
+/// `Array(CurvePoint)` declares this convention via the matching
+/// Channels signature (`[x: F32, y: F32]`); the wire validator
+/// refuses to connect a `CurvePoint` output to a port whose
+/// Channels signature differs.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CurvePoint {
@@ -151,7 +149,6 @@ pub const CURVE_POINT_SPECS: &[ChannelSpec] = &[
 ];
 
 impl KnownItem for CurvePoint {
-    const ITEM_KIND: ItemKind = ItemKind::CurvePoint;
     const SPECS: &'static [ChannelSpec] = CURVE_POINT_SPECS;
 }
 
@@ -194,7 +191,6 @@ pub const EDGE_PAIR_SPECS: &[ChannelSpec] = &[
 ];
 
 impl KnownItem for EdgePair {
-    const ITEM_KIND: ItemKind = ItemKind::EdgePair;
     const SPECS: &'static [ChannelSpec] = EDGE_PAIR_SPECS;
 }
 

@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn simplex_per_instance_declares_vec2_in_and_f32_out() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType};
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         let f32_layout = ArrayType::of_known::<f32>();
         assert_eq!(SimplexPerInstance::TYPE_ID, "node.simplex_per_instance");
@@ -195,7 +195,6 @@ mod tests {
             .expect("uv input must exist");
         assert!(uv_in.required);
         assert_eq!(uv_in.ty, PortType::Array(vec2_layout));
-        assert_eq!(vec2_layout.item_kind, ItemKind::Vec2Slot);
 
         assert_eq!(SimplexPerInstance::OUTPUTS.len(), 1);
         assert_eq!(SimplexPerInstance::OUTPUTS[0].name, "out");

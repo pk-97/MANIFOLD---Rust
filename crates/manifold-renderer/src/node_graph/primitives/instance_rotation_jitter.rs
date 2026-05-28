@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn instance_rotation_jitter_ports() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType, ScalarType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(InstanceRotationJitter::TYPE_ID, "node.instance_rotation_jitter");
 
@@ -159,7 +159,6 @@ mod tests {
             .unwrap();
         assert!(inst_in.required);
         assert_eq!(inst_in.ty, PortType::Array(inst_layout));
-        assert_eq!(inst_layout.item_kind, ItemKind::InstanceTransform);
 
         let amp = InstanceRotationJitter::INPUTS
             .iter()

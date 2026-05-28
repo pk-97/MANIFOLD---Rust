@@ -708,14 +708,6 @@ macro_rules! __primitive_port_type {
             $crate::node_graph::ports::ArrayType::of_known::<$T>()
         )
     };
-    // `ArrayAnonymous(T)` — same size/align as T but `ItemKind::Anonymous`.
-    // Used by cast atoms whose input is a raw byte buffer (typical
-    // wgsl_compute output) of a specific shape but no declared semantic.
-    (ArrayAnonymous, $T:ty) => {
-        $crate::node_graph::ports::PortType::Array(
-            $crate::node_graph::ports::ArrayType::of::<$T>()
-        )
-    };
     (Camera) => {
         $crate::node_graph::ports::PortType::Camera
     };
@@ -735,7 +727,6 @@ macro_rules! __primitive_port_type {
             $crate::node_graph::ports::ArrayType {
                 item_size: 0,
                 item_align: 4,
-                item_kind: $crate::node_graph::ports::ItemKind::Anonymous,
                 specs: &[],
                 match_mode: $crate::node_graph::ports::MatchMode::Permissive,
             }
@@ -952,10 +943,11 @@ mod tests {
     // for the assertions below without forcing the test to depend on
     // the production `Particle` layout (which lives in `generators/`).
     //
-    // Tagged `ItemKind::Anonymous` because no convention is asserted
-    // for this purely-structural smoke test — the registry sweep
-    // (`every_conventional_array_port_declares_a_kind`) carves out
-    // the `node.__smoke_test_*` type-IDs for the same reason.
+    // No Channels signature is declared on the `KnownItem` impl below
+    // — this smoke fixture exercises the Array(T) macro path with a
+    // raw `T: Pod`. The registry sweep
+    // (`every_conventional_array_port_declares_a_channels_signature`)
+    // carves out `node.__smoke_test_*` type-IDs for the same reason.
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
     struct ArraySmokeItem {
@@ -964,8 +956,9 @@ mod tests {
     }
 
     impl crate::node_graph::ports::KnownItem for ArraySmokeItem {
-        const ITEM_KIND: crate::node_graph::ports::ItemKind =
-            crate::node_graph::ports::ItemKind::Anonymous;
+        // No SPECS — this smoke fixture exercises the Array(T)
+        // macro syntax with a `T: Pod` that has no declared Channels
+        // signature (the default `&[]` from the trait covers it).
     }
 
     crate::primitive! {

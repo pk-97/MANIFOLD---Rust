@@ -702,45 +702,34 @@ mod tests {
     }
 
     /// Every shipping primitive's Array ports must carry a declared
-    /// [`ItemKind`](super::super::ports::ItemKind). The kind tag is
-    /// what makes wire validation refuse to connect byte-identical
-    /// buffers whose conventions don't match — `CurvePoint` (origin-
-    /// centered 2D) vs `EdgePair` (two u32 indices) are both 8/4 and
-    /// would have connected silently under a pure size/align check.
-    /// With the kind tag they don't.
+    /// Channels signature ([`ArrayType::specs`] non-empty). The
+    /// signature is what makes wire validation refuse to connect
+    /// byte-identical buffers whose conventions don't match —
+    /// `CurvePoint` (channels `x, y`) vs `EdgePair` (channels
+    /// `a_index, b_index`) are both 8/4 and would have connected
+    /// silently under a pure size/align check. With named channels
+    /// they don't.
     ///
-    /// `ItemKind::Anonymous` is the deliberate opt-out for genuinely
-    /// untyped buffers (raw bytes between WGSL escape-hatch nodes,
-    /// scratch state). It's allowed for `node.wgsl_compute_*` type-IDs
-    /// and the `node.__smoke_test_*` test fixtures — anywhere else it
-    /// is a CI failure pointing at a missing
-    /// [`KnownItem`](super::super::ports::KnownItem) impl on the item
-    /// struct.
+    /// Empty-specs Array ports are the deliberate opt-out for
+    /// genuinely untyped raw-byte buffers (escape-hatch nodes,
+    /// scratch state). Allowed for `node.wgsl_compute*` (the wire
+    /// shape derives from user WGSL via naga — `_pad*` fields skip,
+    /// matrices and runtime arrays fall back to empty specs) and the
+    /// `node.__smoke_test_*` fixtures. Anywhere else it's a CI
+    /// failure pointing at a missing `KnownItem::SPECS` or a missing
+    /// inline `Channels[…]` declaration.
     ///
     /// Walks the live [`super::super::PrimitiveRegistry`] so new
-    /// primitives are picked up automatically — no central list to
-    /// maintain. This is the structural fence against the recurring
-    /// coordinate-space contract bug (Tesseract / Duocylinder
-    /// spawning in the top-right because a producer used the wrong
-    /// convention) — see `crates/manifold-renderer/src/node_graph/ports.rs`
-    /// for the `ItemKind` rationale.
+    /// primitives are picked up automatically.
     #[test]
-    fn every_conventional_array_port_declares_a_kind() {
+    fn every_conventional_array_port_declares_a_channels_signature() {
         use super::super::PrimitiveRegistry;
-        use super::super::ports::{ItemKind, PortType};
+        use super::super::ports::PortType;
 
         let registry = PrimitiveRegistry::with_builtin();
         let mut violations: Vec<String> = Vec::new();
         for type_id in registry.known_type_ids() {
-            // Carve-outs:
-            //   - `node.wgsl_compute*` — escape-hatch primitives whose
-            //     wire shape is derived from the user's WGSL via naga
-            //     (see `docs/CHANNEL_TYPE_SYSTEM.md` §8).
-            //   - `node.__smoke_test_*` — macro-system test fixtures
-            //     that exist purely to exercise authoring scaffolding.
-            //   - `system.*` — boundary nodes (source, final_output,
-            //     generator_input) whose wires are texture/scalar, not
-            //     Array, but the carve-out is cheap defensive depth.
+            // Carve-outs (see doc comment above for rationale).
             if type_id.starts_with("node.wgsl_compute")
                 || type_id.starts_with("node.__smoke_test_")
                 || type_id.starts_with("system.")
@@ -753,27 +742,17 @@ mod tests {
             };
 
             let mut check_port = |kind_label: &str, port_name: &str, ty: &PortType| {
-                // Phase 4b transition: inline `Channels[name: Type, …]`
-                // declarations produce `ItemKind::Anonymous` but carry
-                // a non-empty `specs` slice — the typed semantic lives
-                // in the Channels signature, not the ItemKind tag. Only
-                // flag Anonymous-AND-empty-specs ports as violations;
-                // those are the ones that actually lack a type
-                // declaration. (The ItemKind tag itself deletes in the
-                // next cascade step, at which point this test also
-                // collapses to "every Array port has non-empty specs.")
                 if let PortType::Array(layout) = ty
-                    && layout.item_kind == ItemKind::Anonymous
                     && layout.specs.is_empty()
                 {
                     violations.push(format!(
                         "{type_id}: {kind_label} `{port_name}` is Array<…> \
-                         with no typed signature (item_kind = Anonymous \
-                         AND specs is empty). Either declare the port via \
-                         `Array(T)` (with a `KnownItem` impl on T), via \
-                         `Channels[name: Type, …]` inline syntax, or — if \
-                         the buffer is genuinely untyped scratch — extend \
-                         this test's carve-out list.",
+                         with no Channels signature (specs is empty). \
+                         Declare the port via `Array(T)` (with a \
+                         `KnownItem` impl on T that sets `SPECS`), via \
+                         inline `Channels[name: Type, …]` syntax, or — \
+                         if the buffer is genuinely untyped scratch — \
+                         extend this test's carve-out list.",
                     ));
                 }
             };
@@ -787,7 +766,7 @@ mod tests {
         }
         assert!(
             violations.is_empty(),
-            "Array-port ItemKind invariant violations:\n  {}",
+            "Array-port Channels-signature invariant violations:\n  {}",
             violations.join("\n  "),
         );
     }

@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn instance_position_jitter_ports() {
-        use crate::node_graph::ports::{ArrayType, ItemKind, PortType, ScalarType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         assert_eq!(InstancePositionJitter::TYPE_ID, "node.instance_position_jitter");
@@ -221,7 +221,6 @@ mod tests {
             .unwrap();
         assert!(inst_in.required);
         assert_eq!(inst_in.ty, PortType::Array(inst_layout));
-        assert_eq!(inst_layout.item_kind, ItemKind::InstanceTransform);
 
         let uv_in = InstancePositionJitter::INPUTS
             .iter()
