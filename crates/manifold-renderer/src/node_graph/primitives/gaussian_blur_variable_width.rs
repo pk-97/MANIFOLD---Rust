@@ -13,7 +13,7 @@
 //!
 //!   * `quality`        — Low (9-tap) / Medium (17-tap) / High (25-tap).
 //!   * `weighting_mode` — None (plain Gaussian) / ScatterAsGatherByCoC
-//!                        (foreground-bleed guard for CoC-driven blurs).
+//!     (foreground-bleed guard for CoC-driven blurs).
 //!
 //! The 6 specialized pipelines are lazily compiled on first use and
 //! cached. Defaults preserve the original behaviour (Medium + None).
