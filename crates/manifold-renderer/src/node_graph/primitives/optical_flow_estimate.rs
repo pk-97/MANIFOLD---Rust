@@ -77,7 +77,20 @@ crate::primitive! {
         in: Texture2D required,
     },
     outputs: {
-        out: Texture2D,
+        // R = flow_x (UV units; positive = right)
+        // G = confidence (0..1)
+        // B = flow_y (UV units; positive = down)
+        // A = valid_mask (0 or 1)
+        //
+        // Watercolor convention — R and B carry the flow components,
+        // G the confidence, A the validity. The §17 texture-channel
+        // signature catches the silent layout-mismatch class that
+        // motivated this extension (consumers reading `flow_y` from
+        // the wrong slot get a structured ChannelMismatch at graph
+        // compile time instead of garbage on screen). Consumers that
+        // haven't migrated to declare their own typed signature stay
+        // wireable through the untyped Texture2D back-compat valve.
+        out: Texture2D[R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID],
         cut_score: ScalarF32,
     },
     params: [
@@ -397,14 +410,26 @@ mod tests {
 
     #[test]
     fn optical_flow_estimate_declares_one_input_and_two_outputs() {
-        use crate::node_graph::ports::{PortType, ScalarType};
+        use crate::node_graph::channel_names::well_known;
+        use crate::node_graph::ports::{PortType, ScalarType, TextureChannels};
         assert_eq!(OpticalFlowEstimate::TYPE_ID, "node.optical_flow_estimate");
         assert_eq!(OpticalFlowEstimate::INPUTS.len(), 1);
         assert_eq!(OpticalFlowEstimate::INPUTS[0].name, "in");
         assert_eq!(OpticalFlowEstimate::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(OpticalFlowEstimate::OUTPUTS.len(), 2);
         assert_eq!(OpticalFlowEstimate::OUTPUTS[0].name, "out");
-        assert_eq!(OpticalFlowEstimate::OUTPUTS[0].ty, PortType::Texture2D);
+        // The output declares the Watercolor RGBA layout per §17 so
+        // any consumer that has also migrated to a typed Texture2D
+        // signature gets a structured ChannelMismatch on layout drift.
+        assert_eq!(
+            OpticalFlowEstimate::OUTPUTS[0].ty,
+            PortType::Texture2DTyped(TextureChannels::new(
+                well_known::FLOW_X,
+                well_known::CONFIDENCE,
+                well_known::FLOW_Y,
+                well_known::VALID,
+            ))
+        );
         assert_eq!(OpticalFlowEstimate::OUTPUTS[1].name, "cut_score");
         assert_eq!(
             OpticalFlowEstimate::OUTPUTS[1].ty,
