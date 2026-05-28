@@ -515,6 +515,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                         .collect(),
                     editor_pos: None,
                     wgsl_source: inst.node.wgsl_source().map(|s| s.to_string()),
+                    title: inst.node.display_title().map(|s| s.to_string()),
                     output_formats,
                     output_canvas_scales,
                 }
@@ -974,6 +975,68 @@ mod tests {
         );
     }
 
+    /// `node.wgsl_compute` carries an optional author-supplied `title`
+    /// — the field the graph-canvas header renders as `"<title> (WGSL)"`
+    /// so the four escape-hatch nodes in BlackHole (or any preset that
+    /// stacks them) can be told apart at a glance. Confirms the field
+    /// round-trips through JSON, that `into_graph` installs it via
+    /// `EffectNode::set_display_title`, and that `from_graph` reads it
+    /// back from `EffectNode::display_title`.
+    #[test]
+    fn wgsl_compute_title_field_round_trips_through_json() {
+        let doc = GraphDocument {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![NodeDocument {
+                id: 0,
+                type_id: "node.wgsl_compute".to_string(),
+                handle: Some("simulate".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: Some("Particle Sim".to_string()),
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+            }],
+            wires: vec![],
+        };
+
+        // JSON carries the field with the camelCase key the rest of the
+        // schema uses (handle/wgslSource/editorPos all follow this).
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(
+            json.contains("\"title\":\"Particle Sim\""),
+            "JSON must carry the title field; got: {json}"
+        );
+
+        // Load → install on the node via set_display_title.
+        let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
+        let g = parsed.into_graph(&registry()).unwrap();
+        let kernel_id = g.node_id_by_handle("simulate").expect("handle survived");
+        let inst = g.get_node(kernel_id).unwrap();
+        assert_eq!(
+            inst.node.display_title(),
+            Some("Particle Sim"),
+            "title must reach the node via set_display_title",
+        );
+
+        // Re-serialize → title surfaces back out via display_title().
+        let doc2 = GraphDocument::from_graph(&g);
+        let kernel_doc = doc2
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("simulate"))
+            .expect("kernel node round-tripped");
+        assert_eq!(
+            kernel_doc.title.as_deref(),
+            Some("Particle Sim"),
+            "title must round-trip back out via display_title()",
+        );
+    }
+
     // Note: `output_format_override_round_trips_through_json` and
     // `declared_output_format_lands_in_compiled_plan` previously
     // exercised the legacy `wgsl_compute_0in_1tex` / `_1tex_1tex` /
@@ -1006,6 +1069,7 @@ mod tests {
                 exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                title: None,
                 output_formats,
                 output_canvas_scales,
             }],
@@ -1039,6 +1103,7 @@ mod tests {
                 exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
             }],
@@ -1080,6 +1145,7 @@ mod tests {
                     exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
+                    title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
                 },
@@ -1091,6 +1157,7 @@ mod tests {
                     exposed_params: Default::default(),
                     editor_pos: None,
                     wgsl_source: None,
+                    title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
                 },
@@ -1126,6 +1193,7 @@ mod tests {
                 exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
             }],
@@ -1156,6 +1224,7 @@ mod tests {
                 exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
             }],
@@ -1275,6 +1344,7 @@ mod tests {
                 exposed_params: Default::default(),
                 editor_pos: None,
                 wgsl_source: None,
+                title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
             }],
