@@ -43,6 +43,16 @@ pub struct SpliceResult {
     /// literals as `Cow::Borrowed("mix")` while JSON-loaded defs use
     /// `Cow::Owned` for names that came off disk.
     pub handles: Vec<(Cow<'static, str>, NodeInstanceId)>,
+
+    /// The spliced subgraph's `system.generator_input` node id, if the
+    /// preset included one. The chain runner pushes per-frame scalars
+    /// (time / beat / aspect / output dims) to this node so effects
+    /// can wire project timing through the standard port-shadows-param
+    /// machinery — the same surface generators have. `None` when the
+    /// preset has no `system.generator_input` (the case for almost
+    /// every shipping effect today; opt-in as effects migrate off the
+    /// hardcoded `apply_ctx_params_at` path).
+    pub generator_input_id: Option<NodeInstanceId>,
 }
 
 /// When the chain should drop an effect entirely (no workers added,
@@ -135,5 +145,6 @@ pub fn splice_def_into_chain(
     Some(SpliceResult {
         output: inst.output_endpoint?,
         handles: inst.effect_local_handles,
+        generator_input_id: inst.generator_input_id,
     })
 }

@@ -224,7 +224,24 @@ struct EffectSlot {
     /// Where to apply ctx-driven params (time / beat). The first
     /// handle for now — composite effects with multiple ctx-driven
     /// workers will need a richer resolution rule when we get there.
+    ///
+    /// **Deprecation path**: this is the hardcoded `apply_ctx_params_at`
+    /// hook used by the four legacy effects (Glitch / Strobe /
+    /// Watercolor / VoronoiPrism) that take `time` / `beat` directly
+    /// on a primitive param. New presets should include a
+    /// `system.generator_input` node in their JSON and wire its
+    /// scalar outputs through the standard port-shadows-param
+    /// machinery — that path runs via [`Self::generator_input_node`]
+    /// below and is the long-term replacement for `ctx_target_node`.
     ctx_target_node: Option<NodeInstanceId>,
+    /// Effect-side `system.generator_input` node id, if the preset
+    /// included one. Effects with a generator_input get per-frame
+    /// scalars (time / beat / aspect / output dims) pushed to this
+    /// node so the standard port-shadows-param wires propagate them
+    /// to inner primitives — the same surface generators have.
+    /// Lets effects react to project BPM, beat phase, output
+    /// resolution, etc., without any per-effect Rust code.
+    generator_input_node: Option<NodeInstanceId>,
 }
 
 impl ChainGraph {
@@ -397,7 +414,11 @@ impl ChainGraph {
                     primitives,
                 )?
             };
-            let SpliceResult { output, handles } = splice_result;
+            let SpliceResult {
+                output,
+                handles,
+                generator_input_id,
+            } = splice_result;
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
@@ -466,6 +487,7 @@ impl ChainGraph {
                 user_bindings_version,
                 binding_cache,
                 ctx_target_node,
+                generator_input_node: generator_input_id,
             });
             prev_node = output.0;
             prev_out_port = output.1;
@@ -682,6 +704,37 @@ impl ChainGraph {
                     &slot.effect_type,
                     ctx.time,
                     ctx.beat,
+                );
+            }
+            // New surface: if the preset includes a `system.generator_input`
+            // node, push every frame-context scalar (time / beat / aspect
+            // / output dims) into its params. The standard port-shadows-
+            // param machinery propagates these to inner primitives via
+            // scalar wires — same surface generators have, no per-effect
+            // Rust code. Effects opt in by wiring `system.generator_input`
+            // outputs in their JSON; the four legacy effects on
+            // `ctx_target_node` migrate to this path one preset at a time.
+            // `trigger_count` / `anim_progress` are clip-side concepts
+            // that don't reach the effect chain — they stay at the
+            // generator_input primitive's default (0.0).
+            if let Some(node) = slot.generator_input_node {
+                let aspect = if ctx.height > 0 {
+                    ctx.width as f32 / ctx.height as f32
+                } else {
+                    1.0
+                };
+                let _ = self.graph.set_param(node, "time", ParamValue::Float(ctx.time));
+                let _ = self.graph.set_param(node, "beat", ParamValue::Float(ctx.beat));
+                let _ = self.graph.set_param(node, "aspect", ParamValue::Float(aspect));
+                let _ = self.graph.set_param(
+                    node,
+                    "output_width",
+                    ParamValue::Float(ctx.output_width as f32),
+                );
+                let _ = self.graph.set_param(
+                    node,
+                    "output_height",
+                    ParamValue::Float(ctx.output_height as f32),
                 );
             }
         }
@@ -1648,5 +1701,184 @@ mod persistent_slot_tests {
             "compile() must mark mix.out as a persistent resource — \
              without that, the slot simulator can't dedicate a slot for it"
         );
+    }
+}
+
+#[cfg(test)]
+mod generator_input_tests {
+    //! Regression for the effect-side `system.generator_input` surface.
+    //! Effects that include a `system.generator_input` node in their
+    //! preset get per-frame scalars (time / beat / aspect / output
+    //! dims) pushed to it by the chain runner, the same way generators
+    //! do. The standard port-shadows-param machinery then propagates
+    //! those scalars to inner primitives via wires — no per-effect
+    //! Rust code, no hardcoded `apply_ctx_params_at` match list.
+    //!
+    //! These tests pin two contracts:
+    //! 1. **Splice surface**: a preset that includes
+    //!    `system.generator_input` causes [`SpliceResult::generator_input_id`]
+    //!    to be `Some`, threaded onto [`EffectSlot::generator_input_node`].
+    //! 2. **Per-frame push**: [`ChainGraph::run`] writes the
+    //!    [`EffectContext`]'s `time` / `beat` / `aspect` / output dims
+    //!    into the generator_input node's params via `set_param`.
+    use super::*;
+    use crate::node_graph::ParamValue;
+    use manifold_core::EffectTypeId;
+    use manifold_core::effect_definition_registry;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+
+    fn make_default(ty: EffectTypeId) -> EffectInstance {
+        effect_definition_registry::create_default(&ty)
+    }
+
+    /// A divergent EffectInstance whose graph contains a
+    /// `system.generator_input` node. Uses Invert as the host effect
+    /// type so we get a known canonical to override; the divergent def
+    /// is what actually drives splicing.
+    fn invert_with_generator_input() -> EffectInstance {
+        let custom_def: EffectGraphDef = serde_json::from_str(
+            r#"{
+                "version": 1,
+                "name": "test",
+                "nodes": [
+                    { "id": 0, "typeId": "system.source" },
+                    { "id": 1, "typeId": "system.generator_input", "handle": "input" },
+                    { "id": 2, "typeId": "node.invert", "handle": "invert" },
+                    { "id": 3, "typeId": "system.final_output" }
+                ],
+                "wires": [
+                    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+                ]
+            }"#,
+        )
+        .expect("test fixture parses");
+
+        let mut fx = make_default(EffectTypeId::INVERT_COLORS);
+        // Mark the divergent path live so try_build picks it up.
+        fx.graph = Some(custom_def);
+        fx.graph_version = fx.graph_version.wrapping_add(1);
+        fx
+    }
+
+    /// Build-time contract: a divergent def with a
+    /// `system.generator_input` node populates the EffectSlot's
+    /// `generator_input_node` field.
+    #[test]
+    fn splice_threads_generator_input_id_onto_effect_slot() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = invert_with_generator_input();
+
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+            .expect("chain builds with a divergent def including system.generator_input");
+
+        let slot = cg
+            .effect_nodes
+            .first()
+            .expect("Invert contributes one effect slot");
+        assert!(
+            slot.generator_input_node.is_some(),
+            "EffectSlot.generator_input_node must populate when the def \
+             includes a system.generator_input node — without this the \
+             chain runner has nowhere to push frame-context scalars and \
+             effects can't react to project time/beat."
+        );
+    }
+
+    /// Build-time symmetry: presets without `system.generator_input`
+    /// leave `EffectSlot.generator_input_node` as `None`. Most
+    /// shipping effects today fall in this bucket — the field is
+    /// opt-in.
+    #[test]
+    fn splice_leaves_generator_input_node_none_when_absent() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        // Canonical Invert preset has no system.generator_input.
+        let fx = make_default(EffectTypeId::INVERT_COLORS);
+
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+            .expect("Invert chain builds without divergent def");
+
+        let slot = cg
+            .effect_nodes
+            .first()
+            .expect("Invert contributes one effect slot");
+        assert!(
+            slot.generator_input_node.is_none(),
+            "EffectSlot.generator_input_node should stay None when the \
+             preset doesn't include a system.generator_input — opt-in surface."
+        );
+    }
+
+    /// Per-frame contract: after `ChainGraph::run`, the generator_input
+    /// node's `time` / `beat` / `aspect` / `output_width` /
+    /// `output_height` params reflect the [`EffectContext`].
+    /// Exercises the param-write half of the system; the
+    /// scalar-wire-propagation half is covered by the
+    /// `generator_input_params_drive_scalar_outputs` test in
+    /// `boundary_nodes.rs`.
+    #[test]
+    fn run_pushes_frame_context_into_generator_input_params() {
+        use crate::effect::EffectContext;
+        use crate::gpu_encoder::GpuEncoder;
+
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = invert_with_generator_input();
+
+        let mut cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)
+            .expect("chain builds");
+
+        let gi_id = cg
+            .effect_nodes
+            .first()
+            .and_then(|s| s.generator_input_node)
+            .expect("splice populated generator_input_node");
+
+        // A dummy input texture for `run` to install into the source slot.
+        let input = crate::render_target::RenderTarget::new(
+            &device,
+            256,
+            256,
+            GpuTextureFormat::Rgba16Float,
+            "test-source-input",
+        );
+
+        let mut native_enc = device.create_encoder("generator-input-test");
+        let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+
+        let ctx = EffectContext {
+            time: 1.5,
+            beat: 2.25,
+            dt: 1.0 / 60.0,
+            width: 1920,
+            height: 1080,
+            output_width: 3840,
+            output_height: 2160,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+        };
+
+        cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx);
+
+        let node = cg
+            .graph
+            .get_node(gi_id)
+            .expect("generator_input node id still valid");
+        let read = |name: &str| -> Option<f32> {
+            node.params.get(name).and_then(|v| match v {
+                ParamValue::Float(f) => Some(*f),
+                _ => None,
+            })
+        };
+        assert_eq!(read("time"), Some(1.5));
+        assert_eq!(read("beat"), Some(2.25));
+        // aspect derives from ctx.width / ctx.height (the render-resolution
+        // dims, not the upscale-target output_* fields).
+        assert!((read("aspect").unwrap() - (1920.0 / 1080.0)).abs() < 1e-5);
+        assert_eq!(read("output_width"), Some(3840.0));
+        assert_eq!(read("output_height"), Some(2160.0));
     }
 }
