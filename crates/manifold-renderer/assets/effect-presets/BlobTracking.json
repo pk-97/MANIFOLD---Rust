@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BlobTracking",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Decomposed Blob Track: FFI detection → nearest-neighbour identity tracking → 1€ temporal smoothing → overlay render. Each stage is a separate atom; the HUD visual is blob_overlay_render (hollow boxes). Future: replace blob_overlay_render with wgsl_compute bracket/crosshair/label geometry → render_lines + render_filled_rects + render_value_overlay for the full diagnostic HUD.",
   "presetMetadata": {
     "id": "BlobTracking",
     "displayName": "Blob Track",
@@ -72,8 +72,8 @@
         "defaultValue": 0.5,
         "target": {
           "kind": "handleNode",
-          "handle": "blob_tracking",
-          "param": "amount"
+          "handle": "overlay",
+          "param": "alpha"
         },
         "convert": {
           "type": "Float"
@@ -85,7 +85,7 @@
         "defaultValue": 0.65,
         "target": {
           "kind": "handleNode",
-          "handle": "blob_tracking",
+          "handle": "detect",
           "param": "threshold"
         },
         "convert": {
@@ -98,7 +98,7 @@
         "defaultValue": 0.85,
         "target": {
           "kind": "handleNode",
-          "handle": "blob_tracking",
+          "handle": "detect",
           "param": "sensitivity"
         },
         "convert": {
@@ -111,8 +111,8 @@
         "defaultValue": 0.7,
         "target": {
           "kind": "handleNode",
-          "handle": "blob_tracking",
-          "param": "smoothing"
+          "handle": "smoothing_remap",
+          "param": "a"
         },
         "convert": {
           "type": "Float"
@@ -124,8 +124,8 @@
         "defaultValue": 0.35,
         "target": {
           "kind": "handleNode",
-          "handle": "blob_tracking",
-          "param": "connect"
+          "handle": "connect_nearest",
+          "param": "max_distance"
         },
         "convert": {
           "type": "Float"
@@ -136,18 +136,9 @@
       "kind": "never"
     },
     "paramAliases": [
-      {
-        "old": "thresh",
-        "new": "threshold"
-      },
-      {
-        "old": "sens",
-        "new": "sensitivity"
-      },
-      {
-        "old": "smooth",
-        "new": "smoothing"
-      }
+      { "old": "thresh", "new": "threshold" },
+      { "old": "sens", "new": "sensitivity" },
+      { "old": "smooth", "new": "smoothing" }
     ]
   },
   "nodes": [
@@ -158,49 +149,79 @@
     },
     {
       "id": 1,
-      "typeId": "node.blob_track",
-      "handle": "blob_tracking",
+      "typeId": "node.blob_detect_ffi",
+      "handle": "detect",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "connect": {
-          "type": "Float",
-          "value": 0.35
-        },
-        "sensitivity": {
-          "type": "Float",
-          "value": 0.85
-        },
-        "smoothing": {
-          "type": "Float",
-          "value": 0.7
-        },
-        "threshold": {
-          "type": "Float",
-          "value": 0.65
-        }
+        "threshold": { "type": "Float", "value": 0.65 },
+        "sensitivity": { "type": "Float", "value": 0.85 },
+        "max_capacity": { "type": "Float", "value": 32.0 },
+        "analysis_max_dim": { "type": "Float", "value": 360.0 },
+        "update_interval": { "type": "Float", "value": 3.0 }
       }
     },
     {
       "id": 2,
+      "typeId": "node.track_persist",
+      "handle": "tracker",
+      "params": {
+        "match_radius": { "type": "Float", "value": 0.283 },
+        "grace_frames": { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.affine_scalar",
+      "handle": "smoothing_remap",
+      "params": {
+        "a": { "type": "Float", "value": 0.7 },
+        "scale": { "type": "Float", "value": -3.7 },
+        "offset": { "type": "Float", "value": 4.0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.one_euro_filter",
+      "handle": "smoother",
+      "params": {
+        "min_cutoff": { "type": "Float", "value": 1.41 },
+        "beta": { "type": "Float", "value": 0.5 },
+        "d_cutoff": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.array_connect_nearest",
+      "handle": "connect_nearest",
+      "params": {
+        "max_distance": { "type": "Float", "value": 0.35 },
+        "max_edges": { "type": "Float", "value": 32.0 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.blob_overlay_render",
+      "handle": "overlay",
+      "params": {
+        "color": { "type": "Color", "value": [0.85, 0.92, 1.0, 1.0] },
+        "alpha": { "type": "Float", "value": 0.8 },
+        "border_width": { "type": "Float", "value": 0.003 },
+        "blob_count": { "type": "Float", "value": 32.0 }
+      }
+    },
+    {
+      "id": 7,
       "typeId": "system.final_output",
       "handle": "final_output"
     }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "blobs", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "min_cutoff" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "blobs" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
   ]
 }

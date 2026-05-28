@@ -984,7 +984,6 @@ mod tests {
             primitives::WATERCOLOR_TYPE_ID,
             primitives::DEPTH_OF_FIELD_TYPE_ID,
             primitives::AUTO_GAIN_TYPE_ID,
-            primitives::BLOB_TRACKING_TYPE_ID,
             primitives::WIREFRAME_DEPTH_TYPE_ID,
             primitives::INFRARED_TYPE_ID,
             primitives::QUAD_MIRROR_TYPE_ID,

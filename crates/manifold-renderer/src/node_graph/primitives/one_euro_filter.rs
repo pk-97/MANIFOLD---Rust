@@ -240,7 +240,8 @@ mod tests {
         let cutoff = min_cutoff + beta * dx.abs();
         let alpha = one_euro_alpha(dt, cutoff);
         let smoothed = prev + alpha * (raw - prev);
-        prev = smoothed;
+        #[allow(unused_assignments)]
+        { prev = smoothed; }
 
         // Should converge further toward 1.0.
         assert!(

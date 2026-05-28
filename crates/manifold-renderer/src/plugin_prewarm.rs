@@ -1,8 +1,9 @@
 //! Plugin warmup — startup-time initialization for effects backed by
 //! native plugins or background workers.
 //!
-//! Three of the shipping effects (`BlobTracking`, `DepthOfField`,
-//! `WireframeDepth`) drive native FFI plugins on background threads.
+//! Two of the shipping effects (`DepthOfField`, `WireframeDepth`)
+//! drive native FFI plugins on background threads. (BlobTracking
+//! was decomposed — its worker lives in `node.blob_detect_ffi`.)
 //! Those workers must be running before the first frame renders so
 //! the first chain dispatch doesn't block on plugin initialisation.
 //!
@@ -67,16 +68,16 @@ pub fn prewarm_ids() -> impl Iterator<Item = &'static EffectTypeId> {
 mod tests {
     use super::*;
 
-    /// The three plugin-using effects (per the §11 audit) must each
-    /// have a registered prewarm. Adding a new plugin-using effect =
-    /// add an `inventory::submit!(PluginPrewarm { ... })` in its file;
-    /// this test catches forgetting it.
+    /// Plugin-using effects must each have a registered prewarm.
+    /// Adding a new plugin-using effect = add an
+    /// `inventory::submit!(PluginPrewarm { ... })` in its file;
+    /// this test catches forgetting it. (BlobTracking decomposed —
+    /// its worker is in node.blob_detect_ffi, no prewarm needed.)
     #[test]
     fn plugin_using_effects_all_have_prewarm_submissions() {
         let registered: std::collections::HashSet<EffectTypeId> =
             prewarm_ids().cloned().collect();
         let expected = [
-            EffectTypeId::BLOB_TRACKING,
             EffectTypeId::DEPTH_OF_FIELD,
             EffectTypeId::WIREFRAME_DEPTH,
         ];
