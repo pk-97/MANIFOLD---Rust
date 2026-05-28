@@ -357,6 +357,12 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     }
     let workgroup_size = ep.workgroup_size;
 
+    // Extract `// @channel_skip` markers from the source. Naga preserves
+    // comments through parse but doesn't surface them, so the marker
+    // has to be recovered from the original text and merged into the
+    // struct walk below. Pure transform of the source; no I/O.
+    let skip_map = extract_channel_skip(source);
+
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
     let mut params: Vec<ParamDef> = Vec::new();
@@ -536,16 +542,12 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                         kind: BindingKind::StorageAtomicAccumOut { port: name },
                     });
                 } else {
-                    // Non-atomic struct array. Always Array(Anonymous)
-                    // with the struct's byte span + align — the wgsl_compute
-                    // primitive is the generic byte-buffer escape hatch, and
-                    // typed downstream consumers wire through `node.cast_as_*`
-                    // atoms to relabel the wire (cast_as_particle for the
-                    // 64-byte integrator pattern, cast_as_mesh_vertex for
-                    // 32-byte vertex producers, etc.). The Particle special
-                    // case here was removed 2026-05-26 — type discipline
-                    // lives at the cast-atom boundary, not at the introspection.
-                    let item = element_to_array_type(element, stride, &module)?;
+                    // Non-atomic struct array. The naga struct walk in
+                    // `struct_members_to_specs` emits a typed Channels
+                    // signature derived from the WGSL struct's fields,
+                    // honoring any `// @channel_skip` markers in the
+                    // source.
+                    let item = element_to_array_type(element, stride, &module, &skip_map)?;
                     let port_name = leak_str(&name);
                     if read && write {
                         // Aliased in/out — declare an input AND an
@@ -708,6 +710,7 @@ fn element_to_array_type(
     element: &naga::Type,
     _stride: u32,
     module: &naga::Module,
+    skip_map: &ChannelSkipMap,
 ) -> Result<ArrayType, String> {
     // wgsl_compute is the byte-buffer escape hatch. The naga struct
     // walk in `struct_members_to_specs` emits a typed Channels
@@ -722,7 +725,7 @@ fn element_to_array_type(
     let naga::TypeInner::Struct { span, members } = &element.inner else {
         return Err("storage array element is not a struct".into());
     };
-    let specs = struct_members_to_specs(members, module);
+    let specs = struct_members_to_specs(members, module, element.name.as_deref(), skip_map);
     Ok(ArrayType {
         item_size: *span,
         item_align: 4,
@@ -734,11 +737,15 @@ fn element_to_array_type(
 /// Walk a WGSL storage-array struct's members and emit a Channels
 /// signature.
 ///
-/// Per `docs/CHANNEL_TYPE_SYSTEM.md` §8.2:
-/// - Fields whose name starts with `_pad` are SKIPPED (existing
-///   convention used throughout the codebase, including the uniform-
-///   member walker above; the doc's "explicit marker" preference is
-///   parked for a follow-up that introduces a preprocessor).
+/// Per `docs/CHANNEL_TYPE_SYSTEM.md` §8.2 / §14.9:
+/// - Fields the author tagged with a preceding `// @channel_skip`
+///   marker are SKIPPED. The skip set is the per-struct lookup in
+///   `skip_map`, built by [`extract_channel_skip`] from the original
+///   source before naga sees it.
+/// - The legacy `_pad[0-9]*` name-prefix heuristic was retired with
+///   the marker's landing — naming a field `padding` (or anything
+///   else) no longer silently drops it from the wire. Authors who
+///   want a field excluded write the marker.
 /// - Each remaining field maps to a [`ChannelSpec`] with:
 ///     - `name`: `ChannelName::from_str(field.name)`. The hash collides
 ///       with the registry's `well_known::*` constants when the WGSL
@@ -748,11 +755,10 @@ fn element_to_array_type(
 ///     - `ty`: mapped from the field's WGSL type via
 ///       [`naga_type_to_channel_element_type`].
 /// - Fields whose type doesn't map cleanly (matrices, runtime arrays,
-///   atomics) cause the entire signature to fall back to `&[]` — Phase
-///   4a is best-effort: when the walk can produce a typed signature,
-///   downstream consumers benefit; when it can't, the wire continues
-///   to behave exactly like pre-Phase-4 (Anonymous bridge to a cast
-///   atom).
+///   atomics) cause the entire signature to fall back to `&[]` — the
+///   wire connects only against other empty-specs Array wires of
+///   matching size+align via the raw-byte rule in
+///   `port_types_compatible`.
 ///
 /// The returned slice is `'static` via `Box::leak`. Same justification
 /// as `leak_str`: bounded by the distinct field-name + element-type
@@ -760,23 +766,33 @@ fn element_to_array_type(
 fn struct_members_to_specs(
     members: &[naga::StructMember],
     module: &naga::Module,
+    struct_name: Option<&str>,
+    skip_map: &ChannelSkipMap,
 ) -> &'static [ChannelSpec] {
+    let skip_set = struct_name.and_then(|n| skip_map.get(n));
     let mut specs: Vec<ChannelSpec> = Vec::with_capacity(members.len());
     for m in members {
         let Some(name) = m.name.as_deref() else {
             return &[];
         };
-        if name.starts_with("_pad") {
+        if let Some(set) = skip_set
+            && set.contains(name)
+        {
             continue;
         }
         let inner = &module.types[m.ty].inner;
         let Some(ty) = naga_type_to_channel_element_type(inner) else {
             return &[];
         };
-        specs.push(ChannelSpec {
-            name: crate::node_graph::ports::ChannelName::from_str(leak_str(name)),
-            ty,
-        });
+        // Leak the field name to a `'static` str so it can both back
+        // the `ChannelName` (hash-keyed) and register against the
+        // runtime debug-name registry. The registration lets editor
+        // tooltips and validator error messages recover "real" /
+        // "_pad0" / etc. instead of showing the raw hex hash.
+        let leaked = leak_str(name);
+        let ch = crate::node_graph::ports::ChannelName::from_str(leaked);
+        crate::node_graph::channel_names::register_runtime_name(ch, leaked);
+        specs.push(ChannelSpec { name: ch, ty });
     }
     Box::leak(specs.into_boxed_slice())
 }
@@ -877,17 +893,17 @@ fn extract_channel_skip(source: &str) -> ChannelSkipMap {
         //    marker when we're inside a struct body; outside, it's an
         //    orphan and we warn.
         if code.is_empty() {
-            if let Some(c) = comment {
-                if is_channel_skip_marker(c) {
-                    if current_struct.is_some() {
-                        pending_skip = true;
-                    } else {
-                        log::warn!(
-                            "[node.wgsl_compute] @channel_skip marker at line {} \
-                             is outside any struct — ignored",
-                            line_idx + 1
-                        );
-                    }
+            if let Some(c) = comment
+                && is_channel_skip_marker(c)
+            {
+                if current_struct.is_some() {
+                    pending_skip = true;
+                } else {
+                    log::warn!(
+                        "[node.wgsl_compute] @channel_skip marker at line {} \
+                         is outside any struct — ignored",
+                        line_idx + 1
+                    );
                 }
             }
             continue;
@@ -896,10 +912,12 @@ fn extract_channel_skip(source: &str) -> ChannelSkipMap {
         // 2. Detect `struct Name` at top level. waiting_struct remembers
         //    the name until the opening `{` arrives (possibly on a
         //    later line).
-        if current_struct.is_none() && waiting_struct.is_none() && brace_depth == 0 {
-            if let Some(name) = parse_struct_keyword(code) {
-                waiting_struct = Some(name);
-            }
+        if current_struct.is_none()
+            && waiting_struct.is_none()
+            && brace_depth == 0
+            && let Some(name) = parse_struct_keyword(code)
+        {
+            waiting_struct = Some(name);
         }
 
         // 3. Walk braces on this line's code part. Strings / chars don't
@@ -908,27 +926,27 @@ fn extract_channel_skip(source: &str) -> ChannelSkipMap {
             match ch {
                 '{' => {
                     brace_depth += 1;
-                    if brace_depth == 1 {
-                        if let Some(name) = waiting_struct.take() {
-                            current_struct = Some(name);
-                            pending_skip = false;
-                        }
+                    if brace_depth == 1
+                        && let Some(name) = waiting_struct.take()
+                    {
+                        current_struct = Some(name);
+                        pending_skip = false;
                     }
                 }
                 '}' => {
                     brace_depth -= 1;
-                    if brace_depth == 0 {
-                        if let Some(name) = current_struct.take() {
-                            if pending_skip {
-                                log::warn!(
-                                    "[node.wgsl_compute] @channel_skip marker inside \
-                                     `struct {}` was not followed by a field before \
-                                     the struct closed — ignored",
-                                    name
-                                );
-                            }
-                            pending_skip = false;
+                    if brace_depth == 0
+                        && let Some(name) = current_struct.take()
+                    {
+                        if pending_skip {
+                            log::warn!(
+                                "[node.wgsl_compute] @channel_skip marker inside \
+                                 `struct {}` was not followed by a field before \
+                                 the struct closed — ignored",
+                                name
+                            );
                         }
+                        pending_skip = false;
                     }
                 }
                 _ => {}
@@ -939,15 +957,12 @@ fn extract_channel_skip(source: &str) -> ChannelSkipMap {
         //    this line. (Lines that just opened the struct — `struct X {`
         //    — typically have no field text after the `{`; parse_field_name
         //    returns None for those.)
-        if let Some(ref struct_name) = current_struct {
-            if let Some(field) = parse_field_name(code) {
-                if pending_skip {
-                    map.entry(struct_name.clone())
-                        .or_insert_with(AHashSet::default)
-                        .insert(field);
-                    pending_skip = false;
-                }
-            }
+        if let Some(ref struct_name) = current_struct
+            && let Some(field) = parse_field_name(code)
+            && pending_skip
+        {
+            map.entry(struct_name.clone()).or_default().insert(field);
+            pending_skip = false;
         }
     }
 
@@ -1879,6 +1894,142 @@ struct X {
 ";
         let m = skip(src);
         assert_eq!(fields(&m, "X"), vec!["padding"]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // End-to-end integration of `// @channel_skip` through naga walk
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn channel_skip_marker_drops_padding_field_from_channels_signature() {
+        // A struct with an explicit padding field named `padding` (no
+        // `_pad` prefix) — the legacy heuristic would have missed this
+        // field, leaving it in the wire. The marker rescues it.
+        let src = r#"
+struct Particle {
+    position: vec3<f32>,
+    // @channel_skip
+    padding: f32,
+    velocity: vec3<f32>,
+    life:     f32,
+    age:      f32,
+    color:    vec4<f32>,
+};
+struct U { dt: f32, };
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= arrayLength(&particles) { return; }
+    particles[gid.x].life = particles[gid.x].life + u.dt;
+}
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed, "shader must parse");
+        let array_port = node
+            .inputs
+            .iter()
+            .find(|i| i.name == "particles")
+            .expect("particles input port");
+        match array_port.ty {
+            PortType::Array(at) => {
+                let names: Vec<&'static str> = at
+                    .specs
+                    .iter()
+                    .map(|s| s.name.debug_name().unwrap_or("<unknown>"))
+                    .collect();
+                // `padding` must be absent. Order preserves WGSL order
+                // minus the skipped field.
+                assert_eq!(
+                    names,
+                    vec!["position", "velocity", "life", "age", "color"],
+                    "channel_skip marker did not drop `padding` from Channels signature"
+                );
+            }
+            _ => panic!("expected Array port"),
+        }
+    }
+
+    #[test]
+    fn pad_prefixed_field_without_marker_is_kept_after_heuristic_drop() {
+        // Counterpoint: with the legacy `_pad*` heuristic retired, a
+        // field named `_pad0` is now emitted as a channel unless the
+        // author marks it. This is the new contract.
+        let src = r#"
+struct S {
+    position: vec3<f32>,
+    _pad0:    f32,
+};
+@group(0) @binding(0) var<storage, read> items: array<S>;
+@compute @workgroup_size(64)
+fn cs_main() { _ = items[0].position; }
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed);
+        let port = node
+            .inputs
+            .iter()
+            .find(|i| i.name == "items")
+            .expect("items input");
+        match port.ty {
+            PortType::Array(at) => {
+                // Both fields show up — the heuristic is gone. `position`
+                // resolves through `well_known::POSITION`; `_pad0` is a
+                // runtime-introduced name whose `debug_name` falls back
+                // to None.
+                use crate::node_graph::ports::{ChannelElementType as CET, ChannelName};
+                assert_eq!(at.specs.len(), 2);
+                assert_eq!(at.specs[0].name, ChannelName::from_str("position"));
+                assert_eq!(at.specs[0].ty, CET::Vec3F);
+                assert_eq!(at.specs[1].name, ChannelName::from_str("_pad0"));
+                assert_eq!(at.specs[1].ty, CET::F32);
+            }
+            _ => panic!("expected Array port"),
+        }
+    }
+
+    #[test]
+    fn marker_isolation_between_two_storage_structs() {
+        // Two storage structs in the same shader; markers in one must
+        // not leak to the other.
+        let src = r#"
+struct A {
+    // @channel_skip
+    age:      f32,
+    life:     f32,
+};
+struct B {
+    age:      f32,
+    life:     f32,
+};
+@group(0) @binding(0) var<storage, read> as_in: array<A>;
+@group(0) @binding(1) var<storage, read> bs_in: array<B>;
+@compute @workgroup_size(64)
+fn cs_main() { _ = as_in[0].life + bs_in[0].life; }
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed);
+        let names_of = |port_name: &str| -> Vec<&'static str> {
+            let p = node
+                .inputs
+                .iter()
+                .find(|i| i.name == port_name)
+                .expect("input");
+            match p.ty {
+                PortType::Array(at) => at
+                    .specs
+                    .iter()
+                    .map(|s| s.name.debug_name().unwrap_or("<unknown>"))
+                    .collect(),
+                _ => panic!("expected Array"),
+            }
+        };
+        // A drops `age`; B keeps it (its skip set is empty).
+        assert_eq!(names_of("as_in"), vec!["life"]);
+        assert_eq!(names_of("bs_in"), vec!["age", "life"]);
     }
 
     #[test]

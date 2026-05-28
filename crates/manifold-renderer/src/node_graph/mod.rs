@@ -82,8 +82,9 @@ pub use ports::{
 };
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
-    GraphSnapshot, NodeSnapshot, OuterParamRouting, OuterParamSource, ParamSnapshot,
-    ParamSnapshotKind, PortKindSnapshot, PortSnapshot, WireSnapshot,
+    ArrayMatchMode, ChannelSnapshot, GraphSnapshot, NodeSnapshot, OuterParamRouting,
+    OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
+    WireSnapshot,
 };
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{

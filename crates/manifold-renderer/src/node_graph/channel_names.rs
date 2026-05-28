@@ -157,20 +157,69 @@ pub mod well_known {
 
 /// Best-effort lookup of the source string for a `ChannelName`.
 ///
-/// Returns `Some` for names declared in [`well_known::ALL_WELL_KNOWN`];
-/// returns `None` for runtime-introduced names (e.g. WGSL field names
-/// parsed from a `wgsl_compute` shader — Phase 4 extends the registry
-/// to cover those).
+/// Two registries consulted in order:
+/// 1. Compile-time [`well_known::ALL_WELL_KNOWN`] — canonical channel
+///    names declared once per process. Linear scan; fast for the
+///    well-known set's few-dozen entries.
+/// 2. Runtime overflow map populated via [`register_runtime_name`] —
+///    covers names introduced by `wgsl_compute` shader field parsing
+///    (per `docs/CHANNEL_TYPE_SYSTEM.md` §8.4). Bounded by the
+///    distinct field-name set across all `wgsl_compute` shaders
+///    loaded in a session; in practice tiny.
 ///
-/// Linear scan over the well-known list. This is the slow path —
-/// validator error messages and editor tooltips — so an O(N) scan over
-/// a few-hundred-entry list is fine. Promotion to an `AHashMap` would
-/// be the optimisation if it ever shows up in a profile.
+/// Returns `None` for names that have never been seen by either
+/// registry — those render as a hex hash in error messages and
+/// editor tooltips.
 pub fn debug_name(ch: ChannelName) -> Option<&'static str> {
-    well_known::ALL_WELL_KNOWN
+    if let Some(s) = well_known::ALL_WELL_KNOWN
         .iter()
         .find(|(c, _)| *c == ch)
         .map(|(_, s)| *s)
+    {
+        return Some(s);
+    }
+    runtime_names()
+        .read()
+        .expect("runtime channel-name registry poisoned")
+        .get(&ch)
+        .copied()
+}
+
+/// Register a runtime-introduced channel name so [`debug_name`] can
+/// recover its source string. `name` must be `'static` — `wgsl_compute`
+/// already leaks WGSL field names through `leak_str`; callers with a
+/// non-`'static` String should leak via
+/// `Box::leak(s.to_string().into_boxed_str())`.
+///
+/// Idempotent: re-registering an identical (ch, name) pair is fine.
+/// If a different name registers against the same hash later, the
+/// later one wins (an outcome the hash-collision test in
+/// `well_known::collision_tests` makes astronomically unlikely for
+/// the well-known set; runtime names can in principle collide with
+/// each other but the practical risk is the same).
+pub fn register_runtime_name(ch: ChannelName, name: &'static str) {
+    // Fast path: already registered with the same name.
+    if let Some(existing) = runtime_names()
+        .read()
+        .expect("runtime channel-name registry poisoned")
+        .get(&ch)
+        && *existing == name
+    {
+        return;
+    }
+    runtime_names()
+        .write()
+        .expect("runtime channel-name registry poisoned")
+        .insert(ch, name);
+}
+
+fn runtime_names()
+-> &'static std::sync::RwLock<ahash::AHashMap<ChannelName, &'static str>>
+{
+    static MAP: std::sync::OnceLock<
+        std::sync::RwLock<ahash::AHashMap<ChannelName, &'static str>>,
+    > = std::sync::OnceLock::new();
+    MAP.get_or_init(|| std::sync::RwLock::new(ahash::AHashMap::default()))
 }
 
 #[cfg(test)]

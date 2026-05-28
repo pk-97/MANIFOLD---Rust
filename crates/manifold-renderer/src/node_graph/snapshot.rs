@@ -18,7 +18,7 @@
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
-use crate::node_graph::ports::{PortKind, PortType};
+use crate::node_graph::ports::{ChannelElementType, MatchMode, PortKind, PortType};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 
@@ -172,17 +172,62 @@ pub struct PortSnapshot {
     pub kind: PortKindSnapshot,
 }
 
+/// One named typed channel on an `Array` port, as the editor sees it.
+/// Resolved from [`ChannelSpec`](crate::node_graph::ports::ChannelSpec) at
+/// snapshot-build time so the canvas can render tooltips without depending
+/// on the channel_names registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelSnapshot {
+    /// Source string for the channel name. Recovered from the
+    /// `well_known` registry via `ChannelName::debug_name` when the
+    /// name is registered there; falls back to a hex-formatted hash
+    /// (`"0x{:016x}"`) for runtime-introduced names (e.g. `wgsl_compute`
+    /// shader fields not in `well_known`).
+    pub name: String,
+    /// Display string for the channel element type — `"F32"`, `"U32"`,
+    /// `"Vec3F"`, etc. Stable spellings the editor can pattern-match
+    /// without depending on the `ChannelElementType` enum directly.
+    pub ty: String,
+}
+
+/// Match-mode tag for the snapshot's `Array` variant. Mirrors
+/// [`MatchMode`](crate::node_graph::ports::MatchMode); kept distinct so the
+/// editor doesn't depend on the validator's enum directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayMatchMode {
+    Exact,
+    Permissive,
+}
+
 /// Simplified port type for snapshot — collapses scalar sub-types into
 /// one bucket since the canvas colours by category, not by float vs vec3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The `Array` variant carries owned channel metadata so the editor's
+/// hover-tooltip can render the per-port Channels signature directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortKindSnapshot {
     Texture2D,
     Texture3D,
     Scalar,
-    Array,
+    Array {
+        channels: Vec<ChannelSnapshot>,
+        match_mode: ArrayMatchMode,
+        item_size: u32,
+        item_align: u32,
+    },
     Camera,
     Light,
     Material,
+}
+
+fn channel_element_type_to_display(ty: ChannelElementType) -> &'static str {
+    match ty {
+        ChannelElementType::F32 => "F32",
+        ChannelElementType::I32 => "I32",
+        ChannelElementType::U32 => "U32",
+        ChannelElementType::Vec2F => "Vec2F",
+        ChannelElementType::Vec3F => "Vec3F",
+        ChannelElementType::Vec4F => "Vec4F",
+    }
 }
 
 impl From<PortType> for PortKindSnapshot {
@@ -191,7 +236,30 @@ impl From<PortType> for PortKindSnapshot {
             PortType::Texture2D => Self::Texture2D,
             PortType::Texture3D => Self::Texture3D,
             PortType::Scalar(_) => Self::Scalar,
-            PortType::Array(_) => Self::Array,
+            PortType::Array(at) => {
+                let channels: Vec<ChannelSnapshot> = at
+                    .specs
+                    .iter()
+                    .map(|spec| ChannelSnapshot {
+                        name: spec
+                            .name
+                            .debug_name()
+                            .map(String::from)
+                            .unwrap_or_else(|| format!("{:#018x}", spec.name.hash())),
+                        ty: channel_element_type_to_display(spec.ty).to_string(),
+                    })
+                    .collect();
+                let match_mode = match at.match_mode {
+                    MatchMode::Exact => ArrayMatchMode::Exact,
+                    MatchMode::Permissive => ArrayMatchMode::Permissive,
+                };
+                Self::Array {
+                    channels,
+                    match_mode,
+                    item_size: at.item_size,
+                    item_align: at.item_align,
+                }
+            }
             PortType::Camera => Self::Camera,
             PortType::Light => Self::Light,
             PortType::Material => Self::Material,
@@ -766,5 +834,89 @@ mod tests {
             wires: Vec::new(),
         };
         assert!(GraphSnapshot::from_def(&bad_def).is_none());
+    }
+
+    // ─── Phase 6: snapshot carries Channels signature ────────────────
+
+    #[test]
+    fn array_port_snapshot_carries_channels_from_array_type() {
+        use crate::node_graph::channel_names::well_known;
+        use crate::node_graph::ports::{
+            ArrayType, ChannelElementType, ChannelSpec, MatchMode, PortType,
+        };
+
+        // Synthesize an ArrayType with a known Channels signature and
+        // round-trip it through the From<PortType> conversion.
+        const SPECS: &[ChannelSpec] = &[
+            ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
+            ChannelSpec { name: well_known::COLOR,    ty: ChannelElementType::Vec4F },
+        ];
+        let port_type =
+            PortType::Array(ArrayType::of_channels(SPECS, MatchMode::Exact));
+        let snap = PortKindSnapshot::from(port_type);
+        match snap {
+            PortKindSnapshot::Array { channels, match_mode, item_size, item_align } => {
+                assert_eq!(channels.len(), 2);
+                assert_eq!(channels[0].name, "position");
+                assert_eq!(channels[0].ty, "Vec3F");
+                assert_eq!(channels[1].name, "color");
+                assert_eq!(channels[1].ty, "Vec4F");
+                assert_eq!(match_mode, ArrayMatchMode::Exact);
+                // std430 stride for [Vec3F, Vec4F]: Vec3F at 0 (size 12,
+                // align 16), Vec4F at 16 (align 16) → stride 32.
+                assert_eq!(item_size, 32);
+                assert_eq!(item_align, 16);
+            }
+            other => panic!("expected Array snapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn permissive_array_port_snapshot_tags_match_mode() {
+        use crate::node_graph::ports::{ArrayType, MatchMode, PortType};
+
+        let port_type = PortType::Array(ArrayType {
+            item_size: 0,
+            item_align: 4,
+            specs: &[],
+            match_mode: MatchMode::Permissive,
+        });
+        let snap = PortKindSnapshot::from(port_type);
+        match snap {
+            PortKindSnapshot::Array { channels, match_mode, .. } => {
+                assert!(channels.is_empty());
+                assert_eq!(match_mode, ArrayMatchMode::Permissive);
+            }
+            other => panic!("expected Array snapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_channel_name_falls_back_to_hex_hash() {
+        use crate::node_graph::ports::{
+            ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, PortType,
+        };
+
+        // A channel name not in the well_known registry — debug_name
+        // returns None and the snapshot formats the hash as hex.
+        let local = ChannelName::from_str("internal_debug_counter");
+        let specs: &'static [ChannelSpec] = Box::leak(Box::new([
+            ChannelSpec { name: local, ty: ChannelElementType::U32 },
+        ]));
+        let port_type =
+            PortType::Array(ArrayType::of_channels(specs, MatchMode::Exact));
+        let snap = PortKindSnapshot::from(port_type);
+        match snap {
+            PortKindSnapshot::Array { channels, .. } => {
+                assert_eq!(channels.len(), 1);
+                assert!(
+                    channels[0].name.starts_with("0x"),
+                    "expected hex fallback name, got {:?}",
+                    channels[0].name
+                );
+                assert_eq!(channels[0].ty, "U32");
+            }
+            other => panic!("expected Array snapshot, got {other:?}"),
+        }
     }
 }

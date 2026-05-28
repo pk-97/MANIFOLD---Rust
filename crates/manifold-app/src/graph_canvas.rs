@@ -69,12 +69,16 @@ struct PortView {
 }
 
 impl PortView {
-    fn from_kind(name: String, kind: PortKindSnapshot) -> Self {
+    // Takes `&PortKindSnapshot` because the snapshot's `Array`
+    // variant now carries owned channel metadata (post-Phase-6); a
+    // by-value signature would force every caller to clone the
+    // channels Vec just to read the tag.
+    fn from_kind(name: String, kind: &PortKindSnapshot) -> Self {
         let color = match kind {
             PortKindSnapshot::Texture2D => PORT_TEXTURE2D_COLOR,
             PortKindSnapshot::Texture3D => PORT_TEXTURE3D_COLOR,
             PortKindSnapshot::Scalar => PORT_SCALAR_COLOR,
-            PortKindSnapshot::Array => PORT_ARRAY_COLOR,
+            PortKindSnapshot::Array { .. } => PORT_ARRAY_COLOR,
             PortKindSnapshot::Camera => PORT_CAMERA_COLOR,
             PortKindSnapshot::Light => PORT_LIGHT_COLOR,
             PortKindSnapshot::Material => PORT_MATERIAL_COLOR,
@@ -330,12 +334,12 @@ impl GraphCanvas {
                 inputs: n
                     .inputs
                     .iter()
-                    .map(|p| PortView::from_kind(p.name.clone(), p.kind))
+                    .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
                     .collect(),
                 outputs: n
                     .outputs
                     .iter()
-                    .map(|p| PortView::from_kind(p.name.clone(), p.kind))
+                    .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
                     .collect(),
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
             })
