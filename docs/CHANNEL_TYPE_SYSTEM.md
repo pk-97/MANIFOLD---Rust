@@ -21,6 +21,8 @@
 
 **Phase 5 remains — workspace test gate + canonical-fixture visual sanity check.** Peter did informal eyeball verification on the three migration-affected presets during Phase 4b.1 sign-off; the formal `cargo test --workspace` + workspace clippy + GPU frame-time baseline check on `Liveschool Live Show V6 LEDS.manifold` still wants doing. Saved for whenever the next end-to-end testing session happens.
 
+**§17 (Texture2D channel signatures) — Phase 17.A shipped 2026-05-28.** Extends the Channel type system to decorate Texture2D ports with a four-slot RGBA channel signature. Same well_known registry, same FNV-1a-64 const-hash interning, same compile-time decidable match. Untyped Texture2D stays the back-compat default. Validator surfaces a structured `TextureChannelMismatch` carrying the first diverging slot index. Macro: `Texture2D[R: Name, G: Name, B: Name, A: Name]`. Migrated `node.optical_flow_estimate` to declare the Watercolor `(R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID)` convention; downstream consumer migrations (the bug-fix that motivated this) live in a follow-up commit. See §17 for the full surface.
+
 **Scheduled follow-up:** ~~Build the explicit-marker (`// @channel_skip`) preprocessor for `wgsl_compute` pad-field handling.~~ Shipped 2026-05-28 in commits 4b.6 + dd6889e3. See §8.2 and the §14.9 historical note for the final form.
 
 **Acceptance criteria after Phase 6:** 862/862 manifold-renderer lib tests passing; clippy clean; `check-presets` reports 49/49 OK; three affected presets (BlackHole, ComputeStrangeAttractor, ParticleText) visually verified; manifold-app binary builds; companion docs reference CHANNEL_TYPE_SYSTEM.md as the type-system source of truth.
@@ -1441,6 +1443,197 @@ If you're an agent extending the Channel type system (adding a new element type,
 5. Draft your amendment, then check it against C1-C8 in §16.4 above.
 
 If your amendment violates a constraint, the resolution is one of: (a) redesign the amendment to be compile-time, (b) confine the new feature to non-fusable atoms only (lives outside the fusable subgraph), or (c) escalate to a design discussion that updates §16 with the new constraint structure. Don't merge an amendment that silently breaks fusion compatibility.
+
+---
+
+## 17. Texture2D channel signatures
+
+### 17.1 Why this exists
+
+The Array channel work (Phases 0–6) typed every `Array<T>` wire so producer and consumer agree on per-sample channel layout. The Texture2D family was untouched: a `Rgba16Float` wire labelled `PortType::Texture2D` says "4 × half-float per pixel" and nothing about *what those four components mean*. Two primitives can pack different meanings into the same RGBA layout, the validator nods through because both endpoints say `Texture2D`, and the runtime renders garbage.
+
+The bug case that motivated this section: the V2 WireframeDepth graph wired `node.optical_flow_estimate.out` — which packs `(R=flow_x, G=confidence, B=flow_y, A=valid)` (the Watercolor R/B-flow convention) — into a downstream `wgsl_compute` pass that read `(R=flow_x, G=flow_y, B=confidence, A=valid)` (the MiDaS convention). Validates fine. No log output. Visible-on-screen garbage.
+
+Extending the Channel type system to Texture2D ports plugs the gap. Producers declare what each RGBA slot means; consumers declare what they expect; the validator enforces exact match per slot at graph compile time. Untyped Texture2D stays the default — the migration valve through which one primitive migrates at a time without breaking the catalog.
+
+### 17.2 Shape of the extension
+
+`PortType` gains a second texture variant carrying a four-slot named-channel signature. The untyped variant survives unchanged as the back-compat default.
+
+```rust
+pub enum PortType {
+    /// Untyped Texture2D — the back-compat default. Four RGBA slots
+    /// carry whatever the producer packs; consumers rely on prose
+    /// `composition_notes` for the layout. Connects to anything.
+    Texture2D,
+    /// Texture2D with a four-slot named-channel signature. The
+    /// validator enforces exact-match between two typed endpoints
+    /// and surfaces a per-slot diff on mismatch.
+    Texture2DTyped(TextureChannels),
+    // … rest unchanged …
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureChannels {
+    /// Channel names in R, G, B, A order.
+    pub slots: [ChannelName; 4],
+}
+```
+
+Slot element types are deliberately absent — they're implicit in the texture format (`Rgba16Float` → four F32 slots, `R8Unorm` → one F32 with the rest ignored, etc.). The texture-format contract (`output_format` / `accepted_input_formats`) already covers that axis. The channel signature adds the orthogonal "what does each slot *mean*?" axis.
+
+The same `ChannelName` interning model as the Array path (FNV-1a-64 const hash, `well_known` registry, runtime debug-name lookup) — no parallel registry, no parallel hash mechanism. Names like `well_known::FLOW_X` and `well_known::CONFIDENCE` mean the same physical quantity whether they appear on a Channels array or a Texture2DTyped slot.
+
+### 17.3 Macro syntax
+
+The `primitive!` macro gains a new arm for `Texture2D[R: Name, G: Name, B: Name, A: Name]`. Each slot accepts the same dual form as Array Channels:
+
+- `well_known::*` constant ident — canonical names from the shared registry.
+- Inline string literal — escape hatch for genuinely local meanings (same `composition_notes` discipline as Array Channels: prefer well_known; literals stand out in review).
+
+```rust
+crate::primitive! {
+    name: OpticalFlowEstimate,
+    outputs: {
+        out: Texture2D[R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID],
+        // …
+    },
+    // …
+}
+```
+
+Existing `outputs: { out: Texture2D, … }` declarations stay unchanged — the macro's plain `Texture2D` arm continues to emit the untyped variant. Migration is per-primitive and opt-in.
+
+### 17.4 Validator semantics
+
+The Channels-aware path in `validate_wire_endpoints` gains a Texture2DTyped branch alongside the Array branch:
+
+| Producer | Consumer | Result |
+|---|---|---|
+| `Texture2D` (untyped) | `Texture2D` (untyped) | Connect — existing behaviour. |
+| `Texture2D` (untyped) | `Texture2DTyped(_)` | Connect — back-compat valve. |
+| `Texture2DTyped(_)` | `Texture2D` (untyped) | Connect — back-compat valve. |
+| `Texture2DTyped(a)` | `Texture2DTyped(b)`, a == b | Connect. |
+| `Texture2DTyped(a)` | `Texture2DTyped(b)`, a ≠ b | `TextureChannelMismatch` with the first diverging slot. |
+
+The compatibility predicate:
+
+```rust
+pub fn texture_channels_compatible(
+    producer: TextureChannels,
+    consumer: TextureChannels,
+) -> Result<(), TextureChannelMismatchReason> {
+    for (i, (p, c)) in producer.slots.iter().zip(consumer.slots.iter()).enumerate() {
+        if p != c {
+            return Err(TextureChannelMismatchReason::SlotNameMismatch {
+                slot: i as u32,
+                producer_name: p.debug_name(),
+                consumer_name: c.debug_name(),
+            });
+        }
+    }
+    Ok(())
+}
+```
+
+No `MatchMode` distinction. Unlike Array ports, typed Texture2D ports always match exactly; there's no Permissive use case (a rename-channel-style operator would shuffle bytes through a memcpy, which doesn't make sense for raster textures the way it does for storage-buffer items). If a future use case appears, add the mode as an extension; v1 is exact-only.
+
+The error variant mirrors the Array path:
+
+```rust
+GraphError::TextureChannelMismatch(Box<TextureChannelMismatchInfo>)
+
+pub struct TextureChannelMismatchInfo {
+    pub from_node: NodeInstanceId,
+    pub from_port: String,
+    pub to_node: NodeInstanceId,
+    pub to_port: String,
+    pub producer_slots: [ChannelName; 4],
+    pub consumer_slots: [ChannelName; 4],
+    pub reason: TextureChannelMismatchReason,
+}
+
+pub enum TextureChannelMismatchReason {
+    /// Channel names differ at a specific slot index (0=R, 1=G, 2=B, 3=A).
+    SlotNameMismatch {
+        slot: u32,
+        producer_name: Option<&'static str>,
+        consumer_name: Option<&'static str>,
+    },
+}
+```
+
+A typed-vs-typed mismatch on optical-flow now reads:
+
+```
+Texture-channels mismatch in wire optical_flow_estimate.out -> wgsl_compute.in:
+  Producer: Texture2D[R: flow_x, G: confidence, B: flow_y, A: valid]
+  Consumer: Texture2D[R: flow_x, G: flow_y, B: confidence, A: valid]
+  Mismatch at slot 1 (G): producer `confidence` != consumer `flow_y`.
+  Align both sides to the same canonical name from `well_known::*`, or
+  relabel the producer's WGSL to match.
+```
+
+### 17.5 Why a new variant instead of mutating `Texture2D`
+
+Two designs were considered:
+
+**(a) Mutate `PortType::Texture2D` into a tuple variant carrying an Option-shaped `TextureChannels`.** Every existing `PortType::Texture2D` reference in the codebase (~150 sites across primitive declarations, tests, snapshot conversions, pattern matches) becomes a syntax error overnight. Strictly cleaner final shape, but the migration touches every file in the catalog and conflicts with every other agent's in-flight work.
+
+**(b) Add a new variant `PortType::Texture2DTyped(TextureChannels)` alongside the existing unit `Texture2D`.** Strictly additive. Zero existing references break. Untyped Texture2D becomes the back-compat default by virtue of existing. Validator handles cross-compatibility through one new branch.
+
+The §17 implementation took (b). The "two variants for one conceptual thing" cost is real but contained — both variants share one pool key (the channel signature is a validator concern, not a GPU allocation one) and one snapshot bucket category. A future cleanup pass could collapse to (a) once every Texture2D-producing primitive has migrated to a typed signature; treat that as a Phase-6-style sweep after the per-primitive migration finishes.
+
+### 17.6 Pool-key & runtime invariants
+
+Both texture variants flow through the same `MTLBuffer` allocation path. `pool_key` collapses `Texture2DTyped(...)` to `Texture2D` so a typed producer's output recycles through the same pool entry as any untyped slot of matching format + dims. The channel signature has zero runtime impact — it's a validator-only tag.
+
+Patterns that previously matched `PortType::Texture2D` for "is this a texture port?" purposes (canvas-scale propagation, output-dim inference, slot allocation in `effect_chain_graph`) widen to `PortType::is_texture_2d()` which covers both variants. No code path treats typed and untyped Texture2D differently at runtime.
+
+### 17.7 Snapshot extension
+
+The editor-facing `PortKindSnapshot` mirrors the runtime split with a new variant:
+
+```rust
+pub enum PortKindSnapshot {
+    Texture2D,
+    Texture2DTyped { slots: [String; 4] },
+    // …
+}
+```
+
+`From<PortType>` resolves each slot's `ChannelName` through `debug_name` (well_known + runtime registry from §6.1) so the hover-tooltip can render readable layouts like `Texture2D[R: flow_x, G: confidence, B: flow_y, A: valid]` directly. Unknown names fall back to hex hashes, same as the Array channel path.
+
+### 17.8 `well_known` additions
+
+Three texture-relevant names land in the registry with this section:
+
+- `FLOW_X = "flow_x"` — horizontal component of an optical-flow vector (UV units; positive = right).
+- `FLOW_Y = "flow_y"` — vertical component (positive = down per the Watercolor convention).
+- `VALID = "valid"` — boolean-as-F32 validity mask for sparse / partial fields.
+
+`CONFIDENCE` was already in the registry. The collision test in `channel_names::well_known::collision_tests` automatically extends to the new names — no parallel fixture to update.
+
+The registry stays single-source-of-truth for any channel name shared across the catalog, regardless of whether it appears on an Array port or a Texture2DTyped port. If a future texture-only name (`AO`, `ROUGHNESS`, …) wants adding, it goes in the same `well_known_channels!` invocation under the appropriate category — there is deliberately no parallel `well_known_texture_channels!` registry.
+
+### 17.9 Migration scope
+
+Phase 17.A (this commit set): the type-system surface (types, macro, validator, snapshot) lands plus one primitive migrated to prove the surface — `node.optical_flow_estimate`'s `out` port. Every other Texture2D-producing primitive stays untyped; their existing wires continue connecting through the back-compat valve.
+
+Phase 17.B (separate work): migrate the V2 WireframeDepth pipeline's typed-side consumers to declare matching signatures. That's the bug-fix migration this whole extension was built to unblock. Lives in a separate commit because Peter wants the type-system infrastructure verified standalone before depending on it for the fix.
+
+Phase 17.C (eventual sweep): migrate every Texture2D-producing primitive in the catalog to declare its slot meanings. Catalog-wide; mechanical once the convention is settled; collapses the validator's two-variant Texture2D representation into one once nothing depends on the untyped fallback.
+
+### 17.10 Forward-compatibility check (vs §16)
+
+The fusion-compiler compatibility constraints in §16.4 stay satisfied:
+
+- **C1 / C2 / C3 / C4 / C5:** `TextureChannels::slots` is a fixed-length `[ChannelName; 4]` known at compile time. Per-slot identity is the const-hashed `ChannelName` already in scope. Texture format determines per-slot element type at compile time (out of scope here; covered by the existing texture-format contract). The match check is exact equality on a fixed-length array — fully decidable at graph-compile time.
+- **C6:** No new operators added. Future rename / reorder atoms for texture channels would be a separate decision; the type system doesn't presuppose them.
+- **C7:** N/A — Texture2DTyped signatures come from the primitive's macro declaration, not from naga introspection. `wgsl_compute` outputs that are textures stay untyped Texture2D for now; typing them is a future concern that would extend the naga walk's texture-binding path.
+- **C8:** Per-slot byte stride is fixed by the texture format (1, 2, 4 bytes per channel depending on format). No variant of the new types affects stride.
+
+The §16 anti-pattern list also stays clean: no runtime-resolved slot count, no per-pixel variable layout, no introspection requirement for compatibility — all decisions are static at graph compile time. Same fusion-compatibility surface as the Array channel design.
 
 ---
 
