@@ -206,6 +206,14 @@ pub enum ArrayMatchMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortKindSnapshot {
     Texture2D,
+    /// Texture2D decorated with a four-slot named-channel signature
+    /// (per `docs/CHANNEL_TYPE_SYSTEM.md` §17). The `slots` array
+    /// carries the channel name strings in R, G, B, A order so the
+    /// editor's hover-tooltip can render the per-port texture-channel
+    /// layout directly.
+    Texture2DTyped {
+        slots: [String; 4],
+    },
     Texture3D,
     Scalar,
     Array {
@@ -234,6 +242,14 @@ impl From<PortType> for PortKindSnapshot {
     fn from(t: PortType) -> Self {
         match t {
             PortType::Texture2D => Self::Texture2D,
+            PortType::Texture2DTyped(tc) => {
+                let slots = tc.slots.map(|name| {
+                    name.debug_name()
+                        .map(String::from)
+                        .unwrap_or_else(|| format!("{:#018x}", name.hash()))
+                });
+                Self::Texture2DTyped { slots }
+            }
             PortType::Texture3D => Self::Texture3D,
             PortType::Scalar(_) => Self::Scalar,
             PortType::Array(at) => {

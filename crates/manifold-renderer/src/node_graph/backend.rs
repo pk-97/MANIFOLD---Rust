@@ -222,9 +222,14 @@ pub(crate) fn pool_key(
     format: Option<GpuTextureFormat>,
     dims: (u32, u32),
 ) -> PoolKey {
-    match ty {
-        PortType::Texture2D => (ty, format, dims),
-        _ => (ty, None, (0, 0)),
+    // Both Texture2D variants share the same pool — the channel
+    // signature is a validator concern, not a GPU allocation one.
+    // Normalize Texture2DTyped down to Texture2D so a typed producer
+    // and an untyped slot recycle through the same pool entry.
+    if ty.is_texture_2d() {
+        (PortType::Texture2D, format, dims)
+    } else {
+        (ty, None, (0, 0))
     }
 }
 

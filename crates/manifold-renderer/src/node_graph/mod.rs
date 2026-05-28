@@ -82,8 +82,8 @@ pub use persistence::{
 };
 pub use ports::{
     ArrayType, ChannelElementType, ChannelName, ChannelSpec, KnownItem, MatchMode, NodeInput,
-    NodeOutput, NodePort, PortKind, PortType, ScalarType, std430_layout, std430_stride,
-    std430_stride_and_align,
+    NodeOutput, NodePort, PortKind, PortType, ScalarType, TextureChannels, std430_layout,
+    std430_stride, std430_stride_and_align,
 };
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{

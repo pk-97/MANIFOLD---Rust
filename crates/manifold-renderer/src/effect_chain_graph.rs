@@ -59,8 +59,8 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
-    NodeInstanceId, ParamValue, PortType, PrimitiveRegistry, ResolvedBinding, ResourceId, Slot,
-    Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings, compile,
+    NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding, ResourceId, Slot, Source,
+    SpliceResult, StateStore, apply_binding_defaults, apply_bindings, compile,
     splice_def_into_chain,
 };
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
@@ -1099,7 +1099,11 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
     let persistent_set: std::collections::HashSet<ResourceId> = plan
         .persistent_resources()
         .iter()
-        .filter(|&&res_id| matches!(plan.resource_type(res_id), Some(PortType::Texture2D)))
+        .filter(|&&res_id| {
+            plan.resource_type(res_id)
+                .map(|ty| ty.is_texture_2d())
+                .unwrap_or(false)
+        })
         .copied()
         .collect();
     for &res_id in &persistent_set {
@@ -1122,7 +1126,11 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
                 // runtime; nothing to do in the simulator.
                 continue;
             }
-            if !matches!(plan.resource_type(res_id), Some(PortType::Texture2D)) {
+            if !plan
+                .resource_type(res_id)
+                .map(|ty| ty.is_texture_2d())
+                .unwrap_or(false)
+            {
                 continue;
             }
             let slot = free_pool.pop().unwrap_or_else(|| {
@@ -1145,7 +1153,11 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
                 // defensive.)
                 continue;
             }
-            if !matches!(plan.resource_type(res_id), Some(PortType::Texture2D)) {
+            if !plan
+                .resource_type(res_id)
+                .map(|ty| ty.is_texture_2d())
+                .unwrap_or(false)
+            {
                 continue;
             }
             if let Some(&slot) = resource_to_slot.get(&res_id) {

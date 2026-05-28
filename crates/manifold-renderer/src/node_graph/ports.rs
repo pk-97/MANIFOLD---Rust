@@ -15,7 +15,21 @@
 /// shader owns the per-byte interpretation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortType {
+    /// Untyped Texture2D — the back-compat default. The four RGBA slots
+    /// carry whatever the producer packs into them; consumers reading
+    /// the texture rely on prose `composition_notes` to know the layout.
+    /// Connects to any other [`Texture2D`](PortType::Texture2D) or
+    /// [`Texture2DTyped`](PortType::Texture2DTyped) endpoint (the
+    /// migration valve — see `docs/CHANNEL_TYPE_SYSTEM.md` §17).
     Texture2D,
+    /// Texture2D decorated with a four-slot named-channel signature
+    /// (one [`ChannelName`] per RGBA slot). The validator enforces
+    /// exact-match between two typed endpoints and surfaces a per-slot
+    /// diff on mismatch; an untyped consumer / producer on the other
+    /// side connects through the back-compat valve. See
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` §17 for the texture-channel
+    /// extension to the Channel type system.
+    Texture2DTyped(TextureChannels),
     Texture3D,
     Scalar(ScalarType),
     Array(ArrayType),
@@ -37,6 +51,46 @@ pub enum PortType {
     /// shaded surface (kind + base colour + roughness/metallic/etc.).
     /// Same CPU-struct lifetime model as `Camera` / `Light`.
     Material,
+}
+
+impl PortType {
+    /// True for [`Texture2D`](PortType::Texture2D) and
+    /// [`Texture2DTyped`](PortType::Texture2DTyped). Used by the
+    /// execution planner and pool keyer to treat both texture variants
+    /// uniformly — the channel signature is a validator concern, not
+    /// a runtime / GPU one.
+    pub fn is_texture_2d(self) -> bool {
+        matches!(self, PortType::Texture2D | PortType::Texture2DTyped(_))
+    }
+}
+
+/// Four-slot RGBA channel signature for a [`PortType::Texture2DTyped`]
+/// port. Each slot names what the producer packs into that texel
+/// component; consumers wired to a typed producer declare the same
+/// signature and the validator enforces exact match per slot.
+///
+/// The element type of each slot is implicit in the texture's format
+/// (`Rgba16Float` → four F32 slots, `R8Unorm` → one F32 slot with the
+/// rest ignored, etc.) so [`TextureChannels`] carries only names. The
+/// names interned through the same FNV-1a-64 const-hash mechanism as
+/// [`ChannelSpec::name`] and resolved against the shared `well_known`
+/// channel-name registry. See `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureChannels {
+    /// Channel names in R, G, B, A order.
+    pub slots: [ChannelName; 4],
+}
+
+impl TextureChannels {
+    /// Construct a four-slot signature from explicit per-slot names.
+    /// Use `well_known::*` constants for canonical names; inline
+    /// `ChannelName::from_str("custom")` is the deliberate exception
+    /// for genuinely local meanings.
+    pub const fn new(r: ChannelName, g: ChannelName, b: ChannelName, a: ChannelName) -> Self {
+        Self {
+            slots: [r, g, b, a],
+        }
+    }
 }
 
 /// Sub-types for [`PortType::Scalar`].
@@ -520,6 +574,65 @@ mod channel_layout_tests {
         assert_eq!(full_stride, cs_stride);
         assert_eq!(full_stride, cheap);
         assert_eq!(full_align, cs_align);
+    }
+
+    #[test]
+    fn texture_channels_new_orders_slots_rgba() {
+        const R: ChannelName = ChannelName::from_str("r");
+        const G: ChannelName = ChannelName::from_str("g");
+        const B: ChannelName = ChannelName::from_str("b");
+        const A: ChannelName = ChannelName::from_str("a");
+        let tc = TextureChannels::new(R, G, B, A);
+        assert_eq!(tc.slots, [R, G, B, A]);
+    }
+
+    #[test]
+    fn texture_channels_equal_when_slots_match() {
+        let a = TextureChannels::new(
+            ChannelName::from_str("flow_x"),
+            ChannelName::from_str("confidence"),
+            ChannelName::from_str("flow_y"),
+            ChannelName::from_str("valid"),
+        );
+        let b = TextureChannels::new(
+            ChannelName::from_str("flow_x"),
+            ChannelName::from_str("confidence"),
+            ChannelName::from_str("flow_y"),
+            ChannelName::from_str("valid"),
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn texture_channels_differ_when_any_slot_differs() {
+        // MiDaS convention vs Watercolor convention — the exact bug
+        // that motivated the texture channel extension.
+        let watercolor = TextureChannels::new(
+            ChannelName::from_str("flow_x"),
+            ChannelName::from_str("confidence"),
+            ChannelName::from_str("flow_y"),
+            ChannelName::from_str("valid"),
+        );
+        let midas = TextureChannels::new(
+            ChannelName::from_str("flow_x"),
+            ChannelName::from_str("flow_y"),
+            ChannelName::from_str("confidence"),
+            ChannelName::from_str("valid"),
+        );
+        assert_ne!(watercolor, midas);
+    }
+
+    #[test]
+    fn port_type_is_texture_2d_covers_both_variants() {
+        assert!(PortType::Texture2D.is_texture_2d());
+        let typed = PortType::Texture2DTyped(TextureChannels::new(
+            ChannelName::from_str("r"),
+            ChannelName::from_str("g"),
+            ChannelName::from_str("b"),
+            ChannelName::from_str("a"),
+        ));
+        assert!(typed.is_texture_2d());
+        assert!(!PortType::Texture3D.is_texture_2d());
     }
 
     #[test]

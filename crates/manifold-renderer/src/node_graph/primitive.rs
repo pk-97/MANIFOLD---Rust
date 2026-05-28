@@ -685,6 +685,28 @@ macro_rules! __primitive_port_type {
     (Texture2D) => {
         $crate::node_graph::ports::PortType::Texture2D
     };
+    // `Texture2D[R: Name, G: Name, B: Name, A: Name]` — a Texture2D
+    // port decorated with a four-slot named-channel signature. Each
+    // slot's `Name` is either a `well_known::*` constant ident OR a
+    // string literal (mirrors the `Channels[...]` array-port macro).
+    // The texture's element-type per slot is implicit in the texture
+    // format (no per-slot type required). See
+    // `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+    (Texture2D [
+        R : $r:tt ,
+        G : $g:tt ,
+        B : $b:tt ,
+        A : $a:tt $(,)?
+    ]) => {
+        $crate::node_graph::ports::PortType::Texture2DTyped(
+            $crate::node_graph::ports::TextureChannels::new(
+                $crate::__texture_channel_name!($r),
+                $crate::__texture_channel_name!($g),
+                $crate::__texture_channel_name!($b),
+                $crate::__texture_channel_name!($a),
+            )
+        )
+    };
     (Texture3D) => {
         $crate::node_graph::ports::PortType::Texture3D
     };
@@ -814,6 +836,22 @@ macro_rules! __channels_specs {
     // Public entry: start with empty accumulator.
     ($($body:tt)*) => {
         $crate::__channels_specs!(@accum [] $($body)*)
+    };
+}
+
+/// Resolves one slot of a `Texture2D[R: Name, G: Name, B: Name, A: Name]`
+/// declaration to a [`ChannelName`](crate::node_graph::ports::ChannelName).
+/// Accepts either a `well_known::*` constant ident or an inline string
+/// literal — same dual-form policy as `__channels_specs!` for Array
+/// ports (per `docs/CHANNEL_TYPE_SYSTEM.md` §17).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __texture_channel_name {
+    ($name:ident) => {
+        $crate::node_graph::channel_names::well_known::$name
+    };
+    ($name:literal) => {
+        $crate::node_graph::ports::ChannelName::from_str($name)
     };
 }
 
@@ -1242,6 +1280,109 @@ mod tests {
         assert!(
             g.connect((producer, "edges"), (permissive_consumer, "input")).is_ok(),
             "Permissive consumer should accept any Channels producer"
+        );
+    }
+
+    // ─── §17: Texture2D channel-signature macro smoke primitives ─────
+
+    // A primitive whose output is a typed Texture2D — exercises the
+    // new `Texture2D[R: Name, G: Name, B: Name, A: Name]` macro arm
+    // with `well_known::*` constants.
+    crate::primitive! {
+        name: SmokeTestTexture2DTypedOutput,
+        type_id: "node.__smoke_test_texture2d_typed_output",
+        purpose: "Validates Texture2D[R: ..., G: ..., B: ..., A: ...] macro syntax with well_known idents.",
+        inputs: {},
+        outputs: {
+            flow: Texture2D[R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID],
+        },
+        params: [],
+    }
+
+    impl Primitive for SmokeTestTexture2DTypedOutput {
+        fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    // A consumer-side typed Texture2D port — same convention.
+    crate::primitive! {
+        name: SmokeTestTexture2DTypedInput,
+        type_id: "node.__smoke_test_texture2d_typed_input",
+        purpose: "Validates Texture2D[R: ..., G: ..., B: ..., A: ...] on input ports.",
+        inputs: {
+            flow: Texture2D[R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID] required,
+        },
+        outputs: {},
+        params: [],
+    }
+
+    impl Primitive for SmokeTestTexture2DTypedInput {
+        fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    // Mixed: one inline string literal + three well_known idents. The
+    // texture-channel macro accepts both forms per slot, same dual-form
+    // policy as the Array Channels macro.
+    crate::primitive! {
+        name: SmokeTestTexture2DTypedInlineLiteral,
+        type_id: "node.__smoke_test_texture2d_typed_inline",
+        purpose: "Validates Texture2D[...] accepts inline string-literal names alongside well_known idents.",
+        inputs: {},
+        outputs: {
+            tex: Texture2D[R: "custom_meaning", G: CONFIDENCE, B: B, A: A],
+        },
+        params: [],
+    }
+
+    impl Primitive for SmokeTestTexture2DTypedInlineLiteral {
+        fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    #[test]
+    fn texture2d_typed_macro_emits_port_type_with_channels() {
+        use crate::node_graph::channel_names::well_known;
+        use crate::node_graph::ports::{PortType, TextureChannels};
+
+        let port = &SmokeTestTexture2DTypedOutput::OUTPUTS[0];
+        assert_eq!(port.name, "flow");
+        let expected = PortType::Texture2DTyped(TextureChannels::new(
+            well_known::FLOW_X,
+            well_known::CONFIDENCE,
+            well_known::FLOW_Y,
+            well_known::VALID,
+        ));
+        assert_eq!(port.ty, expected);
+    }
+
+    #[test]
+    fn texture2d_typed_macro_accepts_inline_string_literal_names() {
+        use crate::node_graph::channel_names::well_known;
+        use crate::node_graph::ports::{ChannelName, PortType};
+
+        let port = &SmokeTestTexture2DTypedInlineLiteral::OUTPUTS[0];
+        match port.ty {
+            PortType::Texture2DTyped(tc) => {
+                assert_eq!(tc.slots[0], ChannelName::from_str("custom_meaning"));
+                assert_eq!(tc.slots[1], well_known::CONFIDENCE);
+                assert_eq!(tc.slots[2], well_known::B);
+                assert_eq!(tc.slots[3], well_known::A);
+            }
+            _ => panic!("expected Texture2DTyped"),
+        }
+    }
+
+    #[test]
+    fn texture2d_typed_end_to_end_through_validator() {
+        // A typed producer wires into a typed consumer with the same
+        // four-slot signature: end-to-end through the validator with
+        // the back-compat valve untouched.
+        use crate::node_graph::Graph;
+
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(SmokeTestTexture2DTypedOutput::new()));
+        let consumer = g.add_node(Box::new(SmokeTestTexture2DTypedInput::new()));
+        assert!(
+            g.connect((producer, "flow"), (consumer, "flow")).is_ok(),
+            "Typed Texture2D producer with matching signature must connect"
         );
     }
 }

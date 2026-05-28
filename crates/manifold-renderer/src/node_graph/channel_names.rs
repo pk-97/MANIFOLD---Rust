@@ -152,6 +152,11 @@ pub mod well_known {
         // ─── Confidence / probability / weight (DNN, FFI, classifiers) ─
         CONFIDENCE = "confidence";
         WEIGHT     = "weight";
+
+        // ─── Optical flow / motion vectors (Texture2D channel layouts) ──
+        FLOW_X = "flow_x";
+        FLOW_Y = "flow_y";
+        VALID  = "valid";
     }
 }
 

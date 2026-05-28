@@ -514,7 +514,7 @@ impl Backend for MetalBackend {
         // pull native-precision textures (`r32float`, `rgba32float`).
         // `dims` is honoured for the allocation size — pool-keyed so
         // a quarter-res slot doesn't collide with a full-res one.
-        if matches!(ty, PortType::Texture2D)
+        if ty.is_texture_2d()
             && let std::collections::hash_map::Entry::Vacant(e) = self.textures_2d.entry(slot)
         {
             // Read the raw device pointer directly (NOT via self.device()

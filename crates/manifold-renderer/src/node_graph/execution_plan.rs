@@ -318,7 +318,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         for input_port in inst.node.inputs() {
             if !matches!(
                 input_port.ty,
-                PortType::Texture2D | PortType::Texture3D
+                PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D
             ) {
                 continue;
             }
@@ -370,7 +370,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // construction — the largest dim in the chain and we
             // can't compute max(canvas, explicit) at compile time.
             // Otherwise, max of the explicit input dims.
-            let dims = if matches!(output_port.ty, PortType::Texture2D) {
+            let dims = if output_port.ty.is_texture_2d() {
                 // CANVAS dims aren't known at compile time. We pass
                 // a sentinel (0, 0) here — primitives that need the
                 // real canvas value should declare a width/height
@@ -414,7 +414,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             //      dispatching every downstream node at full canvas.
             //   3. None — output is canvas-default OR concrete (and
             //      `dims` above has already been set).
-            let canvas_scale = if matches!(output_port.ty, PortType::Texture2D)
+            let canvas_scale = if output_port.ty.is_texture_2d()
                 && dims.is_none()
             {
                 inst.node
