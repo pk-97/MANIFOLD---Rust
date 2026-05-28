@@ -114,7 +114,7 @@ fn scan_presets(dir: &Path, require_dir: bool) -> Vec<PresetEntry> {
             })
             .to_string();
 
-        validate(&path);
+        validate(&path, &type_id);
 
         entries.push(PresetEntry {
             type_id,
@@ -127,11 +127,16 @@ fn scan_presets(dir: &Path, require_dir: bool) -> Vec<PresetEntry> {
 }
 
 /// Structural validation — parses as JSON, requires a numeric
-/// `version` field. Deeper validation runs at runtime when the file is
-/// loaded into [`EffectGraphDef`] with the full type system; we keep
-/// build-time checks structural so build.rs doesn't need to drag in
-/// the renderer's type defs.
-fn validate(path: &Path) {
+/// `version` field, and (if present) requires `presetMetadata.id` to
+/// match the file stem so the bundled-preset registry (keyed by file
+/// stem) lines up with the effect-definition registry (keyed by
+/// `presetMetadata.id`). A mismatch causes a silent chain-build None
+/// at runtime — see the WireframeDepthGraph incident, 2026-05-28.
+/// Deeper validation runs at runtime when the file is loaded into
+/// [`EffectGraphDef`] with the full type system; we keep build-time
+/// checks structural so build.rs doesn't need to drag in the
+/// renderer's type defs.
+fn validate(path: &Path, expected_type_id: &str) {
     let content = fs::read_to_string(path).unwrap_or_else(|e| {
         panic!("read {}: {e}", path.display());
     });
@@ -177,6 +182,28 @@ fn validate(path: &Path) {
     if obj.get("wires").is_none() {
         panic!(
             "preset {} missing required `wires` field",
+            path.display()
+        );
+    }
+
+    if let Some(metadata_id) = obj
+        .get("presetMetadata")
+        .and_then(|m| m.as_object())
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_str())
+        && metadata_id != expected_type_id
+    {
+        panic!(
+            "preset {}: file stem `{expected_type_id}` does not match \
+             `presetMetadata.id` `{metadata_id}` — these must agree, or the \
+             chain build silently fails at runtime (the bundled-preset \
+             registry keys by file stem; the effect-definition registry \
+             keys by `presetMetadata.id`; mismatched names cause \
+             `loaded_preset_view_by_id` to return None and the layer \
+             falls back to source passthrough with no log output until \
+             the [chain-build-fail] instrumentation lands). Either rename \
+             the file to `{metadata_id}.json` or change `presetMetadata.id` \
+             to `{expected_type_id}`.",
             path.display()
         );
     }
