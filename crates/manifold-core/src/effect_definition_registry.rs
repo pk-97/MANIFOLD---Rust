@@ -173,24 +173,26 @@ pub fn format_value(effect_type: &EffectTypeId, param_index: usize, value: f32) 
 }
 
 /// Get the OSC address for a master effect parameter.
-/// Returns None if no address is defined.
-/// Matches Unity's `EffectDefinitionRegistry.GetOscAddress(EffectType, int)`.
+///
+/// Unified scheme (preset unification, 2026-05): `/master/{prefix}/{param_id}`
+/// — slash-separated path segments, stable `param_id` as the leaf. Replaces
+/// the legacy concat form (`/master/bloomAmount`, with param 0 addressed bare
+/// as `/master/bloom`). Generators share the identical shape (minus `/master`),
+/// so external senders address effects and generators with one convention.
+/// Returns `None` if the effect has no OSC prefix or the slot has no stable id.
 pub fn get_osc_address(effect_type: &EffectTypeId, param_index: usize) -> Option<String> {
     let def = try_get(effect_type)?;
     let prefix = def.osc_prefix?;
-    if param_index >= def.param_count {
+    let &param_id = def.param_ids.get(param_index)?;
+    if param_id.is_empty() {
         return None;
     }
-    if param_index == 0 {
-        return Some(format!("/master/{}", prefix));
-    }
-    let suffix = def.param_defs[param_index].osc_suffix.as_ref()?;
-    Some(format!("/master/{}{}", prefix, suffix))
+    Some(format!("/master/{}/{}", prefix, param_id))
 }
 
 /// Get the OSC address for a layer effect parameter scoped to a specific layer.
-/// Format: /layer/{layerId}/effectName or /layer/{layerId}/effectName/paramName
-/// Matches Unity's `EffectDefinitionRegistry.GetOscAddressForLayer(EffectType, string, int)`.
+/// Unified scheme: `/layer/{layerId}/{prefix}/{param_id}` — see
+/// [`get_osc_address`] for rationale.
 pub fn get_osc_address_for_layer(
     effect_type: &EffectTypeId,
     layer_id: &str,
@@ -201,14 +203,11 @@ pub fn get_osc_address_for_layer(
     }
     let def = try_get(effect_type)?;
     let prefix = def.osc_prefix?;
-    if param_index >= def.param_count {
+    let &param_id = def.param_ids.get(param_index)?;
+    if param_id.is_empty() {
         return None;
     }
-    if param_index == 0 {
-        return Some(format!("/layer/{}/{}", layer_id, prefix));
-    }
-    let suffix = def.param_defs[param_index].osc_suffix.as_ref()?;
-    Some(format!("/layer/{}/{}{}", layer_id, prefix, suffix))
+    Some(format!("/layer/{}/{}/{}", layer_id, prefix, param_id))
 }
 
 /// Get default parameter values for an effect type as freshly-allocated
@@ -540,28 +539,39 @@ mod tests {
 
     #[test]
     fn test_osc_address_master() {
+        // Unified scheme: /master/{prefix}/{param_id}. Bloom param 0 id = "amount".
         let addr = get_osc_address(&EffectTypeId::BLOOM, 0);
-        assert_eq!(addr, Some("/master/bloom".to_string()));
+        assert_eq!(addr, Some("/master/bloom/amount".to_string()));
     }
 
     #[test]
     fn test_osc_address_master_param() {
+        // InfiniteZoom param 1 id = "sharp" (slash-separated, stable id leaf —
+        // not the legacy concat "/master/infiniteZoomSharpness").
         let addr = get_osc_address(&EffectTypeId::INFINITE_ZOOM, 1);
-        assert_eq!(addr, Some("/master/infiniteZoomSharpness".to_string()));
+        assert_eq!(addr, Some("/master/infiniteZoom/sharp".to_string()));
     }
 
     #[test]
-    fn test_osc_address_no_suffix() {
-        let addr = get_osc_address(&EffectTypeId::TRANSFORM, 0);
-        assert_eq!(addr, Some("/master/transform".to_string()));
-        let addr = get_osc_address(&EffectTypeId::TRANSFORM, 1);
-        assert_eq!(addr, None);
+    fn test_osc_address_uniform_for_param_zero_and_beyond() {
+        // Every param with a stable id gets an address now — no param-0
+        // special case, no "no suffix → None". Transform ids: x, y, zoom, rot.
+        assert_eq!(
+            get_osc_address(&EffectTypeId::TRANSFORM, 0),
+            Some("/master/transform/x".to_string())
+        );
+        assert_eq!(
+            get_osc_address(&EffectTypeId::TRANSFORM, 1),
+            Some("/master/transform/y".to_string())
+        );
+        // Out-of-range index still returns None.
+        assert_eq!(get_osc_address(&EffectTypeId::TRANSFORM, 99), None);
     }
 
     #[test]
     fn test_osc_address_layer() {
         let addr = get_osc_address_for_layer(&EffectTypeId::BLOOM, "layer_1", 0);
-        assert_eq!(addr, Some("/layer/layer_1/bloom".to_string()));
+        assert_eq!(addr, Some("/layer/layer_1/bloom/amount".to_string()));
     }
 
     #[test]

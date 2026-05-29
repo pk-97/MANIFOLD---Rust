@@ -159,14 +159,18 @@ pub fn format_gen_value(gen_type: &GeneratorTypeId, index: usize, value: f32) ->
 pub fn get_osc_address(gen_type: &GeneratorTypeId, index: usize) -> Option<String> {
     let def = DEFINITIONS.get(gen_type)?;
     let prefix = def.osc_prefix.as_ref()?;
-    if index >= def.param_count {
+    let &param_id = def.param_ids.get(index)?;
+    if param_id.is_empty() {
         return None;
     }
-
-    let suffix = def.param_defs[index].osc_suffix.as_ref()?;
-    Some(format!("/{}/{}", prefix, suffix))
+    Some(format!("/{}/{}", prefix, param_id))
 }
 
+/// Unified with the effect scheme (preset unification, 2026-05):
+/// `/layer/{layerId}/{prefix}/{param_id}`. The legacy `/gen/` namespace
+/// segment is dropped — disambiguation between an effect and a generator
+/// sharing a layer is a naming-convention concern (distinct osc_prefixes),
+/// not an addressing one. External senders now use one convention for both.
 pub fn get_osc_address_for_layer(
     gen_type: &GeneratorTypeId,
     layer_id: &str,
@@ -177,12 +181,11 @@ pub fn get_osc_address_for_layer(
     }
     let def = DEFINITIONS.get(gen_type)?;
     let prefix = def.osc_prefix.as_ref()?;
-    if index >= def.param_count {
+    let &param_id = def.param_ids.get(index)?;
+    if param_id.is_empty() {
         return None;
     }
-
-    let suffix = def.param_defs[index].osc_suffix.as_ref()?;
-    Some(format!("/layer/{}/gen/{}/{}", layer_id, prefix, suffix))
+    Some(format!("/layer/{}/{}/{}", layer_id, prefix, param_id))
 }
 
 pub fn try_get_gen_param_range(gen_type: &GeneratorTypeId, index: usize) -> Option<(f32, f32)> {

@@ -46,7 +46,7 @@ pub struct GenParamInfo {
     /// When present, the slider displays the label instead of a numeric value.
     /// Unity: ParamDef.valueLabels → GeneratorDefinitionRegistry.FormatValue().
     pub value_labels: Option<Vec<String>>,
-    /// OSC address for this parameter (e.g. "/layer/{id}/gen/generator/tesseract/rotXY").
+    /// OSC address for this parameter (e.g. "/layer/{id}/tesseract/rot_xy").
     /// When present, clicking the param label copies this address to clipboard.
     /// Unity: UIElementBuilder.CopyToClipboardLabel.
     pub osc_address: Option<String>,
