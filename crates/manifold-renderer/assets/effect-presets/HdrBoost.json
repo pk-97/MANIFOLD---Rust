@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "HdrBoost",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Highlight Boost, decomposed: node.threshold extracts the bright pass with a soft knee, a node.math chain converts the EV `gain` to a linear factor (2^gain - 1), node.gain scales the highlights by it, and node.mix (Add) layers the boosted highlights back over the source by `amount` — pushing them into HDR (>1), no clamp. Replaces the fused node.highlight_boost kernel. Same family; visual delta vs legacy: the bright-pass uses the shared threshold curve and the boost scales the extracted colour directly rather than the legacy excess/lum-normalised proportional ramp. Verified by eye.",
   "presetMetadata": {
     "id": "HdrBoost",
     "displayName": "Highlight Boost",
@@ -59,113 +59,91 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "highlight_boost",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "highlight_boost", "param": "amount" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "gain",
         "label": "Gain",
         "defaultValue": 1.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "highlight_boost",
-          "param": "gain"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "ev_exp", "param": "a" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "threshold",
         "label": "Threshold",
         "defaultValue": 0.15,
-        "target": {
-          "kind": "handleNode",
-          "handle": "highlight_boost",
-          "param": "threshold"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "prefilter", "param": "level" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "knee",
         "label": "Knee",
         "defaultValue": 0.3,
-        "target": {
-          "kind": "handleNode",
-          "handle": "highlight_boost",
-          "param": "knee"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "prefilter", "param": "softness" },
+        "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    },
+    "skipMode": { "kind": "onZero", "paramId": "amount" },
     "paramAliases": [
-      {
-        "old": "thresh",
-        "new": "threshold"
-      }
+      { "old": "thresh", "new": "threshold" }
     ]
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
-      "typeId": "node.highlight_boost",
-      "handle": "highlight_boost",
+      "typeId": "node.threshold",
+      "handle": "prefilter",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "gain": {
-          "type": "Float",
-          "value": 1.5
-        },
-        "knee": {
-          "type": "Float",
-          "value": 0.3
-        },
-        "threshold": {
-          "type": "Float",
-          "value": 0.15
-        }
+        "level": { "type": "Float", "value": 0.15 },
+        "softness": { "type": "Float", "value": 0.3 }
       }
     },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
-  ],
-  "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
+      "typeId": "node.math",
+      "handle": "ev_exp",
+      "params": {
+        "a": { "type": "Float", "value": 1.5 },
+        "op": { "type": "Enum", "value": 13 }
+      }
     },
     {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+      "id": 3,
+      "typeId": "node.math",
+      "handle": "ev_minus1",
+      "params": {
+        "b": { "type": "Float", "value": 1.0 },
+        "op": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.gain",
+      "handle": "boost",
+      "params": {
+        "gain": { "type": "Float", "value": 1.83 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.mix",
+      "handle": "highlight_boost",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 2 }
+      }
+    },
+    { "id": 6, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "gain" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
   ]
 }

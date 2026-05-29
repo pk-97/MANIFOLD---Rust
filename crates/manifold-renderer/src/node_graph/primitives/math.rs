@@ -25,6 +25,7 @@ pub const MATH_OPS: &[&str] = &[
     "Floor",      // 10 — unary, b ignored
     "Ceil",       // 11 — unary, b ignored
     "Modulo",     // 12 — a % b, 0-clamp on |b| < 1e-9
+    "Exp2",       // 13 — unary, b ignored; 2^a (EV stops / octaves → linear)
 ];
 
 crate::primitive! {
@@ -102,6 +103,11 @@ impl Primitive for Math {
         }
         if op == 11 {
             ctx.outputs.set_scalar("out", ParamValue::Float(a.ceil()));
+            return;
+        }
+        if op == 13 {
+            // 2^a — EV stops / octaves → linear gain. Unary; b ignored.
+            ctx.outputs.set_scalar("out", ParamValue::Float(a.exp2()));
             return;
         }
 
@@ -361,6 +367,16 @@ mod tests {
     #[test]
     fn modulo_by_zero_clamps_to_zero() {
         assert_eq!(run_math(5.0, 0.0, 12), 0.0);
+    }
+
+    /// Exp2 is unary 2^a — EV stops / octaves → linear. 2^0=1, 2^1.5≈2.83,
+    /// 2^5=32. The HdrBoost decomposition uses it to turn the EV `gain` knob
+    /// into a linear boost factor (`2^gain - 1`).
+    #[test]
+    fn exp2_converts_ev_stops_to_linear() {
+        assert!((run_math(0.0, 0.0, 13) - 1.0).abs() < 1e-5);
+        assert!((run_math(1.5, 0.0, 13) - 2.0_f32.powf(1.5)).abs() < 1e-4);
+        assert!((run_math(5.0, 0.0, 13) - 32.0).abs() < 1e-3);
     }
 
     /// The canonical bracket-interp triple: feeding any non-integer
