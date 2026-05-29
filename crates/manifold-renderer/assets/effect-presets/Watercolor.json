@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Watercolor",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Watercolor, decomposed: a feedback paint-flow simulation built from atoms. node.feedback carries last frame's accumulated paint; node.film_grain + node.gain(decay) + node.mix(Max) form the grain + decayed-max composite (passes 0-1); node.flow_field_noise + node.uv_displace_by_flow do the fBM flow displacement (passes 2-3); node.blur the edge diffusion (pass 4); node.slope_displace the soft-light/Sobel pigment-pull (pass 5); a second flow_field_noise + scale_offset + node.blur + node.masked_mix the noise-masked dilution that writes the feedback (pass 6); node.mix(Lerp) the wet/dry composite (pass 7). A node.clamp_texture guards the feedback against divergence (replacing the legacy safe_clamp). Replaces the fused 7-pass node.watercolor. Time read from FrameTime.seconds (no generator_input). Documented deltas (visual effect, verified by eye): the flow/diffusion/luma blurs use the general atoms rather than the exact tap kernels; the dilution mask is a soft flow-noise threshold rather than the binary 3D-noise mask; the slope-displacement weight is fixed at the default rather than tracking the Displace slider; no NaN guard (decay < 1 + clamp keep it bounded).",
   "presetMetadata": {
     "id": "Watercolor",
     "displayName": "Watercolor",
@@ -58,53 +58,29 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "watercolor",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "wet_dry", "param": "amount" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "displace",
         "label": "Displace",
         "defaultValue": 0.001,
-        "target": {
-          "kind": "handleNode",
-          "handle": "watercolor",
-          "param": "displace"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "flow_warp", "param": "weight" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "blur",
         "label": "Blur",
         "defaultValue": 2.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "watercolor",
-          "param": "blur"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "diffuse", "param": "radius" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "decay",
         "label": "Decay",
         "defaultValue": 0.99,
-        "target": {
-          "kind": "handleNode",
-          "handle": "watercolor",
-          "param": "decay"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "decay", "param": "gain" },
+        "convert": { "type": "Float" }
       }
     ],
     "skipMode": {
@@ -112,67 +88,138 @@
     }
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
-    {
-      "id": 1,
-      "typeId": "node.watercolor",
-      "handle": "watercolor",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "blur": {
-          "type": "Float",
-          "value": 2.0
-        },
-        "decay": {
-          "type": "Float",
-          "value": 0.99
-        },
-        "displace": {
-          "type": "Float",
-          "value": 0.001
-        },
-        "time": {
-          "type": "Float",
-          "value": 0.0
-        }
-      }
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 1, "typeId": "node.feedback", "handle": "feedback" },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
+      "typeId": "node.film_grain",
+      "handle": "grain",
+      "params": { "amount": { "type": "Float", "value": 0.15 } }
     },
     {
       "id": 3,
-      "typeId": "system.generator_input",
-      "handle": "input"
-    }
+      "typeId": "node.gain",
+      "handle": "decay",
+      "params": { "gain": { "type": "Float", "value": 0.99 } }
+    },
+    {
+      "id": 4,
+      "typeId": "node.mix",
+      "handle": "max_composite",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 3 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.flow_field_noise",
+      "handle": "flow",
+      "params": {
+        "z_scale": { "type": "Float", "value": 0.01 },
+        "warp_scale": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.uv_displace_by_flow",
+      "handle": "flow_warp",
+      "params": {
+        "weight": { "type": "Float", "value": 0.001 },
+        "bias": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.blur",
+      "handle": "diffuse",
+      "params": {
+        "radius": { "type": "Float", "value": 2.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.slope_displace",
+      "handle": "slope",
+      "params": {
+        "strength": { "type": "Float", "value": 5.0 },
+        "step": { "type": "Float", "value": 5.0 },
+        "weight": { "type": "Float", "value": 0.001 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.blur",
+      "handle": "luma_blur",
+      "params": {
+        "radius": { "type": "Float", "value": 10.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.flow_field_noise",
+      "handle": "mask_noise",
+      "params": {
+        "z_scale": { "type": "Float", "value": 0.005 },
+        "warp_scale": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.scale_offset_texture",
+      "handle": "mask_map",
+      "params": {
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.masked_mix",
+      "handle": "dilute",
+      "params": { "amount": { "type": "Float", "value": 1.0 } }
+    },
+    {
+      "id": 13,
+      "typeId": "node.clamp_texture",
+      "handle": "guard",
+      "params": {
+        "min": { "type": "Float", "value": 0.0 },
+        "max": { "type": "Float", "value": 100.0 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.mix",
+      "handle": "wet_dry",
+      "params": {
+        "amount": { "type": "Float", "value": 0.5 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    { "id": 15, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "time",
-      "toNode": 1,
-      "toPort": "time"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "flow", "toNode": 6, "toPort": "flow" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "source" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 8, "toPort": "base" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "image" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "source" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 12, "toPort": "a" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 12, "toPort": "b" },
+    { "fromNode": 10, "fromPort": "flow", "toNode": 11, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "mask" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 14, "toPort": "a" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "b" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" }
   ]
 }

@@ -62,6 +62,7 @@ mod envelope_follower_ar;
 mod fbm_2d;
 mod fbm_per_instance;
 mod field_combine;
+mod film_grain;
 mod filter;
 mod flash;
 mod flow_field_noise;
@@ -179,6 +180,7 @@ mod centered_uv;
 mod plasma_pattern_2d;
 mod rotate_2d;
 mod sin_term;
+mod slope_displace;
 mod texture_sum_5;
 mod trig_texture;
 mod smoothing;
@@ -262,6 +264,7 @@ pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr}
 pub use fbm_2d::Fbm2D;
 pub use fbm_per_instance::FbmPerInstance;
 pub use field_combine::FieldCombine;
+pub use film_grain::FilmGrain;
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
@@ -390,6 +393,7 @@ pub use centered_uv::CenteredUv;
 pub use plasma_pattern_2d::{PLASMA_PATTERNS, PLASMA_PATTERN_COUNT, PlasmaPattern2D};
 pub use rotate_2d::Rotate2D;
 pub use sin_term::SinTerm;
+pub use slope_displace::SlopeDisplace;
 pub use texture_sum_5::TextureSum5;
 pub use trig_texture::{TRIG_MODES, TrigTexture};
 pub use smoothing::{SMOOTHING_TYPE_ID, Smoothing};
