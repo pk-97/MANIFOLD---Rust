@@ -49,12 +49,12 @@ Each effect's `node.*` primitive currently wraps a legacy `PostProcessEffect`. D
 
 | Effect | Decomposes into |
 |---|---|
-| `node.auto_gain` | **`luminance`** (or new `node.luminance_sparse_sample` if the existing one isn't fast enough) + **`envelope_follower_ar`** + **`gain`** + `node.character_color` (5-variant curated-via-`wgsl_compute` family for Clean / Warm / Film / Vivid / Grit) |
-| `node.blob_track` | **`blob_detect_ffi`** + *`one_euro_filter`* (new CPU primitive) + **`blob_overlay_render`** |
-| `node.wireframe_depth` | **`depth_estimate_midas`** + edge detection primitives + wireframe rendering primitives + composite |
-| `node.depth_of_field` | Per branch: DNN (`depth_estimate_midas` + CoC primitive + separable Gaussian + composite); Tilt-Shift (`tilt_shift_mask` primitive + CoC + …); Radial (`radial_mask` primitive + CoC + …) |
-| `node.infrared` | Single-pass shader — decomposable into existing color/threshold/blend atoms |
-| `node.quad_mirror` | Single-pass shader — decomposable into existing transform/mirror atoms |
+| ~~`node.auto_gain`~~ | **Done 2026-05-29** (commit `8f071df2`). Decomposed to **`luminance`** → new **`compressor_envelope`** (attack/release envelope) → **`gain`** → **`wet_dry`**, with new **`hdr_retention_mix`** anchoring above-1.0 highlight energy to the source through the gain branch (kills the large-`target` highlight hue-shift). The originally-proposed `envelope_follower_ar` + `character_color` shapes were superseded by `compressor_envelope` + `hdr_retention_mix`. Bundle Rust + legacy `effects/auto_gain.rs` deleted. |
+| ~~`node.blob_track`~~ | **Done.** `BlobTracking.json` is an 18-node graph: **`blob_detect_ffi`** + **`one_euro_filter`** + **`track_persist`** + **`blob_overlay_render`** + composed `wgsl_compute` SDF passes for the corner-bracket HUD. Bundle primitive + legacy effect deleted. |
+| `node.wireframe_depth` | **In flight (2026-05-29).** `WireframeDepthGraph.json` is the 48-node decomposed graph (analysis tier at canvas/6 via `outputCanvasScales`; `cs_flow_hygiene` runs before the mesh tracker): **`depth_estimate_midas`** + edge detection + wireframe rendering + flow-locked composite. Canonical `WireframeDepth.json` is still the 3-node wrap until the swap + bundle delete lands. |
+| ~~`node.depth_of_field`~~ | **Done** (commit `60d4a42d`). `DepthOfField.json` is a 19-node graph; legacy effect + bundle primitive + parity test deleted. |
+| `node.infrared` | Single-pass shader — decomposes into existing color/threshold/blend atoms: **`luminance`** + **`lut1d`** (the Infrared LUT is already supplied by the preset graph) + **`mix`**. |
+| `node.quad_mirror` | Single-pass shader — **UV-warp family: gated on the missing `remap` atom (§1.6).** Decomposes into axis-fold coordinate math → `remap` → blend. |
 
 ### 1.3 Composite effect presets still wrapping monolithic effect nodes
 
@@ -62,19 +62,19 @@ Most of the 22 thin-wrap effect presets in `assets/effect-presets/` are still si
 
 | Preset | Current shape | Decomposes into |
 |---|---|---|
-| Bloom | `system.source → node.bloom → system.final_output` | Threshold + **`mip_chain`** (registered, unused!) + **`separable_gaussian`** + **`mix`** |
-| Halation | Same shape with `node.halation` | Shares Bloom's atom set + spectral kernel shift atom |
+| Bloom | `system.source → node.bloom → system.final_output` | Threshold + explicit **`downsample`** → **`separable_gaussian`** → upsample mip chain + **`mix`**. (No `mip_chain` primitive ships — build the explicit chain from existing atoms.) Absorbs Halation. |
+| Halation | Same shape with `node.halation` | **Fold into Bloom** (Bloom-absorbs-Halation): shares Bloom's atom set + a spectral kernel shift. |
 | Watercolor | Same with `node.watercolor` | **`flow_field_noise`** + **`uv_displace_by_flow`** (both registered, unused) + existing atoms |
-| Glitch | Same with `node.glitch` | `node.hash_noise_field_2d` + block displace primitive + scanline primitive + chromatic offset |
-| Kaleidoscope | Same with `node.kaleidoscope` | Decomposes onto **`kaleido_fold`** atom (already exists as the underlying impl) |
-| Color Grade | Same with `node.color_grade` | Decomposes into channel-mix + curves + saturation atoms |
-| Chromatic Aberration | Same with `node.chromatic_aberration` | **`chromatic_displace`** atom + RG/RB offset primitive |
-| Dither | Same with `node.dither` | **`dither_pattern`** atom + threshold composition |
-| Edge Stretch | Same with `node.edge_stretch` | **`edge_detect`** + stretch primitive |
-| Highlight Boost | Same with `node.highlight_boost` | Threshold + gain composition |
-| Strobe | Same with `node.strobe` | `node.beat_gate` (registered, unused!) + gain |
-| Transform | Same with `node.transform_effect` | Decomposes onto **`affine_transform`** atom |
-| Voronoi Prism | Same with `node.voronoi_prism` | **`voronoi_2d`** (registered, unused) + prism shading atoms |
+| Glitch | Same with `node.glitch` | **True 4-op monolith** (block displace + scanline jitter + RGB split + per-block invert) — the clearest "no DCC would fuse this" case in the set. `node.hash_noise_field_2d` + block-displace (UV-warp, §1.6) + scanline + **`chromatic_offset`** |
+| ~~Kaleidoscope~~ | Same with `node.kaleidoscope` | **Done-as-atom.** `node.kaleidoscope` IS the single-dispatch **`kaleido_fold`** atom (registered under that type_id). The true polar-fold→resample decomposition is **gated on the missing `remap` atom (§1.6)**; until then `kaleido_fold` is the pragmatic atom floor. |
+| Color Grade | Same with `node.color_grade` | Multi-op bundle (gain + luma-saturation + HSV hue + contrast + tinted-colorize). Decomposes into channel-mix + curves + saturation atoms (likely new). |
+| Chromatic Aberration | Same with `node.chromatic_aberration` | **Mapping corrected:** `chromatic_displace` is a *flow-driven* atom (per-pixel velocity field, oily-fluid Oil Slick) — **not** a drop-in for the *radial/linear* `node.chromatic_aberration`. The radial primitive is single-dispatch; true decomposition is a 3-tap **`remap`** (§1.6) at offset UVs + channel recombine. Fine as a single-dispatch atom otherwise. |
+| Dither | Same with `node.dither` | `node.dither` IS the single-dispatch **`dither_pattern`** curated-6-pattern atom already. No swap target; optional reuse-extraction of the pattern only (low value). |
+| Edge Stretch | Same with `node.edge_stretch` | `node.edge_stretch` IS the single-dispatch **`clamp_stretch`** atom. UV-warp family — true decomposition (strip-clamp coordinate math → `remap`) is **gated on the missing `remap` atom (§1.6)**. |
+| Highlight Boost | Same with `node.highlight_boost` | Clean swap: threshold + **`gain`** composition. |
+| Strobe | Same with `node.strobe` | Clean swap: **`beat_gate`** (registered, unused) + **`gain`**. `node.strobe` is the legacy fused composite; `composites/strobe_opacity.rs` is the decomposed builder already on hand. |
+| ~~Transform~~ | `system.source → node.affine_transform → system.final_output` | **Done.** Already wires the **`affine_transform`** atom directly; `node.transform_effect` is unregistered. |
+| Voronoi Prism | Same with `node.voronoi_prism` | **`voronoi_2d`** (per-cell hash, registered) + per-cell **`remap`** (§1.6) + beat-fade. |
 
 ### 1.4 Atoms on the shelf
 
@@ -98,8 +98,24 @@ Registered primitives with zero current uses that are decomposition targets, not
 These appear unused because they've been displaced by better primitives. Confirm-and-delete pass:
 
 - `node.wgsl_compute_0in_1tex`, `node.wgsl_compute_1tex_1tex`, `node.wgsl_compute_2tex_1tex` — superseded by the introspected `node.wgsl_compute` used by BlackHole.
-- Verify and delete if confirmed superseded: `node.tone_map` (vs `node.reinhard_tone_map`), `node.wet_dry` (vs `node.mix`), `node.sample` (general texture sample — check whether something specific still needs it).
+- Verify and delete if confirmed superseded: `node.tone_map` (vs `node.reinhard_tone_map`). **`node.wet_dry` is now in active use** (AutoGain's wet/dry composite, 2026-05-29) — retain, not a candidate. **`node.sample` is no longer registered** (confirmed gone 2026-05-29) — and note no generic absolute-UV resampler exists in its place; see §1.6.
 - Likely retain: `node.color_lut`, `node.color_ramp`, `node.channel_mix` (registered for future color-grading workflows; not deletion candidates yet).
+
+### 1.6 The missing `remap` atom — the UV-warp family blocker (identified 2026-05-29)
+
+The audit of `kaleido_fold` surfaced a structural gap: **there is no generic "sample the input at an arbitrary UV field" primitive** — the equivalent of TouchDesigner's *Remap TOP*, Unreal's *Texture Sample* fed by computed UVs, or Blender's *Mapping → Image Texture* split. The existing samplers only do *relative* displacement (`texture_advect`: `sample(uv − velocity·dt/dims)`; `uv_displace_by_flow`: `sample(uv + flow)`) or a *fixed* affine (`affine_transform`). Nothing does `out(uv) = sample(input, uvfield(uv).rg)` for an absolute UV map. (`node.sample` and `color_sample` are single-pixel reads, not a per-pixel resample.)
+
+Because that atom is missing, an entire family of UV-warp effects is each shipped as a bespoke fused shader instead of the universal node-DCC shape `[coordinate math] → [resample] → [blend]`:
+
+- `kaleido_fold` (`node.kaleidoscope`) — polar fold
+- `mirror_axis` + `node.quad_mirror` — axis-aligned fold
+- `clamp_stretch` (`node.edge_stretch`) — center-strip clamp
+- `chromatic_offset` (`node.chromatic_aberration`) + `chromatic_displace` — multi-tap offset
+- `voronoi_prism` — per-cell hash-offset
+
+**The unlock is one new generic atom — `node.remap`** (sample input at a UV-field texture's RG), plus one or two small coordinate-fold helpers (polar fold, axis fold). Ship `remap` and the whole family decomposes into clean graphs; e.g. Kaleidoscope = `polar_field → fold math (floor/modulo/mirror) → cartesian reconstruct → remap → mix`. This is why the Tranche 8 "atom-swap" framing for Kaleidoscope / Edge Stretch / Quad Mirror / Chromatic Aberration was wrong: they are **not** swaps onto an existing atom, they are gated on building `remap` first. Highest-leverage item in the whole pass — it's a category unlock, not one decomposition, and exactly the kind of generic vocabulary the AI-authoring goal needs.
+
+**Not to be confused with the convenience-fusion atoms.** `levels` (= `scale_offset → clamp → power`, a Levels TOP), `texture_sum_5` (= a `Mix(Add)` chain, a Composite TOP), and `rotate_2d` (= `angle → cos/sin → field_combine`) openly collapse compositions into one dispatch — but those are the *intended* fusion direction: single-node operators every DCC also ships, and the long-term answer to their bandwidth is the graph compiler auto-fusing authored chains ([`GRAPH_COMPILER.md`](GRAPH_COMPILER.md)), not hand-written fused kernels. They are **not** bespoke-effect-wrap violations. The `remap` gap is the opposite problem — a *missing generic atom* forcing per-effect fusion.
 
 ---
 
@@ -143,11 +159,15 @@ Parity testing requires bounded-not-bit-exact tolerance for particle-sim accumul
 
 ### Tranche 7 — Legacy Rust effects
 
-Decompose the six wrapped legacy effects (`auto_gain`, `blob_track`, `wireframe_depth`, `depth_of_field`, `infrared`, `quad_mirror`). DNN / FFI / CPU work activates already-registered primitives; the rest of each effect composes from existing atoms plus one or two new ones per effect (`one_euro_filter`, `tilt_shift_mask`, `radial_mask`, `character_color`).
+**Status (2026-05-29): half cleared.** `auto_gain` (commit `8f071df2`; new atoms `compressor_envelope` + `hdr_retention_mix`), `blob_track` (`one_euro_filter` + `track_persist` shipped), and `depth_of_field` (commit `60d4a42d`) are decomposed and their bundles deleted. `wireframe_depth` is in flight (`WireframeDepthGraph.json`, 48 nodes). **Remaining:** the `wireframe_depth` swap, plus `infrared` (→ `luminance` + `lut1d` + `mix`) and `quad_mirror` (UV-warp family — gated on the `remap` atom, §1.6). The proposed `tilt_shift_mask` / `radial_mask` / `character_color` atoms were not all needed — DoF's branches and AutoGain's character shipped via other compositions; verify against the actual preset graphs before authoring any of them.
 
 ### Tranche 8 — Composite effect presets
 
-Decompose the thin-wrap composite presets — Bloom, Halation, Watercolor, Glitch, Kaleidoscope, Color Grade, Chromatic Aberration, Dither, Edge Stretch, Highlight Boost, Strobe, Transform, Voronoi Prism. Many decompose onto atoms already shipped (Kaleidoscope onto `kaleido_fold`, Transform onto `affine_transform`, Strobe onto `beat_gate`, etc.). The bigger ones (Bloom, Halation, Watercolor) activate the high-value unused atoms (`mip_chain`, `flow_field_noise`, `uv_displace_by_flow`).
+Re-scoped 2026-05-29 into three groups:
+
+- **Done / already at atom granularity:** Transform (`affine_transform`), Kaleidoscope (`kaleido_fold`), Dither (`dither_pattern`), Edge Stretch (`clamp_stretch`), Chromatic Aberration (`chromatic_offset`) are all single-dispatch atoms today. Transform + Kaleidoscope need nothing further; Dither + Chromatic Aberration are optional reuse-extraction only.
+- **Gated on the `remap` atom (§1.6):** the *true* (non-fused) decomposition of Kaleidoscope, Quad Mirror, Edge Stretch, Chromatic Aberration, and Voronoi Prism's per-cell warp all need the generic resample atom built first. Build `remap` as its own commit, then this sub-tranche is mechanical.
+- **Real composites still to decompose:** Bloom (absorb Halation; explicit `downsample → separable_gaussian → mix` chain — no `mip_chain` primitive ships), Watercolor (`flow_field_noise` + `uv_displace_by_flow`), Glitch (true 4-op monolith — block displace + scanline + RGB split + invert), Color Grade (5-op bundle), Highlight Boost (clean threshold + gain), Strobe (clean `beat_gate` + gain via the existing `composites/strobe_opacity.rs` builder).
 
 ---
 
@@ -203,8 +223,9 @@ When the whole pass is done (all bundles in §1 cleared), one workspace run + wo
 
 ## 5. Open questions
 
+- **`node.remap` (the UV-warp resample atom)** — highest-priority new atom (§1.6). Generic "sample input at a UV-field texture's RG" — TD's Remap TOP. Unblocks Kaleidoscope / Quad Mirror / Edge Stretch / Chromatic Aberration / Voronoi Prism (and any future user/AI-authored UV-warp). Design: one Texture2D input (source) + one Texture2D UV-field input (R=u, G=v) + sampler/wrap mode; possibly a `taps` variant or a sibling for the 3-tap chromatic case. Build as its own commit with `gpu_tests` parity before the gated Tranche-8 entries.
+- ~~**One-euro filter**~~ — **Shipped** (Blob Track decomposition, 2026-05-29). `node.one_euro_filter` is registered and in `BlobTracking.json` alongside `track_persist`.
 - **Array-elementwise atom family** — Lissajous (Tranche 3) is the first consumer; the attractor family (Tranche 6) and the fluid sims (Tranche 6) reuse the same atoms. The first generator decomposed in this family establishes the shape (port types, capacity declaration, port-shadow conventions); subsequent generators ride on it.
-- **One-euro filter** — needed for the Blob Track decomposition. CPU primitive, no GPU surface. Confirm the design before authoring (port shape, state lifecycle, AlphaBeta tuning surface).
 - **Tilt-shift and radial mask primitives** — needed for DoF geometric branches. Probably one curated `node.focus_mask` primitive with a `mode` enum (Tilt-Shift / Radial) since the user knob shape is identical.
 - **Spectral kernel shift** — needed for Halation's wavelength-shifted blur. Could be a new atom or a parameter on the existing `separable_gaussian`. Audit per `DECOMPOSING_GENERATORS.md §6.2` (extend before you build).
 - **CoC primitive** — Circle-of-Confusion generation for DoF. Single curated primitive or decomposable into existing atoms? Audit on first DoF decomposition.
