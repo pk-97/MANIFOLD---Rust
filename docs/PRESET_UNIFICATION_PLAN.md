@@ -107,6 +107,7 @@ pub trait GraphHost {
     fn bump_graph_version(&mut self);
     fn param_values(&self) -> &[ParamSlot];
     fn param_values_mut(&mut self) -> &mut Vec<ParamSlot>;
+    fn user_param_bindings(&self) -> &[UserParamBinding]; // effects: their Vec; generators: &[]
     fn drivers(&self) -> Option<&[ParameterDriver]>;
     fn envelopes(&self) -> Option<&[ParamEnvelope]>;
     fn ableton_mappings(&self) -> Option<&[AbletonParamMapping]>;
@@ -115,7 +116,7 @@ pub trait GraphHost {
 
 `EffectInstance` and `Layer` (delegating to its `gen_params`) both implement it. Editing commands and modulation walks take `&mut dyn GraphHost` instead of forking.
 
-**Note: there is no `user_param_bindings()` method.** Per the binding-storage decision (see Phase 1b), ALL bindings — shipped and user-added — live in one place: the host's `graph_def().preset_metadata.bindings`, with user-added entries tagged `user_added: true`. A reader that wants "every slider on this card" walks that one list. The separate `EffectInstance.user_param_bindings` Vec is deleted; the second-list footgun (the `&[]` bug class, one layer up) is structurally eliminated.
+**Note (revised — see Phase 1b status).** `GraphHost` includes a `user_param_bindings()` accessor. The effect-side physical fold-in was deferred (per `EFFECT_GENERATOR_CARD_UNIFICATION.md` §1), so effects still hold their `Vec<UserParamBinding>` and return it here; generators store user bindings in their graph's `preset_metadata` and return `&[]`. Binding *enumeration* is unified at this trait + `PresetRuntime`, not by physically relocating the effect Vec. The single-physical-list end-state remains the long-term target via a future save-file pass.
 
 ### A unified `LoadedPresetView`
 
@@ -274,7 +275,17 @@ Phases are dependency-ordered. Each phase must land cleanly and pass all gates b
 - Update `serialize_param_values_for_generator` to emit the new object form.
 - Bridge to `GeneratorContext.params: [f32; MAX_GEN_PARAMS]` keeps the lossy cast for now — phase 4 fixes that when `FrameContext` lands.
 
-**Sub-phase 1b — User-binding storage unification (single-list / "approach A").**
+**Sub-phase 1b — STATUS (revised 2026-05-29): generator side already approach-A; effect fold-in DEFERRED.**
+
+Two findings during implementation:
+1. **Generators already store user bindings in the graph** (`commands/graph.rs` `apply_generator_mirror` appends `user_added` `BindingDef`s into `preset_metadata.bindings` and grows `param_values`). Generator half of approach A is already shipped.
+2. **Effect physical fold-in deferred**, matching `EFFECT_GENERATOR_CARD_UNIFICATION.md` §1 ("Not part of Step 8: removing `EffectInstance.user_param_bindings`... Those stay"; "effects can migrate later when there's appetite for the save-file pass"). The fold-in forces lifting the canonical graph into every effect with an exposed param (effects read static bindings from `LoadedPresetView`, not from `EffectInstance.graph`, which is `None` until divergence) — flipping them to `graph = Some(...)`, lighting the MOD badge, switching to divergent-splice, changing rebuild behavior on the live path. Deferred.
+
+**Replacement:** binding *enumeration* unifies at `GraphHost` (1c) + `PresetRuntime` (phase 4). `GraphHost::user_param_bindings()` returns the effect Vec / empty for generators. Full effect fold-in stays a future pass with its own save-file migration; NOT a blocker for registry/runtime/UI unification.
+
+The original single-list design follows for reference:
+
+**(original) User-binding storage unification (single-list / "approach A").**
 
 - **Decision (revised from draft — aligns with `EFFECT_GENERATOR_CARD_UNIFICATION.md` §1):** all bindings live in ONE place — the host's `graph_def().preset_metadata.bindings`. Shipped bindings and user-added bindings share that list; user-added entries carry `user_added: true`. The separate `EffectInstance.user_param_bindings: Vec<UserParamBinding>` is deleted. This is the single-source-of-truth shape: anything that wants "every slider on this card" walks one list. It is structurally symmetric with commit `a7fd4698`, which already moved *exposure* bits into the graph — this extends the same move to the binding *metadata*.
   - **Why this over the draft's separate-Vec model:** the draft kept the effect-side two-list pattern for migration cheapness. That preserves the exact "metadata may be in the graph OR in a parallel Vec — check both" footgun that this whole effort exists to kill (it's the `&[]` bug class, one layer up). The audit itself flagged that footgun as a Tier 1 functional gap; the plan must not re-introduce it. Generators have **no installed base** of user-added bindings (the feature never worked there), so the single-list shape costs nothing on the generator side; effects pay a one-time save-file migration (1d).

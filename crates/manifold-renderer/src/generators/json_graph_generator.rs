@@ -27,11 +27,13 @@ use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::{
-    EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID, FrameTime,
-    GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, MetalBackend, NodeInstanceId,
-    ParamValue, PrimitiveRegistry, ResourceId, Slot, StateStore, compile,
+    BindingSource, EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID, FrameTime,
+    GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LastAppliedCache, LoadError, MetalBackend,
+    NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding, ResolvedTarget, ResourceId,
+    Slot, StateStore, apply_binding_defaults, apply_bindings, compile,
 };
 use crate::render_target::RenderTarget;
+use manifold_core::effects::ParamSlot;
 
 /// Errors produced when loading a generator preset.
 #[derive(Debug)]
@@ -191,11 +193,21 @@ pub struct JsonGraphGenerator {
     /// resize. `None` for the mock-backend test path (which doesn't
     /// touch the GPU on resize).
     target_format: Option<GpuTextureFormat>,
-    /// Outer-card → inner-node bindings resolved at construction time.
-    /// Each render frame walks these and pushes the corresponding
-    /// `GeneratorContext::params[i]` into the target node's param.
-    /// Empty when the preset declares no bindings.
-    bindings: Vec<BindingResolution>,
+    /// Outer-card → inner-node bindings resolved at construction time,
+    /// using the SAME [`ResolvedBinding`] type + [`apply_bindings`] loop
+    /// + [`LastAppliedCache`] the effect chain uses. Each render frame
+    /// walks these via `apply_bindings`, which pushes the corresponding
+    /// `GeneratorContext::params[i]` into the target node's param,
+    /// skipping writes whose outer value hasn't changed (so per-card
+    /// inner edits survive at-rest sliders — the same property effects
+    /// have) and logging structured errors on routing failures instead
+    /// of silently dropping. Empty when the preset declares no bindings.
+    bindings: Vec<ResolvedBinding>,
+    /// Skip-on-unchanged cache parallel to `bindings`. Seeded with each
+    /// binding's declared default at construction so a freshly-built
+    /// generator only writes outer→inner for slots that already diverge
+    /// from their default.
+    binding_cache: LastAppliedCache,
     /// String-typed outer-card → inner-node bindings. Each entry routes
     /// one entry from the host's `clip.string_params` map (looked up by
     /// the binding's `source_key`) into the target node's String param.
@@ -219,36 +231,9 @@ pub struct JsonGraphGenerator {
     state_store: StateStore,
 }
 
-/// One resolved outer-card → inner-node binding for a JSON generator
-/// preset. Built once at construction by walking the preset's
-/// `BindingDef` list against the live graph's handle map.
-///
-/// `source_index` is the position into the host's outer-card `values`
-/// array that this binding draws from — resolved by matching
-/// `BindingDef::id` against `PresetMetadata::params`. Distinct from the
-/// binding's own position in the `bindings` array: a single outer
-/// slider can fan out to multiple inner-node params (e.g. Lissajous's
-/// `clip_trigger` toggle drives both `mux_x.selector` and
-/// `mux_y.selector`), so binding-position indexing would silently
-/// strand the second binding on its default.
-struct BindingResolution {
-    target_node: NodeInstanceId,
-    /// Param name on the target node. Owned because the binding spec
-    /// comes from deserialized JSON, which lives in `String`s. The
-    /// graph's `set_param` API accepts `&str` and looks the canonical
-    /// `&'static str` up from the primitive's `parameters()` list at
-    /// call time, so no leak / interning is required here.
-    target_param: String,
-    /// Position into the outer-card `values` slice this binding reads
-    /// from. Two bindings with the same `source_index` share an outer
-    /// slider — the fan-out case.
-    source_index: usize,
-    default: f32,
-    convert: manifold_core::effects::ParamConvert,
-}
-
-/// One resolved String outer-card → inner-node binding. Mirrors
-/// `BindingResolution` but for String values: source is keyed by name
+/// One resolved String outer-card → inner-node binding. The String
+/// binding path stays bespoke (the shared `apply_bindings` loop is
+/// float-only); source is keyed by name
 /// (lookup into the host's `clip.string_params` map), no convert
 /// because String → String is a pass-through.
 struct StringBindingResolution {
@@ -355,7 +340,7 @@ impl JsonGraphGenerator {
             .map(|m| m.string_bindings.clone())
             .unwrap_or_default();
 
-        let graph = doc.into_graph(registry)?;
+        let mut graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
 
         // Re-locate the boundary nodes by runtime id now that we have
@@ -384,13 +369,15 @@ impl JsonGraphGenerator {
             .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
 
         // Resolve the captured binding specs against the live graph's
-        // handle map. Bindings whose handle doesn't resolve are silently
-        // dropped (the host doesn't surface a runtime warn from
-        // primitive load yet).
+        // handle map into the SHARED `ResolvedBinding` type — the same
+        // one the effect chain uses — so the per-frame apply runs through
+        // `apply_bindings` (skip-on-unchanged cache + structured error
+        // logging) instead of a bespoke generator-only loop. Bindings
+        // whose handle / param doesn't resolve are warned + dropped.
         use manifold_core::effect_graph_def::BindingTarget;
         let handle_map: ahash::AHashMap<&str, NodeInstanceId> =
             graph.handles().collect();
-        let bindings: Vec<BindingResolution> = binding_specs
+        let bindings: Vec<ResolvedBinding> = binding_specs
             .iter()
             .filter_map(|b| match &b.target {
                 BindingTarget::HandleNode { handle, param } => {
@@ -408,17 +395,55 @@ impl JsonGraphGenerator {
                             return None;
                         }
                     };
-                    Some(BindingResolution {
-                        target_node: node_id,
-                        target_param: param.clone(),
-                        source_index,
-                        default: b.default_value,
+                    // Pull the canonical `&'static str` param name off the
+                    // target node's `ParamDef` list (same trick as
+                    // `ResolvedBinding::from_user`) so the resolved target
+                    // carries a stable name with no per-binding leak.
+                    let inst = graph.get_node(node_id)?;
+                    let static_param = inst
+                        .node
+                        .parameters()
+                        .iter()
+                        .map(|p| p.name)
+                        .find(|name| *name == param.as_str())
+                        .or_else(|| {
+                            log::warn!(
+                                "JsonGraphGenerator: binding id `{}` targets \
+                                 `{handle}.{param}` but that param doesn't exist on the \
+                                 node — dropping binding.",
+                                b.id,
+                            );
+                            None
+                        })?;
+                    Some(ResolvedBinding {
+                        id: std::borrow::Cow::Owned(b.id.clone()),
+                        label: std::borrow::Cow::Owned(b.label.clone()),
+                        default_value: b.default_value,
+                        target: ResolvedTarget::Node {
+                            node: node_id,
+                            param: static_param,
+                        },
                         convert: b.convert,
+                        source: if b.user_added {
+                            BindingSource::User
+                        } else {
+                            BindingSource::Static
+                        },
+                        source_index,
                     })
                 }
                 BindingTarget::Composite { .. } => None,
             })
             .collect();
+
+        // Seed the skip-on-unchanged cache + plant each binding's declared
+        // default into its inner-node target now — mirrors the effect
+        // chain's chain-build seed (closes the "inner node starts at the
+        // primitive default instead of the binding default" gap that the
+        // bespoke generator path previously had).
+        let mut binding_cache = LastAppliedCache::new();
+        binding_cache.seed_from_bindings(&bindings);
+        apply_binding_defaults(&bindings, &mut graph, None);
 
         let string_bindings: Vec<StringBindingResolution> = string_binding_specs
             .iter()
@@ -454,6 +479,7 @@ impl JsonGraphGenerator {
             final_output_slot: None,
             target_format: None,
             bindings,
+            binding_cache,
             string_bindings,
             state_store: StateStore::new(),
         };
@@ -629,23 +655,25 @@ impl JsonGraphGenerator {
     /// binding's `default_value`. No-op if the preset declared no
     /// bindings.
     pub fn apply_param_values(&mut self, values: &[f32]) {
-        use manifold_core::effects::ParamConvert;
-        for binding in &self.bindings {
-            let v = values
-                .get(binding.source_index)
-                .copied()
-                .unwrap_or(binding.default);
-            let pv = match binding.convert {
-                ParamConvert::Float => ParamValue::Float(v),
-                ParamConvert::IntRound => ParamValue::Float(v.round()),
-                ParamConvert::BoolThreshold => ParamValue::Bool(v > 0.5),
-                ParamConvert::EnumRound => ParamValue::Enum(v.round().max(0.0) as u32),
-                ParamConvert::Trigger => ParamValue::Float(v),
-            };
-            let _ = self
-                .graph
-                .set_param(binding.target_node, &binding.target_param, pv);
-        }
+        // Route through the shared `apply_bindings` loop. It indexes
+        // `values[binding.source_index]` (so a single outer slider can
+        // fan out to multiple inner params), falls back to each binding's
+        // `default_value` when the slot is missing, skips writes whose
+        // outer value is unchanged since last frame (per-card inner edits
+        // survive at-rest sliders), and logs structured errors on routing
+        // failure. `apply_bindings` takes `&[ParamSlot]`; wrap the host's
+        // float bus into exposed slots (the exposure flag is irrelevant to
+        // the apply — only `.value` is read). The wrap is a small
+        // stack-ish Vec (≤ MAX_GEN_PARAMS); the FrameContext work folds it
+        // away later.
+        let slots: Vec<ParamSlot> = values.iter().map(|v| ParamSlot::exposed(*v)).collect();
+        apply_bindings(
+            &self.bindings,
+            &mut self.graph,
+            None,
+            &slots,
+            &mut self.binding_cache,
+        );
     }
 
     /// Push the host's per-clip string overrides through the preset's
