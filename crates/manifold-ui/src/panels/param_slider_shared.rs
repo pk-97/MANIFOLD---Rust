@@ -1,8 +1,9 @@
 //! Shared constants, types, and builder functions for parameter slider panels.
 //!
-//! Both `EffectCardPanel` and `GenParamPanel` use identical layout constants,
-//! driver/envelope config builders, trim/target handle builders, and formatting
-//! helpers. This module extracts them into a single source of truth.
+//! The unified `ParamCardPanel` (effect + generator kinds) uses identical
+//! layout constants, driver/envelope config builders, trim/target handle
+//! builders, and formatting helpers across both kinds. This module is the
+//! single source of truth for them.
 
 use super::param_card::ParamInfo;
 use super::DriverConfigAction;
@@ -113,7 +114,7 @@ pub struct AbletonMappingDisplay {
 
 // ── Shared modulation state ─────────────────────────────────────
 
-/// Per-parameter modulation state shared by both EffectCardPanel and GenParamPanel.
+/// Per-parameter modulation state for the unified `ParamCardPanel` (both kinds).
 /// Contains driver expansion, envelope expansion, trim/target values, ADSR values,
 /// and driver visual state (beat div, waveform, reversed, dotted, triplet).
 pub struct ParamModState {
@@ -211,7 +212,7 @@ impl ParamModState {
 
 // ── Shared drag state ───────────────────────────────────────────
 
-/// Drag tracking state shared by both EffectCardPanel and GenParamPanel.
+/// Drag tracking state for the unified `ParamCardPanel` (both kinds).
 pub(crate) struct ParamDragState {
     pub(crate) dragging_param: i32,
     pub(crate) dragging_env_param: i32,
@@ -1129,8 +1130,8 @@ pub(crate) struct ParamRowIds {
 /// drawers, returning the created node IDs and the post-row `y`.
 ///
 /// This is the per-parameter core shared verbatim by the effect and generator
-/// cards — the bulk of what used to be duplicated between
-/// `EffectCardPanel::build_sliders` and `GenParamPanel::build`. The two cards
+/// kinds of `ParamCardPanel` — the bulk of what used to be duplicated between
+/// the two cards' build paths. The two kinds
 /// differ only in the parameters threaded in here: `parent` (the effect card
 /// nests rows under its inner-bg panel, the generator card parents flat to
 /// `-1`), `slider_colors` (`default_slider` vs `gen_param`), `config_font`

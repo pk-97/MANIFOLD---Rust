@@ -3,9 +3,7 @@ pub mod browser_popup;
 pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
 pub mod dropdown;
-pub mod effect_card;
 pub mod footer;
-pub mod gen_param;
 pub mod graph_editor;
 pub mod graph_palette;
 pub mod header;
@@ -302,7 +300,7 @@ pub enum PanelAction {
     /// Outer-card click on a `is_trigger` param's button — increment
     /// the underlying monotonic counter by one. Consumed by the same
     /// `ChangeGeneratorParamsCommand` path as toggles, but with `+1`
-    /// instead of `0↔1` flip. Wired in [`crate::panels::gen_param`].
+    /// instead of `0↔1` flip. Wired in [`crate::panels::param_card`].
     GenParamFire(manifold_core::effects::ParamId),
     GenDriverToggle(manifold_core::effects::ParamId),
     GenEnvelopeToggle(manifold_core::effects::ParamId),

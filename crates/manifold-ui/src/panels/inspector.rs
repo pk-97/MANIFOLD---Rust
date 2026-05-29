@@ -1,8 +1,6 @@
 use super::clip_chrome::ClipChromePanel;
-use super::effect_card::EffectCardPanel;
-use super::gen_param::GenParamPanel;
 use super::layer_chrome::LayerChromePanel;
-use super::param_card::ParamCardConfig;
+use super::param_card::{ParamCardConfig, ParamCardPanel};
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
 use super::{InspectorTab, Panel, PanelAction};
@@ -82,9 +80,9 @@ pub struct InspectorCompositePanel {
     master_chrome: MasterChromePanel,
     layer_chrome: LayerChromePanel,
     clip_chrome: ClipChromePanel,
-    master_effects: Vec<EffectCardPanel>,
-    layer_effects: Vec<EffectCardPanel>,
-    gen_params: Option<GenParamPanel>,
+    master_effects: Vec<ParamCardPanel>,
+    layer_effects: Vec<ParamCardPanel>,
+    gen_params: Option<ParamCardPanel>,
 
     // Section visibility
     master_visible: bool,
@@ -239,7 +237,7 @@ impl InspectorCompositePanel {
     pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
         self.master_effects.clear();
         for cfg in configs {
-            let mut card = EffectCardPanel::new();
+            let mut card = ParamCardPanel::new();
             card.configure(cfg);
             self.master_effects.push(card);
         }
@@ -248,7 +246,7 @@ impl InspectorCompositePanel {
     pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig]) {
         self.layer_effects.clear();
         for cfg in configs {
-            let mut card = EffectCardPanel::new();
+            let mut card = ParamCardPanel::new();
             card.configure(cfg);
             self.layer_effects.push(card);
         }
@@ -260,7 +258,7 @@ impl InspectorCompositePanel {
         layer_id: Option<LayerId>,
     ) {
         if let Some(cfg) = config {
-            let mut panel = GenParamPanel::new();
+            let mut panel = ParamCardPanel::new();
             panel.set_layer_id(layer_id);
             panel.configure(cfg);
             self.gen_params = Some(panel);
@@ -289,10 +287,10 @@ impl InspectorCompositePanel {
     pub fn clip_chrome_mut(&mut self) -> &mut ClipChromePanel {
         &mut self.clip_chrome
     }
-    pub fn gen_params(&self) -> Option<&GenParamPanel> {
+    pub fn gen_params(&self) -> Option<&ParamCardPanel> {
         self.gen_params.as_ref()
     }
-    pub fn gen_params_mut(&mut self) -> Option<&mut GenParamPanel> {
+    pub fn gen_params_mut(&mut self) -> Option<&mut ParamCardPanel> {
         self.gen_params.as_mut()
     }
 
@@ -323,10 +321,10 @@ impl InspectorCompositePanel {
             .is_some_and(|gp| gp.param_has_ableton_mapping(param_id))
     }
 
-    pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut EffectCardPanel> {
+    pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
         self.master_effects.get_mut(idx)
     }
-    pub fn layer_effect_mut(&mut self, idx: usize) -> Option<&mut EffectCardPanel> {
+    pub fn layer_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
         self.layer_effects.get_mut(idx)
     }
     pub fn viewport_rect(&self) -> Rect {
@@ -448,7 +446,7 @@ impl InspectorCompositePanel {
     // ── Effect selection (Unity EffectSelectionManager) ─────────
 
     /// Get the selection set and cards vec for a given tab.
-    fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[EffectCardPanel]) {
+    fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
         match tab {
             InspectorTab::Master => (&self.selected_master_ids, &self.master_effects),
             InspectorTab::Layer | InspectorTab::Clip => {
@@ -1104,14 +1102,14 @@ impl InspectorCompositePanel {
         None
     }
 
-    fn cards_for_tab(&self, tab: InspectorTab) -> &[EffectCardPanel] {
+    fn cards_for_tab(&self, tab: InspectorTab) -> &[ParamCardPanel] {
         match tab {
             InspectorTab::Master => &self.master_effects,
             InspectorTab::Layer | InspectorTab::Clip => &self.layer_effects,
         }
     }
 
-    fn cards_for_tab_mut(&mut self, tab: InspectorTab) -> &mut Vec<EffectCardPanel> {
+    fn cards_for_tab_mut(&mut self, tab: InspectorTab) -> &mut Vec<ParamCardPanel> {
         match tab {
             InspectorTab::Master => &mut self.master_effects,
             InspectorTab::Layer | InspectorTab::Clip => &mut self.layer_effects,
