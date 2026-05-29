@@ -1,4 +1,5 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
+use super::param_card::{ParamCardConfig, ParamInfo};
 use super::param_slider_shared::*;
 use super::{DriverConfigAction, EnvelopeParam, PanelAction};
 use crate::color;
@@ -26,98 +27,10 @@ const CARD_BOTTOM_MARGIN: f32 = 6.0;
 const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 
 // ── Data types ───────────────────────────────────────────────────
-
-/// Per-parameter configuration info provided by the app layer.
-#[derive(Debug, Clone)]
-pub struct EffectParamInfo {
-    /// Stable [`ParamId`] for this slot — for static-tier params this is
-    /// the `&'static str` declared in the effect's `ParamSpec`; for
-    /// user-tier (graph-editor-exposed) params it's the owned id from
-    /// `EffectInstance.user_param_bindings[j].id`. Carried on the wire
-    /// when this widget emits a [`PanelAction`] so the bridge never has
-    /// to do a `pi → ParamId` lookup (the bug class Phase 2 of the
-    /// bindings unification plan eliminates).
-    pub param_id: manifold_core::effects::ParamId,
-    pub name: String,
-    pub min: f32,
-    pub max: f32,
-    pub default: f32,
-    pub whole_numbers: bool,
-    /// Whether this slot is exposed as a slider on the card. `false`
-    /// hides the slider widget while preserving slot-index semantics
-    /// (drivers/Ableton mappings keep working — just no visible slider).
-    /// Defaults to `true` for backward compatibility.
-    pub exposed: bool,
-    /// Named value labels for discrete params (e.g., ["Horiz", "Vert", "Both"]).
-    /// When present, the slider displays the label instead of a numeric value.
-    /// Unity: ParamDef.valueLabels → EffectDefinitionRegistry.FormatValue().
-    pub value_labels: Option<Vec<String>>,
-    /// OSC address for this parameter (e.g. "/master/bloom", "/layer/{id}/bloom").
-    /// When present, clicking the param label copies this address to clipboard.
-    /// Unity: UIElementBuilder.CopyToClipboardLabel.
-    pub osc_address: Option<String>,
-    /// When set, an Ableton mapping sub-section is shown below the slider.
-    pub ableton_display: Option<AbletonMappingDisplay>,
-    /// Ableton trim range (range_min, range_max). When present, trim handles are shown.
-    pub ableton_range: Option<(f32, f32)>,
-}
-
-/// Configuration for creating an effect card.
-/// Unity: EffectCardState.SyncFromDataModel — all data-derived visual state in one struct.
-#[derive(Debug, Clone)]
-pub struct EffectCardConfig {
-    pub effect_index: usize,
-    pub effect_id: EffectId,
-    pub name: String,
-    pub enabled: bool,
-    pub collapsed: bool,
-    pub supports_envelopes: bool,
-    pub params: Vec<EffectParamInfo>,
-    /// Aggregate: true if ANY param has an active driver.
-    pub has_drv: bool,
-    /// Aggregate: true if ANY param has an active envelope.
-    pub has_env: bool,
-    /// Aggregate: true if ANY param has an Ableton mapping.
-    pub has_abl: bool,
-    /// True if the effect instance carries a per-card graph override
-    /// (`EffectInstance.graph.is_some()`). Drives the pink "MOD"
-    /// header tint + badge introduced in Phase 5 of per-card
-    /// divergence.
-    pub has_graph_mod: bool,
-    /// Per-param: true if driver exists and is enabled (Unity: driverExpanded[]).
-    pub driver_active: Vec<bool>,
-    /// Per-param: true if envelope exists and is enabled (Unity: envelopeExpanded[]).
-    pub envelope_active: Vec<bool>,
-    /// Per-param driver trim min (normalized). Defaults to 0.0.
-    pub trim_min: Vec<f32>,
-    /// Per-param driver trim max (normalized). Defaults to 1.0.
-    pub trim_max: Vec<f32>,
-    /// Per-param envelope target (normalized). Defaults to 1.0.
-    pub target_norm: Vec<f32>,
-    /// Per-param envelope ADSR values (beats).
-    pub env_attack: Vec<f32>,
-    pub env_decay: Vec<f32>,
-    pub env_sustain: Vec<f32>,
-    pub env_release: Vec<f32>,
-    /// Per-param envelope mode (ADSR or Random).
-    pub env_mode: Vec<EnvelopeMode>,
-    /// Per-param random_jump flag.
-    pub env_random_jump: Vec<bool>,
-    /// Per-param envelope range min (normalized). Defaults to 0.0.
-    pub env_range_min: Vec<f32>,
-    /// Per-param envelope range max (normalized). Defaults to 1.0.
-    pub env_range_max: Vec<f32>,
-    /// Per-param driver beat division button index (0-10). -1 if no driver.
-    pub driver_beat_div_idx: Vec<i32>,
-    /// Per-param driver waveform index (0-4). -1 if no driver.
-    pub driver_waveform_idx: Vec<i32>,
-    /// Per-param driver reversed state.
-    pub driver_reversed: Vec<bool>,
-    /// Per-param driver dotted modifier active.
-    pub driver_dotted: Vec<bool>,
-    /// Per-param driver triplet modifier active.
-    pub driver_triplet: Vec<bool>,
-}
+//
+// The per-parameter info and card-config structs are the unified
+// [`ParamInfo`] / [`ParamCardConfig`] in [`super::param_card`], shared with
+// the generator card. Only the panel-internal `EffectCardState` lives here.
 
 /// Per-parameter expansion and modulation state.
 /// Unity: EffectCardState — presenter-owned, single source of truth for
@@ -161,7 +74,7 @@ pub struct EffectCardPanel {
     is_collapsed: bool,
     is_selected: bool,
     supports_envelopes: bool,
-    param_info: Vec<EffectParamInfo>,
+    param_info: Vec<ParamInfo>,
 
     // State
     state: EffectCardState,
@@ -286,7 +199,7 @@ impl EffectCardPanel {
     /// Unity: EffectCardPresenter creates EffectCard with state.SyncFromDataModel().
     /// All data-derived visual state is populated from the config (which was built from
     /// EffectInstance + envelopes + drivers in the app layer).
-    pub fn configure(&mut self, config: &EffectCardConfig) {
+    pub fn configure(&mut self, config: &ParamCardConfig) {
         self.effect_index = config.effect_index;
         self.effect_id = config.effect_id.clone();
         self.effect_name = config.name.clone();
@@ -1919,19 +1832,23 @@ impl Default for EffectCardPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::param_card::ParamCardKind;
     use crate::tree::UITree;
 
-    fn test_config() -> EffectCardConfig {
+    fn test_config() -> ParamCardConfig {
         let n = 2;
-        EffectCardConfig {
+        ParamCardConfig {
+            kind: ParamCardKind::Effect,
             effect_index: 0,
             effect_id: EffectId::new("test-effect-0"),
             name: "Blur".into(),
             enabled: true,
             collapsed: false,
             supports_envelopes: true,
+            string_params: Vec::new(),
+            layer_id: None,
             params: vec![
-                EffectParamInfo {
+                ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("radius"),
                     name: "Radius".into(),
                     min: 0.0,
@@ -1939,12 +1856,14 @@ mod tests {
                     default: 10.0,
                     whole_numbers: true,
                     exposed: true,
+                    is_toggle: false,
+                    is_trigger: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
                     ableton_range: None,
                 },
-                EffectParamInfo {
+                ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("strength"),
                     name: "Strength".into(),
                     min: 0.0,
@@ -1952,6 +1871,8 @@ mod tests {
                     default: 0.5,
                     whole_numbers: false,
                     exposed: true,
+                    is_toggle: false,
+                    is_trigger: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,

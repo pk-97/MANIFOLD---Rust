@@ -1,7 +1,8 @@
 use super::clip_chrome::ClipChromePanel;
-use super::effect_card::{EffectCardConfig, EffectCardPanel};
-use super::gen_param::{GenParamConfig, GenParamPanel};
+use super::effect_card::EffectCardPanel;
+use super::gen_param::GenParamPanel;
 use super::layer_chrome::LayerChromePanel;
+use super::param_card::ParamCardConfig;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
 use super::{InspectorTab, Panel, PanelAction};
@@ -235,7 +236,7 @@ impl InspectorCompositePanel {
         ranges
     }
 
-    pub fn configure_master_effects(&mut self, configs: &[EffectCardConfig]) {
+    pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
         self.master_effects.clear();
         for cfg in configs {
             let mut card = EffectCardPanel::new();
@@ -244,7 +245,7 @@ impl InspectorCompositePanel {
         }
     }
 
-    pub fn configure_layer_effects(&mut self, configs: &[EffectCardConfig]) {
+    pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig]) {
         self.layer_effects.clear();
         for cfg in configs {
             let mut card = EffectCardPanel::new();
@@ -255,7 +256,7 @@ impl InspectorCompositePanel {
 
     pub fn configure_gen_params(
         &mut self,
-        config: Option<&GenParamConfig>,
+        config: Option<&ParamCardConfig>,
         layer_id: Option<LayerId>,
     ) {
         if let Some(cfg) = config {

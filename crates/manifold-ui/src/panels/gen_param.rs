@@ -1,4 +1,5 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
+use super::param_card::{ParamCardConfig, ParamCardStringInfo, ParamInfo};
 use super::param_slider_shared::*;
 use super::{DriverConfigAction, EnvelopeParam, PanelAction};
 use crate::color;
@@ -23,72 +24,11 @@ const CORNER_RADIUS: f32 = 4.0;
 const CARD_BOTTOM_MARGIN: f32 = 6.0;
 
 // ── Data types ───────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct GenParamInfo {
-    /// Stable [`ParamId`] for this slot — see the equivalent field on
-    /// [`crate::panels::effect_card::EffectParamInfo`] for the
-    /// `Cow<'static, str>` rationale. Carried on the wire so the
-    /// bridge never does a positional `pi → ParamId` lookup.
-    pub param_id: manifold_core::effects::ParamId,
-    pub name: String,
-    pub min: f32,
-    pub max: f32,
-    pub default: f32,
-    pub whole_numbers: bool,
-    pub is_toggle: bool,
-    /// Momentary "fire once" button. Renders as a button row (no
-    /// slider). Click handler increments the underlying monotonic
-    /// counter by one (no toggle state). Consumes via the same
-    /// `ParamConvert::Trigger` plumbing as wired trigger inputs.
-    pub is_trigger: bool,
-    /// Named value labels for discrete params (e.g., ["Classic", "Rings", "Diamond"]).
-    /// When present, the slider displays the label instead of a numeric value.
-    /// Unity: ParamDef.valueLabels → GeneratorDefinitionRegistry.FormatValue().
-    pub value_labels: Option<Vec<String>>,
-    /// OSC address for this parameter (e.g. "/layer/{id}/tesseract/rot_xy").
-    /// When present, clicking the param label copies this address to clipboard.
-    /// Unity: UIElementBuilder.CopyToClipboardLabel.
-    pub osc_address: Option<String>,
-    /// When set, an Ableton mapping sub-section is shown below the slider.
-    pub ableton_display: Option<AbletonMappingDisplay>,
-    /// Ableton trim range (range_min, range_max). When present, trim handles are shown.
-    pub ableton_range: Option<(f32, f32)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GenStringParamInfo {
-    pub name: String,
-    pub key: String,
-    pub value: String,
-    /// If true, clicking this param opens a dropdown instead of text input.
-    pub use_dropdown: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct GenParamConfig {
-    pub gen_type_name: String,
-    pub params: Vec<GenParamInfo>,
-    pub string_params: Vec<GenStringParamInfo>,
-    pub driver_active: Vec<bool>,
-    pub envelope_active: Vec<bool>,
-    pub trim_min: Vec<f32>,
-    pub trim_max: Vec<f32>,
-    pub target_norm: Vec<f32>,
-    pub env_attack: Vec<f32>,
-    pub env_decay: Vec<f32>,
-    pub env_sustain: Vec<f32>,
-    pub env_release: Vec<f32>,
-    pub env_mode: Vec<EnvelopeMode>,
-    pub env_random_jump: Vec<bool>,
-    pub env_range_min: Vec<f32>,
-    pub env_range_max: Vec<f32>,
-    pub driver_beat_div_idx: Vec<i32>,
-    pub driver_waveform_idx: Vec<i32>,
-    pub driver_reversed: Vec<bool>,
-    pub driver_dotted: Vec<bool>,
-    pub driver_triplet: Vec<bool>,
-}
+//
+// The per-parameter info, string-param info, and card-config structs are the
+// unified [`ParamInfo`] / [`ParamCardStringInfo`] / [`ParamCardConfig`] in
+// [`super::param_card`], shared with the effect card. Only the panel-internal
+// `GenParamState` lives here.
 
 /// Per-parameter expansion state for generator params.
 /// Wraps ParamModState for shared modulation state.
@@ -117,7 +57,7 @@ struct ToggleParamIds {
 pub struct GenParamPanel {
     // Configuration
     gen_type_name: String,
-    param_info: Vec<GenParamInfo>,
+    param_info: Vec<ParamInfo>,
     state: GenParamState,
     /// The layer this panel is displaying gen params for.
     layer_id: Option<LayerId>,
@@ -153,7 +93,7 @@ pub struct GenParamPanel {
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
 
     // String params (text fields below sliders)
-    string_param_info: Vec<GenStringParamInfo>,
+    string_param_info: Vec<ParamCardStringInfo>,
     string_param_btn_ids: Vec<i32>,
 
     // Per-param OSC addresses (for click-to-copy)
@@ -215,8 +155,8 @@ impl GenParamPanel {
         }
     }
 
-    pub fn configure(&mut self, config: &GenParamConfig) {
-        self.gen_type_name = config.gen_type_name.clone();
+    pub fn configure(&mut self, config: &ParamCardConfig) {
+        self.gen_type_name = config.name.clone();
         self.param_info = config.params.clone();
 
         let n = config.params.len();
@@ -950,7 +890,7 @@ impl GenParamPanel {
     }
 
     /// Get string param info for text input anchoring.
-    pub fn string_param(&self, index: usize) -> Option<&GenStringParamInfo> {
+    pub fn string_param(&self, index: usize) -> Option<&ParamCardStringInfo> {
         self.string_param_info.get(index)
     }
 
@@ -1581,19 +1521,32 @@ impl Default for GenParamPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::param_card::ParamCardKind;
     use crate::tree::UITree;
 
-    fn test_config() -> GenParamConfig {
-        GenParamConfig {
-            gen_type_name: "Plasma".into(),
+    fn test_config() -> ParamCardConfig {
+        ParamCardConfig {
+            kind: ParamCardKind::Generator,
+            name: "Plasma".into(),
+            collapsed: false,
+            effect_index: 0,
+            effect_id: manifold_core::EffectId::new(""),
+            enabled: true,
+            supports_envelopes: true,
+            has_drv: false,
+            has_env: false,
+            has_abl: false,
+            has_graph_mod: false,
+            layer_id: None,
             params: vec![
-                GenParamInfo {
+                ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("speed"),
                     name: "Speed".into(),
                     min: 0.0,
                     max: 10.0,
                     default: 1.0,
                     whole_numbers: false,
+                    exposed: true,
                     is_toggle: false,
                     is_trigger: false,
                     value_labels: None,
@@ -1601,13 +1554,14 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                 },
-                GenParamInfo {
+                ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("invert"),
                     name: "Invert".into(),
                     min: 0.0,
                     max: 1.0,
                     default: 0.0,
                     whole_numbers: false,
+                    exposed: true,
                     is_toggle: true,
                     is_trigger: false,
                     value_labels: None,
@@ -1615,13 +1569,14 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                 },
-                GenParamInfo {
+                ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("scale"),
                     name: "Scale".into(),
                     min: 0.1,
                     max: 5.0,
                     default: 1.0,
                     whole_numbers: false,
+                    exposed: true,
                     is_toggle: false,
                     is_trigger: false,
                     value_labels: None,

@@ -14,6 +14,7 @@ pub mod layer_chrome;
 pub mod layer_header;
 pub mod macros_panel;
 pub mod master_chrome;
+pub mod param_card;
 pub mod param_slider_shared;
 pub mod perf_hud;
 pub mod stem_lane;
