@@ -36,8 +36,8 @@ pub struct EffectContext {
 /// workers stay in sync with render resolution and finish in-flight
 /// work between export frames.
 ///
-/// The monolithic-wrapper primitives (AutoGain, BlobTracking,
-/// Infrared, WireframeDepth, QuadMirror) also invoke `apply` /
+/// The monolithic-wrapper primitives (BlobTracking, Infrared,
+/// WireframeDepth, QuadMirror) also invoke `apply` /
 /// `clear_state` on their held `Box<dyn PostProcessEffect>` to drive
 /// the legacy compute path one block at a time.
 pub trait PostProcessEffect: Send {

@@ -3,11 +3,10 @@
 //!
 //! Two-coefficient exponential filter where the time constant
 //! switches based on whether the input is rising or falling. Rising
-//! → use `attack`; falling → use `release`. The AutoGain CPU
-//! envelope path matches this shape — the existing `node.smoothing`
-//! primitive is symmetric (single time constant), so this is a
-//! separate primitive for the AutoGain decomposition and any other
-//! audio-style envelope use case.
+//! → use `attack`; falling → use `release`. The existing
+//! `node.smoothing` primitive is symmetric (single time constant),
+//! so this exists for audio-style envelope use cases that need
+//! distinct attack and release shapes.
 //!
 //! State: single f32 (previous smoothed value) in `StateStore`.
 

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "AutoGain",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Tranche 7 decomposition. Visual dynamics compressor: node.luminance sparse-samples the source brightness; node.compressor_envelope runs a log-domain program-dependent attack/release envelope and emits a gain scalar; node.gain multiplies the source by that gain; node.wet_dry crossfades back over the dry source for parallel-compression amount. The original AutoGain's character / colour / HDR retention coloration moved to dedicated colour-treatment effects; this preset is now a pure level-rider utility.",
   "presetMetadata": {
     "id": "AutoGain",
     "displayName": "Auto Gain",
@@ -10,255 +10,66 @@
     "legacyDiscriminant": 41,
     "available": true,
     "params": [
-      {
-        "id": "amount",
-        "name": "Amount",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.5,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2"
-      },
-      {
-        "id": "ratio",
-        "name": "Ratio",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.5,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "Ratio"
-      },
-      {
-        "id": "punch",
-        "name": "Punch",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.5,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "Punch"
-      },
-      {
-        "id": "target",
-        "name": "Target",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.5,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "Target"
-      },
-      {
-        "id": "hdr_retention",
-        "name": "HDR Retention",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.5,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "HdrRetention"
-      },
-      {
-        "id": "color",
-        "name": "Color",
-        "min": -1.0,
-        "max": 1.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "formatString": "F2",
-        "oscSuffix": "ColorPush"
-      },
-      {
-        "id": "character",
-        "name": "Character",
-        "min": 0.0,
-        "max": 4.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "valueLabels": [
-          "Clean",
-          "Warm",
-          "Film",
-          "Vivid",
-          "Grit"
-        ],
-        "oscSuffix": "Character"
-      }
+      { "id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
+      { "id": "ratio",  "name": "Ratio",  "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Ratio" },
+      { "id": "punch",  "name": "Punch",  "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Punch" },
+      { "id": "target", "name": "Target", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Target" }
     ],
     "bindings": [
-      {
-        "id": "amount",
-        "label": "Amount",
-        "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "ratio",
-        "label": "Ratio",
-        "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "ratio"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "punch",
-        "label": "Punch",
-        "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "punch"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "target",
-        "label": "Target",
-        "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "target"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "hdr_retention",
-        "label": "HDR Retention",
-        "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "hdr_retention"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "color",
-        "label": "Color",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "color"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "character",
-        "label": "Character",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "auto_gain",
-          "param": "character"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
-      }
+      { "id": "amount", "label": "Amount", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "wet_dry", "param": "wet_dry" },
+        "convert": { "type": "Float" } },
+      { "id": "ratio", "label": "Ratio", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "env", "param": "ratio" },
+        "convert": { "type": "Float" } },
+      { "id": "punch", "label": "Punch", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "env", "param": "punch" },
+        "convert": { "type": "Float" } },
+      { "id": "target", "label": "Target", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "env", "param": "target" },
+        "convert": { "type": "Float" } }
     ],
-    "skipMode": {
-      "kind": "never"
-    },
-    "paramAliases": [
-      {
-        "old": "char",
-        "new": "character"
-      },
-      {
-        "old": "hdr_ret",
-        "new": "hdr_retention"
-      }
-    ]
+    "skipMode": { "kind": "never" }
   },
   "nodes": [
+    { "id": 0,  "typeId": "system.source",       "handle": "source" },
+    { "id": 99, "typeId": "system.final_output", "handle": "final_output" },
+
+    { "id": 10, "typeId": "node.luminance", "handle": "luminance" },
+
     {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
-    {
-      "id": 1,
-      "typeId": "node.auto_gain",
-      "handle": "auto_gain",
+      "id": 20, "typeId": "node.compressor_envelope", "handle": "env",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "character": {
-          "type": "Enum",
-          "value": 0
-        },
-        "color": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "hdr_retention": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "punch": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "ratio": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "target": {
-          "type": "Float",
-          "value": 0.5
-        }
+        "ratio":  { "type": "Float", "value": 0.5 },
+        "punch":  { "type": "Float", "value": 0.5 },
+        "target": { "type": "Float", "value": 0.5 }
       }
     },
+
     {
-      "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
+      "id": 30, "typeId": "node.gain", "handle": "gain",
+      "params": {
+        "gain": { "type": "Float", "value": 1.0 }
+      }
+    },
+
+    {
+      "id": 40, "typeId": "node.wet_dry", "handle": "wet_dry",
+      "params": {
+        "wet_dry": { "type": "Float", "value": 0.5 }
+      }
     }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 0,  "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 20, "toPort": "in" },
+
+    { "fromNode": 0,  "fromPort": "out", "toNode": 30, "toPort": "in" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 30, "toPort": "gain" },
+
+    { "fromNode": 0,  "fromPort": "out", "toNode": 40, "toPort": "dry" },
+    { "fromNode": 30, "fromPort": "out", "toNode": 40, "toPort": "wet" },
+
+    { "fromNode": 40, "fromPort": "out", "toNode": 99, "toPort": "in" }
   ]
 }

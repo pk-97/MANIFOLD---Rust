@@ -5,8 +5,8 @@
 //! optical flow — too tightly coupled (depth state, flow state, mesh
 //! pyramid) to decompose into atomic graph primitives.
 //!
-//! Same wrapper pattern as AutoGain (§6.5 c1) and BlobTracking
-//! (§6.5 c2). Legacy `apply` early-returns at amount=0 without
+//! Same wrapper pattern as BlobTracking (§6.5 c2). Legacy `apply`
+//! early-returns at amount=0 without
 //! writing the target, so the wrapper blits source → target in that
 //! case for the graph runtime which has no skip mechanism.
 
@@ -20,7 +20,7 @@ use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeTy
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
-use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effect_instance};
+use crate::node_graph::primitives::legacy_bridge::{build_effect_context, build_effect_instance};
 
 pub const WIREFRAME_DEPTH_TYPE_ID: &str = "node.wireframe_depth";
 

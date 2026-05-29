@@ -24,7 +24,6 @@
 mod harness;
 
 mod affine_transform;
-mod auto_gain;
 mod bloom;
 mod chromatic_offset;
 mod clamp_stretch;

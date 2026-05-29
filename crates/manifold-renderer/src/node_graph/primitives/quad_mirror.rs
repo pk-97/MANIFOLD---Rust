@@ -1,6 +1,6 @@
 //! `node.quad_mirror` — wraps the legacy
 //! [`QuadMirrorFX`](crate::effects::quad_mirror::QuadMirrorFX) effect
-//! as a monolithic primitive. Same wrapper pattern as `AutoGain`,
+//! as a monolithic primitive. Same wrapper pattern as
 //! `BlobTracking`, `Infrared`, and `WireframeDepth`: the shader is
 //! tight and pixel-tested, so we route `evaluate` straight into the
 //! legacy `apply` rather than authoring a fresh atomic primitive.
@@ -15,7 +15,7 @@ use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeTy
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
-use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effect_instance};
+use crate::node_graph::primitives::legacy_bridge::{build_effect_context, build_effect_instance};
 
 pub const QUAD_MIRROR_TYPE_ID: &str = "node.quad_mirror";
 

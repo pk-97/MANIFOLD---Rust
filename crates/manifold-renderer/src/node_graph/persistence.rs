@@ -832,7 +832,6 @@ mod tests {
             primitives::BLOOM_TYPE_ID,
             primitives::HALATION_TYPE_ID,
             primitives::WATERCOLOR_TYPE_ID,
-            primitives::AUTO_GAIN_TYPE_ID,
             primitives::WIREFRAME_DEPTH_TYPE_ID,
             primitives::INFRARED_TYPE_ID,
             primitives::QUAD_MIRROR_TYPE_ID,

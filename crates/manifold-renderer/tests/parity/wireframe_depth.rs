@@ -10,7 +10,7 @@
 //! identical legacy code in both paths.
 //!
 //! Unique `owner_key` per setup, same lesson as Watercolor / DoF /
-//! AutoGain / BlobTracking.
+//! BlobTracking.
 
 
 use manifold_core::EffectTypeId;

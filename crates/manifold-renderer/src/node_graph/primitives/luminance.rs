@@ -28,8 +28,7 @@
 //!
 //! Single workgroup of 16×16 threads sparse-samples the input at 256
 //! grid positions, parallel-reduces in workgroup-shared memory,
-//! writes a single f32 to the storage buffer. Same pattern as the
-//! legacy `effects/auto_gain.rs` measure pass. Sparse sampling is
+//! writes a single f32 to the storage buffer. Sparse sampling is
 //! "good enough" for control-rate signals; users wanting pixel-exact
 //! reduction can chain a `MipChain` upstream first.
 

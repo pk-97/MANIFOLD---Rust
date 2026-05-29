@@ -131,9 +131,9 @@ mod tests {
     /// silently strands shipping effects.
     ///
     /// Failure mode caught: the "Add Effect" popup shows only the
-    /// 6 plugin-bridge effects (AutoGain, BlobTracking, DoF,
-    /// Infrared, QuadMirror, WireframeDepth) — the rest live in JSON
-    /// but the picker registry never reads JSON.
+    /// remaining plugin-bridge effects (BlobTracking, Infrared,
+    /// QuadMirror, WireframeDepth) — the rest live in JSON but the
+    /// picker registry never reads JSON.
     #[test]
     fn every_bundled_preset_appears_in_effect_type_registry() {
         use manifold_core::effect_type_registry;

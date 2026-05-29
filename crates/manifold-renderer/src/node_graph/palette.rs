@@ -4,8 +4,8 @@
 //!
 //! 1. [`palette_atoms`] — the flat alphabetical list of atoms users
 //!    can drop into a graph via the palette. Composites and
-//!    monolithic-wrapper primitives (Bloom, Halation, AutoGain, etc.)
-//!    are excluded — they're whole effects, not building blocks.
+//!    monolithic-wrapper primitives (Bloom, Halation, BlobTracking,
+//!    etc.) are excluded — they're whole effects, not building blocks.
 //! 2. [`catalog_graph_def_for`] — the catalog-default
 //!    [`EffectGraphDef`] for an [`EffectTypeId`]. Editing commands
 //!    need this to lift `EffectInstance.graph` from `None` on first

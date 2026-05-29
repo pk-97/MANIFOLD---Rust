@@ -11,7 +11,7 @@
 //! would interpolate differently than the legacy 512×1 LUT) or
 //! require runtime work that's out of scope here. Treat it monolithic
 //! per `docs/PRIMITIVE_LIBRARY_DESIGN.md` §6.5, same shape as
-//! AutoGain / BlobTracking / WireframeDepth.
+//! BlobTracking / WireframeDepth.
 
 use std::sync::OnceLock;
 
@@ -23,7 +23,7 @@ use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeTy
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
-use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effect_instance};
+use crate::node_graph::primitives::legacy_bridge::{build_effect_context, build_effect_instance};
 
 pub const INFRARED_TYPE_ID: &str = "node.infrared";
 
