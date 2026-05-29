@@ -27,9 +27,8 @@
 //!   — kaleidoscope fold with amount blend.
 //! - [`build_infrared`]: `Brightness → ColorRamp`.
 //! - [`build_soft_focus`]: `Blur` + `Mix(source, blurred)`.
-//! - [`build_halation`]: `Threshold → MipChain → Blur → ChannelMix(tint) → Blend(Add)`,
-//!   with the source fanning to the blend base.
-//! - [`build_bloom`]: same shape as Halation minus the tint.
+//! - [`build_bloom`]: `Threshold → MipChain → Blur → Blend(Add)`, with the
+//!   source fanning to the blend base.
 //!
 //! ## Why no `build_color_compass` here
 //!
@@ -43,14 +42,12 @@
 //! to compare against don't need a Rust builder.
 
 mod bloom;
-mod halation;
 mod infrared;
 mod mirror;
 mod soft_focus;
 mod strobe_opacity;
 
 pub use bloom::{BLOOM_TYPE_ID, build_bloom};
-pub use halation::{HALATION_TYPE_ID, build_halation};
 pub use infrared::{INFRARED_TYPE_ID, build_infrared};
 pub use mirror::{MIRROR_TYPE_ID, build_mirror, legacy_mirror_mode_to_uv};
 pub use soft_focus::{SOFT_FOCUS_TYPE_ID, build_soft_focus};
@@ -205,14 +202,13 @@ mod tests {
         // collect their type IDs and assert the invariants.
         let ids: HashSet<&str> = [
             BLOOM_TYPE_ID,
-            HALATION_TYPE_ID,
             INFRARED_TYPE_ID,
             MIRROR_TYPE_ID,
             SOFT_FOCUS_TYPE_ID,
         ]
         .into_iter()
         .collect();
-        assert_eq!(ids.len(), 5, "composite type IDs must be unique");
+        assert_eq!(ids.len(), 4, "composite type IDs must be unique");
 
         for id in ids {
             assert!(
@@ -289,16 +285,6 @@ mod tests {
         assert!(exposed.contains("threshold_level"));
         assert!(exposed.contains("blur_radius"));
         assert!(exposed.contains("intensity"));
-    }
-
-    #[test]
-    fn halation_has_five_inner_nodes_with_color_matrix_for_tint() {
-        let (_, handle) = run_composite_in_graph(build_halation);
-        assert_eq!(
-            handle.inner_nodes().len(),
-            5,
-            "Halation = Threshold + MipChain + Blur + ChannelMix + Blend"
-        );
     }
 
     /// Hero test: chain two composites in series in the same graph.

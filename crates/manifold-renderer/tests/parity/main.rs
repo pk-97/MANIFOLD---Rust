@@ -31,7 +31,6 @@ mod color_grade;
 mod dither_pattern;
 mod edge_detect;
 mod glitch;
-mod halation;
 mod highlight_boost;
 mod invert;
 mod kaleido_fold;

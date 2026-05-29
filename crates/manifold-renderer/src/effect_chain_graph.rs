@@ -2037,8 +2037,9 @@ mod generator_input_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = invert_with_generator_input();
 
-        let mut cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)
-            .expect("chain builds");
+        let mut cg =
+            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256)
+                .expect("chain builds");
 
         let gi_id = cg
             .effect_nodes

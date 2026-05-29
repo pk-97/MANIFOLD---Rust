@@ -830,7 +830,6 @@ mod tests {
             primitives::FEEDBACK_TYPE_ID,
             primitives::WET_DRY_TYPE_ID,
             primitives::BLOOM_TYPE_ID,
-            primitives::HALATION_TYPE_ID,
             primitives::WATERCOLOR_TYPE_ID,
             primitives::WIREFRAME_DEPTH_TYPE_ID,
             primitives::INFRARED_TYPE_ID,
