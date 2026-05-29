@@ -94,6 +94,97 @@ fn compute_random_step(
     }
 }
 
+// ── Shared modulation core ──────────────────────────────────────────────────
+//
+// The effect-side and generator-side walks below differ only in how they
+// *resolve* a target param (effect: registry + user-binding tail; generator:
+// registry only) and in their outer iteration (effects locate a target effect
+// by type within the layer; generators operate on the single gen-param state).
+// The arithmetic that maps a driver/envelope onto a slot value is identical on
+// both sides. These helpers hold that arithmetic in exactly one place so a
+// modulation fix lands once. Byte-for-byte the prior inline logic — extracted,
+// not changed.
+
+/// Map a driver's normalized output onto a target parameter's value range.
+fn driver_target_value(driver: &ParameterDriver, current_beat: Beats, min: f32, max: f32) -> f32 {
+    let mut normalized = ParameterDriver::evaluate(
+        current_beat,
+        driver.beat_division,
+        driver.waveform,
+        driver.phase,
+    );
+    if driver.reversed {
+        normalized = 1.0 - normalized;
+    }
+    // Apply trim: map [0,1] to [lo, hi] within param range
+    let lo = min + (max - min) * driver.trim_min;
+    let hi = min + (max - min) * driver.trim_max;
+    lo + (hi - lo) * normalized
+}
+
+/// Pure core of a Random-mode envelope's per-frame evaluation.
+///
+/// Returns `Some((new_walk, held_value))` when the envelope produces a value
+/// this frame; `None` when the walk is still uninitialized (`walk_value < 0`)
+/// and no trigger fired — the caller holds and only refreshes its edge-detection
+/// bookkeeping.
+#[allow(clippy::too_many_arguments)]
+fn random_envelope_value(
+    trigger: bool,
+    walk_value: f32,
+    random_jump: bool,
+    whole: bool,
+    min: f32,
+    max: f32,
+    range_min: f32,
+    range_max: f32,
+) -> Option<(f32, f32)> {
+    let new_walk = if trigger {
+        if walk_value < 0.0 {
+            compute_random_step(0.5, 1.0, true, whole, min, max, range_min, range_max)
+        } else {
+            compute_random_step(
+                walk_value,
+                0.15,
+                random_jump,
+                whole,
+                min,
+                max,
+                range_min,
+                range_max,
+            )
+        }
+    } else if walk_value < 0.0 {
+        return None;
+    } else {
+        walk_value
+    };
+    let new_walk = new_walk.clamp(range_min, range_max);
+
+    let held = min + (max - min) * new_walk;
+    let held = if whole {
+        held.round().clamp(min, max)
+    } else {
+        held.clamp(min, max)
+    };
+    Some((new_walk, held))
+}
+
+/// Apply an ADSR envelope's additive offset to a single param slot value.
+/// Returns true if the value changed.
+fn apply_adsr_offset(value: &mut f32, min: f32, max: f32, target_norm: f32, adsr: f32) -> bool {
+    let current = *value;
+    let target = min + (max - min) * target_norm.clamp(0.0, 1.0);
+    let offset = (target - current) * adsr;
+    let final_value = (current + offset).clamp(min, max);
+    if (final_value - current).abs() > f32::EPSILON {
+        *value = final_value;
+        true
+    } else {
+        false
+    }
+}
+
 // =====================================================================
 // Phase 1: Reset all effectives (base → effective, blank slate)
 // Port of C# DriverController.ResetAllEffectives()
@@ -178,23 +269,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
                             return None;
                         }
                         let pd = &gen_defs[idx];
-                        let (min, max) = (pd.min, pd.max);
-
-                        let mut normalized = ParameterDriver::evaluate(
-                            current_beat,
-                            driver.beat_division,
-                            driver.waveform,
-                            driver.phase,
-                        );
-                        if driver.reversed {
-                            normalized = 1.0 - normalized;
-                        }
-
-                        // Apply trim: map [0,1] to [lo, hi] within param range
-                        let lo = min + (max - min) * driver.trim_min;
-                        let hi = min + (max - min) * driver.trim_max;
-                        let value = lo + (hi - lo) * normalized;
-
+                        let value = driver_target_value(driver, current_beat, pd.min, pd.max);
                         Some((idx, value))
                     })
                     .collect();
@@ -243,23 +318,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
                 driver.param_id.as_ref(),
             )?;
             let (idx, min, max) = (resolved.idx, resolved.min, resolved.max);
-
-            let mut normalized = ParameterDriver::evaluate(
-                current_beat,
-                driver.beat_division,
-                driver.waveform,
-                driver.phase,
-            );
-            if driver.reversed {
-                normalized = 1.0 - normalized;
-            }
-
-            // Apply trim: map [0,1] to [lo, hi] within param range
-            let lo = min + (max - min) * driver.trim_min;
-            let hi = min + (max - min) * driver.trim_max;
-            let value = lo + (hi - lo) * normalized;
-
-            Some((idx, value))
+            Some((idx, driver_target_value(driver, current_beat, min, max)))
         })
         .collect();
 
@@ -425,53 +484,32 @@ pub fn evaluate_all_envelopes(
                 let (min, max) = (resolved.min, resolved.max);
                 let whole = resolved.whole_numbers;
 
-                let new_walk = if trigger {
-                    if walk_value < 0.0 {
-                        compute_random_step(0.5, 1.0, true, whole, min, max, range_min, range_max)
-                    } else {
-                        compute_random_step(
-                            walk_value,
-                            0.15,
-                            random_jump,
-                            whole,
-                            min,
-                            max,
-                            range_min,
-                            range_max,
-                        )
+                match random_envelope_value(
+                    trigger, walk_value, random_jump, whole, min, max, range_min, range_max,
+                ) {
+                    None => {
+                        if let Some(envs) = &mut layer.envelopes
+                            && let Some(env) = envs.get_mut(ei)
+                        {
+                            env.was_clip_active = clip_active;
+                            env.last_elapsed = elapsed_f;
+                        }
+                        continue;
                     }
-                } else if walk_value < 0.0 {
-                    if let Some(envs) = &mut layer.envelopes
-                        && let Some(env) = envs.get_mut(ei)
-                    {
-                        env.was_clip_active = clip_active;
-                        env.last_elapsed = elapsed_f;
+                    Some((new_walk, held)) => {
+                        if let Some(envs) = &mut layer.envelopes
+                            && let Some(env) = envs.get_mut(ei)
+                        {
+                            env.walk_value = new_walk;
+                            env.current_level = new_walk;
+                            env.was_clip_active = clip_active;
+                            env.last_elapsed = elapsed_f;
+                        }
+                        fx.param_values[idx].value = held;
+                        any_modulated = true;
+                        continue;
                     }
-                    continue;
-                } else {
-                    walk_value
-                };
-                let new_walk = new_walk.clamp(range_min, range_max);
-
-                let held = min + (max - min) * new_walk;
-                let held = if whole {
-                    held.round().clamp(min, max)
-                } else {
-                    held.clamp(min, max)
-                };
-
-                if let Some(envs) = &mut layer.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.walk_value = new_walk;
-                    env.current_level = new_walk;
-                    env.was_clip_active = clip_active;
-                    env.last_elapsed = elapsed_f;
                 }
-
-                fx.param_values[idx].value = held;
-                any_modulated = true;
-                continue;
             }
 
             // ── ADSR mode ────────────────────────────────────────────
@@ -527,13 +565,13 @@ pub fn evaluate_all_envelopes(
             }
             let idx = resolved.idx;
             let (min, max) = (resolved.min, resolved.max);
-            let current_value = fx.param_values[idx].value;
-            let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
-            let offset = (target_value - current_value) * adsr_value;
-            let final_value = (current_value + offset).clamp(min, max);
-
-            if (final_value - current_value).abs() > f32::EPSILON {
-                fx.param_values[idx].value = final_value;
+            if apply_adsr_offset(
+                &mut fx.param_values[idx].value,
+                min,
+                max,
+                target_norm,
+                adsr_value,
+            ) {
                 any_modulated = true;
             }
         }
@@ -661,53 +699,32 @@ pub fn evaluate_gen_param_envelopes(
                     clip_active && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
                 let whole = pd.whole_numbers || pd.value_labels.is_some();
 
-                let new_walk = if trigger {
-                    if walk_value < 0.0 {
-                        compute_random_step(0.5, 1.0, true, whole, min, max, range_min, range_max)
-                    } else {
-                        compute_random_step(
-                            walk_value,
-                            0.15,
-                            random_jump,
-                            whole,
-                            min,
-                            max,
-                            range_min,
-                            range_max,
-                        )
+                match random_envelope_value(
+                    trigger, walk_value, random_jump, whole, min, max, range_min, range_max,
+                ) {
+                    None => {
+                        if let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs.get_mut(ei)
+                        {
+                            env.was_clip_active = clip_active;
+                            env.last_elapsed = elapsed_f;
+                        }
+                        continue;
                     }
-                } else if walk_value < 0.0 {
-                    if let Some(envs) = &mut gp.envelopes
-                        && let Some(env) = envs.get_mut(ei)
-                    {
-                        env.was_clip_active = clip_active;
-                        env.last_elapsed = elapsed_f;
+                    Some((new_walk, held)) => {
+                        if let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs.get_mut(ei)
+                        {
+                            env.walk_value = new_walk;
+                            env.current_level = new_walk;
+                            env.was_clip_active = clip_active;
+                            env.last_elapsed = elapsed_f;
+                        }
+                        gp.param_values[idx].value = held;
+                        any_modulated = true;
+                        continue;
                     }
-                    continue;
-                } else {
-                    walk_value
-                };
-                let new_walk = new_walk.clamp(range_min, range_max);
-
-                let held = min + (max - min) * new_walk;
-                let held = if whole {
-                    held.round().clamp(min, max)
-                } else {
-                    held.clamp(min, max)
-                };
-
-                if let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.walk_value = new_walk;
-                    env.current_level = new_walk;
-                    env.was_clip_active = clip_active;
-                    env.last_elapsed = elapsed_f;
                 }
-
-                gp.param_values[idx].value = held;
-                any_modulated = true;
-                continue;
             }
 
             // ── ADSR mode ────────────────────────────────────────────
@@ -736,13 +753,13 @@ pub fn evaluate_gen_param_envelopes(
                 env.was_clip_active = clip_active;
             }
 
-            let current_value = gp.param_values[idx].value;
-            let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
-            let offset = (target_value - current_value) * adsr_level;
-            let final_value = (current_value + offset).clamp(min, max);
-
-            if (final_value - current_value).abs() > f32::EPSILON {
-                gp.param_values[idx].value = final_value;
+            if apply_adsr_offset(
+                &mut gp.param_values[idx].value,
+                min,
+                max,
+                target_norm,
+                adsr_level,
+            ) {
                 any_modulated = true;
             }
         }
