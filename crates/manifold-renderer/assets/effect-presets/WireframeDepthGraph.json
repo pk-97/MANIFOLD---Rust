@@ -79,6 +79,8 @@
     { "id": 50, "typeId": "node.math", "handle": "cut_minus_threshold", "params": { "op": { "type": "Enum", "value": 1 }, "b": { "type": "Float", "value": 0.28 } } },
     { "id": 51, "typeId": "node.math", "handle": "cut_floor", "params": { "op": { "type": "Enum", "value": 10 } } },
 
+    { "id": 111, "typeId": "node.wgsl_compute", "handle": "flow_hygiene", "title": "Clean Flow Field", "outputCanvasScales": { "output_tex": [1, 6] }, "wgslSource": "// Pass 13 FlowHygiene extracted from fx_wireframe_depth_compute.wgsl.\n// Spatial flow denoise + neighbour-fill + high-confidence preserve.\n// This is the pass the legacy ran on the optical flow BEFORE feeding\n// the mesh tracker — without it the raw DNN flow's sparse/noisy\n// confidence keeps `trust` low in FlowAdvectCoord, `lock` collapses\n// to ~0.08, and the advected mesh coord stays ~= uv (a static grid\n// that just gets masked by the subject instead of sticking to the\n// content). Cleaning the flow here is what lets the grid lock to the\n// moving image.\n//\n// Reads AND writes the Watercolor RGBA layout the rest of this graph\n// uses (R=flow_x, G=confidence, B=flow_y, A=valid) — node.optical_flow\n// _estimate's convention — so the whole flow path stays in one layout.\n\nstruct U { _pad0: f32, };\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var flow_tex: texture_2d<f32>;\n@group(0) @binding(2) var samp: sampler;\n@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;\n\n// Watercolor layout: flow vector = (R, B), confidence = G, valid = A.\nfn accumulate_flow_sample(\n    s: vec4<f32>,\n    f0: vec2<f32>,\n    acc_f: ptr<function, vec2<f32>>,\n    acc_w: ptr<function, f32>,\n    acc_conf: ptr<function, f32>,\n    acc_valid: ptr<function, f32>\n) {\n    let fn_ = vec2<f32>(s.r, s.b);\n    let conf_n = clamp(s.g, 0.0, 1.0);\n    let valid_n = clamp(s.a, 0.0, 1.0);\n    let q_n = conf_n * valid_n;\n    let dist = length(fn_ - f0);\n    let sim = 1.0 - smoothstep(0.002, 0.060, dist);\n    let w = q_n * (0.25 + sim * 0.75);\n    *acc_f = *acc_f + fn_ * w;\n    *acc_w = *acc_w + w;\n    *acc_conf = *acc_conf + conf_n * w;\n    *acc_valid = *acc_valid + valid_n * w;\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    let texel = 1.0 / vec2<f32>(dims);\n\n    let c0 = textureSampleLevel(flow_tex, samp, uv, 0.0);\n    let f0 = vec2<f32>(c0.r, c0.b);\n    let conf0 = clamp(c0.g, 0.0, 1.0);\n    let valid0 = clamp(c0.a, 0.0, 1.0);\n    let q0 = conf0 * valid0;\n\n    let s_l  = textureSampleLevel(flow_tex, samp, uv - vec2<f32>(texel.x, 0.0), 0.0);\n    let s_r  = textureSampleLevel(flow_tex, samp, uv + vec2<f32>(texel.x, 0.0), 0.0);\n    let s_b  = textureSampleLevel(flow_tex, samp, uv - vec2<f32>(0.0, texel.y), 0.0);\n    let s_t  = textureSampleLevel(flow_tex, samp, uv + vec2<f32>(0.0, texel.y), 0.0);\n    let s_lb = textureSampleLevel(flow_tex, samp, uv - texel, 0.0);\n    let s_rb = textureSampleLevel(flow_tex, samp, uv + vec2<f32>(texel.x, -texel.y), 0.0);\n    let s_lt = textureSampleLevel(flow_tex, samp, uv + vec2<f32>(-texel.x, texel.y), 0.0);\n    let s_rt = textureSampleLevel(flow_tex, samp, uv + texel, 0.0);\n\n    var acc_f: vec2<f32> = vec2<f32>(0.0);\n    var acc_w: f32 = 0.0;\n    var acc_conf: f32 = 0.0;\n    var acc_valid: f32 = 0.0;\n\n    accumulate_flow_sample(c0,   f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_l,  f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_r,  f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_b,  f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_t,  f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_lb, f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_rb, f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_lt, f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n    accumulate_flow_sample(s_rt, f0, &acc_f, &acc_w, &acc_conf, &acc_valid);\n\n    var f_out = select(f0, acc_f / acc_w, acc_w > 1e-5);\n    var conf_out = select(conf0, acc_conf / acc_w, acc_w > 1e-5);\n    var valid_out = select(valid0, acc_valid / acc_w, acc_w > 1e-5);\n\n    let neigh_valid = (\n        clamp(s_l.a, 0.0, 1.0) + clamp(s_r.a, 0.0, 1.0) +\n        clamp(s_b.a, 0.0, 1.0) + clamp(s_t.a, 0.0, 1.0) +\n        clamp(s_lb.a, 0.0, 1.0) + clamp(s_rb.a, 0.0, 1.0) +\n        clamp(s_lt.a, 0.0, 1.0) + clamp(s_rt.a, 0.0, 1.0)) / 8.0;\n    let fill = smoothstep(0.02, 0.25, 1.0 - q0) * smoothstep(0.18, 0.70, neigh_valid);\n    let neigh_flow = (vec2<f32>(s_l.r, s_l.b) + vec2<f32>(s_r.r, s_r.b) + vec2<f32>(s_b.r, s_b.b) + vec2<f32>(s_t.r, s_t.b)) * 0.25;\n    f_out = mix(f_out, neigh_flow, fill);\n    conf_out = mix(conf_out, max(conf_out, neigh_valid * 0.75), fill);\n    valid_out = mix(valid_out, max(valid_out, neigh_valid * 0.90), fill);\n\n    let preserve = smoothstep(0.55, 0.92, q0);\n    f_out = mix(f_out, f0, preserve * 0.78);\n    conf_out = mix(conf_out, conf0, preserve * 0.78);\n    valid_out = mix(valid_out, valid0, preserve * 0.78);\n\n    // Write back in Watercolor layout: R=flow_x, G=conf, B=flow_y, A=valid.\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(f_out.x, clamp(conf_out, 0.0, 1.0), f_out.y, clamp(valid_out, 0.0, 1.0)));\n}\n" },
+
     { "id": 100, "typeId": "node.wgsl_compute", "handle": "mesh_init", "title": "Seed Identity Mesh", "outputCanvasScales": { "output_tex": [1, 6] }, "wgslSource": "// Identity-UV writer for the mesh_coord persistent state on first\n// frame and after scene cuts. Mirrors PASS_INIT_MESH_COORD from\n// fx_wireframe_depth_compute.wgsl byte-exact:\n//   RG = (u, v), B = 1.0 (full trust), A = encode_cooldown(0.0) = 0.55.\n// The 0.55 alpha decodes back to 0 cooldown via decode_cooldown so\n// downstream FlowAdvectCoord sees a freshly-recovered tile.\n\nstruct U { _pad0: f32, };\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    _ = u._pad0;\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(uv, 1.0, 0.55));\n}\n" },
 
     { "id": 101, "typeId": "node.wgsl_compute", "handle": "depth_temporal", "title": "Smooth Depth Over Time", "outputCanvasScales": { "output_tex": [1, 6] }, "wgslSource": "// Pass 4 DnnDepthPost, extracted byte-exact from\n// fx_wireframe_depth_compute.wgsl. Mixes the current DNN depth with\n// the previous frame's smoothed depth weighted by temporal_smooth\n// * 0.85 (the 0.85 constant is preserved literally).\n\nstruct U {\n    temporal_smooth: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var current_depth: texture_2d<f32>;\n@group(0) @binding(2) var prev_depth: texture_2d<f32>;\n@group(0) @binding(3) var samp: sampler;\n@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(output_tex);\n    if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }\n    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n    let depth_current = textureSampleLevel(current_depth, samp, uv, 0.0).r;\n    let depth_previous = textureSampleLevel(prev_depth, samp, uv, 0.0).r;\n    let depth_smoothed = mix(depth_current, depth_previous, u.temporal_smooth * 0.85);\n    let depth_value = clamp(depth_smoothed, 0.0, 1.0);\n    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(depth_value, depth_value, depth_value, 1.0));\n}\n" },
@@ -152,15 +154,17 @@
 
     { "fromNode": 4, "fromPort": "output_tex", "toNode": 200, "toPort": "in" },
 
+    { "fromNode": 2, "fromPort": "out", "toNode": 111, "toPort": "flow_tex" },
+
     { "fromNode": 4, "fromPort": "output_tex", "toNode": 102, "toPort": "analysis_tex" },
     { "fromNode": 101, "fromPort": "output_tex", "toNode": 102, "toPort": "depth_tex" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 102, "toPort": "flow_tex" },
+    { "fromNode": 111, "fromPort": "output_tex", "toNode": 102, "toPort": "flow_tex" },
 
     { "fromNode": 100, "fromPort": "output_tex", "toNode": 202, "toPort": "seed" },
 
     { "fromNode": 21, "fromPort": "out", "toNode": 103, "toPort": "temporal_smooth" },
     { "fromNode": 31, "fromPort": "out", "toNode": 103, "toPort": "flow_lock_strength" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 103, "toPort": "flow_tex" },
+    { "fromNode": 111, "fromPort": "output_tex", "toNode": 103, "toPort": "flow_tex" },
     { "fromNode": 202, "fromPort": "out", "toNode": 103, "toPort": "prev_mesh_coord_tex" },
     { "fromNode": 4, "fromPort": "output_tex", "toNode": 103, "toPort": "analysis_tex" },
     { "fromNode": 200, "fromPort": "out", "toNode": 103, "toPort": "prev_analysis_tex" },
@@ -168,23 +172,23 @@
     { "fromNode": 11, "fromPort": "out", "toNode": 104, "toPort": "grid_density" },
     { "fromNode": 35, "fromPort": "out", "toNode": 104, "toPort": "cell_affine_strength" },
     { "fromNode": 103, "fromPort": "output_tex", "toNode": 104, "toPort": "main_tex" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 104, "toPort": "flow_tex" },
+    { "fromNode": 111, "fromPort": "output_tex", "toNode": 104, "toPort": "flow_tex" },
 
     { "fromNode": 38, "fromPort": "out", "toNode": 105, "toPort": "face_warp_strength" },
     { "fromNode": 104, "fromPort": "output_tex", "toNode": 105, "toPort": "main_tex" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 105, "toPort": "flow_tex" },
+    { "fromNode": 111, "fromPort": "output_tex", "toNode": 105, "toPort": "flow_tex" },
     { "fromNode": 102, "fromPort": "output_tex", "toNode": 105, "toPort": "semantic_tex" },
 
     { "fromNode": 21, "fromPort": "out", "toNode": 106, "toPort": "temporal_smooth" },
     { "fromNode": 33, "fromPort": "out", "toNode": 106, "toPort": "mesh_regularize" },
     { "fromNode": 105, "fromPort": "output_tex", "toNode": 106, "toPort": "main_tex" },
     { "fromNode": 202, "fromPort": "out", "toNode": 106, "toPort": "prev_mesh_coord_tex" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 106, "toPort": "flow_tex" },
+    { "fromNode": 111, "fromPort": "output_tex", "toNode": 106, "toPort": "flow_tex" },
     { "fromNode": 106, "fromPort": "output_tex", "toNode": 202, "toPort": "in" },
 
     { "fromNode": 40, "fromPort": "out", "toNode": 107, "toPort": "surface_persistence" },
     { "fromNode": 106, "fromPort": "output_tex", "toNode": 107, "toPort": "main_tex" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 107, "toPort": "flow_tex" },
+    { "fromNode": 111, "fromPort": "output_tex", "toNode": 107, "toPort": "flow_tex" },
     { "fromNode": 203, "fromPort": "out", "toNode": 107, "toPort": "prev_surface_cache_tex" },
     { "fromNode": 107, "fromPort": "output_tex", "toNode": 203, "toPort": "in" },
 
