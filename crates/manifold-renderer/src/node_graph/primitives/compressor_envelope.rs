@@ -53,7 +53,7 @@ const COMPRESSOR_ENVELOPE_INPUTS: [NodeInput; 5] = [
         required: false,
     },
     NodePort {
-        name: "punch",
+        name: "response",
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -89,8 +89,8 @@ const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "punch",
-        label: "Punch",
+        name: "response",
+        label: "Response",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
@@ -161,7 +161,7 @@ impl EffectNode for CompressorEnvelope {
             _ => return,
         };
         let ratio_param = ctx.scalar_or_param("ratio", 0.5).clamp(0.0, 1.0);
-        let punch_param = ctx.scalar_or_param("punch", 0.5).clamp(0.0, 1.0);
+        let response_param = ctx.scalar_or_param("response", 0.5).clamp(0.0, 1.0);
         let target_param = ctx.scalar_or_param("target", 0.5).clamp(0.001, 1.0);
         let dt = ctx.time.delta.0 as f32;
 
@@ -229,10 +229,13 @@ impl EffectNode for CompressorEnvelope {
         let deviation = (log_lum - state.long_term_log).abs();
         let is_transient = deviation > 0.5;
 
-        // Base A/R from Punch. 60fps reference: 50 ms ≈ 3 frames,
-        // 250 ms ≈ 15, 1000 ms ≈ 60, 100 ms ≈ 6.
-        let base_attack = lerp(0.050, 0.250, punch_param);
-        let base_release = lerp(1.000, 0.100, punch_param);
+        // Base A/R from Response. response=0 is tight (fast attack /
+        // slow release — clamps and holds); response=1 is loose
+        // (slow attack / fast release — transients survive, breathes
+        // back). 60fps reference: 50 ms ≈ 3 frames, 250 ms ≈ 15,
+        // 1000 ms ≈ 60, 100 ms ≈ 6.
+        let base_attack = lerp(0.050, 0.250, response_param);
+        let base_release = lerp(1.000, 0.100, response_param);
         let attack = if is_transient {
             base_attack * 2.0
         } else {
@@ -291,7 +294,7 @@ mod tests {
     fn declares_in_three_modulation_ports_reset_and_out() {
         let node = CompressorEnvelope::new();
         let ins: Vec<&str> = node.inputs().iter().map(|p| p.name).collect();
-        assert_eq!(ins, vec!["in", "ratio", "punch", "target", "reset_trigger"]);
+        assert_eq!(ins, vec!["in", "ratio", "response", "target", "reset_trigger"]);
         assert!(node.inputs()[0].required);
         for i in 1..5 {
             assert!(!node.inputs()[i].required);
@@ -301,9 +304,9 @@ mod tests {
     }
 
     #[test]
-    fn has_ratio_punch_target_params() {
+    fn has_ratio_response_target_params() {
         let node = CompressorEnvelope::new();
         let names: Vec<&str> = node.parameters().iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["ratio", "punch", "target"]);
+        assert_eq!(names, vec!["ratio", "response", "target"]);
     }
 }
