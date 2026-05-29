@@ -43,15 +43,24 @@ const BRIGHTNESS_PARAMS: [ParamDef; 1] = [ParamDef {
     enum_values: &[],
 }];
 
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BrightnessUniforms {
+    weights: [f32; 4], // xyz used; w padding
+}
+
 pub struct Brightness {
     type_id: EffectNodeType,
+    pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    sampler: Option<manifold_gpu::GpuSampler>,
 }
 
 impl Brightness {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(BRIGHTNESS_TYPE_ID),
+            pipeline: None,
+            sampler: None,
         }
     }
 }
@@ -75,7 +84,59 @@ impl EffectNode for Brightness {
     fn parameters(&self) -> &[ParamDef] {
         &BRIGHTNESS_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let w = match ctx.params.get("weights") {
+            Some(ParamValue::Vec3(v)) => *v,
+            _ => [0.2126, 0.7152, 0.0722],
+        };
+        let uniforms = BrightnessUniforms {
+            weights: [w[0], w[1], w[2], 0.0],
+        };
+
+        let Some(in_tex) = ctx.inputs.texture_2d("source") else {
+            return;
+        };
+        let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
+        let (width, height) = (out_tex.width, out_tex.height);
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/brightness.wgsl"),
+                "cs_main",
+                "node.brightness",
+            )
+        });
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: in_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out_tex,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "node.brightness",
+        );
+    }
 }
 
 inventory::submit! {
@@ -270,15 +331,25 @@ const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
     },
 ];
 
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ColorRampUniforms {
+    color_a: [f32; 4],
+    color_b: [f32; 4],
+}
+
 pub struct ColorRamp {
     type_id: EffectNodeType,
+    pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    sampler: Option<manifold_gpu::GpuSampler>,
 }
 
 impl ColorRamp {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(COLOR_RAMP_TYPE_ID),
+            pipeline: None,
+            sampler: None,
         }
     }
 }
@@ -302,7 +373,63 @@ impl EffectNode for ColorRamp {
     fn parameters(&self) -> &[ParamDef] {
         &COLOR_RAMP_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let color = |name: &str, default: [f32; 4]| -> [f32; 4] {
+            match ctx.params.get(name) {
+                Some(ParamValue::Color(c)) => *c,
+                Some(ParamValue::Vec4(v)) => *v,
+                _ => default,
+            }
+        };
+        let uniforms = ColorRampUniforms {
+            color_a: color("color_a", [0.0, 0.0, 0.0, 1.0]),
+            color_b: color("color_b", [1.0, 1.0, 1.0, 1.0]),
+        };
+
+        let Some(in_tex) = ctx.inputs.texture_2d("source") else {
+            return;
+        };
+        let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
+        let (width, height) = (out_tex.width, out_tex.height);
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/color_ramp.wgsl"),
+                "cs_main",
+                "node.color_ramp",
+            )
+        });
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: in_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out_tex,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "node.color_ramp",
+        );
+    }
 }
 
 inventory::submit! {
