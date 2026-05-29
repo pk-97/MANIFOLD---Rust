@@ -555,217 +555,37 @@ impl GenParamPanel {
                     self.toggle_cache[i] = on;
                     cy += ROW_HEIGHT + ROW_SPACING;
                 } else {
-                    // Slider row
-                    let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
-                    let val_text = format_param_value(
-                        info.default,
-                        info.min,
-                        info.whole_numbers,
-                        info.value_labels.as_deref(),
-                    );
-                    let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
-                    self.slider_ids[i] = Some(BitmapSlider::build(
+                    // Slider row — shared per-param core (identical to the
+                    // effect card; see [`build_param_row`]). Generators parent
+                    // rows flat to `-1`, use the gen-param slider palette, the
+                    // body-size driver-config font, and always show the `E`
+                    // button (generators always support envelopes).
+                    let row = build_param_row(
                         tree,
                         -1,
-                        slider_rect,
-                        Some(&info.name),
-                        norm,
-                        &val_text,
+                        cx,
+                        cy,
+                        slider_w,
+                        content_w,
+                        &info,
+                        &self.state.mod_state,
+                        i,
                         &SliderColors::gen_param(),
                         FONT_SIZE,
-                        crate::slider::DEFAULT_LABEL_WIDTH,
-                    ));
-
-                    // Make label interactive for Ableton mapping + OSC address copy
-                    if let Some(ids) = &self.slider_ids[i]
-                        && ids.label >= 0
-                    {
-                        tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
-                    }
-
-                    // Trim handles (if driver expanded)
-                    if self
-                        .state
-                        .mod_state
-                        .driver_expanded
-                        .get(i)
-                        .copied()
-                        .unwrap_or(false)
-                        && let Some(ref slider) = self.slider_ids[i]
-                    {
-                        self.trim_ids[i] = Some(build_trim_handles(
-                            tree,
-                            slider.track as i32,
-                            slider.track_rect,
-                            &self.state.mod_state,
-                            i,
-                        ));
-                    }
-
-                    // Envelope target or range handles
-                    if self
-                        .state
-                        .mod_state
-                        .envelope_expanded
-                        .get(i)
-                        .copied()
-                        .unwrap_or(false)
-                        && let Some(ref slider) = self.slider_ids[i]
-                    {
-                        let env_mode = self
-                            .state
-                            .mod_state
-                            .env_mode
-                            .get(i)
-                            .copied()
-                            .unwrap_or(EnvelopeMode::Adsr);
-                        if env_mode == EnvelopeMode::Random {
-                            self.envelope_range_ids[i] = Some(build_envelope_range_handles(
-                                tree,
-                                slider.track as i32,
-                                slider.track_rect,
-                                &self.state.mod_state,
-                                i,
-                            ));
-                        } else {
-                            self.target_ids[i] = Some(build_envelope_target(
-                                tree,
-                                slider.track as i32,
-                                slider.track_rect,
-                                &self.state.mod_state,
-                                i,
-                            ));
-                        }
-                    }
-
-                    // Ableton trim handles
-                    if let Some((amin, amax)) = self.param_info[i].ableton_range
-                        && let Some(ref slider) = self.slider_ids[i]
-                    {
-                        self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
-                            tree,
-                            slider.track as i32,
-                            slider.track_rect,
-                            amin,
-                            amax,
-                            color::ABL_TRIM_BAR_C32,
-                            color::ABL_TRIM_BAR_HOVER_C32,
-                            color::ABL_TRIM_FILL_C32,
-                        ));
-                    }
-
-                    // D/E buttons
-                    let btn_x = cx + slider_w + DE_BUTTON_GAP;
-                    let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-
-                    let env_active = self
-                        .state
-                        .mod_state
-                        .envelope_expanded
-                        .get(i)
-                        .copied()
-                        .unwrap_or(false);
-                    self.envelope_btn_ids[i] = tree.add_button(
-                        -1,
-                        btn_x,
-                        btn_y,
-                        DE_BUTTON_SIZE,
-                        DE_BUTTON_SIZE,
-                        de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
-                        "E",
-                    ) as i32;
-
-                    let drv_active = self
-                        .state
-                        .mod_state
-                        .driver_expanded
-                        .get(i)
-                        .copied()
-                        .unwrap_or(false);
-                    self.driver_btn_ids[i] = tree.add_button(
-                        -1,
-                        btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP,
-                        btn_y,
-                        DE_BUTTON_SIZE,
-                        DE_BUTTON_SIZE,
-                        de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
-                        "\u{2192}",
-                    ) as i32;
-
-                    cy += ROW_HEIGHT + ROW_SPACING;
-
-                    let config_w = content_w; // full width (no D/E button reservation)
-
-                    // Envelope config
-                    if self
-                        .state
-                        .mod_state
-                        .envelope_expanded
-                        .get(i)
-                        .copied()
-                        .unwrap_or(false)
-                    {
-                        let env_mode = self
-                            .state
-                            .mod_state
-                            .env_mode
-                            .get(i)
-                            .copied()
-                            .unwrap_or(EnvelopeMode::Adsr);
-                        // Always build the random config buttons
-                        self.envelope_random_config_ids[i] = Some(build_envelope_random_config(
-                            tree,
-                            -1,
-                            cx,
-                            cy,
-                            config_w,
-                            &self.state.mod_state,
-                            i,
-                        ));
-                        cy += ENV_RANDOM_CONFIG_HEIGHT;
-                        // Only show ADSR sliders when in ADSR mode
-                        if env_mode == EnvelopeMode::Adsr {
-                            self.envelope_config_ids[i] = Some(build_envelope_config(
-                                tree,
-                                -1,
-                                cx,
-                                cy,
-                                config_w,
-                                &self.state.mod_state,
-                                i,
-                            ));
-                            cy += ENV_CONFIG_HEIGHT;
-                        }
-                    }
-
-                    // Driver config
-                    if self
-                        .state
-                        .mod_state
-                        .driver_expanded
-                        .get(i)
-                        .copied()
-                        .unwrap_or(false)
-                    {
-                        self.driver_config_ids[i] = Some(build_driver_config(
-                            tree,
-                            -1,
-                            cx,
-                            cy,
-                            config_w,
-                            &self.state.mod_state,
-                            i,
-                            FONT_SIZE,
-                        ));
-                        cy += DRIVER_CONFIG_HEIGHT;
-                    }
-
-                    // Ableton config drawer (auto-shows when mapping exists)
-                    if let Some(ref display) = self.param_info[i].ableton_display {
-                        self.ableton_config_ids[i] =
-                            Some(build_ableton_config(tree, -1, cx, cy, config_w, display));
-                        cy += ABL_CONFIG_HEIGHT;
-                    }
+                        true,
+                    );
+                    self.slider_ids[i] = row.slider;
+                    self.trim_ids[i] = row.trim;
+                    self.target_ids[i] = row.target;
+                    self.envelope_range_ids[i] = row.envelope_range;
+                    self.ableton_trim_ids[i] = row.ableton_trim;
+                    self.envelope_btn_ids[i] = row.envelope_btn;
+                    self.driver_btn_ids[i] = row.driver_btn;
+                    self.envelope_config_ids[i] = row.envelope_config;
+                    self.envelope_random_config_ids[i] = row.envelope_random_config;
+                    self.driver_config_ids[i] = row.driver_config;
+                    self.ableton_config_ids[i] = row.ableton_config;
+                    cy = row.new_cy;
                 }
             }
 

@@ -4,6 +4,7 @@
 //! driver/envelope config builders, trim/target handle builders, and formatting
 //! helpers. This module extracts them into a single source of truth.
 
+use super::param_card::ParamInfo;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -1100,4 +1101,222 @@ pub(crate) fn check_ableton_config_click(
 
 pub(crate) enum AbletonConfigClick {
     Invert,
+}
+
+// ── Shared per-parameter slider row ─────────────────────────────────
+
+/// Node IDs produced by [`build_param_row`] for one parameter row. The caller
+/// stores each into its parallel per-param vectors at the row's index.
+pub(crate) struct ParamRowIds {
+    pub(crate) slider: Option<SliderNodeIds>,
+    pub(crate) trim: Option<TrimHandleIds>,
+    pub(crate) target: Option<EnvelopeTargetIds>,
+    pub(crate) envelope_range: Option<TrimHandleIds>,
+    pub(crate) ableton_trim: Option<TrimHandleIds>,
+    pub(crate) envelope_btn: i32,
+    pub(crate) driver_btn: i32,
+    pub(crate) envelope_config: Option<EnvelopeConfigIds>,
+    pub(crate) envelope_random_config: Option<EnvelopeRandomConfigIds>,
+    pub(crate) driver_config: Option<DriverConfigIds>,
+    pub(crate) ableton_config: Option<AbletonConfigIds>,
+    /// `y` after this row's slider + any expanded driver/envelope/Ableton
+    /// drawers — the caller continues the next row from here.
+    pub(crate) new_cy: f32,
+}
+
+/// Build one parameter's slider row plus its expanded driver/envelope/Ableton
+/// drawers, returning the created node IDs and the post-row `y`.
+///
+/// This is the per-parameter core shared verbatim by the effect and generator
+/// cards — the bulk of what used to be duplicated between
+/// `EffectCardPanel::build_sliders` and `GenParamPanel::build`. The two cards
+/// differ only in the parameters threaded in here: `parent` (the effect card
+/// nests rows under its inner-bg panel, the generator card parents flat to
+/// `-1`), `slider_colors` (`default_slider` vs `gen_param`), `config_font`
+/// (the driver-config button font), and `build_env_button` (effects gate the
+/// `E` button on `supports_envelopes`; generators always show it).
+///
+/// `x` is the row's left edge (already padded); `slider_w` the slider width
+/// (track + label, D/E buttons reserved to its right); `config_w` the full
+/// inner content width the drawers span. Node creation order is identical to
+/// the prior inline code, so first-node/node-count bookkeeping is preserved.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_param_row(
+    tree: &mut UITree,
+    parent: i32,
+    x: f32,
+    cy: f32,
+    slider_w: f32,
+    config_w: f32,
+    info: &ParamInfo,
+    mod_state: &ParamModState,
+    i: usize,
+    slider_colors: &SliderColors,
+    config_font: u16,
+    build_env_button: bool,
+) -> ParamRowIds {
+    let mut ids = ParamRowIds {
+        slider: None,
+        trim: None,
+        target: None,
+        envelope_range: None,
+        ableton_trim: None,
+        envelope_btn: -1,
+        driver_btn: -1,
+        envelope_config: None,
+        envelope_random_config: None,
+        driver_config: None,
+        ableton_config: None,
+        new_cy: cy,
+    };
+    let mut cy = cy;
+
+    let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
+    let val_text = format_param_value(
+        info.default,
+        info.min,
+        info.whole_numbers,
+        info.value_labels.as_deref(),
+    );
+    let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
+    let slider = BitmapSlider::build(
+        tree,
+        parent,
+        slider_rect,
+        Some(&info.name),
+        norm,
+        &val_text,
+        slider_colors,
+        FONT_SIZE,
+        crate::slider::DEFAULT_LABEL_WIDTH,
+    );
+
+    // Make label interactive for click-to-copy OSC address + Ableton mapping.
+    if slider.label >= 0 {
+        tree.set_flag(slider.label as u32, UIFlags::INTERACTIVE);
+    }
+
+    // Trim handles (if driver expanded).
+    if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+        ids.trim = Some(build_trim_handles(
+            tree,
+            slider.track as i32,
+            slider.track_rect,
+            mod_state,
+            i,
+        ));
+    }
+
+    // Envelope target or range handles (if envelope expanded).
+    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+        let env_mode = mod_state.env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
+        if env_mode == EnvelopeMode::Random {
+            ids.envelope_range = Some(build_envelope_range_handles(
+                tree,
+                slider.track as i32,
+                slider.track_rect,
+                mod_state,
+                i,
+            ));
+        } else {
+            ids.target = Some(build_envelope_target(
+                tree,
+                slider.track as i32,
+                slider.track_rect,
+                mod_state,
+                i,
+            ));
+        }
+    }
+
+    // Ableton trim handles (when the param has an Ableton mapping).
+    if let Some((amin, amax)) = info.ableton_range {
+        ids.ableton_trim = Some(build_trim_handles_explicit(
+            tree,
+            slider.track as i32,
+            slider.track_rect,
+            amin,
+            amax,
+            color::ABL_TRIM_BAR_C32,
+            color::ABL_TRIM_BAR_HOVER_C32,
+            color::ABL_TRIM_FILL_C32,
+        ));
+    }
+
+    ids.slider = Some(slider);
+
+    // D/E buttons (right of the slider row).
+    let btn_x = x + slider_w + DE_BUTTON_GAP;
+    let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+    if build_env_button {
+        let env_active = mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
+        ids.envelope_btn = tree.add_button(
+            parent,
+            btn_x,
+            btn_y,
+            DE_BUTTON_SIZE,
+            DE_BUTTON_SIZE,
+            de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
+            "E",
+        ) as i32;
+    }
+    let drv_active = mod_state.driver_expanded.get(i).copied().unwrap_or(false);
+    let drv_btn_x = btn_x
+        + if build_env_button {
+            DE_BUTTON_SIZE + DE_BUTTON_GAP
+        } else {
+            0.0
+        };
+    ids.driver_btn = tree.add_button(
+        parent,
+        drv_btn_x,
+        btn_y,
+        DE_BUTTON_SIZE,
+        DE_BUTTON_SIZE,
+        de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
+        "\u{2192}", // →
+    ) as i32;
+
+    cy += ROW_HEIGHT + ROW_SPACING;
+
+    // Envelope config drawer.
+    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+        let env_mode = mod_state.env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
+        // Always build the random config buttons (mode toggle + jump toggle).
+        ids.envelope_random_config = Some(build_envelope_random_config(
+            tree, parent, x, cy, config_w, mod_state, i,
+        ));
+        cy += ENV_RANDOM_CONFIG_HEIGHT;
+        // ADSR sliders only in ADSR mode.
+        if env_mode == EnvelopeMode::Adsr {
+            ids.envelope_config = Some(build_envelope_config(
+                tree, parent, x, cy, config_w, mod_state, i,
+            ));
+            cy += ENV_CONFIG_HEIGHT;
+        }
+    }
+
+    // Driver config drawer.
+    if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+        ids.driver_config = Some(build_driver_config(
+            tree,
+            parent,
+            x,
+            cy,
+            config_w,
+            mod_state,
+            i,
+            config_font,
+        ));
+        cy += DRIVER_CONFIG_HEIGHT;
+    }
+
+    // Ableton config drawer (auto-shows when mapping exists).
+    if let Some(ref display) = info.ableton_display {
+        ids.ableton_config = Some(build_ableton_config(tree, parent, x, cy, config_w, display));
+        cy += ABL_CONFIG_HEIGHT;
+    }
+
+    ids.new_cy = cy;
+    ids
 }
