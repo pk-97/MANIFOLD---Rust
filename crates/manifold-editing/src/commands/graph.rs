@@ -1703,11 +1703,14 @@ fn apply_generator_mirror(
             if let Some(gp) = layer.gen_params_mut() {
                 if gp.param_values.len() <= slot_index {
                     while gp.param_values.len() < slot_index {
-                        gp.param_values.push(0.0);
+                        gp.param_values
+                            .push(manifold_core::effects::ParamSlot::default());
                     }
-                    gp.param_values.push(default_value);
+                    gp.param_values
+                        .push(manifold_core::effects::ParamSlot::exposed(default_value));
                 } else {
-                    gp.param_values[slot_index] = default_value;
+                    gp.param_values[slot_index] =
+                        manifold_core::effects::ParamSlot::exposed(default_value);
                 }
                 if let Some(base) = gp.base_param_values.as_mut() {
                     if base.len() <= slot_index {
@@ -1745,7 +1748,7 @@ fn apply_generator_mirror(
             > = Vec::new();
             if let Some(gp) = layer.gen_params_mut() {
                 if slot_index < gp.param_values.len() {
-                    slot_value = gp.param_values.remove(slot_index);
+                    slot_value = gp.param_values.remove(slot_index).value;
                 }
                 if let Some(base) = gp.base_param_values.as_mut()
                     && slot_index < base.len()
@@ -1891,10 +1894,11 @@ fn unmirror_generator_side(
             ..
         } => {
             if let Some(gp) = layer.gen_params_mut() {
+                let restored = manifold_core::effects::ParamSlot::exposed(slot_value);
                 if slot_index <= gp.param_values.len() {
-                    gp.param_values.insert(slot_index, slot_value);
+                    gp.param_values.insert(slot_index, restored);
                 } else {
-                    gp.param_values.push(slot_value);
+                    gp.param_values.push(restored);
                 }
                 if let Some(base) = gp.base_param_values.as_mut() {
                     if slot_index <= base.len() {
@@ -2576,7 +2580,10 @@ mod tests {
             // Override values after init — the registry doesn't know
             // about our synthetic preset, so init may leave the vec
             // empty. Force the bundled slot count to match the preset.
-            gp.param_values = vec![0.0, 1.0];
+            gp.param_values = vec![
+                manifold_core::effects::ParamSlot::exposed(0.0),
+                manifold_core::effects::ParamSlot::exposed(1.0),
+            ];
             gp.base_param_values = Some(vec![0.0, 1.0]);
         }
 
@@ -2815,7 +2822,10 @@ mod tests {
             gp.init_defaults_for_type(GeneratorTypeId::from_string(
                 "test.wireframe".to_string(),
             ));
-            gp.param_values = vec![0.0, 0.75]; // bundled `shape` + user-added `animate`
+            gp.param_values = vec![
+                manifold_core::effects::ParamSlot::exposed(0.0),
+                manifold_core::effects::ParamSlot::exposed(0.75),
+            ]; // bundled `shape` + user-added `animate`
             gp.base_param_values = Some(vec![0.0, 0.75]);
             // Attach a driver + envelope on the user-added id — they
             // should get pruned on unexpose and restored on undo.
@@ -2860,7 +2870,7 @@ mod tests {
 
         let gp = layer.gen_params().unwrap();
         assert_eq!(gp.param_values.len(), 1, "user-added slot removed");
-        assert_eq!(gp.param_values[0], 0.0, "bundled `shape` value intact");
+        assert_eq!(gp.param_values[0].value, 0.0, "bundled `shape` value intact");
         assert!(
             gp.drivers.is_none() || gp.drivers.as_ref().unwrap().is_empty(),
             "driver referencing user-added id pruned"
@@ -2883,7 +2893,7 @@ mod tests {
         let gp = layer.gen_params().unwrap();
         assert_eq!(gp.param_values.len(), 2, "undo restores the slot");
         assert!(
-            (gp.param_values[1] - 0.75).abs() < f32::EPSILON,
+            (gp.param_values[1].value - 0.75).abs() < f32::EPSILON,
             "slot value (0.75) restored"
         );
         assert_eq!(

@@ -149,7 +149,7 @@ impl ActiveInspectorDrag {
                         )
                     && slot < gp.param_values.len()
                 {
-                    gp.param_values[slot] = *value;
+                    gp.param_values[slot].value = *value;
                 }
             }
         }
@@ -987,7 +987,10 @@ impl Application {
                         parsed
                     };
                     if let Some(gp) = layer.gen_params() {
-                        let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
+                        // Base-value snapshot as plain floats (base if present,
+                        // else effective). `param_values` is `Vec<ParamSlot>`
+                        // now, so fall back through the float projection.
+                        let base: Vec<f32> = gp.snapshot_params();
                         let old_val = base.get(param_idx).copied().unwrap_or(0.0);
                         if (old_val - new_val).abs() > f32::EPSILON {
                             let mut old_params = base.clone();

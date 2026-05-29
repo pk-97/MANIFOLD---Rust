@@ -77,7 +77,9 @@ impl GeneratorClipboard {
     pub fn copy_from(&mut self, state: &GeneratorParamState) {
         self.snapshot = Some(GeneratorSnapshot {
             generator_type: state.generator_type().clone(),
-            param_values: state.param_values.clone(),
+            // Clipboard carries effective float values; exposure is host
+            // state and doesn't travel with a copy/paste.
+            param_values: state.param_values.iter().map(|s| s.value).collect(),
             base_param_values: state.base_param_values.clone(),
             drivers: state.drivers.clone(),
             envelopes: state.envelopes.clone(),

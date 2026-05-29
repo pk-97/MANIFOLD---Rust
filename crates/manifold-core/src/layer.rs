@@ -653,15 +653,15 @@ impl Layer {
     pub fn get_gen_param(&self, index: usize) -> f32 {
         self.gen_params
             .as_ref()
-            .and_then(|gp| gp.param_values.get(index).copied())
+            .and_then(|gp| gp.param_values.get(index).map(|s| s.value))
             .unwrap_or(0.0)
     }
 
-    /// Snapshot current generator param values.
+    /// Snapshot current generator param values (effective floats).
     pub fn snapshot_gen_params(&self) -> Vec<f32> {
-        self.gen_params
-            .as_ref()
-            .map_or_else(Vec::new, |gp| gp.param_values.clone())
+        self.gen_params.as_ref().map_or_else(Vec::new, |gp| {
+            gp.param_values.iter().map(|s| s.value).collect()
+        })
     }
 
     /// Snapshot current generator drivers.
@@ -814,9 +814,9 @@ impl Layer {
                 base[index] = value;
             }
             while gp.param_values.len() <= index {
-                gp.param_values.push(0.0);
+                gp.param_values.push(crate::effects::ParamSlot::default());
             }
-            gp.param_values[index] = value;
+            gp.param_values[index].value = value;
         }
     }
 }

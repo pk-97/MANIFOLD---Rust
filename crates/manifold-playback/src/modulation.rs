@@ -203,7 +203,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
                     any_driven = true;
                     for (idx, value) in results {
                         if idx < gp.param_values.len() {
-                            gp.param_values[idx] = value;
+                            gp.param_values[idx].value = value;
                         }
                     }
                 }
@@ -705,7 +705,7 @@ pub fn evaluate_gen_param_envelopes(
                     env.last_elapsed = elapsed_f;
                 }
 
-                gp.param_values[idx] = held;
+                gp.param_values[idx].value = held;
                 any_modulated = true;
                 continue;
             }
@@ -736,13 +736,13 @@ pub fn evaluate_gen_param_envelopes(
                 env.was_clip_active = clip_active;
             }
 
-            let current_value = gp.param_values[idx];
+            let current_value = gp.param_values[idx].value;
             let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
             let offset = (target_value - current_value) * adsr_level;
             let final_value = (current_value + offset).clamp(min, max);
 
             if (final_value - current_value).abs() > f32::EPSILON {
-                gp.param_values[idx] = final_value;
+                gp.param_values[idx].value = final_value;
                 any_modulated = true;
             }
         }

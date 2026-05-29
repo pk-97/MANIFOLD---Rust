@@ -1,4 +1,4 @@
-use crate::effects::{ParamDef, ParamEnvelope, ParamId, ParamSource, ParameterDriver};
+use crate::effects::{ParamDef, ParamEnvelope, ParamId, ParamSlot, ParamSource, ParameterDriver};
 use crate::generator_type_id::GeneratorTypeId;
 use crate::types::{BeatDivision, DriverWaveform};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default)]
 pub struct GeneratorParamState {
     generator_type: GeneratorTypeId,
-    pub param_values: Vec<f32>,
+    /// Effective (post-modulation) param values, one slot per generator
+    /// parameter. `Vec<ParamSlot>` since the storage unification — the
+    /// `value` is the live float; `exposed` mirrors the effect side so
+    /// the host-visible exposure surface is uniform across effects and
+    /// generators. `base_param_values` stays plain `Vec<f32>`: exposure
+    /// is meaningless on a pre-modulation snapshot.
+    pub param_values: Vec<ParamSlot>,
     pub base_param_values: Option<Vec<f32>>,
     pub drivers: Option<Vec<ParameterDriver>>,
     pub envelopes: Option<Vec<ParamEnvelope>>,
@@ -59,7 +65,7 @@ impl Serialize for GeneratorParamState {
         s.serialize_field("generatorType", &self.generator_type)?;
         s.serialize_field(
             "paramValues",
-            &GenParamValuesSer {
+            &GenParamSlotValuesSer {
                 values: &self.param_values,
                 gen_type: &self.generator_type,
             },
@@ -89,7 +95,7 @@ impl Serialize for GeneratorParamState {
     }
 }
 
-/// Serialize-side wrapper for generator `paramValues` / `baseParamValues`.
+/// Serialize-side wrapper for generator `baseParamValues` (plain `f32`).
 struct GenParamValuesSer<'a> {
     values: &'a [f32],
     gen_type: &'a GeneratorTypeId,
@@ -104,6 +110,25 @@ impl Serialize for GenParamValuesSer<'_> {
     }
 }
 
+/// Serialize-side wrapper for generator `paramValues` (`ParamSlot`).
+struct GenParamSlotValuesSer<'a> {
+    values: &'a [ParamSlot],
+    gen_type: &'a GeneratorTypeId,
+}
+
+impl Serialize for GenParamSlotValuesSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        crate::effects::serialize_param_values_for_generator_slots(
+            self.values,
+            self.gen_type,
+            serializer,
+        )
+    }
+}
+
 impl<'de> Deserialize<'de> for GeneratorParamState {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -115,7 +140,7 @@ impl<'de> Deserialize<'de> for GeneratorParamState {
             #[serde(default)]
             generator_type: GeneratorTypeId,
             #[serde(default)]
-            param_values: Option<crate::effects::FloatValuesWire>,
+            param_values: Option<crate::effects::ParamValuesWire>,
             #[serde(default)]
             base_param_values: Option<crate::effects::FloatValuesWire>,
             #[serde(default)]
@@ -171,14 +196,14 @@ impl GeneratorParamState {
                 .as_ref()
                 .is_some_and(|b| b.len() != self.param_values.len())
         {
-            self.base_param_values = Some(self.param_values.clone());
+            self.base_param_values = Some(self.param_values.iter().map(|s| s.value).collect());
         }
     }
 
     /// Indexed read for effective (modulated) param value.
     /// Unity GeneratorParamState.cs lines 43-48.
     pub fn get_param(&self, index: usize) -> f32 {
-        self.param_values.get(index).copied().unwrap_or(0.0)
+        self.param_values.get(index).map(|s| s.value).unwrap_or(0.0)
     }
 
     /// Write to effective (modulated) param value.
@@ -193,9 +218,9 @@ impl GeneratorParamState {
     pub fn set_param(&mut self, index: usize, value: f32) {
         use crate::generator_definition_registry;
         while self.param_values.len() <= index {
-            self.param_values.push(0.0);
+            self.param_values.push(ParamSlot::default());
         }
-        self.param_values[index] =
+        self.param_values[index].value =
             generator_definition_registry::clamp_param(&self.generator_type, index, value);
     }
 
@@ -222,7 +247,8 @@ impl GeneratorParamState {
         if self.param_values.len() < min_target {
             self.param_values.reserve(min_target - self.param_values.len());
             for i in self.param_values.len()..min_target {
-                self.param_values.push(def.param_defs[i].default_value);
+                self.param_values
+                    .push(ParamSlot::exposed(def.param_defs[i].default_value));
             }
         }
         if let Some(base) = &mut self.base_param_values
@@ -272,7 +298,7 @@ impl GeneratorParamState {
         }
         self.ensure_base_values();
         while self.param_values.len() <= index {
-            self.param_values.push(0.0);
+            self.param_values.push(ParamSlot::default());
         }
         if let Some(base) = &mut self.base_param_values {
             while base.len() <= index {
@@ -284,7 +310,7 @@ impl GeneratorParamState {
         if let Some(base) = &mut self.base_param_values {
             base[index] = clamped;
         }
-        self.param_values[index] = clamped;
+        self.param_values[index].value = clamped;
     }
 
     /// Find the driver for a given param id, or None.
@@ -352,7 +378,7 @@ impl GeneratorParamState {
                     continue;
                 };
                 if idx < self.param_values.len() && idx < base.len() {
-                    self.param_values[idx] = base[idx];
+                    self.param_values[idx].value = base[idx];
                 }
             }
         }
@@ -366,7 +392,7 @@ impl GeneratorParamState {
                     continue;
                 };
                 if idx < self.param_values.len() && idx < base.len() {
-                    self.param_values[idx] = base[idx];
+                    self.param_values[idx].value = base[idx];
                 }
             }
         }
@@ -394,8 +420,13 @@ impl GeneratorParamState {
         use crate::generator_definition_registry;
         if let Some(def) = generator_definition_registry::try_get(&gen_type) {
             self.generator_type = gen_type;
-            self.param_values = def.param_defs.iter().map(|pd| pd.default_value).collect();
-            self.base_param_values = Some(self.param_values.clone());
+            self.param_values = def
+                .param_defs
+                .iter()
+                .map(|pd| ParamSlot::exposed(pd.default_value))
+                .collect();
+            self.base_param_values =
+                Some(def.param_defs.iter().map(|pd| pd.default_value).collect());
         }
     }
 
@@ -411,7 +442,7 @@ impl GeneratorParamState {
         if let Some(base) = &self.base_param_values {
             base.clone()
         } else if !self.param_values.is_empty() {
-            self.param_values.clone()
+            self.param_values.iter().map(|s| s.value).collect()
         } else {
             Vec::new()
         }
@@ -443,7 +474,7 @@ impl GeneratorParamState {
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
         self.generator_type = gen_type;
-        self.param_values = params.clone();
+        self.param_values = params.iter().map(|v| ParamSlot::exposed(*v)).collect();
         self.base_param_values = Some(params);
         if let Some(d) = &mut self.drivers {
             d.clear();
@@ -567,7 +598,11 @@ mod tests {
 
         // Simulate a project saved when BLACK_HOLE had only 3 params.
         let mut state = GeneratorParamState {
-            param_values: vec![1.5, 2.5, 3.5],
+            param_values: vec![
+                ParamSlot::exposed(1.5),
+                ParamSlot::exposed(2.5),
+                ParamSlot::exposed(3.5),
+            ],
             base_param_values: Some(vec![1.5, 2.5, 3.5]),
             ..Default::default()
         };
@@ -576,15 +611,15 @@ mod tests {
         state.migrate_to_registry_length();
 
         assert_eq!(state.param_values.len(), target_count);
-        assert_eq!(state.param_values[0], 1.5);
-        assert_eq!(state.param_values[1], 2.5);
-        assert_eq!(state.param_values[2], 3.5);
+        assert_eq!(state.param_values[0].value, 1.5);
+        assert_eq!(state.param_values[1].value, 2.5);
+        assert_eq!(state.param_values[2].value, 3.5);
 
         // The new tail entries should match the registry defaults exactly.
         let def = generator_definition_registry::try_get(&gt).unwrap();
         for i in 3..target_count {
             assert_eq!(
-                state.param_values[i], def.param_defs[i].default_value,
+                state.param_values[i].value, def.param_defs[i].default_value,
                 "tail index {i} should be registry default"
             );
         }
@@ -608,7 +643,11 @@ mod tests {
         // Use values inside each param's clamp range:
         //   Speed 0..5, Cam Dist 0.1..50, Tilt 0..90.
         let mut state = GeneratorParamState {
-            param_values: vec![2.5, 8.0, 9.0],
+            param_values: vec![
+                ParamSlot::exposed(2.5),
+                ParamSlot::exposed(8.0),
+                ParamSlot::exposed(9.0),
+            ],
             base_param_values: Some(vec![2.5, 8.0, 9.0]),
             ..Default::default()
         };
@@ -618,9 +657,9 @@ mod tests {
         state.set_param_base(0, 2.5);
 
         assert_eq!(state.param_values.len(), target_count);
-        assert_eq!(state.param_values[0], 2.5);
-        assert_eq!(state.param_values[1], 8.0);
-        assert_eq!(state.param_values[2], 9.0);
+        assert_eq!(state.param_values[0].value, 2.5);
+        assert_eq!(state.param_values[1].value, 8.0);
+        assert_eq!(state.param_values[2].value, 9.0);
     }
 
     #[test]
@@ -642,14 +681,14 @@ mod tests {
 
         let mut state = GeneratorParamState {
             generator_type: unknown_type,
-            param_values: vec![0.0, 1.0], // two bundled slots
+            param_values: vec![ParamSlot::exposed(0.0), ParamSlot::exposed(1.0)], // two bundled slots
             base_param_values: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
 
         state.set_param_base(1, 0.75);
 
-        assert_eq!(state.param_values[1], 0.75, "write landed on bundled slot");
+        assert_eq!(state.param_values[1].value, 0.75, "write landed on bundled slot");
         assert_eq!(
             state.base_param_values.as_ref().unwrap()[1],
             0.75,
@@ -659,7 +698,7 @@ mod tests {
         // User-added tail slot — slot index past the original length.
         state.set_param_base(2, 0.42);
         assert_eq!(state.param_values.len(), 3, "param_values auto-extended");
-        assert_eq!(state.param_values[2], 0.42, "tail write landed");
+        assert_eq!(state.param_values[2].value, 0.42, "tail write landed");
         assert_eq!(
             state.base_param_values.as_ref().unwrap()[2],
             0.42,

@@ -385,7 +385,7 @@ impl GeneratorRenderer {
             {
                 param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
                 for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
-                    params[i] = *val;
+                    params[i] = val.value;
                 }
             }
 

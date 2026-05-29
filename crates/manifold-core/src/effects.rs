@@ -561,6 +561,56 @@ impl ParamValuesWire {
             }
         }
     }
+
+    /// Generator-registry counterpart to [`Self::into_positional`].
+    /// Produces `Vec<ParamSlot>` for `GeneratorParamState.paramValues`.
+    /// No user-binding tail parameter: generator user-added bindings
+    /// live in the graph's `preset_metadata` and, when present, push
+    /// `param_values.len()` past the registry count so the producer
+    /// emits the positional `Array` form, which round-trips through the
+    /// `Positional` arm here unchanged.
+    pub(crate) fn into_positional_for_generator(
+        self,
+        gen_type: &crate::GeneratorTypeId,
+    ) -> Vec<ParamSlot> {
+        match self {
+            ParamValuesWire::Positional(v) => v,
+            ParamValuesWire::Keyed(map) => {
+                let Some(def) = crate::generator_definition_registry::try_get(gen_type) else {
+                    eprintln!(
+                        "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
+                         generator type '{}' (Map keys: {:?}). In production this should never \
+                         fire — the renderer registers every shipping generator at startup.",
+                        map.len(),
+                        gen_type.as_str(),
+                        map.keys().collect::<Vec<_>>(),
+                    );
+                    return Vec::new();
+                };
+                let mut out = vec![ParamSlot::default(); def.param_count];
+                for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
+                    out[i] = ParamSlot::exposed(pd.default_value);
+                }
+                for (id, pv) in map {
+                    if let Some(&idx) = def.id_to_index.get(&id)
+                        && idx < out.len()
+                    {
+                        out[idx] = pv;
+                        continue;
+                    }
+                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
+                        def.legacy_param_aliases,
+                        &id,
+                    ) && let Some(&idx) = def.id_to_index.get(resolved)
+                        && idx < out.len()
+                    {
+                        out[idx] = pv;
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 /// Wire-format shape for plain-float param vectors:
@@ -709,6 +759,48 @@ where
         let mut seq = serializer.serialize_seq(Some(values.len()))?;
         for &v in values {
             seq.serialize_element(&v)?;
+        }
+        seq.end()
+    }
+}
+
+/// `Vec<ParamSlot>` counterpart to [`serialize_param_values_for_generator`]
+/// — emits each generator param slot as a `{value, exposed}` object keyed
+/// by the generator registry's stable param id. Mirrors the effect-side
+/// [`serialize_param_values`] but against the generator registry and with
+/// no user-binding-tail parameter (generator user-added bindings live in
+/// the graph's `preset_metadata` and ride the positional-array fallback
+/// when `values.len()` exceeds the registry's param count).
+pub(crate) fn serialize_param_values_for_generator_slots<S>(
+    values: &[ParamSlot],
+    gen_type: &crate::GeneratorTypeId,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::{SerializeMap, SerializeSeq};
+
+    let def = crate::generator_definition_registry::try_get(gen_type);
+    let can_emit_map = def.is_some_and(|d| {
+        values.len() <= d.param_ids.len()
+            && d.param_ids
+                .iter()
+                .take(values.len())
+                .all(|id| !id.is_empty())
+    });
+
+    if can_emit_map {
+        let def = def.expect("checked above");
+        let mut map = serializer.serialize_map(Some(values.len()))?;
+        for (i, pv) in values.iter().enumerate() {
+            map.serialize_entry(def.param_ids[i], pv)?;
+        }
+        map.end()
+    } else {
+        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        for pv in values {
+            seq.serialize_element(pv)?;
         }
         seq.end()
     }

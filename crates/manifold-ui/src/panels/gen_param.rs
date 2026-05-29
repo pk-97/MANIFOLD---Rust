@@ -861,7 +861,7 @@ impl GenParamPanel {
 
     // ── Sync methods ─────────────────────────────────────────────
 
-    pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
+    pub fn sync_values(&mut self, tree: &mut UITree, values: &[manifold_core::effects::ParamSlot]) {
         let copied_label = self
             .copied_flash
             .label_id()
@@ -869,7 +869,8 @@ impl GenParamPanel {
             .unwrap_or_default();
         self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
 
-        for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
+        for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
+            let val = slot.value;
             let info = &self.param_info[i];
 
             // Label dirty-check (slider rows only — toggle/trigger rows
@@ -1712,7 +1713,14 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         tree.clear_dirty();
-        panel.sync_values(&mut tree, &[5.0, 1.0, 2.5]);
+        panel.sync_values(
+            &mut tree,
+            &[
+                manifold_core::effects::ParamSlot::exposed(5.0),
+                manifold_core::effects::ParamSlot::exposed(1.0),
+                manifold_core::effects::ParamSlot::exposed(2.5),
+            ],
+        );
         assert!(tree.has_dirty());
     }
 

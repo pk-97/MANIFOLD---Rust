@@ -1818,12 +1818,12 @@ pub(super) fn dispatch_inspector(
                 let new_val = gp.get_param_base(slot);
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let layer_id = layer.layer_id.clone();
-                    let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
-                    let mut old_params = base.clone();
+                    let snap = gp.snapshot_params();
+                    let mut old_params = snap.clone();
                     if slot < old_params.len() {
                         old_params[slot] = old_val;
                     }
-                    let new_params = base.clone();
+                    let new_params = snap;
                     let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
@@ -1843,14 +1843,9 @@ pub(super) fn dispatch_inspector(
                 {
                     let old_val = gp.get_param_base(slot);
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
-                    let old_params = base.clone();
+                    let old_params = gp.snapshot_params();
                     gp.set_param_base(slot, new_val);
-                    let new_params = gp
-                        .base_param_values
-                        .as_ref()
-                        .unwrap_or(&gp.param_values)
-                        .clone();
+                    let new_params = gp.snapshot_params();
                     let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
@@ -1872,14 +1867,9 @@ pub(super) fn dispatch_inspector(
                 {
                     let old_val = gp.get_param_base(slot);
                     let new_val = old_val + 1.0;
-                    let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
-                    let old_params = base.clone();
+                    let old_params = gp.snapshot_params();
                     gp.set_param_base(slot, new_val);
-                    let new_params = gp
-                        .base_param_values
-                        .as_ref()
-                        .unwrap_or(&gp.param_values)
-                        .clone();
+                    let new_params = gp.snapshot_params();
                     let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
@@ -1898,14 +1888,9 @@ pub(super) fn dispatch_inspector(
                 {
                     let old = gp.get_param_base(slot);
                     if (old - *default_val).abs() > f32::EPSILON {
-                        let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
-                        let old_params = base.clone();
+                        let old_params = gp.snapshot_params();
                         gp.set_param_base(slot, *default_val);
-                        let new_params = gp
-                            .base_param_values
-                            .as_ref()
-                            .unwrap_or(&gp.param_values)
-                            .clone();
+                        let new_params = gp.snapshot_params();
                         let cmd =
                             ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
@@ -1941,7 +1926,7 @@ pub(super) fn dispatch_inspector(
                         }
                     } else {
                         let base_value = slot
-                            .and_then(|s| gp.param_values.get(s).copied())
+                            .and_then(|s| gp.param_values.get(s).map(|p| p.value))
                             .unwrap_or(0.0);
                         let driver = ParameterDriver {
                             param_id: param_id.clone(),

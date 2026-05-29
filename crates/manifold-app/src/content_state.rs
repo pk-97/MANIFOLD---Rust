@@ -211,7 +211,7 @@ impl ModulationSnapshot {
 
             if has_gen && let Some(gp) = layer.gen_params() {
                 let len = gp.param_values.len();
-                self.values.extend_from_slice(&gp.param_values);
+                self.values.extend(gp.param_values.iter().map(|p| p.value));
                 self.block_lens.push(len as u16);
             }
 
@@ -279,14 +279,20 @@ impl ModulationSnapshot {
                     block += 1;
                 }
 
-                // Generator params (still raw f32; generators not in scope).
+                // Generator params — write only `.value` per slot, mirroring
+                // the effect path; `.exposed` is host-state, not modulation.
                 if has_gen {
                     let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(gp) = layer.gen_params_mut()
                         && gp.param_values.len() == len
                     {
-                        gp.param_values
-                            .copy_from_slice(&self.values[cursor..cursor + len]);
+                        for (slot, &v) in gp
+                            .param_values
+                            .iter_mut()
+                            .zip(&self.values[cursor..cursor + len])
+                        {
+                            slot.value = v;
+                        }
                     }
                     cursor += len;
                     block += 1;

@@ -240,9 +240,9 @@ pub(super) fn dispatch_project(
                 if let Some(reg) = available.get(*gen_type_idx) {
                     let new_type = reg.id.clone();
                     if new_type != old_type {
-                        let old_params = layer
+                        let old_params: Vec<f32> = layer
                             .gen_params()
-                            .map(|gp| gp.param_values.clone())
+                            .map(|gp| gp.param_values.iter().map(|s| s.value).collect())
                             .unwrap_or_default();
                         let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
                         let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
