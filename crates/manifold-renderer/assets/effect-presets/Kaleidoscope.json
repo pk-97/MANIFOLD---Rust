@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Kaleidoscope",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Polar segment-mirror, decomposed: node.radial_fold_uv builds the folded sample UV, node.remap resamples the source there, node.mix crossfades. Replaces the legacy node.kaleidoscope bundle (bit-exact — the fold shader is a verbatim port).",
   "presetMetadata": {
     "id": "Kaleidoscope",
     "displayName": "Kaleidoscope",
@@ -51,7 +51,7 @@
         "defaultValue": 6.0,
         "target": {
           "kind": "handleNode",
-          "handle": "kaleidoscope",
+          "handle": "fold",
           "param": "segments"
         },
         "convert": {
@@ -78,37 +78,42 @@
     },
     {
       "id": 1,
-      "typeId": "node.kaleidoscope",
-      "handle": "kaleidoscope",
+      "typeId": "node.radial_fold_uv",
+      "handle": "fold",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "segments": {
-          "type": "Int",
-          "value": 6
-        }
+        "segments": { "type": "Float", "value": 6.0 },
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 }
       }
     },
     {
       "id": 2,
+      "typeId": "node.remap",
+      "handle": "remapped",
+      "params": {
+        "wrap": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.mix",
+      "handle": "kaleidoscope",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 4,
       "typeId": "system.final_output",
       "handle": "final_output"
     }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "uv_field" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
   ]
 }

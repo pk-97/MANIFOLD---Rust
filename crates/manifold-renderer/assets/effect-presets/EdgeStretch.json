@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "EdgeStretch",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Edge-stretch, decomposed: node.uv_strip_clamp builds the strip-clamped sample UV, node.remap resamples the source there, node.mix crossfades. Replaces the legacy node.edge_stretch bundle (bit-exact — the clamp shader is a verbatim port).",
   "presetMetadata": {
     "id": "EdgeStretch",
     "displayName": "Edge Stretch",
@@ -67,8 +67,8 @@
         "defaultValue": 0.5,
         "target": {
           "kind": "handleNode",
-          "handle": "edge_stretch",
-          "param": "source_width"
+          "handle": "strip",
+          "param": "width"
         },
         "convert": {
           "type": "Float"
@@ -80,7 +80,7 @@
         "defaultValue": 0.0,
         "target": {
           "kind": "handleNode",
-          "handle": "edge_stretch",
+          "handle": "strip",
           "param": "direction"
         },
         "convert": {
@@ -107,41 +107,41 @@
     },
     {
       "id": 1,
-      "typeId": "node.edge_stretch",
-      "handle": "edge_stretch",
+      "typeId": "node.uv_strip_clamp",
+      "handle": "strip",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "direction": {
-          "type": "Enum",
-          "value": 0
-        },
-        "source_width": {
-          "type": "Float",
-          "value": 0.5
-        }
+        "width": { "type": "Float", "value": 0.5 },
+        "direction": { "type": "Enum", "value": 0 }
       }
     },
     {
       "id": 2,
+      "typeId": "node.remap",
+      "handle": "remapped",
+      "params": {
+        "wrap": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.mix",
+      "handle": "edge_stretch",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 4,
       "typeId": "system.final_output",
       "handle": "final_output"
     }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "uv_field" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
   ]
 }
