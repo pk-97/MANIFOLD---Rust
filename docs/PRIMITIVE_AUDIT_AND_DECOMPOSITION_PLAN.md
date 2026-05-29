@@ -170,6 +170,23 @@ Cheapest-first: **Strobe** (`beat_gate` + `gain`), **Highlight Boost** (`thresho
 - **FluidSim3D** — parked; heavy mechanical 3D-parallel of the done 2D fluid atoms (`fluid_simulate_3d` + `fluid_gradient_curl_3d` + `fluid_seed_3d`).
 - **Tesseract** — reframed 2026-05-29: the channel system removed the wire-type ceiling (an n-D vertex is just `Channels[x,y,z,w,v: F32]`, no new Rust type). So the **square→cube→tesseract dimension-morph** (the "B" option) is now cheap — only `hypercube_vertices(d)` + `edges_from_hypercube(d)` (both closed-form) plus the *existing* `rotate_4d → project_4d → render_lines` (run the 4D pipeline with the 4th coord ramping from 0). A genuinely cool instrument feature, promoted from "tidy split." Only penteract+ (d≥5) needs the separate larger lift of generalized `rotate_nd` / `project_nd`.
 
+### Progress log
+
+**2026-05-29 (session, pre-compaction):**
+
+- **Phase 0 done** — `node.color_ramp` (two-stop gradient map) + `node.brightness` (RGB→weighted-gray) implemented (were no-op stubs). Brightness fixes MetallicGlass's `luma_for_height`/`luma_for_sobel` (changes its look → on the visual-check queue). `threshold` + `mip_chain` stayed deferred to Phase 3 (load-bearing for the Bloom/Halation composite builders).
+- **Phase 1 done** — `node.remap` (keystone), `node.hue_saturation`, `node.posterize` built (modeled on `gain.rs`; no per-atom gpu_tests by design).
+- **Phase 2 in progress — 3 of 5 UV-warps decomposed.** Established pattern: **coordinate-field helper → `node.remap`(Clamp) → `node.mix`(Lerp, amount)**. New coordinate helpers (verbatim ports of the legacy fold math): `node.radial_fold_uv` (kaleidoscope), `node.uv_strip_clamp` (edge stretch).
+  - **QuadMirror** — `centered_uv → abs_texture → scale_offset_texture(-2,+1) → remap → mix`. Documented delta: clean Lerp blend vs the legacy additive-mid quirk.
+  - **Kaleidoscope** — `radial_fold_uv → remap → mix`. **Bit-exact.**
+  - **Edge Stretch** — `uv_strip_clamp → remap → mix`. **Bit-exact.** (EdgeStretchByColor still uses the `node.edge_stretch` bundle.)
+- **Remaining Phase 2 (the hard tail):**
+  - **Chromatic Aberration** — dual-tap: R sampled at `+offset`, B at `−offset`, G at center, recombined per-channel. Shape: a radial/linear offset helper (feeding both taps from one bound `offset`) → 2× `remap` → channel recombine (`channel_mix` swizzle + `pack_channels`, or a small recombine helper) → `mix`. Radial dir = `normalize(delta) * mix(smoothstep(0,0.707,dist), 1, 1-falloff)`; linear dir = `(cos(angle°), sin(angle°))`.
+  - **Voronoi Prism** — per-cell hash-offset remap + beat-synced per-cell pop-in (temporal). `voronoi_2d` (cell hash on A) → per-cell offset field → `remap` → beat-fade.
+- **Verification policy (Peter, 2026-05-29):** these are temporal/visual effects — **no GPU parity tests**, they add nothing here. `check-presets` (structural) + Peter's visual inspection is the verification. See [[feedback_visual_effects_skip_gpu_parity]].
+- **All legacy bundles left registered** — deletion is the deferred irreversible step, batched for Peter's one visual pass. **Visual-check queue:** MetallicGlass, QuadMirror, Kaleidoscope, Edge Stretch (+ Chromatic, Voronoi Prism when done).
+- **Next:** finish Chromatic + Voronoi Prism (Phase 2), then Phase 3 (composites + Plasma; `threshold`/`mip_chain` handled in the Bloom/Halation rework — implement `threshold`, delete the `mip_chain` stub, Bloom = `downsample → gaussian_blur → mix` pyramid).
+
 ---
 
 ## 2b. Tranche order (original cheapest-first analysis — superseded by the phases above for sequencing)
