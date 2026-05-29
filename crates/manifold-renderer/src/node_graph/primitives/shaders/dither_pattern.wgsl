@@ -1,20 +1,24 @@
-// node.dither — pixel-exact replacement for legacy
-// `effects/shaders/fx_dither.wgsl`. 6 dithering algorithms with
-// luminance-preserving quantization. Bindings, math, and dispatch
-// shape preserved verbatim.
+// node.dither_pattern — ordered-dither / halftone threshold pattern generator.
+//
+// Emits the per-pixel dither threshold T in [0,1] (R=G=B=T, A=1) for one of six
+// algorithms (Bayer 8x8, Halftone, Lines, CrossHatch, Blue Noise, Diamond).
+// Screen-space: pixel_pos = id + 0.5, matching the legacy fused dither exactly.
+// Pair with node.dither (which consumes this pattern) for the full effect, or
+// feed any halftone / threshold-driven consumer.
+//
+// The six threshold functions are verbatim from the legacy fx_dither.wgsl.
 
 struct Uniforms {
-    amount: f32,
-    algorithm: u32,
-    resolution_x: f32,
-    resolution_y: f32,
+    algorithm: u32, // 0=Bayer,1=Halftone,2=Lines,3=CrossHatch,4=Noise,5=Diamond
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var source_tex: texture_2d<f32>;
-@group(0) @binding(2) var tex_sampler: sampler;
-@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;
 
+// Bayer 8x8 ordered dither — explicit lookup table.
 fn bayer_threshold(pixel_pos: vec2<f32>) -> f32 {
     let px = i32(abs(pixel_pos.x)) % 8;
     let py = i32(abs(pixel_pos.y)) % 8;
@@ -61,48 +65,26 @@ fn diamond_threshold(pixel_pos: vec2<f32>) -> f32 {
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(source_tex);
+    let dims = textureDimensions(output_tex);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
-    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let pixel_pos = vec2<f32>(id.xy) + 0.5;
 
-    let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
-    let original = src.rgb;
-
-    let pixel_pos = uv * vec2<f32>(uniforms.resolution_x, uniforms.resolution_y);
-
-    let lum = dot(original, vec3<f32>(0.2126, 0.7152, 0.0722));
-
-    let levels = mix(8.0, 2.0, uniforms.amount);
-
-    var threshold: f32;
+    var t: f32;
     if uniforms.algorithm == 0u {
-        threshold = bayer_threshold(pixel_pos);
+        t = bayer_threshold(pixel_pos);
     } else if uniforms.algorithm == 1u {
-        threshold = halftone_threshold(pixel_pos);
+        t = halftone_threshold(pixel_pos);
     } else if uniforms.algorithm == 2u {
-        threshold = lines_threshold(pixel_pos);
+        t = lines_threshold(pixel_pos);
     } else if uniforms.algorithm == 3u {
-        threshold = crosshatch_threshold(pixel_pos);
+        t = crosshatch_threshold(pixel_pos);
     } else if uniforms.algorithm == 4u {
-        threshold = noise_threshold(pixel_pos);
+        t = noise_threshold(pixel_pos);
     } else {
-        threshold = diamond_threshold(pixel_pos);
+        t = diamond_threshold(pixel_pos);
     }
 
-    var dithered = (lum + (threshold - 0.5) / levels) * levels;
-    dithered = floor(dithered + 0.5) / levels;
-    dithered = clamp(dithered, 0.0, 1.0);
-
-    var scale: f32;
-    if lum > 0.001 {
-        scale = dithered / lum;
-    } else {
-        scale = dithered;
-    }
-    let dithered_color = original * scale;
-
-    let result = mix(original, dithered_color, uniforms.amount);
-    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, src.a));
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(t, t, t, 1.0));
 }

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Dither",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Dither, decomposed: node.dither_pattern generates the per-pixel ordered-dither / halftone threshold (the six classic algorithms), and node.dither does the luminance-preserving dither-biased quantize + hue rescale + crossfade reading that pattern. Replaces the fused node.dither kernel — bit-exact (the quantize math is verbatim; only the threshold source moved to an atom). The pattern generator is now reusable: feed it to other halftone consumers, or feed node.dither a BYO threshold texture.",
   "presetMetadata": {
     "id": "Dither",
     "displayName": "Dither",
@@ -44,79 +44,45 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "dither",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "dither", "param": "amount" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "pattern",
         "label": "Pattern",
         "defaultValue": 0.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "dither",
-          "param": "algorithm"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
+        "target": { "kind": "handleNode", "handle": "pattern", "param": "algorithm" },
+        "convert": { "type": "EnumRound" }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    },
+    "skipMode": { "kind": "onZero", "paramId": "amount" },
     "paramAliases": [
-      {
-        "old": "algo",
-        "new": "pattern"
-      }
+      { "old": "algo", "new": "pattern" }
     ]
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
-      "typeId": "node.dither",
-      "handle": "dither",
+      "typeId": "node.dither_pattern",
+      "handle": "pattern",
       "params": {
-        "algorithm": {
-          "type": "Enum",
-          "value": 0
-        },
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        }
+        "algorithm": { "type": "Enum", "value": 0 }
       }
     },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
+      "typeId": "node.dither",
+      "handle": "dither",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 }
+      }
+    },
+    { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "pattern" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
   ]
 }
