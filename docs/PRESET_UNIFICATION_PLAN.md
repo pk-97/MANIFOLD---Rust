@@ -1,6 +1,6 @@
 # Preset System Unification Plan
 
-**Status:** DRAFT — pending approval before phase 0
+**Status:** IN PROGRESS (started 2026-05-29). Done: Phase 0 (baseline), 1a (storage), 4-core (shared apply loop), 5c (OSC), 5a (modulation-core dedup), 7 (UI panel collapse). Deferred (gated on the Phase 1b effect-fold-in, which is itself deferred per the predecessor doc): 5b (Ableton dispatch), 6 (editing commands), 4-struct (`PresetRuntime` wrapper). Skipped: 2 (registry collapse — superseded by disk-load rework). The behavioral fork is closed everywhere user-visible; what remains is internal consolidation gated on a deliberately-parked storage change. See memory `project_preset_unification` for the running record.
 **Owner:** Peter (with Claude as implementation collaborator)
 **Scope:** Effect + generator infrastructure unification across `manifold-core`, `manifold-renderer`, `manifold-editing`, `manifold-playback`, `manifold-ui`, `manifold-app`, `manifold-io`
 **Predecessors:** `docs/EFFECT_RUNTIME_UNIFICATION.md` (runtime layer, complete), `docs/BINDINGS_UNIFICATION_PLAN.md` (bindings layer, complete), `docs/EFFECT_GENERATOR_CARD_UNIFICATION.md` (inspector-card UI, partial)
@@ -484,38 +484,24 @@ The original single-list design follows for reference:
 
 ---
 
-### Phase 7 — UI panel collapse (`manifold-ui` + `manifold-app/ui_bridge`)
+### Phase 7 — UI panel collapse (`manifold-ui` + `manifold-app/ui_bridge`) `[done]`
 
 **Goal:** One `ParamCardPanel`, one config struct, one info struct, one sync API.
 
-**Sub-phase 7a — `ParamCardConfig` + `ParamInfo`.**
+**What landed** (commits 9cf784c1 / f4da2ceb / 25e28221 / 9fd99b3b / this 7c commit):
 
-- Merge `EffectCardConfig` + `GenParamConfig` into `ParamCardConfig` with feature flags (`show_enabled_toggle: bool`, `show_string_params: bool`, etc.).
-- Merge `EffectParamInfo` + `GenParamInfo` into `ParamInfo`.
-- `state_sync.rs`: `configure_layer_effects` + `configure_gen_params` collapse to `configure_param_cards(&[&dyn GraphHost])`.
+- **7a — data contract.** `ParamCardConfig` / `ParamInfo` / `ParamCardStringInfo` / `ParamCardKind` in new `panels/param_card.rs`. Approach taken: a `kind: ParamCardKind{Effect,Generator}` discriminator plus a superset of optional/kind-defaulted fields, NOT the `show_*` feature-flag bools the plan sketched — the kind tag carries the few real differences (effect badges/identity; generator `string_params`/`is_toggle`/`is_trigger`) and readers branch on it.
+- **7b-row + 7b-int — shared per-param core.** The ~210-line per-param row render (slider + trim/target/range + D/E + driver/envelope/Ableton drawers) extracted to `build_param_row`, and the per-param click dispatch to `match_param_row_click` → `RowClick`, both in `param_slider_shared.rs`. This was the bulk of the duplicated LOC.
+- **7b-struct — one `ParamCardPanel`.** Merged the two ~1700-line near-mirror panels into one kind-tagged struct (`effect_card.rs` + `gen_param.rs` deleted). `handle_drag` / `handle_drag_end` deduped into single methods branching on `kind` only at the ~6 `PanelAction` emission points (bodies were byte-identical). `build` / `sync_values` / `handle_click` / `handle_pointer_down` / `handle_right_click` stay kind-branched into private `_effect` / `_generator` methods — the shells (effect: drag-handle + ABL/ENV/DRV/MOD badges + ON/OFF toggle + hierarchical parenting; generator: Change button + toggle/trigger/string rows + flat parenting) and effect's proximity-zone trim/target hit-testing genuinely diverge. `EffectCardState` + `GenParamState` → `ParamCardState`. Sync API: `sync_values(tree, &[ParamSlot])` is canonical for both. 13 panel tests ported.
+- **7c — inspector consolidation (narrowed).** The plan envisioned the generator card joining the unified scrollable effect-card *list* with shared routing. **That turned out to be the wrong move and was deliberately NOT done:** the gen card is a single optional that carries no `EffectId` and lives outside the effect selection + drag-reorder model, so folding it into the effect `Vec` would be a correctness regression, not cleanup. The struct merge already delivered "one widget code path." The genuine 7c consolidation was just the mechanical dedup of the three near-identical card-construction sites (`build_cards` helper); the gen card stays a distinct render/route target by design. `is_*_ableton_mapped` / `handle_*` likewise stay per-target — they dispatch to genuinely different hosts.
 
-**Sub-phase 7b — `ParamCardPanel`.**
+**Files touched:** `manifold-ui/src/panels/{param_card.rs (new, ~2840 lines), inspector.rs, param_slider_shared.rs, mod.rs, lib.rs}`; `effect_card.rs` + `gen_param.rs` deleted. `state_sync.rs` was retyped in 7a (it builds `ParamCardConfig` directly; no `&dyn GraphHost` collapse — that depends on the deferred 1b fold-in).
 
-- The two panel implementations are near-identical. Diff them carefully; pick the more correct/cleaner one as the base; port the unique behaviors from the other.
-- Sync API: `sync_values(tree, &[ParamSlot])` is canonical; generator-side now natively reads `ParamSlot` from phase 1.
-- String-params section renders conditionally on `config.string_params.is_empty()`.
+**Verification:** 242 manifold-ui lib tests pass; manifold-app type-checks; clippy clean on both crates. Manual Liveschool smoke pass (drag sliders both kinds, select/reorder cards, save+reload) — done, basic.
 
-**Sub-phase 7c — Inspector consolidation.**
+**Divergences from the original plan, for the record:** (a) kind-tag over feature-flag bools; (b) the gen card is NOT folded into the effect list (domain-distinct); (c) the `&dyn GraphHost`-based `configure_param_cards` collapse is gated on 1b and not done.
 
-- `Inspector.gen_params: Option<GenParamPanel>` → part of the unified card list.
-- Layer's generator card appears in the same scrollable list as its effects, distinguished by visual treatment if desired (kind tag), but using the same widget code.
-- All inspector methods (`is_*_ableton_mapped`, `handle_*`, etc.) collapse to one path.
-
-**Files touched:** `manifold-ui/src/panels/{effect_card.rs, gen_param.rs, inspector.rs, param_slider_shared.rs}`, `manifold-app/src/ui_bridge/state_sync.rs`.
-
-**Verification gates:** all five, plus a full UI smoke test: open Liveschool, click into every panel, drag sliders on each kind, drag/drop card reorder, undo/redo, save + reload.
-
-**Risk areas:**
-- Drag handle behavior (`handle_pointer_down`, `handle_drag`, `handle_drag_end`). Subtle interaction code. Diff line-by-line.
-- Selection model. The inspector has effect-card-selection state; generator cards must integrate cleanly.
-- Visual identity. Pixel-diff the inspector against pre-phase screenshots for sanity.
-
-**Commit shape:** three commits (7a, 7b, 7c).
+**Commit shape:** 7a / 7b-row / 7b-int / 7b-struct / 7c (five commits, not the planned three — de-risked into shippable steps).
 
 ---
 

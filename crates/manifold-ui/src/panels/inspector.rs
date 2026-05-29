@@ -235,21 +235,11 @@ impl InspectorCompositePanel {
     }
 
     pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
-        self.master_effects.clear();
-        for cfg in configs {
-            let mut card = ParamCardPanel::new();
-            card.configure(cfg);
-            self.master_effects.push(card);
-        }
+        self.master_effects = Self::build_cards(configs);
     }
 
     pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig]) {
-        self.layer_effects.clear();
-        for cfg in configs {
-            let mut card = ParamCardPanel::new();
-            card.configure(cfg);
-            self.layer_effects.push(card);
-        }
+        self.layer_effects = Self::build_cards(configs);
     }
 
     pub fn configure_gen_params(
@@ -257,14 +247,30 @@ impl InspectorCompositePanel {
         config: Option<&ParamCardConfig>,
         layer_id: Option<LayerId>,
     ) {
-        if let Some(cfg) = config {
+        // The generator card is a single optional, distinct from the effect
+        // lists (it carries no EffectId and is outside the selection +
+        // drag-reorder model), so it isn't built through `build_cards`.
+        // `set_layer_id` is applied before `configure` per its contract.
+        self.gen_params = config.map(|cfg| {
             let mut panel = ParamCardPanel::new();
             panel.set_layer_id(layer_id);
             panel.configure(cfg);
-            self.gen_params = Some(panel);
-        } else {
-            self.gen_params = None;
-        }
+            panel
+        });
+    }
+
+    /// Build a fresh effect-card panel per config, in order. Shared by the
+    /// master + layer effect lists (the only structural difference between
+    /// them is which `Vec` the result lands in).
+    fn build_cards(configs: &[ParamCardConfig]) -> Vec<ParamCardPanel> {
+        configs
+            .iter()
+            .map(|cfg| {
+                let mut card = ParamCardPanel::new();
+                card.configure(cfg);
+                card
+            })
+            .collect()
     }
 
     // ── Accessors ─────────────────────────────────────────────────

@@ -1,5 +1,16 @@
 # Effect Card + Generator Card unification — audit
 
+> **Superseded (2026-05-29) for the panel-unification part.** The inspector-card
+> UI collapse this doc designed shipped under `docs/PRESET_UNIFICATION_PLAN.md`
+> Phase 7: `EffectCardPanel` + `GenParamPanel` are now one kind-tagged
+> `ParamCardPanel` in `manifold-ui/src/panels/param_card.rs`. The **storage
+> fork** this doc's §1–§3 hinges on (effect `user_param_bindings` on the
+> instance vs generators having none) is NOT yet closed — that is the
+> deliberately-deferred "Phase 1b effect-fold-in," and the generator-side
+> user-tier binding + tier-aware lookup described below remains unbuilt. Read
+> the sections below as the still-open storage/binding design; treat the panel
+> design as historical.
+
 Status: **Phase 1 only.** Phase 2 (the fix) and Phase 3 (panel unification) have not run yet; this doc is the prerequisite for both.
 
 Context: commit `a7fd4698` unified the **graph-editor side** of exposure (one `exposed_params` set per graph node, one `PanelAction::ToggleNodeParamExpose` for both targets). The **outer-card side** is still forked: clicking the Animate checkbox on a Wireframe generator's `node.render_lines` flips the graph bit but produces no slider. Step 8 of the unification plan (per a7fd4698's commit body) is the work that closes this gap; this doc is the design for that step.
