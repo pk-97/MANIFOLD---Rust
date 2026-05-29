@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "VoronoiPrism",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Voronoi Prism, decomposed: a beat-reseeded per-cell temporal composite built from atoms. node.voronoi_cell_id partitions into cells and emits each pixel's cell coordinate; node.math(Floor) on generator_input.beat gives the integer beat used as a re-hash seed; two node.hash_field_by_seed re-roll a per-cell UV offset (hash2) and per-cell visibility (hash1) each beat. The offset (scaled to ±0.2) is added to a node.uv_strip_clamp content-window UV and node.remap samples the source there. node.beat_ramp fades cells in over the first 15% of each beat; node.smoothstep_texture thresholds ~60% of cells visible; node.gain multiplies visibility by the pop-in; node.mix(Multiply) darkens the prism by visibility (dark cells go black) and node.mix(Lerp, amount) crossfades over the source. Replaces the fused node.voronoi_prism. Three new reusable atoms (voronoi_cell_id, hash_field_by_seed, beat_ramp). It is a visual reconstruction, not a bit-port (the legacy uses the same hash2 partition + constants, transcribed verbatim). Documented deltas (visual effect, verified by eye): the post-offset UV is clamped to [0,1] by remap rather than re-clamped to the content strip, so cell edges may pull in a little out-of-strip source.",
   "presetMetadata": {
     "id": "VoronoiPrism",
     "displayName": "Voronoi Prism",
@@ -47,40 +47,22 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "voronoi",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "composite", "param": "amount" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "cells",
         "label": "Cells",
         "defaultValue": 16.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "voronoi",
-          "param": "cell_count"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "cells", "param": "cell_count" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "source_width",
         "label": "Cell Size",
         "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "voronoi",
-          "param": "source_width"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "content_window", "param": "width" },
+        "convert": { "type": "Float" }
       }
     ],
     "skipMode": {
@@ -89,63 +71,135 @@
     }
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
-    {
-      "id": 1,
-      "typeId": "node.voronoi_prism",
-      "handle": "voronoi",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "beat": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "cell_count": {
-          "type": "Int",
-          "value": 16
-        },
-        "source_width": {
-          "type": "Float",
-          "value": 0.5
-        }
-      }
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 1, "typeId": "system.generator_input", "handle": "input" },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
+      "typeId": "node.math",
+      "handle": "beat_floor",
+      "params": { "op": { "type": "Enum", "value": 10 } }
     },
     {
       "id": 3,
-      "typeId": "system.generator_input",
-      "handle": "input"
-    }
+      "typeId": "node.voronoi_cell_id",
+      "handle": "cells",
+      "params": { "cell_count": { "type": "Int", "value": 16 } }
+    },
+    {
+      "id": 4,
+      "typeId": "node.hash_field_by_seed",
+      "handle": "offset_hash",
+      "params": {
+        "seed_x": { "type": "Float", "value": 1.73 },
+        "seed_y": { "type": "Float", "value": 2.91 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_texture",
+      "handle": "offset",
+      "params": {
+        "scale": { "type": "Float", "value": 0.4 },
+        "offset": { "type": "Float", "value": -0.2 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.uv_strip_clamp",
+      "handle": "content_window",
+      "params": {
+        "width": { "type": "Float", "value": 0.5 },
+        "direction": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.mix",
+      "handle": "prism_uv",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 2 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.remap",
+      "handle": "prism",
+      "params": { "wrap": { "type": "Enum", "value": 0 } }
+    },
+    {
+      "id": 9,
+      "typeId": "node.hash_field_by_seed",
+      "handle": "vis_hash",
+      "params": {
+        "seed_x": { "type": "Float", "value": 0.17 },
+        "seed_y": { "type": "Float", "value": 0.31 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.smoothstep_texture",
+      "handle": "active",
+      "params": {
+        "low": { "type": "Float", "value": 0.399 },
+        "high": { "type": "Float", "value": 0.401 }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.beat_ramp",
+      "handle": "pop_ramp",
+      "params": {
+        "rate": { "type": "Float", "value": 1.0 },
+        "attack": { "type": "Float", "value": 0.15 }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.gain",
+      "handle": "visibility",
+      "params": { "gain": { "type": "Float", "value": 1.0 } }
+    },
+    {
+      "id": 13,
+      "typeId": "node.mix",
+      "handle": "prism_visible",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 4 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.mix",
+      "handle": "composite",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    { "id": 15, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "beat",
-      "toNode": 1,
-      "toPort": "beat"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 1, "fromPort": "beat", "toNode": 2, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "field" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "seed" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "b" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 8, "toPort": "source" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "uv_field" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 9, "toPort": "field" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 9, "toPort": "seed" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "gain" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 13, "toPort": "a" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "b" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 14, "toPort": "a" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "b" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" }
   ]
 }
