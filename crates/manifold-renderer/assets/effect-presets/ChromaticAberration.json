@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ChromaticAberration",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "RGB channel separation, decomposed: node.radial_offset_field builds the radial/linear direction field, node.math scales the UV-space `offset` into a (negated) pixel displacement, node.chromatic_displace does the 3-tap RGB recombine (R outward, G center, B inward), node.mix crossfades by `amount`. Replaces the fused node.chromatic_aberration kernel. Visual delta vs legacy: chromatic_displace divides by dims so the split is isotropic in pixels (round halo) where the legacy added a raw UV offset (anisotropic / elliptical). Same controls, same look family; verified by eye.",
   "presetMetadata": {
     "id": "ChromaticAberration",
     "displayName": "Chromatic Aberration",
@@ -88,8 +88,8 @@
         "defaultValue": 0.01,
         "target": {
           "kind": "handleNode",
-          "handle": "chromatic",
-          "param": "offset"
+          "handle": "offset_scale",
+          "param": "a"
         },
         "convert": {
           "type": "Float"
@@ -101,7 +101,7 @@
         "defaultValue": 0.0,
         "target": {
           "kind": "handleNode",
-          "handle": "chromatic",
+          "handle": "field",
           "param": "mode"
         },
         "convert": {
@@ -114,7 +114,7 @@
         "defaultValue": 0.0,
         "target": {
           "kind": "handleNode",
-          "handle": "chromatic",
+          "handle": "field",
           "param": "angle"
         },
         "convert": {
@@ -127,7 +127,7 @@
         "defaultValue": 0.5,
         "target": {
           "kind": "handleNode",
-          "handle": "chromatic",
+          "handle": "field",
           "param": "falloff"
         },
         "convert": {
@@ -148,49 +148,53 @@
     },
     {
       "id": 1,
-      "typeId": "node.chromatic_aberration",
-      "handle": "chromatic",
+      "typeId": "node.radial_offset_field",
+      "handle": "field",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "angle": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "falloff": {
-          "type": "Float",
-          "value": 0.5
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 0
-        },
-        "offset": {
-          "type": "Float",
-          "value": 0.01
-        }
+        "mode": { "type": "Enum", "value": 0 },
+        "angle": { "type": "Float", "value": 0.0 },
+        "falloff": { "type": "Float", "value": 0.5 }
       }
     },
     {
       "id": 2,
+      "typeId": "node.math",
+      "handle": "offset_scale",
+      "params": {
+        "a": { "type": "Float", "value": 0.01 },
+        "b": { "type": "Float", "value": -1000.0 },
+        "op": { "type": "Enum", "value": 2 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.chromatic_displace",
+      "handle": "split",
+      "params": {
+        "amount": { "type": "Float", "value": -10.0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.mix",
+      "handle": "chromatic",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 5,
       "typeId": "system.final_output",
       "handle": "final_output"
     }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "velocity" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "amount" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
   ]
 }
