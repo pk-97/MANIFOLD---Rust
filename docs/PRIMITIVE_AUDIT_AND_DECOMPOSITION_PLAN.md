@@ -131,7 +131,48 @@ Because that atom is missing, an entire family of UV-warp effects is each shippe
 
 ---
 
-## 2. Tranche order
+## 2. Plan of attack (active — established 2026-05-29)
+
+This phase plan is the **authoritative sequencing**. It supersedes the cheapest-first "Tranche order" below, which predates three findings: the `remap` keystone, the registered no-op stubs, and Plasma's decoupling from the (now-shelved) graph compiler. The tranches are retained beneath for their per-bundle detail and rationale; read the phases for *order*, the tranches for *how*.
+
+The shape: **foundational atoms first (Phases 0–1) gate the effect waves (Phases 2–3).** The atoms that close the standard-library gaps (vs TouchDesigner / Blender / Unreal) turn out to be the same atoms the composite-effect decompositions need — `remap`, HSV, `color_ramp`, `threshold`, posterize. Build those, and the gaps close *and* the effects unblock.
+
+### Phase 0 — Stub sweep (cleanup; no `remap` dependency)
+
+Four atoms are registered + pickable in the palette but are no-op stubs (empty `evaluate`) — an authoring hazard (§1.5). Clear them:
+- **Delete** `node.mip_chain` (Peter 2026-05-29: downsample→blur graphs are the right pattern; mip chains give no benefit).
+- **Fix** the MetallicGlass `node.brightness` ×2 — investigate what they feed, then implement `brightness` (RGB→weighted-gray) or remove the dead nodes.
+- **Implement `node.threshold` and `node.color_ramp`** — two birds: they're stubs *and* standard-library atoms. `threshold` feeds Bloom + Highlight Boost; `color_ramp` feeds Color Grade + Infrared.
+
+(Wireframe Depth is *not* in Phase 0 — a separate agent owns it.)
+
+### Phase 1 — Foundational new atoms (unblock families)
+
+Build with `gpu_tests` parity, each its own commit. These are the remaining standard-library gaps:
+- **`remap`** — the keystone (§1.6). Sample input at a UV-field's RG (TD Remap TOP). Unblocks the entire UV-warp family. Resolve the single-atom-vs-3-tap-variant design in the §2.5 audit first.
+- **HSV / hue-saturation** — RGB↔HSV adjust (TD HSV Adjust / Blender Hue-Sat). Feeds Color Grade.
+- **posterize / quantize** — standalone (currently bundled in `dither_pattern`). Feeds Dither.
+
+### Phase 2 — `remap`-gated UV-warp family (mechanical batch after Phase 1)
+
+All the same shape `coordinate-math → remap → blend`: **Kaleidoscope, Quad Mirror, Edge Stretch, Chromatic Aberration, Voronoi Prism.** Finishes Tranche 7's `quad_mirror` and clears the UV-warp half of Tranche 8.
+
+### Phase 3 — Composite effects (atoms now exist)
+
+Cheapest-first: **Strobe** (`beat_gate` + `gain`), **Highlight Boost** (`threshold` + `gain`), **Infrared** (`luminance` + `color_ramp`/`lut1d` + `mix`), **Bloom** (absorb Halation; `downsample → gaussian_blur → mix` pyramid + `threshold`), **Watercolor** (`flow_field_noise` + `uv_displace_by_flow`), **Dither** (posterize + pattern-gen + `mix`), **Color Grade** (HSV + `color_ramp` + `channel_mix`), **Glitch** (block-displace via `remap` + new scanline atom). **Plus Plasma** — now lives here, not deferred: 6 sin-variants → atoms muxed on `pattern`, Noise + Fractal → a couple of bespoke `wgsl_compute` nodes.
+
+### Phase 4 — Generators (do-able now)
+
+**DigitalPlants** (geometry → `render_instanced_3d_mesh`; styling stays `wgsl_compute`; the `cylinder/torus_wrap_field → wrap_field` unification rides along). **NestedCubes** — Peter-driven *rework*, not a mechanical decomposition; scope/timing his call.
+
+### Phase 5 — Deferred / feature work
+
+- **FluidSim3D** — parked; heavy mechanical 3D-parallel of the done 2D fluid atoms (`fluid_simulate_3d` + `fluid_gradient_curl_3d` + `fluid_seed_3d`).
+- **Tesseract** — reframed 2026-05-29: the channel system removed the wire-type ceiling (an n-D vertex is just `Channels[x,y,z,w,v: F32]`, no new Rust type). So the **square→cube→tesseract dimension-morph** (the "B" option) is now cheap — only `hypercube_vertices(d)` + `edges_from_hypercube(d)` (both closed-form) plus the *existing* `rotate_4d → project_4d → render_lines` (run the 4D pipeline with the 4th coord ramping from 0). A genuinely cool instrument feature, promoted from "tidy split." Only penteract+ (d≥5) needs the separate larger lift of generalized `rotate_nd` / `project_nd`.
+
+---
+
+## 2b. Tranche order (original cheapest-first analysis — superseded by the phases above for sequencing)
 
 The tranches are sequenced by parity-test difficulty and atom-activation payoff, cheapest first.
 
