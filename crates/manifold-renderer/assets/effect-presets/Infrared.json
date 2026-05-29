@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Infrared",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Thermal-vision palette mapping, decomposed: ten node.gradient_ramp atoms bake the ten palettes as gradient LUTs, a dynamic node.mux_texture (num_inputs=10) selects the active one from the `palette` knob, and node.color_lut samples it by BT.601 luminance (with contrast) and crossfades against the source. Replaces the fused node.infrared kernel. Nine palettes are bit-exact (the legacy bake IS a piecewise-linear gradient with last-segment extrapolation over luma [0,2], reproduced by gradient_ramp domain=2). Rainbow is procedural in the legacy (a fract triangle-wave); here it's a clean single-cycle hue ramp (domain=1) — visually a rainbow, not the legacy double-cycle.",
   "presetMetadata": {
     "id": "Infrared",
     "displayName": "Infrared",
@@ -59,90 +59,196 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "infrared",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "infrared", "param": "amount" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "palette",
         "label": "Palette",
         "defaultValue": 0.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "infrared",
-          "param": "palette"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
+        "target": { "kind": "handleNode", "handle": "palette_mux", "param": "selector" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "contrast",
         "label": "Contrast",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "infrared",
-          "param": "contrast"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "infrared", "param": "contrast" },
+        "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "onZero",
-      "paramId": "amount"
-    }
+    "skipMode": { "kind": "onZero", "paramId": "amount" }
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
-      "typeId": "node.infrared",
-      "handle": "infrared",
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_white_hot",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "contrast": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "palette": {
-          "type": "Enum",
-          "value": 0
-        }
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [[0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]] }
       }
     },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
-  ],
-  "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_black_hot",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [[0.0, 1.0, 1.0, 1.0], [1.0, 0.0, 0.0, 0.0]] }
+      }
     },
     {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+      "id": 3,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_green_nv",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [[0.0, 0.0, 0.0, 0.0], [1.0, 0.15, 1.0, 0.1]] }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_iron_bow",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 0.0, 0.0, 0.0],
+          [0.2, 0.15, 0.0, 0.3],
+          [0.4, 0.7, 0.05, 0.1],
+          [0.6, 0.95, 0.4, 0.0],
+          [0.8, 1.0, 0.85, 0.2],
+          [1.0, 1.0, 1.0, 0.9]
+        ] }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_rainbow",
+      "params": {
+        "domain": { "type": "Float", "value": 1.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 1.0, 0.0, 0.0],
+          [0.1667, 1.0, 1.0, 0.0],
+          [0.3333, 0.0, 1.0, 0.0],
+          [0.5, 0.0, 1.0, 1.0],
+          [0.6667, 0.0, 0.0, 1.0],
+          [0.8333, 1.0, 0.0, 1.0],
+          [1.0, 1.0, 0.0, 0.0]
+        ] }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_lava",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 0.0, 0.0, 0.0],
+          [0.25, 0.4, 0.02, 0.0],
+          [0.5, 0.85, 0.15, 0.0],
+          [0.75, 1.0, 0.55, 0.0],
+          [1.0, 1.0, 0.9, 0.2]
+        ] }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_arctic",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 0.0, 0.0, 0.0],
+          [0.3, 0.0, 0.05, 0.35],
+          [0.6, 0.1, 0.55, 0.8],
+          [0.85, 0.6, 0.9, 1.0],
+          [1.0, 1.0, 1.0, 1.0]
+        ] }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_magenta",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 0.0, 0.0, 0.0],
+          [0.3, 0.3, 0.0, 0.35],
+          [0.6, 0.9, 0.1, 0.5],
+          [0.85, 1.0, 0.5, 0.7],
+          [1.0, 1.0, 0.95, 1.0]
+        ] }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_electric",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 0.0, 0.0, 0.0],
+          [0.25, 0.15, 0.0, 0.4],
+          [0.5, 0.1, 0.2, 0.9],
+          [0.75, 0.0, 0.7, 1.0],
+          [1.0, 0.7, 1.0, 1.0]
+        ] }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.gradient_ramp",
+      "handle": "pal_toxic",
+      "params": {
+        "domain": { "type": "Float", "value": 2.0 },
+        "stops": { "type": "Table", "rows": [
+          [0.0, 0.0, 0.0, 0.0],
+          [0.3, 0.0, 0.2, 0.05],
+          [0.6, 0.3, 0.75, 0.0],
+          [0.85, 0.7, 1.0, 0.1],
+          [1.0, 1.0, 1.0, 0.3]
+        ] }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.mux_texture",
+      "handle": "palette_mux",
+      "params": {
+        "num_inputs": { "type": "Int", "value": 10 },
+        "selector": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.color_lut",
+      "handle": "infrared",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "contrast": { "type": "Float", "value": 1.0 }
+      }
+    },
+    { "id": 13, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 11, "toPort": "in_0" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 11, "toPort": "in_1" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 11, "toPort": "in_2" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 11, "toPort": "in_3" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 11, "toPort": "in_4" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 11, "toPort": "in_5" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 11, "toPort": "in_6" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in_7" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "in_8" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in_9" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "lut" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" }
   ]
 }
