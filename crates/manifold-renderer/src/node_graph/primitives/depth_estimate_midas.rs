@@ -226,9 +226,29 @@ impl Primitive for DepthEstimateMidas {
             if let Some(response) = dw.try_recv()
                 && let Some(buf) = response.depth_buffer
             {
+                let first = !ds.has_depth;
                 ds.depth_buffer = buf;
                 ds.has_depth = true;
                 ds.depth_dirty = true;
+                // DIAGNOSTIC: confirm MiDaS is producing real (non-flat)
+                // depth. An all-zero / constant buffer downstream makes
+                // `z = depth * depth_scale` collapse → the Wireframe Depth
+                // Z-slider does nothing and the grid never gains 3D. Log on
+                // first arrival, then every ~120 inferences.
+                if first || ds.frame_counter % 120 == 0 {
+                    let (mut mn, mut mx, mut sum) = (f32::INFINITY, f32::NEG_INFINITY, 0.0f32);
+                    for &v in &ds.depth_buffer {
+                        mn = mn.min(v);
+                        mx = mx.max(v);
+                        sum += v;
+                    }
+                    let mean = sum / ds.depth_buffer.len().max(1) as f32;
+                    log::info!(
+                        "[node.depth_estimate_midas] depth stats (frame {}): min={mn:.3} max={mx:.3} mean={mean:.3} \
+                         — near=1/far=0; min==max==0 means MiDaS returned no depth",
+                        ds.frame_counter,
+                    );
+                }
             }
 
             // Upload latest depth buffer → analysis-resolution texture.

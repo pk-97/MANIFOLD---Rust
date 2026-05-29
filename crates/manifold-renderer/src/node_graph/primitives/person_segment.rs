@@ -268,9 +268,27 @@ impl Primitive for PersonSegment {
             if let Some(response) = mw.try_recv()
                 && let Some(buf) = response.mask_blended
             {
+                let first = !ms.has_mask;
                 ms.mask_buffer = buf;
                 ms.has_mask = true;
                 ms.mask_dirty = true;
+                // DIAGNOSTIC: confirm the segmentation model returns a real
+                // subject mask. An all-zero mask makes the subject-isolation
+                // path in wire_mask fall back to depth/semantic heuristics.
+                // Log on first arrival, then every ~120 inferences.
+                if first || ms.frame_counter % 120 == 0 {
+                    let (mut mx, mut sum) = (0.0f32, 0.0f32);
+                    for &v in &ms.mask_buffer {
+                        mx = mx.max(v);
+                        sum += v;
+                    }
+                    let mean = sum / ms.mask_buffer.len().max(1) as f32;
+                    log::info!(
+                        "[node.person_segment] mask stats (frame {}): max={mx:.3} mean={mean:.3} \
+                         — max==0 means no subject mask",
+                        ms.frame_counter,
+                    );
+                }
             }
 
             // Upload latest mask buffer → analysis-resolution texture.

@@ -308,9 +308,34 @@ impl Primitive for OpticalFlowEstimate {
                 // value for downstream gating.
                 fs.cut_score = response.cut_score;
                 if let Some(buf) = response.flow_packed {
+                    let first = !fs.has_flow;
                     fs.flow_buffer = buf;
                     fs.has_flow = true;
                     fs.flow_dirty = true;
+                    // DIAGNOSTIC: confirm Farneback is producing real motion.
+                    // Flow drives mesh advection ("sticking"); all-zero flow
+                    // leaves the mesh on identity UVs → grid never tracks the
+                    // subject. Packed layout R=flow_x G=conf B=flow_y A=valid.
+                    // Log on first arrival, then every ~120 inferences.
+                    if first || fs.frame_counter % 120 == 0 {
+                        let (mut max_mag, mut max_valid, mut sum_valid) = (0.0f32, 0.0f32, 0.0f32);
+                        let px = fs.flow_buffer.len() / 4;
+                        for i in 0..px {
+                            let fx = fs.flow_buffer[i * 4];
+                            let fy = fs.flow_buffer[i * 4 + 2];
+                            max_mag = max_mag.max((fx * fx + fy * fy).sqrt());
+                            let valid = fs.flow_buffer[i * 4 + 3];
+                            max_valid = max_valid.max(valid);
+                            sum_valid += valid;
+                        }
+                        let mean_valid = sum_valid / px.max(1) as f32;
+                        log::info!(
+                            "[node.optical_flow_estimate] flow stats (frame {}): max|flow|={max_mag:.4} \
+                             max_valid={max_valid:.3} mean_valid={mean_valid:.3} cut={:.3} \
+                             — max|flow|==0 means no motion vectors",
+                            fs.frame_counter, fs.cut_score,
+                        );
+                    }
                 }
             }
 
