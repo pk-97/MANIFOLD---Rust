@@ -81,6 +81,7 @@ mod generate_tesseract_vertices;
 mod pack_vec4;
 mod glitch;
 mod gradient_central_diff;
+mod gradient_ramp;
 mod grid_uv_field;
 mod hash_noise_field_2d;
 mod hdr_retention_mix;
@@ -284,6 +285,7 @@ pub use generate_tesseract_vertices::{
 pub use pack_vec4::PackVec4;
 pub use glitch::Glitch;
 pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
+pub use gradient_ramp::GradientRamp;
 pub use grid_uv_field::GridUvField;
 pub use hash_noise_field_2d::HashNoiseField2D;
 pub use heightmap_to_normal::HeightmapToNormal;
