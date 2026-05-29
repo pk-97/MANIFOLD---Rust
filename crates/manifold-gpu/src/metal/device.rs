@@ -105,6 +105,12 @@ pub struct GpuDevice {
     msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
     /// Pre-compiled compute clear pipelines per texture format.
     clear_pipelines: std::sync::OnceLock<ClearPipelines>,
+    /// Lazily-created linear (bilinear) sampler with clamp addressing.
+    /// Shared by `GpuEncoder::resize_sample` and any other helper that
+    /// needs a default filtering sampler without minting a fresh
+    /// `MTLSamplerState` per frame. Mirrors the `clear_pipelines`
+    /// lazy-cache pattern.
+    linear_sampler: std::sync::OnceLock<GpuSampler>,
 }
 
 // Safety: MTLDevice and MTLCommandQueue are thread-safe (Metal guarantee).
@@ -134,7 +140,17 @@ impl GpuDevice {
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             msl_cache: std::sync::Mutex::new(None),
             clear_pipelines: std::sync::OnceLock::new(),
+            linear_sampler: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Shared linear (bilinear) sampler with clamp-to-edge addressing,
+    /// created once on first use. Use for sampling-based resize /
+    /// downscale passes (`GpuEncoder::resize_sample`) so callers don't
+    /// allocate a per-frame `MTLSamplerState`.
+    pub fn linear_sampler(&self) -> &GpuSampler {
+        self.linear_sampler
+            .get_or_init(|| self.create_sampler(&GpuSamplerDesc::default()))
     }
 
     /// Set the default Metal capture scope to the device so that Xcode's

@@ -267,7 +267,13 @@ impl Primitive for DepthEstimateMidas {
                     label: "node.depth_estimate_midas.staging",
                     mip_levels: 1,
                 });
-                gpu.copy_texture_to_texture(source, &staging, aw, ah);
+                // Bilinear downscale of the WHOLE source into the
+                // analysis-res staging — NOT a blit. A same-size blit
+                // (copy_texture_to_texture) would crop the top-left
+                // analysis-sized corner of the full-res frame, so MiDaS
+                // would estimate depth on ~9% of a 4K image (flat corner
+                // → dead Z-slider downstream). See GpuEncoder::resize_sample.
+                gpu.resize_sample(source, &staging);
                 ds.readback.submit(gpu, &staging, aw, ah);
                 ds.readback_pending = true;
                 ds.last_request_frame = ds.frame_counter;

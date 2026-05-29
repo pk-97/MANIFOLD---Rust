@@ -311,7 +311,11 @@ impl Primitive for PersonSegment {
                     label: "node.person_segment.staging",
                     mip_levels: 1,
                 });
-                gpu.copy_texture_to_texture(source, &staging, aw, ah);
+                // Bilinear downscale of the WHOLE source into the
+                // analysis-res staging — NOT a blit. A same-size blit
+                // would crop the top-left corner, so segmentation would
+                // only see ~9% of a 4K frame. See GpuEncoder::resize_sample.
+                gpu.resize_sample(source, &staging);
                 ms.readback.submit(gpu, &staging, aw, ah);
                 ms.readback_pending = true;
                 ms.last_request_frame = ms.frame_counter;

@@ -357,7 +357,12 @@ impl Primitive for OpticalFlowEstimate {
                     label: "node.optical_flow_estimate.staging",
                     mip_levels: 1,
                 });
-                gpu.copy_texture_to_texture(source, &staging, aw, ah);
+                // Bilinear downscale of the WHOLE source into the
+                // analysis-res staging — NOT a blit. A same-size blit
+                // would crop the top-left corner, so the flow net would
+                // only ever see motion in ~9% of a 4K frame. See
+                // GpuEncoder::resize_sample.
+                gpu.resize_sample(source, &staging);
                 fs.readback.submit(gpu, &staging, aw, ah);
                 fs.readback_pending = true;
                 fs.last_request_frame = fs.frame_counter;
