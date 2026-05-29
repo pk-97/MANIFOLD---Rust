@@ -1,7 +1,7 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{ParamCardConfig, ParamCardStringInfo, ParamInfo};
 use super::param_slider_shared::*;
-use super::{DriverConfigAction, EnvelopeParam, PanelAction};
+use super::{EnvelopeParam, PanelAction};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -801,48 +801,47 @@ impl GenParamPanel {
             }
         }
 
-        // D/E buttons (skip toggles and triggers — neither makes sense
-        // to modulate)
-        for (pi, &btn_id) in self.driver_btn_ids.iter().enumerate() {
-            if self
-                .param_info
-                .get(pi)
-                .map(|i| i.is_toggle || i.is_trigger)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            if id == btn_id {
-                return vec![PanelAction::GenDriverToggle(self.pid_at(pi))];
-            }
-        }
-        for (pi, &btn_id) in self.envelope_btn_ids.iter().enumerate() {
-            if self
-                .param_info
-                .get(pi)
-                .map(|i| i.is_toggle || i.is_trigger)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            if id == btn_id {
-                return vec![PanelAction::GenEnvelopeToggle(self.pid_at(pi))];
-            }
-        }
-
-        // Param label click → copy OSC address to clipboard (slider labels)
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let Some(ids) = slider
-                && ids.label >= 0
-                && id == ids.label
-                && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
-            {
-                self.copied_flash.trigger(ids.label as u32);
-                return vec![PanelAction::CopyOscAddress(addr)];
-            }
+        // Per-param row elements (D/E buttons, config drawers, slider-label
+        // copy) — shared dispatch; map the abstract RowClick to generator-side
+        // actions. Toggle/trigger params are skipped for D/E inside the matcher.
+        if let Some(rc) = match_param_row_click(
+            id,
+            &self.driver_btn_ids,
+            &self.envelope_btn_ids,
+            &self.driver_config_ids,
+            &self.envelope_random_config_ids,
+            &self.ableton_config_ids,
+            &self.slider_ids,
+            &self.osc_addresses,
+            &self.param_info,
+        ) {
+            return match rc {
+                RowClick::DriverToggle(pi) => vec![PanelAction::GenDriverToggle(self.pid_at(pi))],
+                RowClick::EnvelopeToggle(pi) => {
+                    vec![PanelAction::GenEnvelopeToggle(self.pid_at(pi))]
+                }
+                RowClick::DriverConfig(pi, action) => {
+                    vec![PanelAction::GenDriverConfig(self.pid_at(pi), action)]
+                }
+                RowClick::EnvModeToggle(pi) => vec![PanelAction::GenEnvModeToggle(self.pid_at(pi))],
+                RowClick::EnvRandomJumpToggle(pi) => {
+                    vec![PanelAction::GenEnvRandomJumpToggle(self.pid_at(pi))]
+                }
+                RowClick::AbletonInvert(pi) => {
+                    vec![PanelAction::AbletonGenInvertToggle(self.pid_at(pi))]
+                }
+                RowClick::LabelCopy(pi) => {
+                    if let Some(ids) = &self.slider_ids[pi] {
+                        self.copied_flash.trigger(ids.label as u32);
+                    }
+                    let addr = self.osc_addresses[pi].clone().unwrap_or_default();
+                    vec![PanelAction::CopyOscAddress(addr)]
+                }
+            };
         }
 
-        // Param label click → copy OSC address to clipboard (toggle labels)
+        // Param label click → copy OSC address to clipboard (toggle labels —
+        // generator-only; slider labels are handled by the shared matcher above)
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
                 && t._label_id >= 0
@@ -852,37 +851,6 @@ impl GenParamPanel {
                 self.copied_flash.trigger(t._label_id as u32);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
-        }
-
-        // Driver config buttons
-        if let Some((pi, result)) = check_driver_config_click(id, &self.driver_config_ids) {
-            let action = match result {
-                DriverClickResult::BeatDiv(j) => DriverConfigAction::BeatDiv(j),
-                DriverClickResult::Dot => DriverConfigAction::Dot,
-                DriverClickResult::Triplet => DriverConfigAction::Triplet,
-                DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
-                DriverClickResult::Reverse => DriverConfigAction::Reverse,
-            };
-            return vec![PanelAction::GenDriverConfig(self.pid_at(pi), action)];
-        }
-
-        // Envelope random config buttons (mode toggle, jump toggle)
-        for (pi, cfg) in self.envelope_random_config_ids.iter().enumerate() {
-            if let Some(c) = cfg {
-                if id == c.mode_btn_id {
-                    return vec![PanelAction::GenEnvModeToggle(self.pid_at(pi))];
-                }
-                if id == c.jump_btn_id {
-                    return vec![PanelAction::GenEnvRandomJumpToggle(self.pid_at(pi))];
-                }
-            }
-        }
-
-        // Ableton config buttons
-        if let Some((pi, AbletonConfigClick::Invert)) =
-            check_ableton_config_click(id, &self.ableton_config_ids)
-        {
-            return vec![PanelAction::AbletonGenInvertToggle(self.pid_at(pi))];
         }
 
         // String param buttons → open text input or dropdown

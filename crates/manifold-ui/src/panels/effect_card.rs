@@ -1,7 +1,7 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{ParamCardConfig, ParamInfo};
 use super::param_slider_shared::*;
-use super::{DriverConfigAction, EnvelopeParam, PanelAction};
+use super::{EnvelopeParam, PanelAction};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -969,59 +969,46 @@ impl EffectCardPanel {
             return vec![PanelAction::OpenGraphEditor(ei)];
         }
 
-        // D/E buttons
-        for (pi, &btn_id) in self.driver_btn_ids.iter().enumerate() {
-            if id == btn_id {
-                return vec![PanelAction::EffectDriverToggle(ei, self.pid_at(pi))];
-            }
-        }
-        for (pi, &btn_id) in self.envelope_btn_ids.iter().enumerate() {
-            if id == btn_id {
-                return vec![PanelAction::EffectEnvelopeToggle(ei, self.pid_at(pi))];
-            }
-        }
-
-        // Driver config buttons
-        if let Some((pi, result)) = check_driver_config_click(id, &self.driver_config_ids) {
-            let action = match result {
-                DriverClickResult::BeatDiv(j) => DriverConfigAction::BeatDiv(j),
-                DriverClickResult::Dot => DriverConfigAction::Dot,
-                DriverClickResult::Triplet => DriverConfigAction::Triplet,
-                DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
-                DriverClickResult::Reverse => DriverConfigAction::Reverse,
+        // Per-param row elements (D/E buttons, config drawers, label copy) —
+        // shared dispatch; map the abstract RowClick to effect-side actions.
+        if let Some(rc) = match_param_row_click(
+            id,
+            &self.driver_btn_ids,
+            &self.envelope_btn_ids,
+            &self.driver_config_ids,
+            &self.envelope_random_config_ids,
+            &self.ableton_config_ids,
+            &self.slider_ids,
+            &self.osc_addresses,
+            &self.param_info,
+        ) {
+            return match rc {
+                RowClick::DriverToggle(pi) => {
+                    vec![PanelAction::EffectDriverToggle(ei, self.pid_at(pi))]
+                }
+                RowClick::EnvelopeToggle(pi) => {
+                    vec![PanelAction::EffectEnvelopeToggle(ei, self.pid_at(pi))]
+                }
+                RowClick::DriverConfig(pi, action) => {
+                    vec![PanelAction::EffectDriverConfig(ei, self.pid_at(pi), action)]
+                }
+                RowClick::EnvModeToggle(pi) => {
+                    vec![PanelAction::EffectEnvModeToggle(ei, self.pid_at(pi))]
+                }
+                RowClick::EnvRandomJumpToggle(pi) => {
+                    vec![PanelAction::EffectEnvRandomJumpToggle(ei, self.pid_at(pi))]
+                }
+                RowClick::AbletonInvert(pi) => {
+                    vec![PanelAction::AbletonInvertToggle(ei, self.pid_at(pi))]
+                }
+                RowClick::LabelCopy(pi) => {
+                    if let Some(ids) = &self.slider_ids[pi] {
+                        self.copied_flash.trigger(ids.label as u32);
+                    }
+                    let addr = self.osc_addresses[pi].clone().unwrap_or_default();
+                    vec![PanelAction::CopyOscAddress(addr)]
+                }
             };
-            return vec![PanelAction::EffectDriverConfig(ei, self.pid_at(pi), action)];
-        }
-
-        // Envelope random config buttons (mode toggle, jump toggle)
-        for (pi, cfg) in self.envelope_random_config_ids.iter().enumerate() {
-            if let Some(c) = cfg {
-                if id == c.mode_btn_id {
-                    return vec![PanelAction::EffectEnvModeToggle(ei, self.pid_at(pi))];
-                }
-                if id == c.jump_btn_id {
-                    return vec![PanelAction::EffectEnvRandomJumpToggle(ei, self.pid_at(pi))];
-                }
-            }
-        }
-
-        // Ableton config buttons
-        if let Some((pi, AbletonConfigClick::Invert)) =
-            check_ableton_config_click(id, &self.ableton_config_ids)
-        {
-            return vec![PanelAction::AbletonInvertToggle(ei, self.pid_at(pi))];
-        }
-
-        // Param label click → copy OSC address to clipboard
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let Some(ids) = slider
-                && ids.label >= 0
-                && id == ids.label
-                && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
-            {
-                self.copied_flash.trigger(ids.label as u32);
-                return vec![PanelAction::CopyOscAddress(addr)];
-            }
         }
 
         // Card selection — any click on card background, border, or header triggers selection

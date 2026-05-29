@@ -5,6 +5,7 @@
 //! helpers. This module extracts them into a single source of truth.
 
 use super::param_card::ParamInfo;
+use super::DriverConfigAction;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -1319,4 +1320,121 @@ pub(crate) fn build_param_row(
 
     ids.new_cy = cy;
     ids
+}
+
+// ── Shared per-parameter click dispatch ─────────────────────────────
+
+/// A click on one of a parameter row's interactive elements, abstracted away
+/// from the effect-vs-generator [`PanelAction`] vocabulary. Each panel maps
+/// these to its own kind-specific actions (e.g. `EffectDriverToggle(ei, …)`
+/// vs `GenDriverToggle(…)`).
+pub(crate) enum RowClick {
+    /// The row's `→` driver toggle button (param index).
+    DriverToggle(usize),
+    /// The row's `E` envelope toggle button (param index).
+    EnvelopeToggle(usize),
+    /// A button inside the driver-config drawer (param index + action).
+    DriverConfig(usize, DriverConfigAction),
+    /// The envelope mode (ADSR/Random) toggle (param index).
+    EnvModeToggle(usize),
+    /// The envelope random-jump toggle (param index).
+    EnvRandomJumpToggle(usize),
+    /// The Ableton-config invert button (param index).
+    AbletonInvert(usize),
+    /// The slider's param label, when it carries an OSC address to copy
+    /// (param index). The caller performs the copied-flash side effect and
+    /// reads `osc_addresses[pi]`.
+    LabelCopy(usize),
+}
+
+/// Match a clicked node id against a parameter row's interactive elements,
+/// shared by the effect and generator cards' `handle_click`. Returns the
+/// abstract [`RowClick`] for the caller to map to a kind-specific action, or
+/// `None` if `id` hits nothing in the per-param row surface (the caller then
+/// checks its own shell-specific elements — header buttons, toggle/string
+/// rows, card selection).
+///
+/// Driver/envelope toggle buttons on toggle/trigger params are skipped (they
+/// carry no slider to modulate). Effects have no toggle/trigger params, so the
+/// skip is a no-op there — behavior is identical to the prior per-panel code.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn match_param_row_click(
+    id: i32,
+    driver_btn_ids: &[i32],
+    envelope_btn_ids: &[i32],
+    driver_config_ids: &[Option<DriverConfigIds>],
+    envelope_random_config_ids: &[Option<EnvelopeRandomConfigIds>],
+    ableton_config_ids: &[Option<AbletonConfigIds>],
+    slider_ids: &[Option<SliderNodeIds>],
+    osc_addresses: &[Option<String>],
+    param_info: &[ParamInfo],
+) -> Option<RowClick> {
+    let is_unmodulatable = |pi: usize| {
+        param_info
+            .get(pi)
+            .map(|p| p.is_toggle || p.is_trigger)
+            .unwrap_or(false)
+    };
+
+    // D/E buttons (skip toggle/trigger params).
+    for (pi, &btn_id) in driver_btn_ids.iter().enumerate() {
+        if is_unmodulatable(pi) {
+            continue;
+        }
+        if id == btn_id {
+            return Some(RowClick::DriverToggle(pi));
+        }
+    }
+    for (pi, &btn_id) in envelope_btn_ids.iter().enumerate() {
+        if is_unmodulatable(pi) {
+            continue;
+        }
+        if id == btn_id {
+            return Some(RowClick::EnvelopeToggle(pi));
+        }
+    }
+
+    // Driver config drawer buttons.
+    if let Some((pi, result)) = check_driver_config_click(id, driver_config_ids) {
+        let action = match result {
+            DriverClickResult::BeatDiv(j) => DriverConfigAction::BeatDiv(j),
+            DriverClickResult::Dot => DriverConfigAction::Dot,
+            DriverClickResult::Triplet => DriverConfigAction::Triplet,
+            DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
+            DriverClickResult::Reverse => DriverConfigAction::Reverse,
+        };
+        return Some(RowClick::DriverConfig(pi, action));
+    }
+
+    // Envelope random-config buttons (mode toggle, jump toggle).
+    for (pi, cfg) in envelope_random_config_ids.iter().enumerate() {
+        if let Some(c) = cfg {
+            if id == c.mode_btn_id {
+                return Some(RowClick::EnvModeToggle(pi));
+            }
+            if id == c.jump_btn_id {
+                return Some(RowClick::EnvRandomJumpToggle(pi));
+            }
+        }
+    }
+
+    // Ableton config invert button.
+    if let Some((pi, AbletonConfigClick::Invert)) =
+        check_ableton_config_click(id, ableton_config_ids)
+    {
+        return Some(RowClick::AbletonInvert(pi));
+    }
+
+    // Slider label → copy OSC address (only when one exists for this slot).
+    for (pi, slider) in slider_ids.iter().enumerate() {
+        if let Some(ids) = slider
+            && ids.label >= 0
+            && id == ids.label
+            && osc_addresses.get(pi).and_then(|a| a.as_ref()).is_some()
+        {
+            return Some(RowClick::LabelCopy(pi));
+        }
+    }
+
+    None
 }
