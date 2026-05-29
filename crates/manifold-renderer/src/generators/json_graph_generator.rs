@@ -194,8 +194,8 @@ pub struct JsonGraphGenerator {
     /// touch the GPU on resize).
     target_format: Option<GpuTextureFormat>,
     /// Outer-card → inner-node bindings resolved at construction time,
-    /// using the SAME [`ResolvedBinding`] type + [`apply_bindings`] loop
-    /// + [`LastAppliedCache`] the effect chain uses. Each render frame
+    /// using the SAME [`ResolvedBinding`] type, [`apply_bindings`] loop,
+    /// and [`LastAppliedCache`] the effect chain uses. Each render frame
     /// walks these via `apply_bindings`, which pushes the corresponding
     /// `GeneratorContext::params[i]` into the target node's param,
     /// skipping writes whose outer value hasn't changed (so per-card
