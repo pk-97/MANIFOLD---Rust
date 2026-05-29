@@ -36,10 +36,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let target = textureSampleLevel(uv_field_tex, tex_sampler, uv, 0.0).rg;
+    let sample_uv = textureSampleLevel(uv_field_tex, tex_sampler, uv, 0.0).rg;
     let wrapped = vec2<f32>(
-        wrap_coord(target.x, uniforms.wrap),
-        wrap_coord(target.y, uniforms.wrap),
+        wrap_coord(sample_uv.x, uniforms.wrap),
+        wrap_coord(sample_uv.y, uniforms.wrap),
     );
     let result = textureSampleLevel(source_tex, tex_sampler, wrapped, 0.0);
     textureStore(output_tex, vec2<i32>(id.xy), result);
