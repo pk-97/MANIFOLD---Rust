@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Glitch",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Glitch, decomposed: node.glitch_displace generates the block-displacement + scanline-jitter sampling-UV field (RG) plus a per-block invert accent mask; node.remap warps the source by that field; node.chromatic_aberration (Linear) does the RGB channel split; node.invert + node.masked_mix apply the per-block colour invert; node.mix (Lerp, amount) crossfades the whole thing back over the source. Replaces the fused 4-op node.glitch kernel (block displace + scanline + RGB split + per-block invert) — the displacement math is verbatim; the chromatic split + invert are now general atoms. node.value fans the master `amount` to both the displacement field and the final crossfade. Documented visual deltas vs legacy: the chromatic split uses a fixed angle (legacy rotates it per time-step) and a fixed rgb_shift offset (legacy scales it by amount, which the final crossfade now handles); within-block the chromatic sampling is identical, differing only at block boundaries. Time read from FrameTime.seconds — no generator_input needed.",
   "presetMetadata": {
     "id": "Glitch",
     "displayName": "Glitch",
@@ -70,66 +70,36 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "glitch",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "amount_value", "param": "value" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "block_size",
         "label": "Block Size",
         "defaultValue": 16.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "glitch",
-          "param": "block_size"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "displace", "param": "block_size" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "rgb_shift",
         "label": "RGB Shift",
         "defaultValue": 0.01,
-        "target": {
-          "kind": "handleNode",
-          "handle": "glitch",
-          "param": "rgb_shift"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "split", "param": "offset" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "scanline",
         "label": "Scanline",
         "defaultValue": 0.3,
-        "target": {
-          "kind": "handleNode",
-          "handle": "glitch",
-          "param": "scanline"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "displace", "param": "scanline" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "speed",
         "label": "Speed",
         "defaultValue": 2.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "glitch",
-          "param": "speed"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "displace", "param": "speed" },
+        "convert": { "type": "Float" }
       }
     ],
     "skipMode": {
@@ -137,78 +107,89 @@
       "paramId": "amount"
     },
     "paramAliases": [
-      {
-        "old": "block",
-        "new": "block_size"
-      }
+      { "old": "block", "new": "block_size" }
     ]
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
-      "typeId": "node.glitch",
-      "handle": "glitch",
+      "typeId": "node.value",
+      "handle": "amount_value",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "block_size": {
-          "type": "Float",
-          "value": 16.0
-        },
-        "rgb_shift": {
-          "type": "Float",
-          "value": 0.01
-        },
-        "scanline": {
-          "type": "Float",
-          "value": 0.3
-        },
-        "speed": {
-          "type": "Float",
-          "value": 2.0
-        },
-        "time": {
-          "type": "Float",
-          "value": 0.0
-        }
+        "value": { "type": "Float", "value": 0.0 }
       }
     },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
+      "typeId": "node.glitch_displace",
+      "handle": "displace",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "block_size": { "type": "Float", "value": 16.0 },
+        "scanline": { "type": "Float", "value": 0.3 },
+        "speed": { "type": "Float", "value": 2.0 }
+      }
     },
     {
       "id": 3,
-      "typeId": "system.generator_input",
-      "handle": "input"
-    }
+      "typeId": "node.remap",
+      "handle": "warp",
+      "params": {
+        "wrap": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.chromatic_aberration",
+      "handle": "split",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": 0.01 },
+        "mode": { "type": "Enum", "value": 1 },
+        "angle": { "type": "Float", "value": 0.0 },
+        "falloff": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.invert",
+      "handle": "inv",
+      "params": {
+        "intensity": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.masked_mix",
+      "handle": "accent",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.mix",
+      "handle": "glitch",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "time",
-      "toNode": 1,
-      "toPort": "time"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "amount" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "source" },
+    { "fromNode": 2, "fromPort": "uv", "toNode": 3, "toPort": "uv_field" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
+    { "fromNode": 2, "fromPort": "mask", "toNode": 6, "toPort": "mask" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "b" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 7, "toPort": "amount" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" }
   ]
 }

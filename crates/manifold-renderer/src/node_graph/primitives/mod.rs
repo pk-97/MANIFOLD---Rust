@@ -84,6 +84,7 @@ mod generate_range;
 mod generate_tesseract_vertices;
 mod pack_vec4;
 mod glitch;
+mod glitch_displace;
 mod gradient_central_diff;
 mod gradient_ramp;
 mod grid_uv_field;
@@ -293,6 +294,7 @@ pub use generate_tesseract_vertices::{
 };
 pub use pack_vec4::PackVec4;
 pub use glitch::Glitch;
+pub use glitch_displace::GlitchDisplace;
 pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
 pub use gradient_ramp::GradientRamp;
 pub use grid_uv_field::GridUvField;

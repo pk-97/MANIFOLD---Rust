@@ -54,6 +54,7 @@ crate::primitive! {
     inputs: {
         a: Texture2D required,
         b: Texture2D required,
+        amount: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -94,9 +95,15 @@ struct MixUniforms {
 
 impl Primitive for Mix {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let amount = match ctx.params.get("amount") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
+        // `amount` port-shadows the param — a wired scalar (LFO, gate,
+        // envelope, a shared master knob via node.value) drives the
+        // crossfade live; the inline param is the fallback.
+        let amount = match ctx.inputs.scalar("amount") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("amount") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.5,
+            },
         };
         let mode = match ctx.params.get("mode") {
             Some(ParamValue::Enum(v)) => (*v).min(7),
