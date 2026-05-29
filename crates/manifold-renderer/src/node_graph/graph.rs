@@ -31,11 +31,15 @@ pub struct NodeInstance {
 }
 
 impl NodeInstance {
-    fn new(id: NodeInstanceId, node: Box<dyn EffectNode>) -> Self {
+    fn new(id: NodeInstanceId, mut node: Box<dyn EffectNode>) -> Self {
         let mut params = AHashMap::default();
         for def in node.parameters() {
             params.insert(def.name, def.default.clone());
         }
+        // Let variadic nodes build their param-derived port lists from the
+        // default param values before the instance is queried by compile /
+        // snapshot. No-op for the fixed-port-shape majority.
+        node.reconfigure(&params);
         Self {
             id,
             node,
@@ -215,6 +219,9 @@ impl Graph {
                 param: name.to_string(),
             })?;
         inst.params.insert(static_name, value);
+        // Variadic nodes rebuild their port lists when a count-style param
+        // changes. Disjoint field borrows (`node` mut, `params` shared).
+        inst.node.reconfigure(&inst.params);
         Ok(())
     }
 

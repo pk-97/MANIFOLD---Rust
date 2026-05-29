@@ -644,6 +644,26 @@ pub trait EffectNode: Send {
     /// and the symptom → cause table when feedback effects misbehave.
     fn clear_state(&mut self) {}
 
+    /// Rebuild any param-derived port lists after a parameter changes.
+    ///
+    /// Default no-op — almost every node has a fixed port shape declared
+    /// at compile time and ignores this. **Variadic** nodes (a dynamic
+    /// mux / pack / sum whose port COUNT is driven by a `num_inputs`-style
+    /// param) override it to rebuild the `Vec<NodeInput>` / `Vec<NodeOutput>`
+    /// that `inputs()` / `outputs()` return, so the new shape is visible to
+    /// `compile()`, `validate()`, and the editor snapshot.
+    ///
+    /// Called by [`Graph::set_param`](crate::node_graph::Graph::set_param)
+    /// right after a value is stored (covering both editor edits and JSON
+    /// load, which applies params via `set_param`) and once by
+    /// `NodeInstance::new` after defaults are installed. It is NOT called on
+    /// the per-frame `set_param_unchecked` hot path — port counts are
+    /// authoring-time state, never modulated per frame. The `inputs()`
+    /// "same shape every call" contract still holds *within* a compile/run
+    /// cycle: `reconfigure` only fires between edits, and a port-count
+    /// change forces a recompile before the next run.
+    fn reconfigure(&mut self, _params: &ParamValues) {}
+
     /// Optional WGSL kernel source for the WGSL-escape-hatch primitive
     /// family (`node.wgsl_compute_*`). Returns the source string the
     /// node was constructed with; `None` for every node whose shader
