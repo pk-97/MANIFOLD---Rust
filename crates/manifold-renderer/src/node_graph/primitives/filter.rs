@@ -54,15 +54,27 @@ const THRESHOLD_PARAMS: [ParamDef; 2] = [
     },
 ];
 
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ThresholdUniforms {
+    level: f32,
+    softness: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
 pub struct Threshold {
     type_id: EffectNodeType,
+    pipeline: Option<GpuComputePipeline>,
+    sampler: Option<GpuSampler>,
 }
 
 impl Threshold {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(THRESHOLD_TYPE_ID),
+            pipeline: None,
+            sampler: None,
         }
     }
 }
@@ -86,7 +98,67 @@ impl EffectNode for Threshold {
     fn parameters(&self) -> &[ParamDef] {
         &THRESHOLD_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let level = match ctx.params.get("level") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.5,
+        };
+        let softness = match ctx.params.get("softness") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+
+        let Some(source) = ctx.inputs.texture_2d("source") else {
+            return;
+        };
+        let Some(out) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
+        let (width, height) = (out.width, out.height);
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/threshold.wgsl"),
+                "cs_main",
+                "node.threshold",
+            )
+        });
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+        let uniforms = ThresholdUniforms {
+            level,
+            softness,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: source,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "node.threshold",
+        );
+    }
 }
 
 inventory::submit! {

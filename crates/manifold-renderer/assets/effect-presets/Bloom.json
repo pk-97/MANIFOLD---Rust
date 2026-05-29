@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Bloom",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Bloom, decomposed: node.threshold extracts the bright pass with a soft knee (the legacy bloom prefilter curve), node.downsample drops to quarter-res, node.blur (Gaussian) softens it cheaply, node.mix (Add) layers the glow back over the source by `amount`. Replaces the fused node.bloom kernel. Visual delta vs legacy: a single downsample+gaussian instead of the legacy 3-level Blur9/Blur13 mip pyramid, and `amount` scales glow intensity only (the legacy also widened the radius with amount) — same family, simpler/wider-fixed glow. Verified by eye.",
   "presetMetadata": {
     "id": "Bloom",
     "displayName": "Bloom",
@@ -26,55 +26,57 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": {
-          "kind": "handleNode",
-          "handle": "bloom",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "bloom", "param": "amount" },
+        "convert": { "type": "Float" }
       }
     ],
-    "skipMode": {
-      "kind": "never"
-    }
+    "skipMode": { "kind": "onZero", "paramId": "amount" }
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
-      "typeId": "node.bloom",
-      "handle": "bloom",
+      "typeId": "node.threshold",
+      "handle": "prefilter",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.5
-        }
+        "level": { "type": "Float", "value": 0.42 },
+        "softness": { "type": "Float", "value": 0.24 }
       }
     },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
-    }
-  ],
-  "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
+      "typeId": "node.downsample",
+      "handle": "downsample",
+      "params": {
+        "factor": { "type": "Enum", "value": 1 }
+      }
     },
     {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+      "id": 3,
+      "typeId": "node.blur",
+      "handle": "blur",
+      "params": {
+        "radius": { "type": "Float", "value": 8.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.mix",
+      "handle": "bloom",
+      "params": {
+        "amount": { "type": "Float", "value": 0.5 },
+        "mode": { "type": "Enum", "value": 2 }
+      }
+    },
+    { "id": 5, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "source" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
   ]
 }
