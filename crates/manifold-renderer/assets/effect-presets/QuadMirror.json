@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "QuadMirror",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Center-symmetric 4-way UV fold, decomposed: centered_uv → abs → scale_offset builds the mirrored UV field, node.remap resamples the source there, node.mix crossfades. Replaces the legacy node.quad_mirror bundle.",
   "presetMetadata": {
     "id": "QuadMirror",
     "displayName": "Quad Mirror",
@@ -49,33 +49,59 @@
     },
     {
       "id": 1,
-      "typeId": "node.quad_mirror",
-      "handle": "quad_mirror",
+      "typeId": "node.centered_uv",
+      "handle": "center",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        }
+        "cx": { "type": "Float", "value": 0.5 },
+        "cy": { "type": "Float", "value": 0.5 },
+        "scale_x": { "type": "Float", "value": 1.0 },
+        "scale_y": { "type": "Float", "value": 1.0 }
       }
     },
     {
       "id": 2,
+      "typeId": "node.abs_texture",
+      "handle": "fold"
+    },
+    {
+      "id": 3,
+      "typeId": "node.scale_offset_texture",
+      "handle": "mirror_uv",
+      "params": {
+        "scale": { "type": "Float", "value": -2.0 },
+        "offset": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.remap",
+      "handle": "remapped",
+      "params": {
+        "wrap": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.mix",
+      "handle": "quad_mirror",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 6,
       "typeId": "system.final_output",
       "handle": "final_output"
     }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "source" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "uv_field" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
   ]
 }
