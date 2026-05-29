@@ -84,6 +84,7 @@ mod gradient_central_diff;
 mod grid_uv_field;
 mod halation;
 mod hash_noise_field_2d;
+mod hdr_retention_mix;
 mod heightmap_to_normal;
 mod highlight_boost;
 mod image_folder;
