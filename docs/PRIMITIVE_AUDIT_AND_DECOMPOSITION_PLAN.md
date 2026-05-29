@@ -66,7 +66,7 @@ Most of the 22 thin-wrap effect presets in `assets/effect-presets/` are still si
 
 | Preset | Current shape | Decomposes into |
 |---|---|---|
-| Bloom | `system.source → node.bloom → system.final_output` | Threshold + explicit **`downsample`** → **`separable_gaussian`** → upsample mip chain + **`mix`**. (No `mip_chain` primitive ships — build the explicit chain from existing atoms.) Absorbs Halation. |
+| Bloom | `system.source → node.bloom → system.final_output` | Threshold + explicit **`downsample`** → **`gaussian_blur`** → upsample pyramid + **`mix`**. **No mip-chain** — `node.mip_chain` is a registered no-op stub being deleted (downsample graphs are the right pattern; mip chains give no benefit — Peter 2026-05-29). `node.threshold` (filter.rs) is *also* a no-op stub — implement it, or compose the prefilter from `scale_offset_texture` + `clamp_texture`/`smoothstep_texture`. Absorbs Halation. |
 | Halation | Same shape with `node.halation` | **Fold into Bloom** (Bloom-absorbs-Halation): shares Bloom's atom set + a spectral kernel shift. |
 | Watercolor | Same with `node.watercolor` | **`flow_field_noise`** + **`uv_displace_by_flow`** (both registered, unused) + existing atoms |
 | Glitch | Same with `node.glitch` | **True 4-op monolith** (block displace + scanline jitter + RGB split + per-block invert) — the clearest "no DCC would fuse this" case in the set. `node.hash_noise_field_2d` + block-displace (UV-warp, §1.6) + scanline + **`chromatic_offset`** |
@@ -84,7 +84,7 @@ Most of the 22 thin-wrap effect presets in `assets/effect-presets/` are still si
 
 Registered primitives with zero current uses that are decomposition targets, not deletion candidates. These will get wired in by the bundles above:
 
-- **For Bloom / Halation:** `mip_chain`
+- ~~**For Bloom / Halation:** `mip_chain`~~ — **not a usable shelf atom: `node.mip_chain` is a no-op stub** (empty `evaluate`), and per Peter (2026-05-29) it is being deleted, not implemented. Bloom/Halation use an explicit `downsample → gaussian_blur → mix` pyramid. See the stub list in §1.5.
 - **For Watercolor:** `flow_field_noise`, `uv_displace_by_flow`
 - ~~**For PBR-shaded effects:** `cook_torrance_specular`, `equirect_envmap_sample`~~ — both activated 2026-05-27 by the MetallicGlass decomposition (3D-mesh mode via wired world_pos input). For future PBR-on-flat-surface presets they remain available in their original constant-V mode (no world_pos wired).
 - **For SDF / coordinate work:** `centered_uv`, `polar_field`, `distance_to_point`, `field_combine`
@@ -103,7 +103,15 @@ These appear unused because they've been displaced by better primitives. Confirm
 
 - `node.wgsl_compute_0in_1tex`, `node.wgsl_compute_1tex_1tex`, `node.wgsl_compute_2tex_1tex` — superseded by the introspected `node.wgsl_compute` used by BlackHole.
 - Verify and delete if confirmed superseded: `node.tone_map` (vs `node.reinhard_tone_map`). **`node.wet_dry` is now in active use** (AutoGain's wet/dry composite, 2026-05-29) — retain, not a candidate. **`node.sample` is no longer registered** (confirmed gone 2026-05-29) — and note no generic absolute-UV resampler exists in its place; see §1.6.
-- Likely retain: `node.color_lut`, `node.color_ramp`, `node.channel_mix` (registered for future color-grading workflows; not deletion candidates yet).
+- Likely retain: `node.color_lut`, `node.channel_mix` (implemented — `channel_mix` activated 2026-05-27, used by StarField).
+
+**Registered no-op stubs (found 2026-05-29) — implement-or-delete.** These are pickable in the palette but do nothing (hand-written `EffectNode` with empty `evaluate`), which silently misleads authors and AI:
+
+- `node.mip_chain` (filter.rs) — **delete** (Peter 2026-05-29: downsample graphs suffice; mip chains give no benefit).
+- `node.threshold` (filter.rs) — implement (a genuinely useful general atom — Bloom prefilter, mask gen) or delete and compose from `scale_offset_texture` + `clamp_texture`/`smoothstep_texture`. No preset references it.
+- `node.color_ramp` (color.rs) — implement (useful for color-grade / Infrared palette work) or delete. No preset references it.
+- `node.brightness` (color.rs) — stub, **but MetallicGlass wires it ×2 → silent passthrough.** Either implement (RGB→weighted-gray per its `weights` param) or remove the dead nodes from MetallicGlass; investigate what they feed first.
+- `node.sample` (`Sample` in uv.rs) — stubbed/unused; the long-standing deletion candidate. Distinct from the missing absolute-UV `remap` (§1.6).
 
 ### 1.6 The missing `remap` atom — the UV-warp family blocker (identified 2026-05-29)
 
