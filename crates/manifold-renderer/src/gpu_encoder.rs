@@ -187,3 +187,102 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_tex, vec2<i32>(id.xy), textureSampleLevel(src_tex, samp, uv, 0.0));
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use half::f16;
+    use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+
+    /// `resize_sample` must downscale the WHOLE source, not crop the
+    /// top-left corner. This is the regression test for the bug class
+    /// the user flagged: the DNN atoms filled their analysis staging
+    /// with a `copy_texture_to_texture` blit, which crops, so depth /
+    /// flow / person ran on the top-left ~9% of a 4K frame.
+    ///
+    /// Source is a 4×4 vertical split — left half black, right half
+    /// white. Downscaled to 2×2, a correct sample-resize keeps the
+    /// split (left column black, right column white). A crop of the
+    /// top-left 2×2 would be all black, so the right column going white
+    /// is the discriminating signal.
+    ///
+    /// The bug is resolution-dependent (only appears when source >
+    /// analysis res), which is exactly why the 256×256 preset-load test
+    /// never caught it. This test deliberately uses src > dst.
+    #[test]
+    fn resize_sample_covers_whole_source_not_top_left_crop() {
+        let device = crate::test_device();
+
+        // 4×4 RGBA8 source: columns 0–1 black, columns 2–3 white.
+        let mut src_px = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..4 {
+                let i = (y * 4 + x) * 4;
+                let v = if x >= 2 { 255u8 } else { 0u8 };
+                src_px[i] = v;
+                src_px[i + 1] = v;
+                src_px[i + 2] = v;
+                src_px[i + 3] = 255;
+            }
+        }
+        let src = device.create_texture(&GpuTextureDesc {
+            width: 4,
+            height: 4,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
+            label: "resize-test-src",
+            mip_levels: 1,
+        });
+        device.upload_texture(&src, &src_px);
+
+        // 2×2 RGBA16F destination — the analysis-staging format the DNN
+        // atoms use, exercising the rgba16float resize variant.
+        let dst = device.create_texture(&GpuTextureDesc {
+            width: 2,
+            height: 2,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "resize-test-dst",
+            mip_levels: 1,
+        });
+
+        // Source is rgba8unorm, dst is rgba16float — resize_sample bridges
+        // formats (it samples as f32 and stores to the dst format), unlike
+        // copy_texture_to_texture which requires matching formats.
+        let mut native_enc = device.create_encoder("resize-test");
+        {
+            let mut gpu = super::GpuEncoder::new(&mut native_enc, &device);
+            gpu.resize_sample(&src, &dst);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let bytes_per_row = 2 * 8; // 2 px × rgba16float (8 bytes)
+        let readback = device.create_buffer_shared(u64::from(2 * bytes_per_row));
+        let mut rb_enc = device.create_encoder("resize-test-readback");
+        rb_enc.copy_texture_to_buffer(&dst, &readback, 2, 2, bytes_per_row);
+        rb_enc.commit_and_wait_completed();
+
+        let ptr = readback.mapped_ptr().expect("shared buffer pointer");
+        let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), 2 * 2 * 4) };
+        let r_at = |x: usize, y: usize| f16::from_bits(halves[(y * 2 + x) * 4]).to_f32();
+
+        // Left column dark, right column bright — the split survived the
+        // downscale. A top-left crop would leave the right column dark.
+        assert!(
+            r_at(0, 0) < 0.25 && r_at(0, 1) < 0.25,
+            "left column should be ~black, got ({}, {})",
+            r_at(0, 0),
+            r_at(0, 1),
+        );
+        assert!(
+            r_at(1, 0) > 0.75 && r_at(1, 1) > 0.75,
+            "right column should be ~white (whole-frame sampled, not \
+             top-left cropped), got ({}, {})",
+            r_at(1, 0),
+            r_at(1, 1),
+        );
+    }
+}

@@ -1178,6 +1178,23 @@ impl GpuEncoder {
             dst.format, dst.width, dst.height,
             width, height, depth,
         );
+        // Same-size guard. A Metal blit copies from origin (0,0) with NO
+        // scaling, so a size mismatch silently copies the top-left
+        // region — which reads as a crop everywhere a downscale was
+        // intended. That is the cropped-DNN-analysis bug class (depth /
+        // flow / person estimating on the top-left ~9% of a 4K frame).
+        // Make it unwriteable: differently-sized textures must go through
+        // a sampling resize (manifold-renderer's GpuEncoder::resize_sample),
+        // never this blit. (Every current caller is a same-size full copy
+        // — ping-pong, feedback capture, passthrough, LED tap.)
+        assert!(
+            src.width == dst.width && src.height == dst.height,
+            "copy_texture_to_texture is a same-size blit (origin 0, no \
+             scaling) — src {}×{} != dst {}×{}. To change resolution, \
+             sample: use GpuEncoder::resize_sample. A size-mismatched blit \
+             would silently crop the top-left corner.",
+            src.width, src.height, dst.width, dst.height,
+        );
         assert!(
             width <= src.width && height <= src.height,
             "copy_texture_to_texture: copy region exceeds source bounds — \
