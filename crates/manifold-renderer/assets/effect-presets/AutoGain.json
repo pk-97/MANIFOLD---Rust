@@ -12,7 +12,7 @@
     "params": [
       { "id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
       { "id": "ratio",  "name": "Ratio",  "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Ratio" },
-      { "id": "response", "name": "Response", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Response" },
+      { "id": "sensitivity", "name": "Sensitivity", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Sensitivity" },
       { "id": "target", "name": "Target", "min": 0.0, "max": 1.0, "defaultValue": 0.5, "wholeNumbers": false, "isToggle": false, "formatString": "F2", "oscSuffix": "Target" }
     ],
     "bindings": [
@@ -22,8 +22,8 @@
       { "id": "ratio", "label": "Ratio", "defaultValue": 0.5,
         "target": { "kind": "handleNode", "handle": "env", "param": "ratio" },
         "convert": { "type": "Float" } },
-      { "id": "response", "label": "Response", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "env", "param": "response" },
+      { "id": "sensitivity", "label": "Sensitivity", "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "env", "param": "sensitivity" },
         "convert": { "type": "Float" } },
       { "id": "target", "label": "Target", "defaultValue": 0.5,
         "target": { "kind": "handleNode", "handle": "env", "param": "target" },
@@ -31,7 +31,8 @@
     ],
     "skipMode": { "kind": "never" },
     "paramAliases": [
-      { "old": "punch", "new": "response" }
+      { "old": "punch", "new": "sensitivity" },
+      { "old": "response", "new": "sensitivity" }
     ]
   },
   "nodes": [
@@ -43,9 +44,9 @@
     {
       "id": 20, "typeId": "node.compressor_envelope", "handle": "env",
       "params": {
-        "ratio":    { "type": "Float", "value": 0.5 },
-        "response": { "type": "Float", "value": 0.5 },
-        "target":   { "type": "Float", "value": 0.5 }
+        "ratio":       { "type": "Float", "value": 0.5 },
+        "sensitivity": { "type": "Float", "value": 0.5 },
+        "target":      { "type": "Float", "value": 0.5 }
       }
     },
 
