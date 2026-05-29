@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Strobe",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Strobe, decomposed: node.beat_gate produces the beat-synced square gate (fract(beats*rate) >= 0.5 ? amount : 0, reading FrameTime.beats — identical to the legacy inline gate, proven by beat_gate's parity test), and node.flash applies it to the image in the selected mode (Opacity = toward black, White = toward white, Gain = 3x brighten). Replaces the fused node.strobe kernel; the gate is now a reusable wireable signal and the flash a reusable scalar-driven brightness modulator (drive it from an LFO/audio/MIDI too). No system.generator_input needed — beat_gate reads the beat from FrameTime.",
   "presetMetadata": {
     "id": "Strobe",
     "displayName": "Strobe",
@@ -63,40 +63,22 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "strobe",
-          "param": "amount"
-        },
-        "convert": {
-          "type": "Float"
-        }
+        "target": { "kind": "handleNode", "handle": "gate", "param": "amount" },
+        "convert": { "type": "Float" }
       },
       {
         "id": "rate",
         "label": "Rate",
         "defaultValue": 6.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "strobe",
-          "param": "rate"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
+        "target": { "kind": "handleNode", "handle": "gate", "param": "rate" },
+        "convert": { "type": "EnumRound" }
       },
       {
         "id": "mode",
         "label": "Mode",
         "defaultValue": 0.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "strobe",
-          "param": "mode"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
+        "target": { "kind": "handleNode", "handle": "flash", "param": "mode" },
+        "convert": { "type": "EnumRound" }
       }
     ],
     "skipMode": {
@@ -105,63 +87,32 @@
     }
   },
   "nodes": [
-    {
-      "id": 0,
-      "typeId": "system.source",
-      "handle": "source"
-    },
+    { "id": 0, "typeId": "system.source", "handle": "source" },
     {
       "id": 1,
-      "typeId": "node.strobe",
-      "handle": "strobe",
+      "typeId": "node.beat_gate",
+      "handle": "gate",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "beat": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 0
-        },
-        "rate": {
-          "type": "Enum",
-          "value": 6
-        }
+        "rate": { "type": "Enum", "value": 6 },
+        "amount": { "type": "Float", "value": 0.0 },
+        "duty": { "type": "Float", "value": 0.5 },
+        "phase": { "type": "Float", "value": 0.0 }
       }
     },
     {
       "id": 2,
-      "typeId": "system.final_output",
-      "handle": "final_output"
+      "typeId": "node.flash",
+      "handle": "flash",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
     },
-    {
-      "id": 3,
-      "typeId": "system.generator_input",
-      "handle": "input"
-    }
+    { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
   ],
   "wires": [
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 1,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "beat",
-      "toNode": 1,
-      "toPort": "beat"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "out",
-      "toNode": 2,
-      "toPort": "in"
-    }
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "amount" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
   ]
 }

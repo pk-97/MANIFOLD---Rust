@@ -63,6 +63,7 @@ mod fbm_2d;
 mod fbm_per_instance;
 mod field_combine;
 mod filter;
+mod flash;
 mod flow_field_noise;
 mod fract_texture;
 mod fresnel_rim;
@@ -263,6 +264,7 @@ pub use field_combine::FieldCombine;
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
+pub use flash::{FLASH_MODES, Flash};
 pub use flow_field_noise::FlowFieldNoise;
 pub use fract_texture::FractTexture;
 pub use fresnel_rim::FresnelRim;
