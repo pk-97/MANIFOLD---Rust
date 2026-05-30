@@ -522,6 +522,9 @@ macro_rules! primitive {
         $( composition_notes: $notes:literal, )?
         $( examples: [ $($ex:literal),* $(,)? ], )?
         $( picker: { label: $picker_label:literal, category: $picker_cat:ident $(,)? }, )?
+        $( summary: $summary:literal, )?
+        $( category: $cat:ident, )?
+        $( role: $role:ident, )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -585,6 +588,22 @@ macro_rules! primitive {
                 type_id: $type_id,
                 create: || ::std::boxed::Box::new(<$struct_name>::new()),
                 picker: $crate::__primitive_picker!($( $picker_label, $picker_cat )?),
+            }
+        }
+
+        // Documentation / AI-composition metadata on its own inventory
+        // channel (see `node_graph::descriptor`). `purpose` is the
+        // existing `PURPOSE`; `summary` / `category` / `role` come from
+        // the optional macro fields, defaulting to "unset" so existing
+        // nodes need no edit. `catalog_gen` joins this with the registry.
+        ::inventory::submit! {
+            $crate::node_graph::descriptor::NodeDescriptor {
+                type_id: $type_id,
+                purpose: $purpose,
+                summary: $crate::__primitive_desc_summary!($( $summary )?),
+                category: $crate::__primitive_desc_category!($( $cat )?),
+                role: $crate::__primitive_desc_role!($( $role )?),
+                examples: &[ $( $( $ex ),* )? ],
             }
         }
     };
@@ -652,6 +671,49 @@ macro_rules! __primitive_picker {
             label: $label,
             category: $crate::node_graph::palette::PaletteCategory::$cat,
         })
+    };
+}
+
+/// Internal helper: optional `summary:` macro field → `&'static str`.
+/// Missing → `""` (the "unset" sentinel `catalog_gen` treats as blank).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __primitive_desc_summary {
+    () => {
+        ""
+    };
+    ($summary:literal) => {
+        $summary
+    };
+}
+
+/// Internal helper: optional `category:` macro field → [`Category`].
+/// Missing → `Category::Uncategorized`.
+///
+/// [`Category`]: $crate::node_graph::descriptor::Category
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __primitive_desc_category {
+    () => {
+        $crate::node_graph::descriptor::Category::Uncategorized
+    };
+    ($cat:ident) => {
+        $crate::node_graph::descriptor::Category::$cat
+    };
+}
+
+/// Internal helper: optional `role:` macro field → [`Role`].
+/// Missing → `Role::Unknown`.
+///
+/// [`Role`]: $crate::node_graph::descriptor::Role
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __primitive_desc_role {
+    () => {
+        $crate::node_graph::descriptor::Role::Unknown
+    };
+    ($role:ident) => {
+        $crate::node_graph::descriptor::Role::$role
     };
 }
 

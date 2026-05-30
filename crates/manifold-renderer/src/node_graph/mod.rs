@@ -15,8 +15,10 @@ pub mod light;
 pub mod material;
 mod boundary_nodes;
 mod bundled_presets;
+pub mod catalog_gen;
 mod chain_spec;
 pub mod composites;
+pub mod descriptor;
 mod effect_node;
 mod execution;
 mod execution_plan;
@@ -85,6 +87,7 @@ pub use ports::{
     NodeOutput, NodePort, PortKind, PortType, ScalarType, TextureChannels, std430_layout,
     std430_stride, std430_stride_and_align,
 };
+pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
     ArrayMatchMode, ChannelSnapshot, GraphSnapshot, NodeSnapshot, OuterParamRouting,
