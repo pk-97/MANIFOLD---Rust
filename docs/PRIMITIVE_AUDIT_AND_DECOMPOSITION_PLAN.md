@@ -167,7 +167,7 @@ Cheapest-first: **Strobe** (`beat_gate` + `gain`), **Highlight Boost** (`thresho
 
 ### Phase 5 — Deferred / feature work
 
-- **FluidSim3D** — parked; heavy mechanical 3D-parallel of the done 2D fluid atoms (`fluid_simulate_3d` + `fluid_gradient_curl_3d` + `fluid_seed_3d`).
+- **FluidSim3D** — ✅ **done 2026-05-30.** Fully atom-decomposed (3D-parallel of the 2D fluid atoms): the fused `fluid_simulate_3d` + `fluid_gradient_curl_3d` + `fluid_seed_3d` were replaced by 10 new 3D atoms (`gradient_central_diff_3d`, `curl_slope_force_3d`, `sample_texture_3d_at_particles`, `simplex_noise_force_3d_at_particles`, `diffuse_force_3d_at_particles`, `container_repel_force_3d`, `euler_step_particles_3d`, `container_bounds_3d`, `flatten_to_camera_plane`, `apply_radial_burst_3d_to_particles`) plus a `seed_particles → wgsl_compute(8-pattern) → array_feedback` seed branch. Preset rewired; fused primitives + shaders deleted. Parity: approximate-with-documented-deltas (force-buffer fp32 round-trip, dropped dead velocity-bounce), visual inspection pending.
 - **Tesseract** — reframed 2026-05-29: the channel system removed the wire-type ceiling (an n-D vertex is just `Channels[x,y,z,w,v: F32]`, no new Rust type). So the **square→cube→tesseract dimension-morph** (the "B" option) is now cheap — only `hypercube_vertices(d)` + `edges_from_hypercube(d)` (both closed-form) plus the *existing* `rotate_4d → project_4d → render_lines` (run the 4D pipeline with the 4th coord ramping from 0). A genuinely cool instrument feature, promoted from "tidy split." Only penteract+ (d≥5) needs the separate larger lift of generalized `rotate_nd` / `project_nd`.
 
 ### Progress log

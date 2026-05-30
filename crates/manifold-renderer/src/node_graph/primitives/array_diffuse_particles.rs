@@ -6,8 +6,10 @@
 //! `integrate_particles_attractor` had this folded into its simulate
 //! shader as `if u.diffusion > 0.0 { state += hash_kick }`; pulling
 //! it out gives the JSON graph a knob the user can wire to an LFO or
-//! audio band, and lets future particle effects (fluid_simulate_3d,
-//! sparks, swarms) compose the same kick without re-implementing it.
+//! audio band, and lets future particle effects (fluid sims, sparks,
+//! swarms) compose the same kick without re-implementing it. The
+//! position-domain sibling for fluid sims is `diffuse_force_3d_at_particles`
+//! (kicks the force buffer, density-weighted) / `anti_clump_particles`.
 //!
 //! Aliased `in`/`out` (single physical buffer, in-place mutation) —
 //! same shape as `node.integrate_particles` and the rest of the

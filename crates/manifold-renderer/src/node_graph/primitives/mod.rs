@@ -69,9 +69,6 @@ mod flow_field_noise;
 mod fract_texture;
 mod fresnel_rim;
 mod frequency_ratio;
-mod fluid_gradient_curl_3d;
-mod fluid_seed_3d;
-mod fluid_simulate_3d;
 mod gradient_central_diff_3d;
 mod curl_slope_force_3d;
 mod sample_texture_3d_at_particles;
@@ -284,11 +281,6 @@ pub use flow_field_noise::FlowFieldNoise;
 pub use fract_texture::FractTexture;
 pub use fresnel_rim::FresnelRim;
 pub use frequency_ratio::{FREQUENCY_RATIO_TABLE, FrequencyRatio};
-pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
-pub use fluid_seed_3d::{
-    FLUID_SEED_3D_CONTAINER_MODES, FLUID_SEED_3D_PATTERNS, FluidSeed3D,
-};
-pub use fluid_simulate_3d::{FLUID_3D_CONTAINER_MODES, FluidSimulate3D};
 pub use gradient_central_diff_3d::GradientCentralDiff3D;
 pub use curl_slope_force_3d::CurlSlopeForce3D;
 pub use sample_texture_3d_at_particles::SampleTexture3DAtParticles;
