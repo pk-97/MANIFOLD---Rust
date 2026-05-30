@@ -25,7 +25,6 @@ mod harness;
 
 mod affine_transform;
 mod edge_detect;
-mod glitch;
 mod invert;
 mod lut1d;
 mod sanity;

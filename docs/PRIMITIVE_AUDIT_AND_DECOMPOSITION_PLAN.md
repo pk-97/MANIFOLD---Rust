@@ -1,6 +1,6 @@
 # Primitive Audit and 2nd-Pass Decomposition Plan
 
-**Status:** Active. Established 2026-05-26 after the post-migration inventory revealed the fused-bundle anti-pattern at scale. The original generator migration ([`GENERATOR_DECOMPOSITION_PLAN.md`](GENERATOR_DECOMPOSITION_PLAN.md)) is closed — 0 Rust generators remain — but several of the primitives shipped during that pass are fused bundles that need to be decomposed under the no-fused-monolith rule.
+**Status:** Nearly closed. Established 2026-05-26 after the post-migration inventory revealed the fused-bundle anti-pattern at scale. The original generator migration ([`GENERATOR_DECOMPOSITION_PLAN.md`](GENERATOR_DECOMPOSITION_PLAN.md)) is closed — 0 Rust generators remain. As of the **2026-05-30 decomposition-completion + deletion pass**, every effect is a decomposed JSON atom graph and all fused effect-monolith bundles have been **deleted** (not just decomposed-pending-deletion) — see the progress-log entry at the bottom. **Remaining decomposition targets (the only ones left):** one effect — Wireframe Depth (`node.wireframe_depth`, legacy `PostProcessEffect`; `WireframeDepthGraph.json` decomp in flight) — and three generators that still wire fused/closed bundles: DigitalPlants (`cylinder_wrap_field` + `torus_wrap_field` + `digital_plants_render`), NestedCubes (`nested_cubes_geometry`, Peter-driven rework), Tesseract (`generate_tesseract_vertices`, closed-polytope, deferred).
 
 **Companion docs:** [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md) (how-to-think, mandatory pre-read), [`NODE_CATALOG.md`](NODE_CATALOG.md) (what exists today), [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md) (mechanics of adding atoms).
 
@@ -49,6 +49,8 @@ Each row: the bundled primitive, the operations it internalizes, the atoms it sh
 
 ### 1.2 Legacy effects with wrapped Rust pipelines
 
+> **CLOSED except Wireframe Depth (2026-05-30).** Every row below is decomposed and its bundle deleted (`auto_gain`, `blob_track`, `depth_of_field`, `infrared`, `quad_mirror`) — only **Wireframe Depth** still wraps a legacy `PostProcessEffect` (`WireframeDepthGraph.json` decomp in flight). The original analysis is preserved below for history.
+
 Each effect's `node.*` primitive currently wraps a legacy `PostProcessEffect`. Decomposing produces a graph of single-purpose primitives; the DNN / FFI / CPU work stays at primitive granularity but the fused outer kernel is deleted.
 
 | Effect | Decomposes into |
@@ -62,7 +64,9 @@ Each effect's `node.*` primitive currently wraps a legacy `PostProcessEffect`. D
 
 ### 1.3 Composite effect presets still wrapping monolithic effect nodes
 
-Most of the 22 thin-wrap effect presets in `assets/effect-presets/` are still single-node graphs around a composite `node.*` primitive. Atomization candidates beyond the legacy-Rust six above:
+> **CLOSED (2026-05-30).** Every effect in the table below is now a decomposed atom-graph preset and its fused `node.*` bundle is **deleted** (Bloom, Watercolor, Glitch, Kaleidoscope, Color Grade, Chromatic Aberration, Dither, Edge Stretch, Highlight Boost, Strobe, Voronoi Prism; Halation deleted; Transform was always the legit `affine_transform` exception). The original analysis is preserved below for history.
+
+Most of the thin-wrap effect presets in `assets/effect-presets/` were once single-node graphs around a composite `node.*` primitive. Atomization candidates beyond the legacy-Rust six above:
 
 | Preset | Current shape | Decomposes into |
 |---|---|---|
@@ -99,6 +103,8 @@ Registered primitives with zero current uses that are decomposition targets, not
 
 ### 1.5 Deletion candidates (genuinely superseded)
 
+> **RESOLVED (2026-05-30).** The three `node.wgsl_compute_*tex` variants + `node.mip_chain` + `node.blend` + `node.sample` are **deleted**. `node.tone_map` was reviewed and **KEPT** (NOT a duplicate of `reinhard_tone_map` — it's the richer HDR node with ACES/AgX/Khronos curves + SDR/PQ/EDR output). The no-op stubs `node.threshold` / `node.color_ramp` / `node.brightness` were **implemented** in prior sessions (no longer stubs). `node.wet_dry` / `node.color_lut` / `node.channel_mix` retained (in active use). The original analysis is preserved below.
+
 These appear unused because they've been displaced by better primitives. Confirm-and-delete pass:
 
 - `node.wgsl_compute_0in_1tex`, `node.wgsl_compute_1tex_1tex`, `node.wgsl_compute_2tex_1tex` — superseded by the introspected `node.wgsl_compute` used by BlackHole.
@@ -114,6 +120,8 @@ These appear unused because they've been displaced by better primitives. Confirm
 - `node.sample` (`Sample` in uv.rs) — stubbed/unused; the long-standing deletion candidate. Distinct from the missing absolute-UV `remap` (§1.6).
 
 ### 1.6 The missing `remap` atom — the UV-warp family blocker (identified 2026-05-29)
+
+> **RESOLVED (2026-05-29/30).** `node.remap` was built (with an `Absolute`/`Relative` mode enum) and the entire UV-warp family decomposed onto it: Kaleidoscope (`radial_fold_uv`), Quad Mirror (`centered_uv → abs → scale_offset`), Edge Stretch (`uv_strip_clamp`), Chromatic Aberration (`radial_offset_field → chromatic_displace`), Mirror (`mirror_fold_uv`), Glitch displace (`block_displace_field` + `scanline_jitter_field`). All the legacy bundles named below are **deleted**. The original gap analysis is preserved below.
 
 The audit of `kaleido_fold` surfaced a structural gap: **there is no generic "sample the input at an arbitrary UV field" primitive** — the equivalent of TouchDesigner's *Remap TOP*, Unreal's *Texture Sample* fed by computed UVs, or Blender's *Mapping → Image Texture* split. The existing samplers only do *relative* displacement (`texture_advect`: `sample(uv − velocity·dt/dims)`; `uv_displace_by_flow`: `sample(uv + flow)`) or a *fixed* affine (`affine_transform`). Nothing does `out(uv) = sample(input, uvfield(uv).rg)` for an absolute UV map. (`node.sample` and `color_sample` are single-pixel reads, not a per-pixel resample.)
 
@@ -235,6 +243,19 @@ Cheapest-first: **Strobe** (`beat_gate` + `gain`), **Highlight Boost** (`thresho
 - **All legacy bundles stay registered** until Peter's end-of-migration visual pass; bundle deletion is the last, batched, irreversible step. Pre-existing non-mine test failures (palette Driver-list stale assertion, DepthOfField prewarm gap, WireframeDepthGraph blit) — flagged, not fixed.
 - **Visual-check queue (full, after session 3):** MetallicGlass, QuadMirror, Kaleidoscope, Edge Stretch, Chromatic Aberration, Infrared, Bloom, Dither, HighlightBoost, ColorGrade, Strobe, Glitch, Watercolor, **Voronoi Prism, Plasma**. Legacy bundles for all stay registered until the pass.
 - **New atoms shipped this session (11) + 2 extensions:** `node.saturation`, `node.contrast`, `node.colorize` (ColorGrade); `node.flash` (Strobe); `node.glitch_displace` (Glitch, 2-output); `node.film_grain`, `node.slope_displace` (Watercolor); `node.voronoi_cell_id`, `node.hash_field_by_seed`, `node.beat_ramp` (Voronoi Prism); plus `Exp2` math op + an `amount` scalar input port on `node.mix`. Plasma uses `node.wgsl_compute` (no new compiled atom). All registered as palette Atoms/Drivers with full purpose/composition_notes.
+
+**2026-05-30 — DECOMPOSITION-COMPLETION + DELETION PASS (the deferred irreversible step, now done). Peter authorized deleting the legacy bundles now and tuning the decomposed effects live as he uses them, collapsing the per-effect visual-checkpoint gate.**
+
+- **Last three effect presets rewired off their embedded monoliths**, so no preset references a fused effect-monolith node anymore:
+  - **Mirror** — new atom **`node.mirror_fold_uv`** (the mirror/fold half of the deleted `node.transform`, as a coordinate generator; the affine half stays `node.affine_transform`) → `node.remap` → `node.mix`. Verbatim port of the legacy fold math.
+  - **Glitch** — the embedded `node.chromatic_aberration` replaced with the inlined chromatic decomposition (`node.radial_offset_field` → `node.math` → `node.chromatic_displace`).
+  - **OilyFluid** (generator) — terminal `node.color_grade` replaced with the used subset of the ColorGrade chain (`node.gain` → `node.saturation` → `node.hue_saturation` → `node.contrast` → `node.clamp_texture`).
+- **Three test-effect presets DELETED** (Peter: test effects): **Mandala**, **SmearMosh**, **EdgeStretchByColor** — preset JSON + `EffectTypeId` consts + `examples:` refs.
+- **14 fused effect-monolith bundles DELETED** (Rust + WGSL + registrations): `bloom`, `chromatic_offset` (chromatic_aberration), `clamp_stretch` (edge_stretch), `color_grade`, `highlight_boost`, `infrared`, `kaleido_fold` (kaleidoscope), `quad_mirror`, `plasma_pattern_2d`, `strobe`, `uv` (`node.transform` + `node.sample`), `voronoi_prism`, plus the two legacy `effects/{infrared,quad_mirror}` `PostProcessEffect` impls.
+- **Two no-op stub atoms DELETED:** `node.mip_chain` (empty `evaluate`, unbuilt mip convention) and `node.blend` (empty `evaluate`, superseded by `node.mix`), along with the dead `build_bloom` Rust composite-builder that was their only consumer. **`node.tone_map` was reviewed and KEPT** — it is NOT a duplicate of `reinhard_tone_map`; it's the richer HDR node (Narkowicz/Hill ACES, AgX, Khronos PBR Neutral curves + SDR/PQ/EDR output).
+- **Follow-on cleanup:** the shared note-rate table was lifted out of the deleted `strobe.rs` into `note_rates.rs` (used by `beat_gate` / `lfo`); 8 obsolete vs-legacy parity tests + the dead `composites/mirror.rs` were removed; user-binding regression tests repointed onto `StylizedFeedback.affine`.
+- **Verification:** renderer + core + editing compile, clippy clean, **46/46 presets load and execute one frame on GPU**, renderer lib suite down from 8 failures to 2 — both pre-existing and unrelated (DepthOfField missing `PluginPrewarm`, WireframeDepthGraph size-mismatched blit). Two trivial pre-existing assertions were also fixed in the pass (palette driver-list staleness; Bloom removed from the stateful-effects list since its decomposed graph is stateless). Commits `75a7391e` (monoliths) + `1bbd4223` (stubs) on `node-graph-system`.
+- **Net effect on this plan:** §1.1, §1.2, §1.3, §1.5 fused/stub entries for the effects + mip_chain/blend are now CLOSED (bundles deleted, not just decomposed). The only OPEN items left in the whole plan are **Wireframe Depth** (§1.2, separate agent) and the three generator bundles **DigitalPlants / NestedCubes / Tesseract** (§1.1) — see the Status line at the top.
 
 ---
 

@@ -23,7 +23,7 @@ The system is intuitive by default — drop a preset, it works — and exposes p
 3. **Stable IDs are forever.** Once shipped to a real user, type IDs and parameter names are public API. Additive evolution only.
 4. **Bundle wins.** When a project's bundled composite differs from a future user-library version, the bundle is canonical for that project.
 5. **Generator/effect distinction collapses.** A graph is a graph. Whether it acts as a generator or an effect is determined by its boundary port shape (`Source` → it's an effect; no `Source` → it's a generator).
-6. **JSON is the source of truth for presets.** Rust composite builders (`build_bloom`, `build_strobe_opacity`, …) survive only as dev fixtures for parity tests against legacy fused shaders. New presets ship as JSON only.
+6. **JSON is the source of truth for presets.** A few Rust composite builders (`build_infrared`, `build_soft_focus`, `build_strobe_opacity`) survive only as dev fixtures exercising the composite-mechanism in unit tests — the legacy fused shaders they once compared against are deleted, as is `build_bloom`. New presets ship as JSON only.
 
 ---
 
@@ -33,7 +33,7 @@ The system is intuitive by default — drop a preset, it works — and exposes p
 
 Every node in the graph is an instance of a [`Primitive`](../crates/manifold-renderer/src/node_graph/primitive.rs). A primitive declares (via the `primitive!` macro):
 
-- A stable **`type_id`** — e.g. `"node.gain"`, `"node.chromatic_aberration"`. Treated as public API once shipped.
+- A stable **`type_id`** — e.g. `"node.gain"`, `"node.remap"`. Treated as public API once shipped.
 - **`inputs`** — named typed ports (Texture2D, Texture3D, Scalar(F32/V2/V3)). Each is required or optional.
 - **`outputs`** — named typed ports.
 - **`params`** — typed scalar parameters with default + range + optional enum labels.
@@ -72,7 +72,7 @@ Three kinds of wire live in the graph today:
 
 ### 4.1 Port-shadows-param convention
 
-When a primitive declares a scalar input port with the same name as one of its `ParamDef`s, the wire wins when present and the param is the fallback. This is the standard pattern for control-rate modulation — used by `node.gain`, `node.wet_dry`, `node.affine_transform.rotation/translate_x/translate_y`, `node.smoothing.time_constant`, `node.feedback.amount`, `node.chromatic_aberration.amount`.
+When a primitive declares a scalar input port with the same name as one of its `ParamDef`s, the wire wins when present and the param is the fallback. This is the standard pattern for control-rate modulation — used by `node.gain`, `node.wet_dry`, `node.affine_transform.rotation/translate_x/translate_y`, `node.smoothing.time_constant`, `node.feedback.amount`, `node.chromatic_displace.amount`.
 
 In the editor: rows whose param is currently driven by a wire show `← wired` and disable the expose checkbox + value cell, so users can't double-bind the same parameter.
 

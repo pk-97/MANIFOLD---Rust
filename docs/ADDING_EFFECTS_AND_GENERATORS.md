@@ -104,11 +104,12 @@ The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets
 | File | Pattern |
 |---|---|
 | `InvertColors.json` | Minimal one-primitive preset |
-| `ChromaticAberration.json` | Single-primitive, multi-slider with `EnumRound` for the mode |
+| `ChromaticAberration.json` | Decomposed UV-warp: `radial_offset_field → math → chromatic_displace → mix`; multi-slider with `EnumRound` for the mode |
 | `EdgeGlow.json` | Two-stage chain: EdgeDetect → Threshold → Mix |
-| `SmearMosh.json` | Stateful (Feedback) + scalar-wire-driven control (EdgeDetect → Luminance → Smoothing → Math drives ChromaticOffset.amount) |
+| `StylizedFeedback.json` | Stateful (Feedback) loop: `feedback → affine_transform → gain → vignette → mix` — the canonical feedback-trail preset |
+| `Glitch.json` | Scalar-wire-driven control: `node.value` fans `amount`/`speed` into `block_displace_field` + `scanline_jitter_field` + the chromatic split |
 | `ColorCompass.json` | Four texture→scalar bridges driving AffineTransform translate ports |
-| `Strobe.json` | `node.strobe` fused composite — kept as a single atomic primitive |
+| `Strobe.json` | Decomposed: `node.beat_gate` (reads `FrameTime.beats`) → `node.flash` (3-mode brightness modulator) — no fused primitive |
 
 ---
 

@@ -944,7 +944,7 @@ With every effect either a preset graph (4b) or a monolithic node (4c), `EffectC
 
 2. **What's the canonical owner_key namespace under graph-as-chain?** Today: master=0, layer=layer_index+1, clip=hash(clip_id). With per-chain graphs, we keep this — owner_key is host-level identity; graphs are unaware. StateStore is per-host-process, keyed by `(NodeInstanceId, owner_key)`.
 
-3. **Composite expansion vs in-place sub-graph?** Composites today expand inline (`build_bloom` adds 4 nodes to the parent graph). Recommend: stay inline. Inline composites participate in static elision and lifetime analysis. Opaque sub-graphs would require a recursive executor.
+3. **Composite expansion vs in-place sub-graph?** Composites today expand inline (`build_soft_focus` adds 2 nodes to the parent graph). Recommend: stay inline. Inline composites participate in static elision and lifetime analysis. Opaque sub-graphs would require a recursive executor.
 
 4. **Vulkan barrier granularity.** `vkCmdPipelineBarrier2` supports per-stage and per-access masks for finer-grained barriers. Current proposed `pipeline_barrier(reads, writes)` is coarse (full memory + execution barrier). Coarse is fine for Phase 1; finer granularity is a future Vulkan-side optimization.
 

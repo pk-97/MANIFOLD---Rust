@@ -163,10 +163,10 @@ Per-pixel math producing a `Texture2D`. The Plasma family is the case study.
 
 For when a primitive operates on an incoming `Texture2D`.
 
-- **`gaussian_blur_variable_width` / `separable_gaussian` / `bloom` / `halation`** — blur family.
-- **`edge_detect` / `chromatic_offset` / `kaleido_fold` / `quad_mirror`** — single-shader effects.
+- **`gaussian_blur` / `gaussian_blur_variable_width` / `separable_gaussian` / `downsample`** — blur family.
+- **`edge_detect` / `remap` / `radial_fold_uv` / `uv_strip_clamp` / `mirror_fold_uv` / `radial_offset_field`** — edge detect + the UV-warp `coordinate-field → remap → blend` family (replaced the deleted kaleido/quad-mirror/edge-stretch/chromatic single-shader kernels).
 - **`affine_transform` / `rotate_2d`** — UV-space transforms.
-- **`color` / `color_grade` / `tone_map` / `reinhard_tone_map` / `lut1d` / `infrared`** — color.
+- **`brightness` / `saturation` / `contrast` / `hue_saturation` / `colorize` / `levels` / `channel_mix` / `tone_map` / `reinhard_tone_map` / `lut1d` / `gradient_ramp`** — color & tone.
 - **`compose`** — multi-mode blend (Lerp/Screen/Add/Max/Multiply/Difference/Overlay). The standard "combine two images" primitive.
 - **`wet_dry_mix` / `masked_mix`** — crossfade variants.
 
@@ -324,8 +324,6 @@ Good (already in the codebase, from the NODE_CATALOG rename pass):
 | `primitive.color_matrix` | `node.channel_mix` | hides the matrix math from users |
 | `primitive.gradient_map` | `node.color_ramp` | matches DAW / paint-program vocabulary |
 | `primitive.separable_gaussian` | `node.gaussian_blur` | the "separable" detail is an implementation choice |
-| `primitive.uv_transform` | `node.transform` | "UV" is GPU jargon; users just want a transform |
-| `primitive.kaleido_fold` | `node.kaleidoscope` | the math name; the user thinks "kaleidoscope" |
 
 Patterns that are usually a smell:
 

@@ -1,6 +1,6 @@
 # Graph Compiler — Shader Fusion + Per-Pixel Loops
 
-**Status:** Proposed initiative, not yet started. Standing decision (2026-05-26): Plasma decomposition is deferred until this work lands; Plasma becomes the test bed.
+**Status:** Shelved / walked back (2026-05-29). The 2026-05-26 standing decision — "Plasma decomposition deferred until this lands; Plasma is the test bed" — was **reversed**: `for_each_n` was judged overkill for MANIFOLD, and Plasma was decoupled and shipped via `node.wgsl_compute` (the 8 variants behind a `switch`), with `node.plasma_pattern_2d` **deleted in the 2026-05-30 pass** — without any graph-compiler / shader-fusion work. The order-of-operations below (incl. step 6's "delete plasma_pattern_2d") is the original hypothetical plan, retained as a future idea only; it lost its test bed and is not active. See memory `project_graph_compiler_initiative`.
 
 **Owner:** TBD. Estimated 2-4 weeks of focused work.
 
