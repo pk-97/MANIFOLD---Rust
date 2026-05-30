@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Fluid Sim 3D",
-  "description": "Volumetric 3D particle compute fluid simulation — decomposed from `FluidSimulation3DGenerator` + the four fluid_*_3d shaders into the curated primitive library. Built on the new Camera-port shape (PortType::Camera, node.camera_orbit) so the camera basis lives in one node feeding both the volume sim (cam.fwd drives flatten) and the display projector (camera_orbit → scatter_particles_camera).\n\nPer-frame pipeline:\n1. Volume buildup: seed→scatter_3d→resolve_3d→blur_3d ×3 (density volume) → fluid_gradient_curl_3d → blur_3d ×3 (vector field).\n2. Simulate: fluid_simulate_3d consumes (aliased in particles, blurred field, blurred density) and mutates positions in place. Uses cam.fwd for the flatten-toward-camera math.\n3. Display: seed.particles (aliased — already mutated by simulate) → scatter_particles_camera (mode dispatched by container — None→Orthographic toroidal wrap, else Perspective) → resolve_accumulator → reinhard_tone_map → affine_transform → final_output.\n\nClip-trigger envelope: same structural shape as FluidSim2D — trigger_gate gates raw trigger_count by `clip_trigger > 0.5`; envelope_decay (rate 12.0) produces a one-shot 0→1 envelope per gated edge; sample_and_hold latches the mode slider at trigger time. Five modes:\n- mode 0 (turbulence burst): turbulence *= 1 + 9*env\n- mode 1 (curl rotation): curl_angle += π * env\n- mode 2 (flow sign-flip): flow *= 1 - 2*env\n- mode 3 (re-seed): trigger_gate(clip_trigger AND mode==3) → fluid_seed_3d.trigger + simulate.trigger; clip_trigger_cycle(mod=8) drives pattern (8 patterns: 7 geometric + Random)\n- mode 4 (3D inject): inject_burst.active gates clip_trigger_cycle(mod=4) → mux to either the cycled zone index (active=1) or -1 (active=0) → simulate.inject_index; the four zones are hardcoded tetrahedron vertices in the shader\n\nKnown parity deltas vs legacy:\n(1) Volume pipeline runs every frame; legacy amortized to every-other-frame to halve GPU cost on the volume passes. Graph runtime lacks per-frame sub-graph gating (same shape as FluidSim2D's mode-3 hitch). ~30–40% extra GPU on the volume passes.\n(2) vol_res baked at 128 — the legacy 64/128/256 slider is dropped because the graph runtime can't reallocate Texture3D mid-frame.\n(3) Display tone curve UV recenter is a separate affine_transform pass instead of fused into the tone shader — mathematically equivalent, not byte-exact (same delta as FluidSim2D).\n(4) The mode-3 re-seed will produce a ~16ms GPU pipeline hitch on each fire; legacy skipped the full pipeline on seed frames via the trigger port. The trigger-port skip is supported here (fluid_simulate_3d.trigger), but the volume pipeline still runs that frame — acceptable.\n\nCamera wiring: rotate_x (legacy [-1, +1] slider) → ×π → camera_orbit.tilt; rotate_y → ×π → camera_orbit.orbit; rotate_z → ×π → camera_orbit.roll (new in Camera struct); cam_dist → camera_orbit.distance. fov is baked at π/3 ≈ 60° to match the legacy implicit FOV.",
+  "description": "Volumetric 3D particle compute fluid simulation — fully atom-decomposed from the fused `fluid_seed_3d` + `fluid_simulate_3d` + `fluid_gradient_curl_3d` primitives into the curated library (mirrors the FluidSim2D atom decomposition in 3D). Built on the Camera-port shape (node.camera_orbit) so one camera basis feeds both the volume sim (cam.fwd drives flatten) and the display projector (scatter_particles_camera).\n\nPer-frame pipeline:\n1. **Seed branch** (open family — pattern math is JSON-editable WGSL): `seed_particles` allocates the persistent particle buffer; `wgsl_compute(seed_pattern_3d)` writes one of 8 patterns (cluster / H planes / V planes / shells / 3D cross / helix / surface sphere / random) selected by `pattern`, with container-aware rejection. Output flows into `array_feedback.seed`.\n2. **Particle loop** (closes via state, no graph cycle): `array_feedback` holds last frame's sim state, emits `out`. On `reset_trigger` integer-edge (mode-3 gate) it reloads from the seed branch.\n3. **Force-field assembly**: `array_feedback.out → scatter_particles_3d → resolve_3d → blur_3d x3` builds the density volume; `gradient_central_diff_3d → curl_slope_force_3d` replaces the legacy fused gradient/curl dispatch; `→ blur_3d x3 → blurred vector field`.\n4. **Per-particle integrator chain** (replaces the fused fluid_simulate_3d): force buffer `sample_texture_3d_at_particles(field) → simplex_noise_force_3d_at_particles(density, turbulence, anti_clump) → diffuse_force_3d_at_particles(density, diffusion) → container_repel_force_3d`; then position `euler_step_particles_3d(forces, speed) → container_bounds_3d(container) → flatten_to_camera_plane(cam.fwd) → apply_radial_burst_3d_to_particles(inject)` → back into array_feedback.\n5. **Display**: `array_feedback.out → scatter_particles_camera (mode by container) → resolve_accumulator → reinhard_tone_map → affine_transform → final_output`.\n\nClip-trigger envelope (same structural shape as FluidSim2D): trig_gate_env gates raw trigger_count by `clip_trigger > 0.5`; envelope_decay (rate 12.0) gives a one-shot 0->1 envelope per gated edge; sample_and_hold latches the mode slider at trigger time. Five modes:\n- mode 0 (turbulence burst): turbulence *= 1 + 9*env\n- mode 1 (curl rotation): curl_angle += pi * env\n- mode 2 (flow sign-flip): flow *= 1 - 2*env\n- mode 3 (re-seed): mode3 gate -> array_feedback.reset_trigger; clip_trigger_cycle(mod=8) drives the 8-pattern seed\n- mode 4 (3D inject): inject_burst gates clip_trigger_cycle(mod=4) -> mux to the cycled tetrahedron zone (active=1) or -1 (active=0) -> apply_radial_burst_3d_to_particles\n\nKnown parity deltas vs the previous fused build (same class as FluidSim2D's documented deltas):\n(1) The force buffer is written to memory (Array<[f32;3]>) between the force atoms and the euler step, whereas the fused kernel accumulated force in registers — fp32 round-trip, visually identical, not byte-exact.\n(2) Container soft repulsion is now a pre-integration force atom and the hard containment a post-integration position atom; the legacy velocity-bounce write was dead state (nothing reads particle velocity) and is dropped.\n(3) The seed no longer applies camera flatten — flatten_to_camera_plane re-applies it every frame, so the only difference is the very first seeded frame before the per-frame flatten catches up.\n(4) The 8-pattern seed cycle is now actually wired (clip_trigger_cycle -> seed pattern); the previous fused build left the cycle dangling and always seeded Random.\n(5) Volume pipeline runs every frame and vol_res is baked at 128 (graph runtime can't reallocate Texture3D mid-frame) — same deltas the fused build documented.\n\nWhat the decomposition unlocks: every integrator stage (sample / noise / diffuse / repel / euler / bounds / flatten / inject) is a separate atom usable in any 3D particle sim; the seed patterns are JSON-editable WGSL (add a 9th by appending a `case`); the gradient/curl/force-field assembly is reusable for any volumetric flow field.\n\nCamera wiring: rotate_x/y/z (legacy [-1,+1] sliders) x pi -> camera_orbit.tilt/orbit/roll; cam_dist -> camera_orbit.distance; fov baked at pi/3.",
   "presetMetadata": {
     "id": "FluidSimulation3D",
     "displayName": "Fluid Sim 3D",
@@ -33,7 +33,7 @@
     ],
     "bindings": [
       { "id": "speed",             "label": "Speed",        "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "speed" },
+        "target": { "kind": "handleNode", "handle": "euler_3d", "param": "speed" },
         "convert": { "type": "Float" } },
 
       { "id": "flow",              "label": "Flow",         "defaultValue": -0.01,
@@ -89,7 +89,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "anti_clump" },
+        "target": { "kind": "handleNode", "handle": "noise_force", "param": "anti_clump" },
         "convert": { "type": "Float" } },
       { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
         "target": { "kind": "handleNode", "handle": "diffusion_calc", "param": "a" },
@@ -100,20 +100,26 @@
         "convert": { "type": "Float" } },
 
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "container" },
+        "target": { "kind": "handleNode", "handle": "container_repel", "param": "container" },
         "convert": { "type": "EnumRound" } },
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "seed", "param": "container" },
+        "target": { "kind": "handleNode", "handle": "container_bounds", "param": "container" },
         "convert": { "type": "EnumRound" } },
+      { "id": "container",         "label": "Container",    "defaultValue": 0.0,
+        "target": { "kind": "handleNode", "handle": "seed_pattern", "param": "container" },
+        "convert": { "type": "IntRound" } },
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
         "target": { "kind": "handleNode", "handle": "container_clamped", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "ctr_scale" },
+        "target": { "kind": "handleNode", "handle": "container_repel", "param": "ctr_scale" },
         "convert": { "type": "Float" } },
       { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
-        "target": { "kind": "handleNode", "handle": "seed", "param": "ctr_scale" },
+        "target": { "kind": "handleNode", "handle": "container_bounds", "param": "ctr_scale" },
+        "convert": { "type": "Float" } },
+      { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
+        "target": { "kind": "handleNode", "handle": "seed_pattern", "param": "ctr_scale" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",          "label": "Cam Dist",     "defaultValue": 3.0,
@@ -131,10 +137,7 @@
         "convert": { "type": "Float" } },
 
       { "id": "flatten",           "label": "Flatten",      "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "flatten" },
-        "convert": { "type": "Float" } },
-      { "id": "flatten",           "label": "Flatten",      "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "seed", "param": "flatten" },
+        "target": { "kind": "handleNode", "handle": "flatten_3d", "param": "flatten" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
@@ -162,16 +165,26 @@
     { "id": 5,  "typeId": "node.affine_scalar", "handle": "roll_to_rad",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 6,  "typeId": "node.fluid_seed_3d", "handle": "seed",
+    { "id": 100, "typeId": "node.seed_particles", "handle": "seed_buffer",
       "params": {
-        "max_capacity":  { "type": "Int",  "value": 8000000 },
-        "active_count":  { "type": "Int",  "value": 2000000 },
-        "pattern":       { "type": "Enum", "value": 7 },
-        "trigger_count": { "type": "Int",  "value": 42 },
-        "container":     { "type": "Enum", "value": 0 },
-        "ctr_scale":     { "type": "Float", "value": 0.8 },
-        "flatten":       { "type": "Float", "value": 0.0 }
+        "max_capacity": { "type": "Int",  "value": 8000000 },
+        "active_count": { "type": "Int",  "value": 2000000 },
+        "seed_offset":  { "type": "Int",  "value": 0 },
+        "seed_mode":    { "type": "Enum", "value": 0 }
       } },
+
+    { "id": 101, "typeId": "node.wgsl_compute", "handle": "seed_pattern",
+      "wgslSource": "// FluidSim3D seed pattern — open family (8 patterns, JSON-editable).\n// Writes initial 3D particle positions for one of 8 patterns into an\n// aliased Array<Particle> (allocated by node.seed_particles upstream).\n// Add a 9th pattern by appending a `case` to the switch.\n//\n// Patterns: 0 center cluster, 1 H planes, 2 V planes, 3 shells,\n// 4 diagonal cross, 5 helix, 6 surface sphere, 7+ random fill.\n// Container-aware: positions outside the SDF are pulled back inside.\n// (Camera flatten is applied per-frame by node.flatten_to_camera_plane,\n// so the seed itself does not flatten.)\n\nstruct U {\n    active_count: u32,\n    pattern: u32,\n    trigger_count: u32,\n    container: u32,\n    ctr_scale: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float3(seed: u32) -> vec3<f32> {\n    let h0 = wang_hash(seed);\n    let h1 = wang_hash(h0);\n    let h2 = wang_hash(h1);\n    return vec3<f32>(\n        f32(h0) / 4294967296.0,\n        f32(h1) / 4294967296.0,\n        f32(h2) / 4294967296.0,\n    );\n}\n\nfn sd_box(p: vec3<f32>, half_size: vec3<f32>) -> f32 {\n    let d = abs(p) - half_size;\n    return length(max(d, vec3<f32>(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);\n}\n\nfn sd_sphere(p: vec3<f32>, r: f32) -> f32 {\n    return length(p) - r;\n}\n\nfn sd_torus(p: vec3<f32>, big_r: f32, small_r: f32) -> f32 {\n    let q = vec2<f32>(length(p.xz) - big_r, p.y);\n    return length(q) - small_r;\n}\n\nfn container_sdf(p: vec3<f32>, ctype: u32, scale: f32) -> f32 {\n    let centered = p - 0.5;\n    switch ctype {\n        case 1u: { return sd_box(centered, vec3<f32>(scale * 0.5)); }\n        case 2u: { return sd_sphere(centered, scale * 0.5); }\n        case 3u: { return sd_torus(centered, scale * 0.3, scale * 0.12); }\n        default: { return -1.0; }\n    }\n}\n\nfn container_gradient(p: vec3<f32>, ctype: u32, scale: f32) -> vec3<f32> {\n    let eps: f32 = 0.002;\n    return normalize(vec3<f32>(\n        container_sdf(p + vec3<f32>(eps, 0.0, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(eps, 0.0, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, eps, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(0.0, eps, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, 0.0, eps), ctype, scale) - container_sdf(p - vec3<f32>(0.0, 0.0, eps), ctype, scale),\n    ));\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= u.active_count {\n        return;\n    }\n\n    let pattern_seed = u.trigger_count * 7919u;\n    let seed = i * 1664525u + pattern_seed * 747796405u;\n    var pos: vec3<f32>;\n\n    switch u.pattern {\n        case 0u: {\n            var sum = vec3<f32>(0.0);\n            var s = seed;\n            for (var j: i32 = 0; j < 4; j++) {\n                sum += hash_float3(s);\n                s = wang_hash(s);\n            }\n            pos = 0.5 + (sum - 2.0) * 0.052;\n        }\n        case 1u: {\n            let slab_idx = i % 6u;\n            let xz = hash_float3(seed).xy;\n            pos = vec3<f32>(xz.x, (f32(slab_idx) + 0.5) / 6.0, xz.y);\n        }\n        case 2u: {\n            let slab_idx = i % 6u;\n            let yz = hash_float3(seed).xy;\n            pos = vec3<f32>((f32(slab_idx) + 0.5) / 6.0, yz.x, yz.y);\n        }\n        case 3u: {\n            let shell_idx = i % 3u;\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let radius = 0.1 + f32(shell_idx) * 0.1;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        case 4u: {\n            let t = hash_float(seed);\n            let spread = hash_float(seed + 1u) * 0.03;\n            let axis = i % 3u;\n            if axis == 0u {\n                pos = vec3<f32>(t, t + spread, 0.5 + spread);\n            } else if axis == 1u {\n                pos = vec3<f32>(t, 0.5 + spread, t + spread);\n            } else {\n                pos = vec3<f32>(0.5 + spread, t, t + spread);\n            }\n        }\n        case 5u: {\n            let norm = f32(i) / f32(u.active_count);\n            let angle = norm * 6.0 * 6.28318530718;\n            let y = norm;\n            let radius: f32 = 0.15;\n            let spread = hash_float(seed) * 0.015;\n            let helix_side = select(0.0, 3.14159, (i & 1u) != 0u);\n            pos = vec3<f32>(\n                0.5 + cos(angle + helix_side) * (radius + spread),\n                y,\n                0.5 + sin(angle + helix_side) * (radius + spread),\n            );\n        }\n        case 6u: {\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let spread = (hash_float(seed + 1u) - 0.5) * 0.03;\n            let radius = 0.45 + spread;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        default: {\n            pos = hash_float3(seed);\n        }\n    }\n\n    pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n\n    if u.container > 0u {\n        if container_sdf(pos, u.container, u.ctr_scale) > 0.0 {\n            let n = container_gradient(pos, u.container, u.ctr_scale);\n            let d = container_sdf(pos, u.container, u.ctr_scale);\n            pos -= n * (d + 0.01);\n            pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n        }\n    }\n\n    var out_p: Particle;\n    out_p.position = pos;\n    out_p.velocity = vec3<f32>(0.0);\n    out_p.life = 1.0;\n    out_p.age = -1.0;\n    out_p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n    particles[i] = out_p;\n}\n",
+      "params": {
+        "active_count":  { "type": "Float", "value": 2000000.0 },
+        "pattern":       { "type": "Float", "value": 7.0 },
+        "trigger_count": { "type": "Float", "value": 42.0 },
+        "container":     { "type": "Float", "value": 0.0 },
+        "ctr_scale":     { "type": "Float", "value": 0.8 }
+      } },
+
+    { "id": 102, "typeId": "node.array_feedback", "handle": "particles_feedback",
+      "params": {} },
 
     { "id": 7,  "typeId": "node.scatter_particles_3d", "handle": "vol_scatter",
       "params": {
@@ -194,7 +207,13 @@
     { "id": 11, "typeId": "node.blur_3d_separable", "handle": "density_blur_z",
       "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 2 }, "radius": { "type": "Float", "value": 5.0 } } },
 
-    { "id": 12, "typeId": "node.fluid_gradient_curl_3d", "handle": "grad_curl",
+    { "id": 111, "typeId": "node.gradient_central_diff_3d", "handle": "grad_3d",
+      "params": {
+        "vol_res":   { "type": "Int", "value": 128 },
+        "vol_depth": { "type": "Int", "value": 128 }
+      } },
+
+    { "id": 112, "typeId": "node.curl_slope_force_3d", "handle": "curl_slope",
       "params": {
         "vol_res":        { "type": "Int",   "value": 128 },
         "vol_depth":      { "type": "Int",   "value": 128 },
@@ -212,19 +231,54 @@
     { "id": 15, "typeId": "node.blur_3d_separable", "handle": "field_blur_z",
       "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 2 }, "radius": { "type": "Float", "value": 5.0 } } },
 
-    { "id": 16, "typeId": "node.fluid_simulate_3d", "handle": "simulate",
+    { "id": 103, "typeId": "node.sample_texture_3d_at_particles", "handle": "sample_forces",
+      "params": { "active_count": { "type": "Int", "value": 2000000 } } },
+
+    { "id": 104, "typeId": "node.simplex_noise_force_3d_at_particles", "handle": "noise_force",
       "params": {
-        "active_count":  { "type": "Int",   "value": 2000000 },
-        "speed":         { "type": "Float", "value": 1.0 },
-        "turbulence":    { "type": "Float", "value": 0.001 },
-        "anti_clump":    { "type": "Float", "value": 20.0 },
-        "diffusion":     { "type": "Float", "value": 0.0166 },
-        "container":     { "type": "Enum",  "value": 0 },
-        "ctr_scale":     { "type": "Float", "value": 0.8 },
-        "flatten":       { "type": "Float", "value": 0.0 },
-        "inject_index":  { "type": "Int",   "value": -1 },
-        "inject_force":  { "type": "Float", "value": 0.0 },
-        "inject_phase":  { "type": "Float", "value": 0.0 }
+        "turbulence":   { "type": "Float", "value": 0.001 },
+        "anti_clump":   { "type": "Float", "value": 20.0 },
+        "active_count": { "type": "Int",   "value": 2000000 }
+      } },
+
+    { "id": 105, "typeId": "node.diffuse_force_3d_at_particles", "handle": "diffuse",
+      "params": {
+        "diffusion":    { "type": "Float", "value": 0.0166 },
+        "active_count": { "type": "Int",   "value": 2000000 }
+      } },
+
+    { "id": 106, "typeId": "node.container_repel_force_3d", "handle": "container_repel",
+      "params": {
+        "container":    { "type": "Enum",  "value": 0 },
+        "ctr_scale":    { "type": "Float", "value": 0.8 },
+        "active_count": { "type": "Int",   "value": 2000000 }
+      } },
+
+    { "id": 107, "typeId": "node.euler_step_particles_3d", "handle": "euler_3d",
+      "params": {
+        "active_count": { "type": "Int",   "value": 2000000 },
+        "speed":        { "type": "Float", "value": 1.0 }
+      } },
+
+    { "id": 108, "typeId": "node.container_bounds_3d", "handle": "container_bounds",
+      "params": {
+        "container":    { "type": "Enum",  "value": 0 },
+        "ctr_scale":    { "type": "Float", "value": 0.8 },
+        "active_count": { "type": "Int",   "value": 2000000 }
+      } },
+
+    { "id": 109, "typeId": "node.flatten_to_camera_plane", "handle": "flatten_3d",
+      "params": {
+        "flatten":      { "type": "Float", "value": 0.0 },
+        "active_count": { "type": "Int",   "value": 2000000 }
+      } },
+
+    { "id": 110, "typeId": "node.apply_radial_burst_3d_to_particles", "handle": "inject_3d",
+      "params": {
+        "inject_index": { "type": "Int",   "value": -1 },
+        "inject_force": { "type": "Float", "value": 0.0 },
+        "inject_phase": { "type": "Float", "value": 0.0 },
+        "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
     { "id": 17, "typeId": "node.scatter_particles_camera", "handle": "display_scatter",
@@ -378,31 +432,33 @@
     { "fromNode": 4,  "fromPort": "out", "toNode": 2, "toPort": "orbit" },
     { "fromNode": 5,  "fromPort": "out", "toNode": 2, "toPort": "roll" },
 
-    { "fromNode": 2,  "fromPort": "out", "toNode": 6,  "toPort": "camera" },
-    { "fromNode": 2,  "fromPort": "out", "toNode": 16, "toPort": "camera" },
-    { "fromNode": 2,  "fromPort": "out", "toNode": 17, "toPort": "camera" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 17,  "toPort": "camera" },
+    { "fromNode": 2,  "fromPort": "out", "toNode": 109, "toPort": "camera" },
 
-    { "fromNode": 24, "fromPort": "out", "toNode": 6,  "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 100, "toPort": "active_count" },
+    { "fromNode": 100, "fromPort": "particles", "toNode": 101, "toPort": "particles" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 101, "toPort": "active_count" },
+    { "fromNode": 53, "fromPort": "out", "toNode": 101, "toPort": "pattern" },
+    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 101, "toPort": "trigger_count" },
+    { "fromNode": 101, "fromPort": "particles", "toNode": 102, "toPort": "seed" },
+    { "fromNode": 110, "fromPort": "out", "toNode": 102, "toPort": "in" },
+    { "fromNode": 52, "fromPort": "out", "toNode": 102, "toPort": "reset_trigger" },
+
+    { "fromNode": 102, "fromPort": "out", "toNode": 103, "toPort": "particles" },
+    { "fromNode": 102, "fromPort": "out", "toNode": 104, "toPort": "particles" },
+    { "fromNode": 102, "fromPort": "out", "toNode": 105, "toPort": "particles" },
+    { "fromNode": 102, "fromPort": "out", "toNode": 106, "toPort": "particles" },
+    { "fromNode": 102, "fromPort": "out", "toNode": 107, "toPort": "in" },
+    { "fromNode": 102, "fromPort": "out", "toNode": 7,   "toPort": "particles" },
+    { "fromNode": 102, "fromPort": "out", "toNode": 17,  "toPort": "particles" },
+
     { "fromNode": 24, "fromPort": "out", "toNode": 7,  "toPort": "active_count" },
-    { "fromNode": 24, "fromPort": "out", "toNode": 16, "toPort": "active_count" },
-    { "fromNode": 24, "fromPort": "out", "toNode": 17, "toPort": "active_count" },
+    { "fromNode": 74, "fromPort": "out", "toNode": 7,  "toPort": "scaled_energy" },
 
-    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "a" },
-    { "fromNode": 26, "fromPort": "out", "toNode": 17, "toPort": "scaled_energy" },
-
-    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 17, "toPort": "disp_w" },
-    { "fromNode": 0,  "fromPort": "output_height", "toNode": 17, "toPort": "disp_h" },
-
-    { "fromNode": 6,  "fromPort": "particles", "toNode": 7,  "toPort": "particles" },
-    { "fromNode": 6,  "fromPort": "particles", "toNode": 16, "toPort": "in" },
-
-    { "fromNode": 7,  "fromPort": "accum", "toNode": 8, "toPort": "accum" },
-    { "fromNode": 8,  "fromPort": "density", "toNode": 9, "toPort": "in" },
-    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
-
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "density" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 16, "toPort": "density" },
+    { "fromNode": 7,  "fromPort": "accum",   "toNode": 8,  "toPort": "accum" },
+    { "fromNode": 8,  "fromPort": "density", "toNode": 9,  "toPort": "in" },
+    { "fromNode": 9,  "fromPort": "out",     "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out",     "toNode": 11, "toPort": "in" },
 
     { "fromNode": 28, "fromPort": "out", "toNode": 9,  "toPort": "radius" },
     { "fromNode": 28, "fromPort": "out", "toNode": 10, "toPort": "radius" },
@@ -411,6 +467,12 @@
     { "fromNode": 28, "fromPort": "out", "toNode": 14, "toPort": "radius" },
     { "fromNode": 28, "fromPort": "out", "toNode": 15, "toPort": "radius" },
 
+    { "fromNode": 11, "fromPort": "out", "toNode": 111, "toPort": "density" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 104, "toPort": "density" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 105, "toPort": "density" },
+
+    { "fromNode": 111, "fromPort": "gradient", "toNode": 112, "toPort": "gradient" },
+
     { "fromNode": 46, "fromPort": "out", "toNode": 77, "toPort": "a" },
     { "fromNode": 42, "fromPort": "out", "toNode": 70, "toPort": "a" },
     { "fromNode": 42, "fromPort": "out", "toNode": 71, "toPort": "a" },
@@ -418,13 +480,8 @@
     { "fromNode": 70, "fromPort": "out", "toNode": 72, "toPort": "b" },
     { "fromNode": 77, "fromPort": "out", "toNode": 73, "toPort": "a" },
     { "fromNode": 71, "fromPort": "out", "toNode": 73, "toPort": "b" },
-    { "fromNode": 72, "fromPort": "out", "toNode": 12, "toPort": "curl_strength" },
-    { "fromNode": 73, "fromPort": "out", "toNode": 12, "toPort": "slope_strength" },
-
-    { "fromNode": 74, "fromPort": "out", "toNode": 7,  "toPort": "scaled_energy" },
-
-    { "fromNode": 75, "fromPort": "out", "toNode": 76, "toPort": "b" },
-    { "fromNode": 76, "fromPort": "out", "toNode": 17, "toPort": "mode" },
+    { "fromNode": 72, "fromPort": "out", "toNode": 112, "toPort": "curl_strength" },
+    { "fromNode": 73, "fromPort": "out", "toNode": 112, "toPort": "slope_strength" },
 
     { "fromNode": 0,  "fromPort": "time", "toNode": 80, "toPort": "a" },
     { "fromNode": 80, "fromPort": "out",  "toNode": 81, "toPort": "a" },
@@ -432,18 +489,45 @@
     { "fromNode": 80, "fromPort": "out",  "toNode": 83, "toPort": "a" },
     { "fromNode": 81, "fromPort": "out",  "toNode": 84, "toPort": "a" },
     { "fromNode": 82, "fromPort": "out",  "toNode": 85, "toPort": "a" },
-    { "fromNode": 83, "fromPort": "out",  "toNode": 12, "toPort": "ref_axis_x" },
-    { "fromNode": 84, "fromPort": "out",  "toNode": 12, "toPort": "ref_axis_y" },
-    { "fromNode": 85, "fromPort": "out",  "toNode": 12, "toPort": "ref_axis_z" },
+    { "fromNode": 83, "fromPort": "out",  "toNode": 112, "toPort": "ref_axis_x" },
+    { "fromNode": 84, "fromPort": "out",  "toNode": 112, "toPort": "ref_axis_y" },
+    { "fromNode": 85, "fromPort": "out",  "toNode": 112, "toPort": "ref_axis_z" },
 
-    { "fromNode": 12, "fromPort": "force", "toNode": 13, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out",   "toNode": 14, "toPort": "in" },
-    { "fromNode": 14, "fromPort": "out",   "toNode": 15, "toPort": "in" },
-    { "fromNode": 15, "fromPort": "out",   "toNode": 16, "toPort": "field" },
+    { "fromNode": 112, "fromPort": "force", "toNode": 13, "toPort": "in" },
+    { "fromNode": 13,  "fromPort": "out",   "toNode": 14, "toPort": "in" },
+    { "fromNode": 14,  "fromPort": "out",   "toNode": 15, "toPort": "in" },
+    { "fromNode": 15,  "fromPort": "out",   "toNode": 103, "toPort": "field" },
 
-    { "fromNode": 27, "fromPort": "out", "toNode": 16, "toPort": "diffusion" },
+    { "fromNode": 103, "fromPort": "out", "toNode": 104, "toPort": "in" },
+    { "fromNode": 104, "fromPort": "out", "toNode": 105, "toPort": "in" },
+    { "fromNode": 105, "fromPort": "out", "toNode": 106, "toPort": "in" },
+    { "fromNode": 106, "fromPort": "out", "toNode": 107, "toPort": "forces" },
 
-    { "fromNode": 6,  "fromPort": "particles", "toNode": 17, "toPort": "particles" },
+    { "fromNode": 27, "fromPort": "out", "toNode": 105, "toPort": "diffusion" },
+    { "fromNode": 38, "fromPort": "out", "toNode": 104, "toPort": "turbulence" },
+
+    { "fromNode": 24, "fromPort": "out", "toNode": 103, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 104, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 105, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 106, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 107, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 108, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 109, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 110, "toPort": "active_count" },
+    { "fromNode": 24, "fromPort": "out", "toNode": 17,  "toPort": "active_count" },
+
+    { "fromNode": 107, "fromPort": "out", "toNode": 108, "toPort": "in" },
+    { "fromNode": 108, "fromPort": "out", "toNode": 109, "toPort": "in" },
+    { "fromNode": 109, "fromPort": "out", "toNode": 110, "toPort": "in" },
+
+    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "a" },
+    { "fromNode": 26, "fromPort": "out", "toNode": 17, "toPort": "scaled_energy" },
+
+    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 17, "toPort": "disp_w" },
+    { "fromNode": 0,  "fromPort": "output_height", "toNode": 17, "toPort": "disp_h" },
+
+    { "fromNode": 75, "fromPort": "out", "toNode": 76, "toPort": "b" },
+    { "fromNode": 76, "fromPort": "out", "toNode": 17, "toPort": "mode" },
 
     { "fromNode": 17, "fromPort": "accum",   "toNode": 18, "toPort": "accum" },
     { "fromNode": 18, "fromPort": "density", "toNode": 20, "toPort": "in" },
@@ -473,7 +557,6 @@
     { "fromNode": 35, "fromPort": "out", "toNode": 37, "toPort": "b" },
     { "fromNode": 36, "fromPort": "out", "toNode": 37, "toPort": "b" },
     { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "b" },
-    { "fromNode": 38, "fromPort": "out", "toNode": 16, "toPort": "turbulence" },
 
     { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "a" },
     { "fromNode": 39, "fromPort": "out", "toNode": 42, "toPort": "b" },
@@ -489,10 +572,7 @@
     { "fromNode": 50, "fromPort": "out", "toNode": 51, "toPort": "a" },
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 52, "toPort": "trigger_count" },
     { "fromNode": 51, "fromPort": "out", "toNode": 52, "toPort": "enable" },
-    { "fromNode": 52, "fromPort": "out", "toNode": 6,  "toPort": "trigger" },
-    { "fromNode": 52, "fromPort": "out", "toNode": 16, "toPort": "trigger" },
     { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 53, "toPort": "trigger_count" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 6,  "toPort": "trigger_count" },
 
     { "fromNode": 34, "fromPort": "out", "toNode": 60, "toPort": "in_4" },
     { "fromNode": 60, "fromPort": "out", "toNode": 61, "toPort": "a" },
@@ -503,10 +583,10 @@
     { "fromNode": 63, "fromPort": "out", "toNode": 65, "toPort": "in_1" },
     { "fromNode": 64, "fromPort": "out", "toNode": 65, "toPort": "in_0" },
     { "fromNode": 62, "fromPort": "active", "toNode": 65, "toPort": "selector" },
-    { "fromNode": 65, "fromPort": "out",    "toNode": 16, "toPort": "inject_index" },
+    { "fromNode": 65, "fromPort": "out",    "toNode": 110, "toPort": "inject_index" },
 
     { "fromNode": 62, "fromPort": "active", "toNode": 66, "toPort": "a" },
-    { "fromNode": 66, "fromPort": "out",    "toNode": 16, "toPort": "inject_force" },
-    { "fromNode": 62, "fromPort": "phase",  "toNode": 16, "toPort": "inject_phase" }
+    { "fromNode": 66, "fromPort": "out",    "toNode": 110, "toPort": "inject_force" },
+    { "fromNode": 62, "fromPort": "phase",  "toNode": 110, "toPort": "inject_phase" }
   ]
 }
