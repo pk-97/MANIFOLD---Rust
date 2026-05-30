@@ -13,6 +13,28 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Output-resolution options. The flow field is low-frequency, so it
+/// tolerates being generated at reduced resolution and sampled back
+/// bilinearly — which is exactly what the original Watercolor effect
+/// did. Generating fBM is the expensive part (it scales with pixel
+/// count), so half- or quarter-res cuts the cost 4× / 16×.
+pub const FLOW_RESOLUTIONS: &[&str] = &["full", "half", "quarter"];
+
+/// Decode the `resolution` enum into a `(num, denom)` canvas scale, or
+/// `None` for full-res (canvas-default).
+fn resolution_scale(params: &crate::node_graph::effect_node::ParamValues) -> Option<(u32, u32)> {
+    let idx = match params.get("resolution") {
+        Some(ParamValue::Enum(n)) => *n,
+        Some(ParamValue::Float(f)) => f.round() as u32,
+        _ => 0,
+    };
+    match idx {
+        1 => Some((1, 2)), // half
+        2 => Some((1, 4)), // quarter
+        _ => None,         // full
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FlowFieldUniforms {
@@ -47,13 +69,39 @@ crate::primitive! {
             range: Some((0.0, 4.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "resolution",
+            label: "Resolution",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 2.0)),
+            enum_values: FLOW_RESOLUTIONS,
+        },
     ],
-    composition_notes: "Output values are roughly in [-1, 1] (raw fBM range). Pair with a UV displacement primitive that scales by a `displace_weight` (Watercolor uses 0.001). z_scale = 0.01 gives Watercolor's default slow evolution; raise for faster animation. warp_scale = 0.5 matches Watercolor.",
+    composition_notes: "Output values are roughly in [-1, 1] (raw fBM range). Pair with a UV displacement primitive that scales by a `displace_weight` (Watercolor uses 0.001). z_scale = 0.01 gives Watercolor's default slow evolution; raise for faster animation. warp_scale = 0 skips the two domain-warp fBM evaluations entirely (the cheap direct-eval flow the original Watercolor used); raise it for swirlier flow. resolution = half/quarter generates the field at reduced resolution (4× / 16× cheaper) — the field is low-frequency so downstream bilinear sampling upscales it cleanly; full-res is the default.",
     examples: [],
     picker: { label: "Flow Field Noise", category: Atom },
 }
 
 impl Primitive for FlowFieldNoise {
+    fn output_canvas_scale(
+        &self,
+        port: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        if port != "flow" {
+            return None;
+        }
+        // Zero-input generator: the executor has no input dims to size
+        // the slot from, so it consults this directly (the propagation
+        // path is skipped when there are no wired inputs). Declaring
+        // canvas/2 or canvas/4 lands the flow slot at reduced size; the
+        // shader derives its uv from `textureDimensions(output_tex)` so
+        // it renders correctly at any size, and `uv_displace_by_flow`
+        // samples it bilinearly — free upscale for a low-freq field.
+        resolution_scale(params)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let z_scale = match ctx.params.get("z_scale") {
             Some(ParamValue::Float(f)) => *f,
@@ -125,9 +173,29 @@ mod tests {
     }
 
     #[test]
-    fn flow_field_noise_has_z_scale_and_warp_scale_params() {
+    fn flow_field_noise_has_z_scale_warp_scale_and_resolution_params() {
         let names: Vec<&str> = FlowFieldNoise::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["z_scale", "warp_scale"]);
+        assert_eq!(names, vec!["z_scale", "warp_scale", "resolution"]);
+    }
+
+    #[test]
+    fn resolution_param_drives_output_canvas_scale() {
+        use crate::node_graph::EffectNode;
+        let prim = FlowFieldNoise::new();
+        let node: &dyn EffectNode = &prim;
+        for (enum_v, expected) in [
+            (0u32, None),
+            (1, Some((1u32, 2u32))),
+            (2, Some((1u32, 4u32))),
+        ] {
+            let mut params = ahash::AHashMap::default();
+            params.insert("resolution", ParamValue::Enum(enum_v));
+            assert_eq!(
+                node.output_canvas_scale("flow", &params),
+                expected,
+                "resolution enum {enum_v}",
+            );
+        }
     }
 
     #[test]

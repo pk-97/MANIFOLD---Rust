@@ -3,8 +3,9 @@
 // Watercolor uses RB for displacement, this primitive matches by
 // writing R = flow_x, B = flow_y, G/A = 0/1 for compatibility).
 //
-// Bit-exact extract of the Watercolor mode-2 (Flow Map Generation)
-// pass. Pure generator — zero inputs.
+// Derived from the Watercolor mode-2 (Flow Map Generation) pass, with
+// an optional domain-warp stage (warp_scale; the original used the
+// direct-eval path = warp_scale 0). Pure generator — zero inputs.
 
 struct FlowFieldUniforms {
     time:       f32,    // seconds (drives slow noise evolution)
@@ -106,9 +107,15 @@ fn fbm(p: vec3<f32>) -> f32 {
 
 fn flow_noise(uv: vec2<f32>, z: f32) -> vec2<f32> {
     let p = vec3<f32>(uv * 4.0, z);
-    // Domain warp: shift noise input by another noise sample.
-    let warp = vec2<f32>(fbm(p), fbm(p + vec3<f32>(5.2, 1.3, 0.0))) * u.warp_scale;
-    let pw = p + vec3<f32>(warp, 0.0);
+    // Domain warp: shift noise input by another noise sample. When
+    // warp_scale is 0 the warp is a no-op, so skip its two fBM
+    // evaluations entirely (uniform control flow) — this is the cheap
+    // direct-eval flow the original Watercolor used for performance.
+    var pw = p;
+    if (u.warp_scale != 0.0) {
+        let warp = vec2<f32>(fbm(p), fbm(p + vec3<f32>(5.2, 1.3, 0.0))) * u.warp_scale;
+        pw = p + vec3<f32>(warp, 0.0);
+    }
     return vec2<f32>(
         fbm(pw + vec3<f32>(1.7, 9.2, 0.0)),
         fbm(pw + vec3<f32>(8.3, 2.8, 0.0)),
