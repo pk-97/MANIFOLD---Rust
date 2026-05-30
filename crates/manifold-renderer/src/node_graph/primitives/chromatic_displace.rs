@@ -49,7 +49,7 @@ crate::primitive! {
     ],
     composition_notes: "Velocity is read from RG; BA ignored. `amount` is in pixels — resolution-independent (shader divides by dims internally). Negative amount inverts the R/B sampling direction. Sample is bilinear; out-of-bounds uses the sampler's default clamp mode.",
     examples: [],
-    picker: { label: "Chromatic Displace", category: Atom },
+    picker: { label: "RGB Split", category: Atom },
 }
 
 impl Primitive for ChromaticDisplace {

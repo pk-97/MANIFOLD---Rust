@@ -56,7 +56,7 @@ crate::primitive! {
     ],
     composition_notes: "Verbatim port of the legacy node.edge_stretch clamp: half_width = width * 0.5, strip = [0.5 - hw, 0.5 + hw], clamped per active axis. `width` is port-shadowed (legacy `source_width` binding). Output UVs stay in range so remap's Clamp wrap is a no-op safety. Pair: source → uv_strip_clamp → remap(source, uv_field) → mix(source, remapped, Lerp, amount).",
     examples: ["preset.effect.edge_stretch"],
-    picker: { label: "UV Strip Clamp", category: Atom },
+    picker: { label: "Edge Stretch", category: Atom },
 }
 
 impl Primitive for UvStripClamp {

@@ -2162,7 +2162,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Channel Mix",
+      "label": "Channel Mixer",
       "outputs": [
         {
           "name": "out",
@@ -2335,7 +2335,7 @@
           "type": "f32"
         }
       ],
-      "label": "Chromatic Displace",
+      "label": "RGB Split",
       "outputs": [
         {
           "name": "out",
@@ -2557,7 +2557,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Color Ramp",
+      "label": "Gradient Map",
       "outputs": [
         {
           "name": "out",
@@ -3037,7 +3037,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Convolution 2D (9-tap)",
+      "label": "Custom Convolution",
       "outputs": [
         {
           "name": "out",
@@ -5122,7 +5122,7 @@
           "type": "f32"
         }
       ],
-      "label": "Gain",
+      "label": "Exposure",
       "outputs": [
         {
           "name": "out",
@@ -5858,7 +5858,7 @@
           "type": "f32"
         }
       ],
-      "label": "Gradient Ramp",
+      "label": "Gradient",
       "outputs": [
         {
           "name": "out",
@@ -7536,7 +7536,7 @@
           "type": "f32"
         }
       ],
-      "label": "Mirror Axis",
+      "label": "Flip",
       "outputs": [
         {
           "name": "out",
@@ -7567,7 +7567,7 @@
         "preset.effect.mirror"
       ],
       "inputs": [],
-      "label": "Mirror Fold UV",
+      "label": "Mirror",
       "outputs": [
         {
           "name": "out",
@@ -9331,7 +9331,7 @@
           "type": "f32"
         }
       ],
-      "label": "Radial Fold UV",
+      "label": "Kaleidoscope",
       "outputs": [
         {
           "name": "out",
@@ -10274,7 +10274,7 @@
           "type": "f32"
         }
       ],
-      "label": "Rotate 2D",
+      "label": "Rotate",
       "outputs": [
         {
           "name": "out",
@@ -12916,7 +12916,7 @@
           "type": "f32"
         }
       ],
-      "label": "UV Strip Clamp",
+      "label": "Edge Stretch",
       "outputs": [
         {
           "name": "out",

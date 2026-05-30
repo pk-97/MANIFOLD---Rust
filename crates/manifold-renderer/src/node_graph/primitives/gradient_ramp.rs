@@ -72,7 +72,7 @@ crate::primitive! {
     ],
     composition_notes: "Stop positions are in t-space; `domain` sets the max t the texture covers (texel x → t = (x+0.5)/width * domain). Stops in [0,1] with domain=2 reproduce Infrared's [0,2] LUT (the [1,2] tail is the extrapolated overshoot). Feed `out` into node.color_lut's `lut` input (sampled by luminance) for a gradient-map effect, or use it directly as a ramp texture. Stops are NOT clamped to [0,1] colour — negative / >1 channels are preserved (legacy Black Hot reaches negative past the last stop). Up to 16 stops; rows beyond that are ignored.",
     examples: ["preset.effect.infrared"],
-    picker: { label: "Gradient Ramp", category: Atom },
+    picker: { label: "Gradient", category: Atom },
 }
 
 impl Primitive for GradientRamp {

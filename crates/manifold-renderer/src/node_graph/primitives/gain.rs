@@ -50,7 +50,7 @@ crate::primitive! {
     ],
     composition_notes: "Wire wins over the param — same convention as `node.wet_dry`. Range above 1.0 brightens the image; below 1.0 darkens; 0.0 produces black. For Strobe-style modes: Opacity = Gain(1 - beat_gate), Gain-mode = Gain(1 + 2*beat_gate).",
     examples: ["preset.strobe"],
-    picker: { label: "Gain", category: Atom },
+    picker: { label: "Exposure", category: Atom },
 }
 
 impl Primitive for Gain {
