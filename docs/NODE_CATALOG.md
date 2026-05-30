@@ -49,6 +49,7 @@ Free to evaluate (no GPU dispatch). The scalar wire graph runs every frame with 
 | Trigger Gate | `node.trigger_gate` | Emit a single-frame pulse on integer-edge changes of an input scalar |
 | Smoothing | `node.smoothing` | One-pole low-pass on a scalar (stateful) |
 | Envelope Follower (AR) | `node.envelope_follower_ar` | Attack/release envelope from an impulse (stateful) |
+| Compressor Envelope | `node.compressor_envelope` | Audio-compressor envelope path applied to a scalar signal level — log-domain program-dependent A/R + ratio compression toward a `target`, out is a gain multiplier in [0.1, 10.0] (stateful; AutoGain) |
 | Envelope Decay | `node.envelope_decay` | Decay-only envelope (stateful) |
 | Sample & Hold | `node.sample_and_hold` | Hold the last sampled input until next trigger (stateful) |
 | Trigger Ease To | `node.trigger_ease_to` | Snap-and-glide on a scalar: on each trigger edge captures current visible as `prev` and the input as `curr`, then eases over `window_beats` beats via cubic ease-out (stateful) |
