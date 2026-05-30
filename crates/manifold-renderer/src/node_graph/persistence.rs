@@ -800,7 +800,7 @@ mod tests {
     use crate::node_graph::boundary_nodes::{
         FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source,
     };
-    use crate::node_graph::primitives::{self, Blur, MipChain, Threshold};
+    use crate::node_graph::primitives::{self, Blur, Threshold};
     use crate::node_graph::{compile, validate};
 
     fn registry() -> PrimitiveRegistry {
@@ -820,10 +820,8 @@ mod tests {
             primitives::CHANNEL_MIX_TYPE_ID,
             primitives::COLOR_RAMP_TYPE_ID,
             primitives::MIX_TYPE_ID,
-            primitives::BLEND_TYPE_ID,
             primitives::THRESHOLD_TYPE_ID,
             primitives::BLUR_TYPE_ID,
-            primitives::MIP_CHAIN_TYPE_ID,
             primitives::GAUSSIAN_BLUR_TYPE_ID,
             primitives::FEEDBACK_TYPE_ID,
             primitives::WET_DRY_TYPE_ID,
@@ -1365,37 +1363,32 @@ mod tests {
     }
 
     #[test]
-    fn five_node_bloom_shape_round_trips() {
+    fn decomposed_bloom_shape_round_trips() {
         // The same topology as the integration test in
-        // primitives/mod.rs: Source → MipChain → Blur → Blend.overlay
-        // (with Source also fanning out to Blend.base), → FinalOutput.
-        // Verifies fan-out + multi-input wires survive the round-trip.
-        use primitives::{Blend, Threshold};
-        let _ = (Blur::new(), MipChain::new(), Threshold::new(), Blend::new());
-
+        // primitives/mod.rs: Source → Blur → Mix.b (with Source also
+        // fanning out to Mix.a) → FinalOutput. Verifies fan-out +
+        // multi-input wires survive the round-trip.
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
-        let mips = g.add_node(Box::new(MipChain::new()));
         let blur = g.add_node(Box::new(Blur::new()));
-        let blend = g.add_node(Box::new(primitives::Blend::new()));
+        let mix = g.add_node(Box::new(primitives::Mix::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
 
-        g.connect((src, "out"), (mips, "source")).unwrap();
-        g.connect((mips, "out"), (blur, "source")).unwrap();
-        g.connect((src, "out"), (blend, "base")).unwrap();
-        g.connect((blur, "out"), (blend, "overlay")).unwrap();
-        g.connect((blend, "out"), (out, "in")).unwrap();
+        g.connect((src, "out"), (blur, "source")).unwrap();
+        g.connect((src, "out"), (mix, "a")).unwrap();
+        g.connect((blur, "out"), (mix, "b")).unwrap();
+        g.connect((mix, "out"), (out, "in")).unwrap();
 
         let doc = GraphDocument::from_graph(&g);
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
         let g2 = parsed.into_graph(&registry()).unwrap();
 
-        assert_eq!(g2.node_count(), 5);
-        assert_eq!(g2.wires().len(), 5);
+        assert_eq!(g2.node_count(), 4);
+        assert_eq!(g2.wires().len(), 4);
         validate(&g2).unwrap();
         let plan = compile(&g2).unwrap();
-        assert_eq!(plan.steps().len(), 5);
+        assert_eq!(plan.steps().len(), 4);
     }
 
     #[test]

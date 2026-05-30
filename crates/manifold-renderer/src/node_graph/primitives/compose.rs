@@ -4,26 +4,13 @@
 //! using one of 7 modes, then crossfade the result back against `a` by
 //! `amount`. At `mode = Lerp` it's a pure linear crossfade; at any
 //! other mode `amount` acts as opacity for the blend result. Pixel-local
-//! and fuseable.
-//!
-//! [`Blend`] is a transitional stub kept only because the V1 Bloom and
-//! Halation composite builders still reference it. It will be retired
-//! in §6.3 when those composites are rebuilt around `Mix` /
-//! `WetDry`. New code should use [`Mix`].
+//! and fuseable. It supersedes the old no-op `Blend` stub (now removed).
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::Primitive;
-
-const OUT_OUTPUT: NodeOutput = NodePort {
-    name: "out",
-    ty: PortType::Texture2D,
-    kind: PortKind::Output,
-    required: false,
-};
 
 // =====================================================================
 // Mix — combine A and B with a blend mode, crossfaded by amount.
@@ -168,100 +155,6 @@ impl Primitive for Mix {
             [width.div_ceil(16), height.div_ceil(16), 1],
             "node.mix",
         );
-    }
-}
-
-// =====================================================================
-// Blend — composite two textures with a blend mode.
-// =====================================================================
-
-pub const BLEND_TYPE_ID: &str = "node.blend";
-
-pub const BLEND_MODES: &[&str] = &[
-    "Normal",
-    "Add",
-    "Multiply",
-    "Screen",
-    "Overlay",
-    "Difference",
-];
-
-const BLEND_INPUTS: [NodeInput; 2] = [
-    NodePort {
-        name: "base",
-        ty: PortType::Texture2D,
-        kind: PortKind::Input,
-        required: true,
-    },
-    NodePort {
-        name: "overlay",
-        ty: PortType::Texture2D,
-        kind: PortKind::Input,
-        required: true,
-    },
-];
-
-const BLEND_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
-
-const BLEND_PARAMS: [ParamDef; 2] = [
-    ParamDef {
-        name: "mode",
-        label: "Blend Mode",
-        ty: ParamType::Enum,
-        default: ParamValue::Enum(0), // Normal
-        range: None,
-        enum_values: BLEND_MODES,
-    },
-    ParamDef {
-        name: "opacity",
-        label: "Opacity",
-        ty: ParamType::Float,
-        default: ParamValue::Float(1.0),
-        range: Some((0.0, 1.0)),
-        enum_values: &[],
-    },
-];
-
-#[derive(Debug)]
-pub struct Blend {
-    type_id: EffectNodeType,
-}
-
-impl Blend {
-    pub fn new() -> Self {
-        Self {
-            type_id: EffectNodeType::new(BLEND_TYPE_ID),
-        }
-    }
-}
-
-impl Default for Blend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EffectNode for Blend {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.type_id
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        &BLEND_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &BLEND_OUTPUTS
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &BLEND_PARAMS
-    }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
-}
-
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: BLEND_TYPE_ID,
-        create: || Box::new(Blend::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Blend", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 

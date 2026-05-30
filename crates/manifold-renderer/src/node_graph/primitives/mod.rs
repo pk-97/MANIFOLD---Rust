@@ -239,7 +239,7 @@ pub use color::{
 };
 pub use color_sample::ColorSample;
 pub use colorize::Colorize;
-pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
+pub use compose::{MIX_MODES, MIX_TYPE_ID, Mix};
 pub use contrast::Contrast;
 pub use compressor_envelope::{COMPRESSOR_ENVELOPE_TYPE_ID, CompressorEnvelope};
 pub use consecutive_edges::{CONSECUTIVE_EDGES_MAX_CAPACITY, ConsecutiveEdges};
@@ -259,9 +259,7 @@ pub use fbm_2d::Fbm2D;
 pub use fbm_per_instance::FbmPerInstance;
 pub use field_combine::FieldCombine;
 pub use film_grain::FilmGrain;
-pub use filter::{
-    BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
-};
+pub use filter::{BLUR_MODES, BLUR_TYPE_ID, Blur, THRESHOLD_TYPE_ID, Threshold};
 pub use flash::{FLASH_MODES, Flash};
 pub use flow_field_noise::FlowFieldNoise;
 pub use fract_texture::FractTexture;
@@ -446,10 +444,8 @@ mod tests {
             Box::new(ChannelMix::new()),
             Box::new(ColorRamp::new()),
             Box::new(Mix::new()),
-            Box::new(Blend::new()),
             Box::new(Threshold::new()),
             Box::new(Blur::new()),
-            Box::new(MipChain::new()),
             Box::new(Feedback::new()),
             Box::new(WetDry::new()),
         ]
@@ -459,7 +455,7 @@ mod tests {
     fn all_v1_primitives_have_unique_type_ids() {
         let primitives = all_primitives();
         let ids: HashSet<&str> = primitives.iter().map(|p| p.type_id().as_str()).collect();
-        assert_eq!(ids.len(), 10, "primitive type IDs must be unique");
+        assert_eq!(ids.len(), 8, "primitive type IDs must be unique");
     }
 
     #[test]
@@ -597,39 +593,35 @@ mod tests {
         }
     }
 
-    /// Hero integration test: assemble the V1 Bloom-as-composite topology
-    /// from primitives + boundary nodes, compile it, execute it. Validates
-    /// that the trait shape and pool work for a real composite preset.
+    /// Integration test: assemble the decomposed Bloom shape (blur a
+    /// copy of the source, mix it back) from primitives + boundary
+    /// nodes, compile it, execute it. Validates that the trait shape and
+    /// pool work for a real multi-node graph with source fan-out and a
+    /// multi-input node. Mirrors how Bloom.json is built today
+    /// (threshold → downsample → blur → mix), minus the prefilter.
     ///
     /// Topology:
     ///
     /// ```text
-    ///   Source ──→ MipChain ──→ Blur ──→ Blend.overlay ─→ FinalOutput
-    ///       │                              ↑
-    ///       └─────────────────────────→ Blend.base
+    ///   Source ──→ Blur ──→ Mix.b ─→ FinalOutput
+    ///       └─────────────→ Mix.a
     /// ```
-    ///
-    /// (Threshold is omitted from this test for simplicity — the four-node
-    /// shape is enough to exercise fan-out, multi-input, and the boundary.
-    /// Real Bloom preset will include Threshold before MipChain.)
     #[test]
-    fn bloom_shape_composite_compiles_and_executes() {
+    fn decomposed_bloom_shape_compiles_and_executes() {
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
-        let mips = g.add_node(Box::new(MipChain::new()));
         let blur = g.add_node(Box::new(Blur::new()));
-        let blend = g.add_node(Box::new(Blend::new()));
+        let mix = g.add_node(Box::new(Mix::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
 
-        g.connect((src, "out"), (mips, "source")).unwrap();
-        g.connect((mips, "out"), (blur, "source")).unwrap();
-        g.connect((src, "out"), (blend, "base")).unwrap();
-        g.connect((blur, "out"), (blend, "overlay")).unwrap();
-        g.connect((blend, "out"), (out, "in")).unwrap();
+        g.connect((src, "out"), (blur, "source")).unwrap();
+        g.connect((src, "out"), (mix, "a")).unwrap();
+        g.connect((blur, "out"), (mix, "b")).unwrap();
+        g.connect((mix, "out"), (out, "in")).unwrap();
 
         validate(&g).unwrap();
         let plan = compile(&g).unwrap();
-        assert_eq!(plan.steps().len(), 5);
+        assert_eq!(plan.steps().len(), 4);
 
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());

@@ -1574,9 +1574,11 @@ mod topology_hash_tests {
         // prev-frame texture, Bloom mip pyramid, Watercolor ping-pong,
         // DNN worker spool, etc.) survives the bypass moment.
         // Tagging them `SkipMode::Never` is how we guarantee that.
+        // Bloom is intentionally absent: its decomposed graph
+        // (threshold → downsample → blur → mix) is stateless, so it has
+        // no per-instance state to preserve and can stay SkipMode::OnZero.
         for ty in [
             EffectTypeId::STYLIZED_FEEDBACK,
-            EffectTypeId::BLOOM,
             EffectTypeId::WATERCOLOR,
             EffectTypeId::DEPTH_OF_FIELD,
             EffectTypeId::WIREFRAME_DEPTH,

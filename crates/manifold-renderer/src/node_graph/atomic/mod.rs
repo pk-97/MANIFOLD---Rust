@@ -151,31 +151,31 @@ mod tests {
     }
 
     /// Hero test: FluidSim's auxiliary output (density) wired through
-    /// downstream nodes (Threshold → Blend with the source) and out to
+    /// downstream nodes (Threshold → Mix with the source) and out to
     /// FinalOutput. Validates the whole atomic-with-rich-ports flow:
     /// the host can use FluidSim's internals for compositing, not just
     /// its main composited output.
     #[test]
     fn fluid_sim_density_can_be_wired_downstream() {
-        use crate::node_graph::primitives::{Blend, Threshold};
+        use crate::node_graph::primitives::{Mix, Threshold};
 
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
         let fluid = g.add_node(Box::new(FluidSim2D::new()));
         let thresh = g.add_node(Box::new(Threshold::new()));
-        let blend = g.add_node(Box::new(Blend::new()));
+        let mix = g.add_node(Box::new(Mix::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
 
-        // Source feeds FluidSim's source AND Blend's base (fan-out).
+        // Source feeds FluidSim's source AND Mix's `a` input (fan-out).
         g.connect((src, "out"), (fluid, "source")).unwrap();
-        g.connect((src, "out"), (blend, "base")).unwrap();
+        g.connect((src, "out"), (mix, "a")).unwrap();
 
         // FluidSim's auxiliary `density` output drives a Threshold whose
-        // result becomes the Blend overlay.
+        // result becomes the Mix `b` input.
         g.connect((fluid, "density"), (thresh, "source")).unwrap();
-        g.connect((thresh, "out"), (blend, "overlay")).unwrap();
+        g.connect((thresh, "out"), (mix, "b")).unwrap();
 
-        g.connect((blend, "out"), (out, "in")).unwrap();
+        g.connect((mix, "out"), (out, "in")).unwrap();
 
         validate(&g).unwrap();
         let plan = compile(&g).unwrap();

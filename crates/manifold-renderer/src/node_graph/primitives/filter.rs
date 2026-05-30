@@ -371,69 +371,7 @@ inventory::submit! {
     }
 }
 
-// =====================================================================
-// MipChain — emit progressively-downsampled mip levels in a single texture.
-//
-// Output is one Texture2D handle; the convention is that this texture has
-// `levels` mip levels, accessible by downstream nodes that understand mip
-// chains (e.g., a per-level blur in Bloom). This convention is established
-// here so multi-pass composites have a way to encode "stack of textures"
-// without exploding the port count.
-// =====================================================================
-
-pub const MIP_CHAIN_TYPE_ID: &str = "node.mip_chain";
-
-const MIP_CHAIN_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const MIP_CHAIN_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
-
-const MIP_CHAIN_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "levels",
-    label: "Levels",
-    ty: ParamType::Int,
-    default: ParamValue::Float(4.0),
-    range: Some((1.0, 8.0)),
-    enum_values: &[],
-}];
-
-#[derive(Debug)]
-pub struct MipChain {
-    type_id: EffectNodeType,
-}
-
-impl MipChain {
-    pub fn new() -> Self {
-        Self {
-            type_id: EffectNodeType::new(MIP_CHAIN_TYPE_ID),
-        }
-    }
-}
-
-impl Default for MipChain {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EffectNode for MipChain {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.type_id
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        &MIP_CHAIN_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &MIP_CHAIN_OUTPUTS
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &MIP_CHAIN_PARAMS
-    }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
-}
-
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: MIP_CHAIN_TYPE_ID,
-        create: || Box::new(MipChain::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Mip Chain", category: crate::node_graph::palette::PaletteCategory::Atom }),
-    }
-}
+// MipChain (node.mip_chain) was a no-op stub for an unbuilt multi-level
+// downsample convention; removed when its only consumer (the legacy
+// build_bloom composite) was retired. Bloom is now an explicit
+// downsample → blur → mix graph in Bloom.json.

@@ -141,8 +141,8 @@ pub trait Primitive: PrimitiveSpec {
     fn late_capture(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
 
     /// Reset persistent state. Default no-op; stateful primitives
-    /// (Feedback, MipChain when state-backed) override to drop their
-    /// previous-frame textures on seek.
+    /// (Feedback, etc.) override to drop their previous-frame textures
+    /// on seek.
     fn clear_state(&mut self) {}
 
     /// Optional WGSL kernel source — mirror of

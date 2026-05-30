@@ -25,8 +25,6 @@
 //!
 //! - [`build_infrared`]: `Brightness → ColorRamp`.
 //! - [`build_soft_focus`]: `Blur` + `Mix(source, blurred)`.
-//! - [`build_bloom`]: `Threshold → MipChain → Blur → Blend(Add)`, with the
-//!   source fanning to the blend base.
 //!
 //! ## Why no `build_color_compass` here
 //!
@@ -39,12 +37,10 @@
 //! both graphs constructable in the same test. Effects with no legacy
 //! to compare against don't need a Rust builder.
 
-mod bloom;
 mod infrared;
 mod soft_focus;
 mod strobe_opacity;
 
-pub use bloom::{BLOOM_TYPE_ID, build_bloom};
 pub use infrared::{INFRARED_TYPE_ID, build_infrared};
 pub use soft_focus::{SOFT_FOCUS_TYPE_ID, build_soft_focus};
 pub use strobe_opacity::{STROBE_OPACITY_TYPE_ID, build_strobe_opacity};
@@ -197,13 +193,12 @@ mod tests {
         // Build each composite into its own scratch graph (cheap) just to
         // collect their type IDs and assert the invariants.
         let ids: HashSet<&str> = [
-            BLOOM_TYPE_ID,
             INFRARED_TYPE_ID,
             SOFT_FOCUS_TYPE_ID,
         ]
         .into_iter()
         .collect();
-        assert_eq!(ids.len(), 3, "composite type IDs must be unique");
+        assert_eq!(ids.len(), 2, "composite type IDs must be unique");
 
         for id in ids {
             assert!(
@@ -213,7 +208,7 @@ mod tests {
         }
 
         // Sanity: each builder is callable.
-        let _ = build_bloom(&mut g, source_endpoint);
+        let _ = build_infrared(&mut g, source_endpoint);
     }
 
     #[test]
@@ -250,16 +245,6 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn bloom_compiles_executes_and_exposes_three_params() {
-        let (_, handle) = run_composite_in_graph(build_bloom);
-        assert_eq!(handle.inner_nodes().len(), 4);
-        let exposed: HashSet<&'static str> = handle.exposed_params().collect();
-        assert!(exposed.contains("threshold_level"));
-        assert!(exposed.contains("blur_radius"));
-        assert!(exposed.contains("intensity"));
-    }
-
     /// Hero test: chain two composites in series in the same graph.
     /// Validates that composites compose with each other, parameter
     /// routing remains independent per instance, and inner nodes from
@@ -268,10 +253,10 @@ mod tests {
     fn two_composites_in_series_compose() {
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
-        let bloomed = build_bloom(&mut g, (src, "out")).unwrap();
-        let infrared_after_bloom = build_infrared(&mut g, bloomed.output()).unwrap();
+        let focused = build_soft_focus(&mut g, (src, "out")).unwrap();
+        let infrared_after_focus = build_infrared(&mut g, focused.output()).unwrap();
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.connect(infrared_after_bloom.output(), (out, "in"))
+        g.connect(infrared_after_focus.output(), (out, "in"))
             .unwrap();
 
         validate(&g).unwrap();
@@ -279,12 +264,12 @@ mod tests {
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
 
-        // Bloom (4 inner) + Infrared (2 inner) + Source + FinalOutput = 8 nodes.
-        assert_eq!(g.node_count(), 8);
-        // Bloom's and Infrared's inner-node sets are disjoint.
-        let bloom_inner: HashSet<NodeInstanceId> = bloomed.inner_nodes().iter().copied().collect();
+        // SoftFocus (2 inner) + Infrared (2 inner) + Source + FinalOutput = 6 nodes.
+        assert_eq!(g.node_count(), 6);
+        // SoftFocus's and Infrared's inner-node sets are disjoint.
+        let focus_inner: HashSet<NodeInstanceId> = focused.inner_nodes().iter().copied().collect();
         let infrared_inner: HashSet<NodeInstanceId> =
-            infrared_after_bloom.inner_nodes().iter().copied().collect();
-        assert!(bloom_inner.is_disjoint(&infrared_inner));
+            infrared_after_focus.inner_nodes().iter().copied().collect();
+        assert!(focus_inner.is_disjoint(&infrared_inner));
     }
 }
