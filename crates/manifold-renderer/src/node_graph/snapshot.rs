@@ -696,16 +696,16 @@ mod tests {
         use crate::node_graph::EffectGraphDefExt;
         use manifold_core::effect_graph_def::EffectGraphDef;
 
-        // Build the catalog Mirror graph via the existing builder and
-        // serialize it to a def — the round-trip should produce the
-        // same snapshot structure end-to-end.
+        // Build a small named-handle graph via an existing composite
+        // builder and serialize it to a def — the round-trip should
+        // produce the same snapshot structure end-to-end.
         let mut g = Graph::new();
         let src = g.add_node_named(
             "source",
             Box::new(crate::node_graph::boundary_nodes::Source::new()),
         );
-        let handle = crate::node_graph::composites::build_mirror(&mut g, (src, "out"))
-            .expect("build_mirror");
+        let handle = crate::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
+            .expect("build_soft_focus");
         let _out = g.add_node_named(
             "final_output",
             Box::new(crate::node_graph::boundary_nodes::FinalOutput::new()),
@@ -717,8 +717,8 @@ mod tests {
         let snap = GraphSnapshot::from_def(&def).expect("from_def succeeds");
 
         // Same number of nodes + wires as the live graph.
-        // 4 nodes: Source, uv_transform, mix, FinalOutput.
-        // 4 wires: src→uv.source, src→mix.a, uv.out→mix.b, mix.out→final.in.
+        // 4 nodes: Source, blur, mix, FinalOutput.
+        // 4 wires: src→blur.source, src→mix.a, blur.out→mix.b, mix.out→final.in.
         assert_eq!(snap.nodes.len(), 4);
         assert_eq!(snap.wires.len(), 4);
         // Named handles survive.
@@ -729,7 +729,7 @@ mod tests {
         assert!(snap
             .nodes
             .iter()
-            .any(|n| n.node_handle.as_deref() == Some("uv_transform")));
+            .any(|n| n.node_handle.as_deref() == Some("blur")));
         assert!(snap
             .nodes
             .iter()
@@ -749,14 +749,14 @@ mod tests {
         use crate::node_graph::EffectGraphDefExt;
         use manifold_core::effect_graph_def::EffectGraphDef;
 
-        // Build a minimal Mirror graph with a moved Source node.
+        // Build a minimal soft-focus graph with a moved Source node.
         let mut g = Graph::new();
         let src = g.add_node_named(
             "source",
             Box::new(crate::node_graph::boundary_nodes::Source::new()),
         );
-        let handle = crate::node_graph::composites::build_mirror(&mut g, (src, "out"))
-            .expect("build_mirror");
+        let handle = crate::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
+            .expect("build_soft_focus");
         let final_out = g.add_node_named(
             "final_output",
             Box::new(crate::node_graph::boundary_nodes::FinalOutput::new()),

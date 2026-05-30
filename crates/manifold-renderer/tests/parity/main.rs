@@ -24,19 +24,11 @@
 mod harness;
 
 mod affine_transform;
-mod bloom;
-mod chromatic_offset;
-mod clamp_stretch;
-mod color_grade;
 mod edge_detect;
 mod glitch;
-mod highlight_boost;
 mod invert;
-mod kaleido_fold;
 mod lut1d;
 mod sanity;
 mod smoke;
-mod strobe;
-mod voronoi_prism;
 mod watercolor;
 mod wireframe_depth;

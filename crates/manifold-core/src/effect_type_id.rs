@@ -92,20 +92,6 @@ impl EffectTypeId {
     /// branching topology — exercises source fan-out.
     pub const SOFT_FOCUS_GRAPH: Self = Self(Cow::Borrowed("SoftFocusGraph"));
 
-    /// Mandala — kaleidoscope whose mirrored segments persist across
-    /// frames via a feedback loop, with chromatic split. Composite:
-    /// `Source ─▶ KaleidoFold ─▶ Feedback ─▶ ChromaticOffset ─▶ out`.
-    pub const MANDALA: Self = Self(Cow::Borrowed("Mandala"));
-
-    /// Edge Stretch By Colour — applies clamp-stretch only to pixels
-    /// matching a target colour. First demo of the Phase A mask
-    /// primitives (`masked_mix` + `chroma_key`). Composite, 3-way
-    /// fan-out:
-    /// `Source → ChromaKey → MaskedMix.mask`,
-    /// `Source → ClampStretch → MaskedMix.b`,
-    /// `Source → MaskedMix.a`.
-    pub const EDGE_STRETCH_BY_COLOR: Self = Self(Cow::Borrowed("EdgeStretchByColor"));
-
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
     pub const UNKNOWN: Self = Self(Cow::Borrowed("Unknown"));

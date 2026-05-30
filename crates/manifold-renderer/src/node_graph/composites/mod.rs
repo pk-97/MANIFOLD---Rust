@@ -23,8 +23,6 @@
 //!
 //! ## V1 set
 //!
-//! - [`build_mirror`]: `Transform[mode=Foldᴹ] + Mix(source, folded)`
-//!   — kaleidoscope fold with amount blend.
 //! - [`build_infrared`]: `Brightness → ColorRamp`.
 //! - [`build_soft_focus`]: `Blur` + `Mix(source, blurred)`.
 //! - [`build_bloom`]: `Threshold → MipChain → Blur → Blend(Add)`, with the
@@ -43,13 +41,11 @@
 
 mod bloom;
 mod infrared;
-mod mirror;
 mod soft_focus;
 mod strobe_opacity;
 
 pub use bloom::{BLOOM_TYPE_ID, build_bloom};
 pub use infrared::{INFRARED_TYPE_ID, build_infrared};
-pub use mirror::{MIRROR_TYPE_ID, build_mirror, legacy_mirror_mode_to_uv};
 pub use soft_focus::{SOFT_FOCUS_TYPE_ID, build_soft_focus};
 pub use strobe_opacity::{STROBE_OPACITY_TYPE_ID, build_strobe_opacity};
 
@@ -203,12 +199,11 @@ mod tests {
         let ids: HashSet<&str> = [
             BLOOM_TYPE_ID,
             INFRARED_TYPE_ID,
-            MIRROR_TYPE_ID,
             SOFT_FOCUS_TYPE_ID,
         ]
         .into_iter()
         .collect();
-        assert_eq!(ids.len(), 4, "composite type IDs must be unique");
+        assert_eq!(ids.len(), 3, "composite type IDs must be unique");
 
         for id in ids {
             assert!(
@@ -219,28 +214,6 @@ mod tests {
 
         // Sanity: each builder is callable.
         let _ = build_bloom(&mut g, source_endpoint);
-    }
-
-    #[test]
-    fn mirror_compiles_executes_and_exposes_amount_and_mode() {
-        let (mut g, handle) = run_composite_in_graph(build_mirror);
-        assert_eq!(handle.type_id().as_str(), MIRROR_TYPE_ID);
-        assert_eq!(
-            handle.inner_nodes().len(),
-            2,
-            "Mirror = Transform (fold) + Mix (amount blend)"
-        );
-        let exposed: HashSet<&'static str> = handle.exposed_params().collect();
-        assert!(exposed.contains("amount"));
-        assert!(exposed.contains("mode"));
-        handle
-            .set_param(&mut g, "amount", ParamValue::Float(0.5))
-            .unwrap();
-        // Mode routes to Transform's mode enum directly; legacy values
-        // need the legacy_mirror_mode_to_uv helper at the call site.
-        handle
-            .set_param(&mut g, "mode", ParamValue::Enum(7))
-            .unwrap();
     }
 
     #[test]

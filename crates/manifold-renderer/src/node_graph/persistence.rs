@@ -825,15 +825,10 @@ mod tests {
             primitives::BLUR_TYPE_ID,
             primitives::MIP_CHAIN_TYPE_ID,
             primitives::GAUSSIAN_BLUR_TYPE_ID,
-            primitives::TRANSFORM_TYPE_ID,
-            primitives::SAMPLE_TYPE_ID,
             primitives::FEEDBACK_TYPE_ID,
             primitives::WET_DRY_TYPE_ID,
-            primitives::BLOOM_TYPE_ID,
             primitives::WATERCOLOR_TYPE_ID,
             primitives::WIREFRAME_DEPTH_TYPE_ID,
-            primitives::INFRARED_TYPE_ID,
-            primitives::QUAD_MIRROR_TYPE_ID,
         ];
         for id in expected {
             assert!(

@@ -1625,32 +1625,34 @@ mod user_binding_tests {
         effect_definition_registry::create_default(&ty)
     }
 
-    fn mirror_with_rotation_exposed(rotation_value: f32) -> EffectInstance {
-        let mut fx = make_default(EffectTypeId::MIRROR);
-        // Mirror's canonical splice registers Transform under the
-        // handle `"uv_transform"` and Mix under `"mix"`. Expose the
-        // inner Transform's `rotation` param via the user-binding
-        // tail.
+    fn stylized_with_translate_exposed(translate_value: f32) -> EffectInstance {
+        let mut fx = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        // StylizedFeedback's graph registers an affine_transform under
+        // the handle `"affine"`. Its static card exposes gain / scale /
+        // rotation, but NOT `translate_x` — so a user-tail binding to
+        // `affine.translate_x` is the sole writer of that inner param
+        // (the clean regression vehicle the deleted Mirror.rotation
+        // test used to be).
         fx.append_user_binding(UserParamBinding {
-            id: "user.uv_transform.rotation.1".to_string(),
-            label: "Rotation".to_string(),
-            node_handle: "uv_transform".to_string(),
-            inner_param: "rotation".to_string(),
-            min: 0.0,
+            id: "user.affine.translate_x.1".to_string(),
+            label: "Translate X".to_string(),
+            node_handle: "affine".to_string(),
+            inner_param: "translate_x".to_string(),
+            min: -1.0,
             max: 1.0,
             default_value: 0.0,
             convert: ParamConvert::Float,
         });
-        // Drag the user-tail slider to `rotation_value`. With static
-        // count = 2 (amount, mode) the user binding's slot lives at
-        // index 2.
-        let slot_index = 2;
+        // Drag the user-tail slider to `translate_value`. With static
+        // count = 3 (amount, zoom, rotate) the user binding's slot lives
+        // at index 3.
+        let slot_index = 3;
         assert_eq!(
             fx.param_values.len(),
-            3,
-            "Mirror with 2 static + 1 user-tail = 3 param slots",
+            4,
+            "StylizedFeedback with 3 static + 1 user-tail = 4 param slots",
         );
-        fx.param_values[slot_index] = ParamSlot::exposed(rotation_value);
+        fx.param_values[slot_index] = ParamSlot::exposed(translate_value);
         fx
     }
 
@@ -1662,25 +1664,25 @@ mod user_binding_tests {
     fn build_time_hydrate_resolves_user_binding_to_inner_node() {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let fx = mirror_with_rotation_exposed(0.48);
+        let fx = stylized_with_translate_exposed(0.48);
 
         let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
-            .expect("Mirror chain with one user binding builds");
+            .expect("StylizedFeedback chain with one user binding builds");
 
         let slot = cg
             .effect_nodes
             .first()
-            .expect("Mirror contributes one effect slot");
+            .expect("StylizedFeedback contributes one effect slot");
         assert_eq!(
             slot.bindings.len(),
             slot.n_static + 1,
-            "user-tail binding for Transform.rotation must hydrate at build time",
+            "user-tail binding for affine.translate_x must hydrate at build time",
         );
         let user_rb = &slot.bindings[slot.n_static];
         assert_eq!(user_rb.source, crate::node_graph::BindingSource::User);
         match &user_rb.target {
             crate::node_graph::ResolvedTarget::Node { param, .. } => {
-                assert_eq!(*param, "rotation");
+                assert_eq!(*param, "translate_x");
             }
             _ => panic!("user binding must resolve to a Node target"),
         }
@@ -1690,10 +1692,10 @@ mod user_binding_tests {
     /// the chain's stored unified binding list must write the
     /// user-tail param value to the inner Transform node.
     #[test]
-    fn exposed_rotation_slider_value_reaches_inner_transform() {
+    fn exposed_slider_value_reaches_inner_node() {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let fx = mirror_with_rotation_exposed(0.48);
+        let fx = stylized_with_translate_exposed(0.48);
 
         let mut cg = ChainGraph::try_build(
             std::slice::from_ref(&fx),
@@ -1704,7 +1706,7 @@ mod user_binding_tests {
             256,
             256,
         )
-        .expect("Mirror chain with one user binding builds");
+        .expect("StylizedFeedback chain with one user binding builds");
 
         // Mirror the per-frame apply that `run()` would execute:
         // walk the slot's unified bindings against fx.param_values.
@@ -1717,25 +1719,25 @@ mod user_binding_tests {
             &mut slot.binding_cache,
         );
 
-        // Inspect the inner Transform node's `rotation` param — it
+        // Inspect the inner affine node's `translate_x` param — it
         // must reflect the user-tail slot's value, not its primitive
         // default of 0.0.
         let (_, xform_id) = slot
             .handles
             .iter()
-            .find(|(h, _)| h.as_ref() == "uv_transform")
-            .expect("Mirror splice registers `uv_transform` handle");
-        let rotation = cg
+            .find(|(h, _)| h.as_ref() == "affine")
+            .expect("StylizedFeedback graph registers `affine` handle");
+        let translate_x = cg
             .graph
             .get_node(*xform_id)
-            .and_then(|n| n.params.get("rotation").cloned())
-            .expect("Transform exposes a `rotation` param");
+            .and_then(|n| n.params.get("translate_x").cloned())
+            .expect("affine_transform exposes a `translate_x` param");
 
         assert_eq!(
-            rotation,
+            translate_x,
             ParamValue::Float(0.48),
             "exposed user-binding slider must propagate to the inner \
-             Transform.rotation param. If this is `Float(0.0)`, the \
+             affine.translate_x param. If this is `Float(0.0)`, the \
              per-frame apply walked the wrong slice — the regression \
              that motivated this fix.",
         );
@@ -1745,25 +1747,26 @@ mod user_binding_tests {
     /// of `binding_seed_tests::soft_focus_inner_blur_starts_at_binding_default_not_primitive_default`
     /// for the user tier.
     ///
-    /// Builds a Mirror chain whose user-exposed `Transform.rotation`
-    /// binding declares `default_value = 0.42`, and asserts that the
-    /// inner Transform's `rotation` param starts at `0.42` (the
-    /// binding default) rather than `0.0` (the Transform primitive's
-    /// `ParamDef::default`). Catches the latent "user binding default
-    /// not seeded" bug: without the unified `apply_binding_defaults`
-    /// walk covering the user tail, exposed sliders would have to be
-    /// "touched" to push their declared default through.
+    /// Builds a StylizedFeedback chain whose user-exposed
+    /// `affine.translate_x` binding declares `default_value = 0.42`,
+    /// and asserts that the inner affine node's `translate_x` param
+    /// starts at `0.42` (the binding default) rather than `0.0` (the
+    /// affine_transform primitive's `ParamDef::default`). Catches the
+    /// latent "user binding default not seeded" bug: without the
+    /// unified `apply_binding_defaults` walk covering the user tail,
+    /// exposed sliders would have to be "touched" to push their
+    /// declared default through.
     #[test]
     fn user_binding_with_nonzero_default_seeds_inner_at_build_time() {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let mut fx = make_default(EffectTypeId::MIRROR);
+        let mut fx = make_default(EffectTypeId::STYLIZED_FEEDBACK);
         fx.append_user_binding(UserParamBinding {
-            id: "user.uv_transform.rotation.1".to_string(),
-            label: "Rotation".to_string(),
-            node_handle: "uv_transform".to_string(),
-            inner_param: "rotation".to_string(),
-            min: 0.0,
+            id: "user.affine.translate_x.1".to_string(),
+            label: "Translate X".to_string(),
+            node_handle: "affine".to_string(),
+            inner_param: "translate_x".to_string(),
+            min: -1.0,
             max: 1.0,
             default_value: 0.42,
             convert: ParamConvert::Float,
@@ -1771,30 +1774,30 @@ mod user_binding_tests {
         // Leave the outer slot at its declared default so the test
         // depends on the seed pass, not on the apply-with-divergent-
         // value path.
-        let slot_index = 2;
-        assert_eq!(fx.param_values.len(), 3);
+        let slot_index = 3;
+        assert_eq!(fx.param_values.len(), 4);
         fx.param_values[slot_index] = ParamSlot::exposed(0.42);
 
         let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
-            .expect("Mirror chain with one user binding builds");
+            .expect("StylizedFeedback chain with one user binding builds");
         let slot = cg
             .effect_nodes
             .first()
-            .expect("Mirror contributes one effect slot");
+            .expect("StylizedFeedback contributes one effect slot");
         let (_, xform_id) = slot
             .handles
             .iter()
-            .find(|(h, _)| h.as_ref() == "uv_transform")
-            .expect("Mirror splice registers `uv_transform` handle");
-        let rotation = cg
+            .find(|(h, _)| h.as_ref() == "affine")
+            .expect("StylizedFeedback graph registers `affine` handle");
+        let translate_x = cg
             .graph
             .get_node(*xform_id)
-            .and_then(|n| n.params.get("rotation").cloned())
-            .expect("Transform exposes a `rotation` param");
+            .and_then(|n| n.params.get("translate_x").cloned())
+            .expect("affine_transform exposes a `translate_x` param");
         assert_eq!(
-            rotation,
+            translate_x,
             ParamValue::Float(0.42),
-            "user-binding default seed must plant 0.42 into Transform.rotation \
+            "user-binding default seed must plant 0.42 into affine.translate_x \
              at build time. If this is Float(0.0), the unified \
              apply_binding_defaults walk regressed and exposed sliders \
              will need to be 'touched' before they take their declared default.",

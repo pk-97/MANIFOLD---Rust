@@ -21,15 +21,12 @@ mod beat_ramp;
 mod blob_detect_ffi;
 mod blob_overlay_render;
 mod block_displace_field;
-mod bloom;
 mod box_mask;
 mod blur_3d_separable;
 mod blinn_specular;
 mod chroma_key;
 mod checkerboard;
 mod chromatic_displace;
-mod chromatic_offset;
-mod clamp_stretch;
 mod bake_equirect_envmap;
 mod basic_shape;
 mod clamp_texture;
@@ -39,7 +36,6 @@ mod pack_curve_xy;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
 mod color;
-mod color_grade;
 mod color_sample;
 mod colorize;
 mod compose;
@@ -99,10 +95,8 @@ mod hash_field_by_seed;
 mod hash_noise_field_2d;
 mod hdr_retention_mix;
 mod heightmap_to_normal;
-mod highlight_boost;
 mod hue_saturation;
 mod image_folder;
-mod infrared;
 mod instance_position_jitter;
 mod instance_rotation_jitter;
 mod inject_burst;
@@ -110,7 +104,6 @@ mod euler_step_particles;
 mod sample_texture_at_particles;
 mod wrap_particles_torus;
 mod invert;
-mod kaleido_fold;
 mod lambert_directional;
 mod legacy_bridge;
 mod length_vec2;
@@ -147,7 +140,8 @@ mod posterize;
 mod power_texture;
 mod project_3d;
 mod project_4d;
-mod quad_mirror;
+mod mirror_fold_uv;
+mod note_rates;
 mod radial_burst_force_field;
 mod radial_fold_uv;
 mod radial_offset_field;
@@ -185,7 +179,6 @@ mod affine_scalar;
 mod camera_orbit;
 mod canvas_area_scale;
 mod centered_uv;
-mod plasma_pattern_2d;
 mod rotate_2d;
 mod sin_term;
 mod slope_displace;
@@ -194,7 +187,6 @@ mod trig_texture;
 mod smoothing;
 mod smoothstep_texture;
 mod track_persist;
-mod strobe;
 mod temporal;
 mod texture_advect;
 mod texture_dimensions;
@@ -203,13 +195,11 @@ mod torus_wrap_field;
 mod triangulate_grid;
 mod trigger_ease_to;
 mod trigger_gate;
-mod uv;
 mod uv_displace_by_flow;
 mod uv_field;
 mod value;
 mod vignette;
 mod voronoi_2d;
-mod voronoi_prism;
 mod wgsl_compute;
 mod watercolor;
 mod wet_dry_mix;
@@ -232,15 +222,12 @@ pub use beat_ramp::BeatRamp;
 pub use blob_detect_ffi::BlobDetectFfi;
 pub use blob_overlay_render::BlobOverlayRender;
 pub use block_displace_field::BlockDisplaceField;
-pub use bloom::{BLOOM_TYPE_ID, Bloom};
 pub use box_mask::BoxMask;
 pub use blinn_specular::BlinnSpecular;
 pub use blur_3d_separable::{BLUR_3D_AXES, BLUR_3D_MODES, Blur3DSeparable};
 pub use chroma_key::{CHROMA_KEY_MODES, ChromaKey};
 pub use checkerboard::Checkerboard;
 pub use chromatic_displace::ChromaticDisplace;
-pub use chromatic_offset::ChromaticOffset;
-pub use clamp_stretch::ClampStretch;
 pub use bake_equirect_envmap::BakeEquirectEnvmap;
 pub use basic_shape::{BASIC_SHAPE_SHAPES, BasicShape};
 pub use clamp_texture::ClampTexture;
@@ -250,7 +237,6 @@ pub use pack_curve_xy::PackCurveXy;
 pub use color::{
     BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
 };
-pub use color_grade::ColorGrade;
 pub use color_sample::ColorSample;
 pub use colorize::Colorize;
 pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
@@ -316,9 +302,7 @@ pub use grid_uv_field::GridUvField;
 pub use hash_field_by_seed::{HASH_FIELD_MODES, HashFieldBySeed};
 pub use hash_noise_field_2d::HashNoiseField2D;
 pub use heightmap_to_normal::HeightmapToNormal;
-pub use highlight_boost::HighlightBoost;
 pub use image_folder::ImageFolder;
-pub use infrared::{INFRARED_PALETTES, INFRARED_TYPE_ID, Infrared};
 pub use instance_position_jitter::InstancePositionJitter;
 pub use instance_rotation_jitter::InstanceRotationJitter;
 pub use inject_burst::{INJECT_BURST_TYPE_ID, InjectBurst};
@@ -327,7 +311,6 @@ pub use sample_texture_at_particles::SampleTextureAtParticles;
 pub use wrap_particles_torus::WrapParticlesTorus;
 pub use hue_saturation::HueSaturation;
 pub use invert::Invert;
-pub use kaleido_fold::KaleidoFold;
 pub use lambert_directional::LambertDirectional;
 pub use length_vec2::LengthVec2;
 pub use lerp_instance_fields::LerpInstanceFields;
@@ -363,7 +346,8 @@ pub use posterize::Posterize;
 pub use power_texture::PowerTexture;
 pub use project_3d::{PROJECT_3D_MODES, Project3D};
 pub use project_4d::Project4D;
-pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
+pub use mirror_fold_uv::{MIRROR_FOLD_MODES, MirrorFoldUv};
+pub use note_rates::{NOTE_RATE_LABELS, NOTE_RATE_VALUES};
 pub use radial_burst_force_field::RadialBurstForceField;
 pub use radial_fold_uv::RadialFoldUv;
 pub use radial_offset_field::RadialOffsetField;
@@ -404,7 +388,6 @@ pub use affine_scalar::AffineScalar;
 pub use camera_orbit::CameraOrbit;
 pub use canvas_area_scale::CanvasAreaScale;
 pub use centered_uv::CenteredUv;
-pub use plasma_pattern_2d::{PLASMA_PATTERNS, PLASMA_PATTERN_COUNT, PlasmaPattern2D};
 pub use rotate_2d::Rotate2D;
 pub use sin_term::SinTerm;
 pub use slope_displace::SlopeDisplace;
@@ -412,9 +395,6 @@ pub use texture_sum_5::TextureSum5;
 pub use trig_texture::{TRIG_MODES, TrigTexture};
 pub use smoothing::{SMOOTHING_TYPE_ID, Smoothing};
 pub use smoothstep_texture::SmoothstepTexture;
-pub use strobe::{
-    NOTE_RATE_LABELS, NOTE_RATE_VALUES, NOTE_RATES as STROBE_NOTE_RATES, Strobe,
-};
 pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
 pub use texture_advect::{TEXTURE_ADVECT_BOUNDARIES, TextureAdvect};
 pub use texture_dimensions::TextureDimensions;
@@ -424,16 +404,11 @@ pub use triangulate_grid::TriangulateGrid;
 pub use trigger_ease_to::{TRIGGER_EASE_TO_TYPE_ID, TriggerEaseTo};
 pub use track_persist::TrackPersist;
 pub use trigger_gate::TriggerGate;
-pub use uv::{
-    SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
-    TRANSFORM_TYPE_ID, Transform,
-};
 pub use uv_displace_by_flow::UvDisplaceByFlow;
 pub use uv_field::UvField;
 pub use value::Value;
 pub use vignette::{VIGNETTE_SHAPES, Vignette};
 pub use voronoi_2d::Voronoi2D;
-pub use voronoi_prism::VoronoiPrism;
 pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
@@ -475,8 +450,6 @@ mod tests {
             Box::new(Threshold::new()),
             Box::new(Blur::new()),
             Box::new(MipChain::new()),
-            Box::new(Transform::new()),
-            Box::new(Sample::new()),
             Box::new(Feedback::new()),
             Box::new(WetDry::new()),
         ]
@@ -486,7 +459,7 @@ mod tests {
     fn all_v1_primitives_have_unique_type_ids() {
         let primitives = all_primitives();
         let ids: HashSet<&str> = primitives.iter().map(|p| p.type_id().as_str()).collect();
-        assert_eq!(ids.len(), 12, "primitive type IDs must be unique");
+        assert_eq!(ids.len(), 10, "primitive type IDs must be unique");
     }
 
     #[test]

@@ -18,10 +18,10 @@
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use crate::node_graph::primitives::strobe::NOTE_RATE_VALUES;
+use crate::node_graph::primitives::note_rates::NOTE_RATE_VALUES;
 
 /// Display labels for the `rate` enum. Indices match
-/// [`NOTE_RATE_VALUES`] from `node.strobe`. Kept in sync with
+/// [`NOTE_RATE_VALUES`] (the shared note-rate table). Kept in sync with
 /// `node.lfo`'s rate vocabulary.
 pub const BEAT_GATE_RATE_LABELS: &[&str] = &[
     "1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64",

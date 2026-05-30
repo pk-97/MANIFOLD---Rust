@@ -49,7 +49,7 @@ crate::primitive! {
         },
     ],
     composition_notes: "Mask sampled from `.r`. Pair with `luma_key`, `chroma_key`, or `threshold` upstream of the mask input. The global `amount` scales the mask uniformly so the whole effect can be crossfaded in/out from one knob; at amount=0 the output is always `a`.",
-    examples: ["preset.effect.edge_stretch_by_color"],
+    examples: ["preset.effect.glitch"],
 }
 
 #[repr(C)]

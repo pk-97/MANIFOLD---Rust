@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Oily Fluid",
-  "description": "Oily Fluid — decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) `feedback_velocity` is downsampled 4× (`node.downsample`) then H+V Gaussian blurred at quarter-res, mirroring the legacy `cs_downsample → 2× separable blur` path; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90°) and advects the quarter-res blurred velocity using the full-res unblurred velocity as the displacement field, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of simplex noise injection (z-axis driven by `system.generator_input.time × speed × 0.6` so the noise field evolves frame-to-frame, matching the legacy `noise_time` term), then carries the result back to the color feedback. Both advect timesteps are `speed × disp` via `node.math` so the outer-card Speed slider scales both advection and noise rate. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines); only the selected one's producer subgraph runs each frame via mux short-circuit (`EffectNode::selected_input_branch`), and the result is graded by `node.color_grade`.\n\nKnown parity deltas vs legacy: (1) 1-frame state delay through `node.feedback`'s `late_capture` phase, matching legacy's same-frame ping-pong + swap, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted — recover via the outer-card Hue / Saturation, (3) sim evolves from black via per-frame noise injection — takes a few seconds to build visible patterns, (4) state textures are rgba16float pending the Feedback compute-shader copy path that will lift the cross-format blit restriction so fp32 state can be opt-in without requiring every intermediate node in the loop to also be annotated fp32.",
+  "description": "Oily Fluid — decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) `feedback_velocity` is downsampled 4× (`node.downsample`) then H+V Gaussian blurred at quarter-res, mirroring the legacy `cs_downsample → 2× separable blur` path; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90°) and advects the quarter-res blurred velocity using the full-res unblurred velocity as the displacement field, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of simplex noise injection (z-axis driven by `system.generator_input.time × speed × 0.6` so the noise field evolves frame-to-frame, matching the legacy `noise_time` term), then carries the result back to the color feedback. Both advect timesteps are `speed × disp` via `node.math` so the outer-card Speed slider scales both advection and noise rate. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines); only the selected one's producer subgraph runs each frame via mux short-circuit (`EffectNode::selected_input_branch`), and the result is graded by the decomposed Color Grade chain (`node.gain` → `node.saturation` → `node.hue_saturation` → `node.contrast` → `node.clamp_texture`, the used subset of the legacy `node.color_grade` kernel — colorize/tint and the amount crossfade were never wired here so they are dropped; the trailing clamp keeps the legacy `max(result, 0)` floor).\n\nKnown parity deltas vs legacy: (1) 1-frame state delay through `node.feedback`'s `late_capture` phase, matching legacy's same-frame ping-pong + swap, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted — recover via the outer-card Hue / Saturation, (3) sim evolves from black via per-frame noise injection — takes a few seconds to build visible patterns, (4) state textures are rgba16float pending the Feedback compute-shader copy path that will lift the cross-format blit restriction so fp32 state can be opt-in without requiring every intermediate node in the loop to also be annotated fp32.",
   "presetMetadata": {
     "id": "OilyFluid",
     "displayName": "Oily Fluid",
@@ -45,16 +45,16 @@
         "target": { "kind": "handleNode", "handle": "oilslick_chroma", "param": "amount" },
         "convert": { "type": "Float" } },
       { "id": "contrast", "label": "Contrast", "defaultValue": 1.4,
-        "target": { "kind": "handleNode", "handle": "grade", "param": "contrast" },
+        "target": { "kind": "handleNode", "handle": "grade_contrast", "param": "contrast" },
         "convert": { "type": "Float" } },
       { "id": "hue", "label": "Hue", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "grade", "param": "hue" },
+        "target": { "kind": "handleNode", "handle": "grade_hue", "param": "hue" },
         "convert": { "type": "Float" } },
       { "id": "sat", "label": "Saturation", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "grade", "param": "saturation" },
+        "target": { "kind": "handleNode", "handle": "grade_saturation", "param": "saturation" },
         "convert": { "type": "Float" } },
       { "id": "bright", "label": "Brightness", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "grade", "param": "gain" },
+        "target": { "kind": "handleNode", "handle": "grade_gain", "param": "gain" },
         "convert": { "type": "Float" } },
       { "id": "vel_disp", "label": "Velocity Displace", "defaultValue": 0.5,
         "target": { "kind": "handleNode", "handle": "vel_speed_mul", "param": "b" },
@@ -172,13 +172,20 @@
     { "id": 38, "typeId": "node.mux_texture", "handle": "mode_mux",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 39, "typeId": "node.color_grade", "handle": "grade",
+    { "id": 39, "typeId": "node.gain", "handle": "grade_gain",
+      "params": { "gain": { "type": "Float", "value": 1.0 } } },
+    { "id": 46, "typeId": "node.saturation", "handle": "grade_saturation",
+      "params": { "saturation": { "type": "Float", "value": 1.0 } } },
+    { "id": 47, "typeId": "node.hue_saturation", "handle": "grade_hue",
       "params": {
-        "gain":        { "type": "Float", "value": 1.0 },
-        "saturation":  { "type": "Float", "value": 1.0 },
-        "hue":         { "type": "Float", "value": 0.0 },
-        "contrast":    { "type": "Float", "value": 1.4 }
+        "hue":        { "type": "Float", "value": 0.0 },
+        "saturation": { "type": "Float", "value": 1.0 },
+        "value":      { "type": "Float", "value": 1.0 }
       } },
+    { "id": 48, "typeId": "node.contrast", "handle": "grade_contrast",
+      "params": { "contrast": { "type": "Float", "value": 1.4 } } },
+    { "id": 49, "typeId": "node.clamp_texture", "handle": "grade_clamp",
+      "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 65000.0 } } },
 
     { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
   ],
@@ -256,6 +263,10 @@
     { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "in_4" },
 
     { "fromNode": 38, "fromPort": "out", "toNode": 39, "toPort": "in" },
-    { "fromNode": 39, "fromPort": "out", "toNode": 40, "toPort": "in" }
+    { "fromNode": 39, "fromPort": "out", "toNode": 46, "toPort": "in" },
+    { "fromNode": 46, "fromPort": "out", "toNode": 47, "toPort": "in" },
+    { "fromNode": 47, "fromPort": "out", "toNode": 48, "toPort": "in" },
+    { "fromNode": 48, "fromPort": "out", "toNode": 49, "toPort": "in" },
+    { "fromNode": 49, "fromPort": "out", "toNode": 40, "toPort": "in" }
   ]
 }

@@ -4,6 +4,4 @@ pub const HDR_BUFFER_DIVISOR: u32 = 1;
 
 pub mod compute_blit_helper;
 pub mod compute_dual_blit_helper;
-pub mod infrared;
-pub mod quad_mirror;
 pub mod wireframe_depth;
