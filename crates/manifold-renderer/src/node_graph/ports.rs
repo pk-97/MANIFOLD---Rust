@@ -41,7 +41,7 @@ pub enum PortType {
     /// CPU-only struct wire carrying a [`Light`](crate::node_graph::light::Light).
     /// Produced by `node.light` (sun + point modes), consumed optionally by 3D
     /// rendering primitives (which generate shadow maps internally when wired)
-    /// and by shading atoms (`lambert_directional`, `cook_torrance_specular`,
+    /// and by shading atoms (`lambert_directional`, `blinn_specular`,
     /// etc., which use the light's direction/colour/attenuation instead of
     /// their scattered scalar params). Same lifetime model as `Camera`.
     Light,

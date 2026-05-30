@@ -2,7 +2,7 @@
 //!
 //! Emits one [`Light`] on the `out` port; downstream consumers — shading
 //! atoms ([`lambert_directional`](super::lambert_directional),
-//! [`cook_torrance_specular`](super::cook_torrance_specular), …) and
+//! [`blinn_specular`](super::blinn_specular), …) and
 //! shadow-aware mesh renderers — take it as a single `light: Light`
 //! input instead of scattered `light_x/y/z/intensity` scalars.
 //!
@@ -37,7 +37,7 @@ const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft"];
 crate::primitive! {
     name: LightNode,
     type_id: "node.light",
-    purpose: "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, cook_torrance_specular, etc.) and shadow-aware mesh renderers. All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage.",
+    purpose: "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_3d_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage.",
     inputs: {
         pos_x: ScalarF32 optional,
         pos_y: ScalarF32 optional,

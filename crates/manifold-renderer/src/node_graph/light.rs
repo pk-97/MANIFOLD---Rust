@@ -2,7 +2,7 @@
 //!
 //! One `Light` source primitive (`node.light`, with `mode` enum picking Sun
 //! or Point) emits a fully-populated struct each frame; downstream consumers
-//! — shading atoms ([`lambert_directional`], [`cook_torrance_specular`], …)
+//! — shading atoms ([`lambert_directional`], [`blinn_specular`], …)
 //! and shadow-aware mesh renderers — take it as a single `light: Light`
 //! input instead of scattered `light_x/y/z/intensity` scalars.
 //!
@@ -234,7 +234,7 @@ impl Light {
     /// Sun: always 1.0 (parallel rays don't fall off).
     /// Point: `1 / (1 + d²/range²)`. Matches the well-behaved
     /// (non-divergent) inverse-square variant used by the legacy
-    /// DigitalPlants shader and `cook_torrance_specular`.
+    /// DigitalPlants shader and the mesh renderers' PBR path.
     pub fn attenuation_at(&self, world_pos: [f32; 3]) -> f32 {
         match self.mode {
             LightMode::Sun => 1.0,

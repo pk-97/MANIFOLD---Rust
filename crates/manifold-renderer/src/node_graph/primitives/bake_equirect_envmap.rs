@@ -1,7 +1,7 @@
 //! `node.bake_equirect_envmap` — procedurally bake an HDR studio
 //! environment map at a configurable resolution. Outputs an
-//! equirectangular Rgba16Float Texture2D suitable for
-//! `node.equirect_envmap_sample` and PBR-IBL rendering.
+//! equirectangular Rgba16Float Texture2D suitable for wiring into
+//! `node.render_3d_mesh`'s `envmap` input for PBR-IBL rendering.
 //!
 //! The studio aesthetic — ambient floor + bright horizon band + overhead
 //! softbox + floor fill + two strip lights + azimuthal modulation — is
@@ -28,7 +28,7 @@ struct EnvmapUniforms {
 crate::primitive! {
     name: BakeEquirectEnvmap,
     type_id: "node.bake_equirect_envmap",
-    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — pair with `node.equirect_envmap_sample` downstream for IBL reflections, or `node.tone_map` if displaying directly.",
+    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_3d_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
     inputs: {},
     outputs: {
         envmap: Texture2D,

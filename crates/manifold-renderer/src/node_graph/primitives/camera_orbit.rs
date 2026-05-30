@@ -108,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Outer-card sliders typically expose orbit/tilt in degrees and `fov_y` in degrees too — convert with a `node.affine_scalar` (scale = π/180) per input before wiring into camera_orbit, matching the DigitalPlants / MetallicGlass pattern. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target. `pos_x`/`pos_y`/`pos_z` outputs are the camera's world position — wire into PBR atoms (`cook_torrance_specular.view_x/y/z`, `equirect_envmap_sample.view_x/y/z`) when they're running in 3D-mesh mode (world_pos input wired), so per-pixel V = camera_pos - world_pos.",
+    composition_notes: "Outer-card sliders typically expose orbit/tilt in degrees and `fov_y` in degrees too — convert with a `node.affine_scalar` (scale = π/180) per input before wiring into camera_orbit, matching the DigitalPlants / MetallicGlass pattern. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target. `pos_x`/`pos_y`/`pos_z` outputs are the camera's world position — `node.render_3d_mesh` takes the Camera directly and derives the per-pixel view vector (V = camera_pos - world_pos) internally for its PBR material.",
     examples: [],
     picker: { label: "Orbit Camera", category: Driver },
 }
