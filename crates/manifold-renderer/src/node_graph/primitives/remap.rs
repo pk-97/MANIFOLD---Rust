@@ -16,12 +16,13 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 pub const REMAP_WRAP_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];
+pub const REMAP_FIELD_MODES: &[&str] = &["Absolute", "Relative"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RemapUniforms {
     wrap: u32,
-    _pad0: u32,
+    mode: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -29,7 +30,7 @@ struct RemapUniforms {
 crate::primitive! {
     name: Remap,
     type_id: "node.remap",
-    purpose: "Resample `source` at the per-pixel UV coordinates in `uv_field`'s R/G channels (TouchDesigner's Remap TOP). out(p) = source(uv_field(p).rg). `wrap` picks the out-of-[0,1] policy (Clamp / Repeat / Mirror). The generic UV-warp atom — pair with a coordinate-field producer (polar_field, centered_uv, scale_offset_texture, optical flow) to build kaleidoscope / mirror / edge-stretch / chromatic split / lens distortion as a visible `coordinate-math → remap → blend` graph rather than a bespoke single-effect shader.",
+    purpose: "Resample `source` at the per-pixel UV coordinates in `uv_field`'s R/G channels (TouchDesigner's Remap TOP). `mode` = Absolute: out(p) = source(uv_field(p).rg); Relative: out(p) = source(p + uv_field(p).rg) — treat the field as a UV *offset* so it sums cleanly with other offset fields. `wrap` picks the out-of-[0,1] policy (Clamp / Repeat / Mirror). The generic UV-warp atom — pair with a coordinate-field producer (polar_field, centered_uv, scale_offset_texture, block_displace_field, optical flow) to build kaleidoscope / mirror / edge-stretch / chromatic split / glitch displace / lens distortion as a visible `coordinate-math → remap → blend` graph rather than a bespoke single-effect shader.",
     inputs: {
         source: Texture2D required,
         uv_field: Texture2D required,
@@ -46,8 +47,16 @@ crate::primitive! {
             range: None,
             enum_values: REMAP_WRAP_MODES,
         },
+        ParamDef {
+            name: "mode",
+            label: "Field Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: None,
+            enum_values: REMAP_FIELD_MODES,
+        },
     ],
-    composition_notes: "uv_field carries absolute target UVs in R (u) and G (v), [0,1] over the canvas. Build it from centered_uv / polar_field / scale_offset_texture / field_combine chains, or feed a flow field. Wrap is applied per-component in the shader (Clamp = saturate, Repeat = fract, Mirror = triangle), so no sampler-state juggling. Pure resample — blend the result against the original with node.mix downstream when an effect wants a wet/dry.",
+    composition_notes: "Absolute (default): uv_field carries target UVs in R (u) / G (v), [0,1] over the canvas — build it from centered_uv / polar_field / scale_offset_texture / field_combine chains, or feed a flow field. Relative: uv_field carries a signed UV *offset* added to each pixel's own coordinate — this is how displacement fields (block_displace_field, scanline_jitter_field) compose: sum them with node.mix(Add) then remap once. Wrap is applied per-component in the shader (Clamp = saturate, Repeat = fract, Mirror = triangle), so no sampler-state juggling. Pure resample — blend the result against the original with node.mix downstream when an effect wants a wet/dry.",
     examples: ["preset.effect.kaleidoscope"],
     picker: { label: "Remap", category: Atom },
 }
@@ -55,6 +64,10 @@ crate::primitive! {
 impl Primitive for Remap {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let wrap = match ctx.params.get("wrap") {
+            Some(ParamValue::Enum(e)) => *e,
+            _ => 0,
+        };
+        let mode = match ctx.params.get("mode") {
             Some(ParamValue::Enum(e)) => *e,
             _ => 0,
         };
@@ -84,7 +97,7 @@ impl Primitive for Remap {
 
         let uniforms = RemapUniforms {
             wrap,
-            _pad0: 0,
+            mode,
             _pad1: 0,
             _pad2: 0,
         };

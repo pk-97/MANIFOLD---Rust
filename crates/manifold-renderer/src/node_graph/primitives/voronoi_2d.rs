@@ -28,15 +28,15 @@ struct VoronoiUniforms {
     offset_y: f32,
     jitter: f32,
     out_scale: f32,
-    _pad0: f32,
-    _pad1: f32,
+    write_out: u32,
+    write_cell_id: u32,
     _pad2: f32,
 }
 
 crate::primitive! {
     name: Voronoi2D,
     type_id: "node.voronoi_2d",
-    purpose: "Pure generator. 2D Worley / Voronoi cellular noise. Outputs F1 in R (distance to nearest feature point), F2 in G (second-nearest), F2-F1 in B (cell-edge factor — high at boundaries), and a per-cell stable random hash in A (same value across every pixel inside a cell, uncorrelated between cells — drives per-cell variation: density threshold, twinkle frequency, per-cell colour, per-cell size). Foundation for cellular patterns, cracked-glass, stained-glass, stars (sparse jitter + per-star twinkle), foam, fire embers, procedural tiles.",
+    purpose: "Pure generator. 2D Worley / Voronoi cellular noise. `out` packs F1 in R (distance to nearest feature point), F2 in G (second-nearest), F2-F1 in B (cell-edge factor — high at boundaries), and a per-cell stable random hash in A (same value across every pixel inside a cell, uncorrelated between cells — drives per-cell variation: density threshold, twinkle frequency, per-cell colour, per-cell size). `cell_id` carries the F1-winning cell's integer coordinate in RG (constant within a Voronoi region) — feed RG + a seed into node.hash_field_by_seed for beat-reseeded per-cell composites (Voronoi Prism). Both outputs are independently optional: read only what you need and the other slot isn't allocated. Foundation for cellular patterns, cracked-glass, stained-glass, stars (sparse jitter + per-star twinkle), foam, fire embers, procedural tiles.",
     inputs: {
         // Every numeric param is port-shadowable so drift / animated
         // density / time-varying cell scale can come from upstream
@@ -50,6 +50,7 @@ crate::primitive! {
     },
     outputs: {
         out: Texture2D,
+        cell_id: Texture2D,
     },
     params: [
         ParamDef {
@@ -93,7 +94,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "For star fields: chain into node.fract_texture → node.power_texture (high exponent ~16) to spike F1 into points. Read A (cell_hash) to threshold which cells are stars (density slider via node.filter or node.smoothstep_texture against A), and to derive per-star twinkle (math chain: A → frequency range → multiply by time → sin_term → multiply with the core). For cracked-glass / cell edges: read the B (F2-F1) channel via node.channel_mix. For watercolor patches: read R, threshold via node.threshold. For per-cell colour variation (foam, pebbles, tiles): feed A into node.color_ramp or node.lut1d. Setting jitter to 0 gives a perfect grid; 1 gives full random cells. The cell_hash on A uses an independent hash mix from the jitter offsets, so each cell's hash is stable as jitter is animated (only the F1-winner can change at cell boundaries).",
+    composition_notes: "For star fields: chain into node.fract_texture → node.power_texture (high exponent ~16) to spike F1 into points. Read A (cell_hash) to threshold which cells are stars (density slider via node.filter or node.smoothstep_texture against A), and to derive per-star twinkle (math chain: A → frequency range → multiply by time → sin_term → multiply with the core). For cracked-glass / cell edges: read the B (F2-F1) channel via node.channel_mix. For watercolor patches: read R, threshold via node.threshold. For per-cell colour variation (foam, pebbles, tiles): feed A into node.color_ramp or node.lut1d. Setting jitter to 0 gives a perfect grid; 1 gives full random cells. The cell_hash on A uses an independent hash mix from the jitter offsets, so each cell's hash is stable as jitter is animated (only the F1-winner can change at cell boundaries). The `cell_id` output (RG = F1-winner cell coordinate) is read via textureLoad downstream (node.hash_field_by_seed), so keep field and consumer at the same resolution; it carries integer cell coords (exact in fp16) for beat-reseeded per-cell offset/visibility (Voronoi Prism). Reading only `cell_id` (not `out`) is fine — the F1/F2 slot isn't allocated.",
     examples: [],
     picker: { label: "Voronoi 2D", category: Atom },
 }
@@ -109,14 +110,24 @@ impl Primitive for Voronoi2D {
         let jitter = ctx.scalar_or_param("jitter", 1.0);
         let out_scale = ctx.scalar_or_param("out_scale", 1.0);
 
-        let Some(target) = ctx.outputs.texture_2d("out") else {
-            return;
+        // Both outputs are independently optional — the executor only
+        // allocates a slot for an output that has a downstream consumer.
+        // Gate each store on whether its slot exists, and bind whichever
+        // slot IS live to both bindings (the gated-off store never
+        // touches the placeholder, so aliasing is harmless).
+        let out_slot = ctx.outputs.texture_2d("out");
+        let cell_slot = ctx.outputs.texture_2d("cell_id");
+        let Some(primary) = out_slot.or(cell_slot) else {
+            return; // nothing consumes either output
         };
-        let w = target.width;
-        let h = target.height;
+        let (w, h) = (primary.width, primary.height);
         if w == 0 || h == 0 {
             return;
         }
+        let write_out = u32::from(out_slot.is_some());
+        let write_cell_id = u32::from(cell_slot.is_some());
+        let out_tex = out_slot.unwrap_or(primary);
+        let cell_tex = cell_slot.unwrap_or(primary);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
@@ -133,8 +144,8 @@ impl Primitive for Voronoi2D {
             offset_y,
             jitter,
             out_scale,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            write_out,
+            write_cell_id,
             _pad2: 0.0,
         };
 
@@ -147,7 +158,11 @@ impl Primitive for Voronoi2D {
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: target,
+                    texture: out_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: cell_tex,
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
@@ -163,7 +178,7 @@ mod tests {
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
-    fn voronoi_2d_declares_five_optional_scalar_inputs_and_one_texture_output() {
+    fn voronoi_2d_declares_five_optional_scalar_inputs_and_two_texture_outputs() {
         use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(Voronoi2D::TYPE_ID, "node.voronoi_2d");
         let ins = Voronoi2D::INPUTS;
@@ -176,9 +191,11 @@ mod tests {
             assert!(!port.required, "all voronoi_2d inputs are optional");
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
         }
-        assert_eq!(Voronoi2D::OUTPUTS.len(), 1);
-        assert_eq!(Voronoi2D::OUTPUTS[0].name, "out");
-        assert_eq!(Voronoi2D::OUTPUTS[0].ty, PortType::Texture2D);
+        let out_names: Vec<&str> = Voronoi2D::OUTPUTS.iter().map(|p| p.name).collect();
+        assert_eq!(out_names, vec!["out", "cell_id"]);
+        for port in Voronoi2D::OUTPUTS {
+            assert_eq!(port.ty, PortType::Texture2D);
+        }
     }
 
     #[test]

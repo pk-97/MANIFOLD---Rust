@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "VoronoiPrism",
-  "description": "Voronoi Prism, decomposed: a beat-reseeded per-cell temporal composite built from atoms. node.voronoi_cell_id partitions into cells and emits each pixel's cell coordinate; node.math(Floor) on generator_input.beat gives the integer beat used as a re-hash seed; two node.hash_field_by_seed re-roll a per-cell UV offset (hash2) and per-cell visibility (hash1) each beat. The offset (scaled to ±0.2) is added to a node.uv_strip_clamp content-window UV and node.remap samples the source there. node.beat_ramp fades cells in over the first 15% of each beat; node.smoothstep_texture thresholds ~60% of cells visible; node.gain multiplies visibility by the pop-in; node.mix(Multiply) darkens the prism by visibility (dark cells go black) and node.mix(Lerp, amount) crossfades over the source. Replaces the fused node.voronoi_prism. Three new reusable atoms (voronoi_cell_id, hash_field_by_seed, beat_ramp). It is a visual reconstruction, not a bit-port (the legacy uses the same hash2 partition + constants, transcribed verbatim). Documented deltas (visual effect, verified by eye): the post-offset UV is clamped to [0,1] by remap rather than re-clamped to the content strip, so cell edges may pull in a little out-of-strip source.",
+  "description": "Voronoi Prism, decomposed: a beat-reseeded per-cell temporal composite built from atoms. node.voronoi_2d partitions into cells and emits each pixel's cell coordinate on its cell_id output (the same atom StarField uses for F1/F2/cell_hash — no separate partition); node.math(Floor) on generator_input.beat gives the integer beat used as a re-hash seed; two node.hash_field_by_seed re-roll a per-cell UV offset (hash2) and per-cell visibility (hash1) each beat. The offset (scaled to ±0.2) is added to a node.uv_strip_clamp content-window UV and node.remap samples the source there. node.beat_ramp fades cells in over the first 15% of each beat; node.smoothstep_texture thresholds ~60% of cells visible; node.gain multiplies visibility by the pop-in; node.mix(Multiply) darkens the prism by visibility (dark cells go black) and node.mix(Lerp, amount) crossfades over the source. Replaces the fused node.voronoi_prism. Two reusable atoms (hash_field_by_seed, beat_ramp) plus the cell_id output added to the shared node.voronoi_2d (the old single-use node.voronoi_cell_id is deleted). It is a visual reconstruction, not a bit-port. Documented deltas (visual effect, verified by eye): cell layout now comes from voronoi_2d's wang-hash partition (cells square in UV, not aspect-corrected to square-in-pixels as the legacy hash2 partition was) rather than the prism's bespoke partition — same beat-reseeded behaviour, different exact cell shapes; and the post-offset UV is clamped to [0,1] by remap rather than re-clamped to the content strip, so cell edges may pull in a little out-of-strip source.",
   "presetMetadata": {
     "id": "VoronoiPrism",
     "displayName": "Voronoi Prism",
@@ -54,7 +54,7 @@
         "id": "cells",
         "label": "Cells",
         "defaultValue": 16.0,
-        "target": { "kind": "handleNode", "handle": "cells", "param": "cell_count" },
+        "target": { "kind": "handleNode", "handle": "cells", "param": "scale" },
         "convert": { "type": "Float" }
       },
       {
@@ -81,9 +81,12 @@
     },
     {
       "id": 3,
-      "typeId": "node.voronoi_cell_id",
+      "typeId": "node.voronoi_2d",
       "handle": "cells",
-      "params": { "cell_count": { "type": "Int", "value": 16 } }
+      "params": {
+        "scale": { "type": "Float", "value": 16.0 },
+        "jitter": { "type": "Float", "value": 1.0 }
+      }
     },
     {
       "id": 4,
@@ -184,14 +187,14 @@
   ],
   "wires": [
     { "fromNode": 1, "fromPort": "beat", "toNode": 2, "toPort": "a" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "field" },
+    { "fromNode": 3, "fromPort": "cell_id", "toNode": 4, "toPort": "field" },
     { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "seed" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
     { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "a" },
     { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "b" },
     { "fromNode": 0, "fromPort": "out", "toNode": 8, "toPort": "source" },
     { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "uv_field" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 9, "toPort": "field" },
+    { "fromNode": 3, "fromPort": "cell_id", "toNode": 9, "toPort": "field" },
     { "fromNode": 2, "fromPort": "out", "toNode": 9, "toPort": "seed" },
     { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
     { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "in" },

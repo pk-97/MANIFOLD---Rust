@@ -5,6 +5,7 @@
 // returns the smallest (F1) and second-smallest (F2) Euclidean
 // distances. Output channels:
 //
+// `out` (binding 1):
 //   R = F1                  (distance to nearest feature point)
 //   G = F2                  (distance to second-nearest)
 //   B = F2 - F1             (cell-edge factor — high at boundaries)
@@ -16,24 +17,36 @@
 //                            for per-cell variation: density
 //                            thresholding, per-cell colour, per-cell
 //                            timing/twinkle, per-cell size.)
+// `cell_id` (binding 2):
+//   RG = the F1-winning cell's integer coordinate (B=0, A=1) — the
+//        raw cell coordinate, constant within a Voronoi region, for
+//        seeding per-cell randoms (feed RG + a seed into
+//        node.hash_field_by_seed for beat-reseeded cellular composites
+//        like Voronoi Prism).
+//
+// Both outputs are independently optional: `write_out` / `write_cell_id`
+// gate each store, so a consumer that reads only one output doesn't pay
+// to allocate the other (the executor skips the unconsumed slot, and the
+// run() binds the live one to both bindings as a harmless placeholder).
 //
 // F1/F2/(F2-F1) are scaled by `out_scale` so the user can remap into
 // a useful range without an extra scale_offset_texture node. The
 // cell_hash on A is always raw [0, 1] — out_scale does not apply.
 
 struct Uniforms {
-    scale:     f32,   // cell density (cells per UV-unit)
-    offset_x:  f32,
-    offset_y:  f32,
-    jitter:    f32,   // 0..1 — 0 = grid points, 1 = full random offset
-    out_scale: f32,   // multiplier on F1/F2/(F2-F1)
-    _pad0:     f32,
-    _pad1:     f32,
-    _pad2:     f32,
+    scale:         f32,   // cell density (cells per UV-unit)
+    offset_x:      f32,
+    offset_y:      f32,
+    jitter:        f32,   // 0..1 — 0 = grid points, 1 = full random offset
+    out_scale:     f32,   // multiplier on F1/F2/(F2-F1)
+    write_out:     u32,   // 1 = store the F1/F2/edge/cell_hash output
+    write_cell_id: u32,   // 1 = store the cell-coordinate output
+    _pad2:         f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var cell_id_tex: texture_storage_2d<rgba16float, write>;
 
 fn wang_hash(seed_in: u32) -> u32 {
     var seed = seed_in;
@@ -93,5 +106,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let r = f1 * u.out_scale;
     let g = f2 * u.out_scale;
     let b = (f2 - f1) * u.out_scale;
-    textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(r, g, b, cell_hash));
+    if u.write_out != 0u {
+        textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(r, g, b, cell_hash));
+    }
+    if u.write_cell_id != 0u {
+        textureStore(
+            cell_id_tex,
+            vec2<i32>(gid.xy),
+            vec4<f32>(f32(f1_cell.x), f32(f1_cell.y), 0.0, 1.0),
+        );
+    }
 }

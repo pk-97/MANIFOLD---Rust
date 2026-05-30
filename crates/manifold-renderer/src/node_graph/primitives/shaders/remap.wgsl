@@ -1,10 +1,13 @@
-// node.remap — resample source_tex at the absolute UV coordinates carried
-// in uv_field_tex's R/G channels. out(p) = source(wrap(uv_field(p).rg)).
-// The generic UV-warp / TD Remap TOP.
+// node.remap — resample source_tex at the UV coordinates carried in
+// uv_field_tex's R/G channels. The generic UV-warp / TD Remap TOP.
+//   mode 0 (Absolute): out(p) = source(wrap(uv_field(p).rg))
+//   mode 1 (Relative): out(p) = source(wrap(p + uv_field(p).rg))
+// Relative treats the field as a signed UV offset, so displacement
+// fields sum with node.mix(Add) and remap once.
 
 struct Uniforms {
     wrap: u32, // 0 = Clamp, 1 = Repeat, 2 = Mirror
-    _pad0: u32,
+    mode: u32, // 0 = Absolute, 1 = Relative
     _pad1: u32,
     _pad2: u32,
 }
@@ -36,7 +39,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let sample_uv = textureSampleLevel(uv_field_tex, tex_sampler, uv, 0.0).rg;
+    let field = textureSampleLevel(uv_field_tex, tex_sampler, uv, 0.0).rg;
+    // Absolute: field IS the target UV. Relative: field is an offset
+    // added to this pixel's own coordinate.
+    let sample_uv = select(field, uv + field, uniforms.mode == 1u);
     let wrapped = vec2<f32>(
         wrap_coord(sample_uv.x, uniforms.wrap),
         wrap_coord(sample_uv.y, uniforms.wrap),

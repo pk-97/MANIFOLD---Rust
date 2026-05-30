@@ -6,9 +6,10 @@
 //!   Hash1 (mode 1): out.rgb = hash1(seeded)  ∈ [0,1]
 //!
 //! The "re-hash a value field by a seed" atom the §2.5 audit found
-//! missing. Feed `node.voronoi_cell_id`'s RG and a `beat_floor` seed to
-//! get per-cell randoms that jump each beat — the per-beat reshuffle at
-//! the heart of Voronoi Prism. General: any value field + any seed.
+//! missing. Feed `node.voronoi_2d`'s `cell_id` output (RG) and a
+//! `beat_floor` seed to get per-cell randoms that jump each beat — the
+//! per-beat reshuffle at the heart of Voronoi Prism. General: any value
+//! field + any seed.
 
 use manifold_gpu::GpuBinding;
 
@@ -30,7 +31,7 @@ struct HashFieldUniforms {
 crate::primitive! {
     name: HashFieldBySeed,
     type_id: "node.hash_field_by_seed",
-    purpose: "Hash an input value-field's RG channels with an added scalar seed: seeded = field.rg + seed·(seed_x, seed_y); Hash2 (mode 0) → out.rg = hash2(seeded) in [0,1]^2, Hash1 (mode 1) → out.rgb = hash1(seeded) in [0,1]. The 're-hash a value field by a seed' atom — feed node.voronoi_cell_id's RG + a beat_floor seed to get per-cell randoms that re-roll each beat (Voronoi Prism's per-beat content shuffle / visibility). General: any value field, any seed.",
+    purpose: "Hash an input value-field's RG channels with an added scalar seed: seeded = field.rg + seed·(seed_x, seed_y); Hash2 (mode 0) → out.rg = hash2(seeded) in [0,1]^2, Hash1 (mode 1) → out.rgb = hash1(seeded) in [0,1]. The 're-hash a value field by a seed' atom — feed node.voronoi_2d's cell_id output (RG) + a beat_floor seed to get per-cell randoms that re-roll each beat (Voronoi Prism's per-beat content shuffle / visibility). General: any value field, any seed.",
     inputs: {
         field: Texture2D required,
         seed: ScalarF32 optional,
@@ -72,7 +73,7 @@ crate::primitive! {
             enum_values: HASH_FIELD_MODES,
         },
     ],
-    composition_notes: "Reads `field` via textureLoad (no interpolation) so a per-cell-constant field (voronoi_cell_id) stays exact across cell boundaries — field and output must be the same resolution (true in a single-canvas graph). hash2 / hash1 constants are verbatim from the legacy Voronoi Prism. `seed` port-shadows the param: wire generator_input.beat → node.math(Floor) for the per-beat reshuffle. seed_x/seed_y set the per-axis seed weights (prism offset uses 1.73/2.91, visibility uses 0.17/0.31).",
+    composition_notes: "Reads `field` via textureLoad (no interpolation) so a per-cell-constant field (voronoi_2d's cell_id) stays exact across cell boundaries — field and output must be the same resolution (true in a single-canvas graph). hash2 / hash1 constants are verbatim from the legacy Voronoi Prism. `seed` port-shadows the param: wire generator_input.beat → node.math(Floor) for the per-beat reshuffle. seed_x/seed_y set the per-axis seed weights (prism offset uses 1.73/2.91, visibility uses 0.17/0.31).",
     examples: ["preset.effect.voronoi_prism"],
     picker: { label: "Hash Field by Seed", category: Atom },
 }
