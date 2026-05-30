@@ -1177,30 +1177,35 @@ mod tests {
         assert_eq!(preset.type_id().as_str(), "ComputeStrangeAttractor");
     }
 
-    /// Load the bundled `Plasma.json` preset from disk and execute it.
-    /// This is the JSON Plasma that supersedes the legacy Rust factory
-    /// — a non-trivial graph (~75 nodes) exercising the procedural-math
-    /// vocabulary + port-shadows-param + system.generator_input. The
-    /// `Plasma` type_id binding is load-bearing: it's what makes the
-    /// editor cog populate for existing Plasma layers and what causes
-    /// the registry to pick this JSON over the Rust factory at runtime.
+    /// Load + compile the bundled `Plasma.json` preset from disk. This
+    /// is the JSON Plasma that supersedes the legacy Rust factory. After
+    /// the 2026-05-29 decomposition Plasma's pattern path is a single
+    /// `node.wgsl_compute` (JSON-editable shader) which declares
+    /// `requires().gpu_encoder = true`, so the CPU `execute_frame` path
+    /// no longer applies — GPU execution is covered by
+    /// `bundled_generator_presets::every_bundled_preset_executes_one_frame`
+    /// (and `Generator::render` in production). This asserts the preset
+    /// loads, the WGSL introspects, and the chain pre-allocator wires
+    /// every resource without error. The `Plasma` type_id binding is
+    /// load-bearing: it's what makes the editor cog populate for existing
+    /// Plasma layers and what causes the registry to pick this JSON over
+    /// the Rust factory at runtime.
     #[test]
-    fn bundled_plasma_loads_and_executes() {
+    fn bundled_plasma_loads_and_compiles() {
+        let device = crate::test_device();
         let json = include_str!(
             "../../assets/generator-presets/Plasma.json"
         );
-        let mut preset = JsonGraphGenerator::from_json_str(
+        let preset = JsonGraphGenerator::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
         )
-        .expect("bundled Plasma must load");
+        .expect("bundled Plasma must load + compile");
         assert_eq!(preset.type_id().as_str(), "Plasma");
-        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
-        preset.execute_frame(frame_time());
-        // Advance time and execute again — phase should propagate
-        // through the wired Math chains without the graph panicking.
-        preset.set_frame_context(0.5, 0.25, 1.78, 0.0, 0.5, 1920.0, 1080.0);
-        preset.execute_frame(frame_time());
     }
 
     /// Regression for the "loaded project renders black until the user
