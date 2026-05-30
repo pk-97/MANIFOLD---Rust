@@ -156,6 +156,21 @@ impl KnownItem for [f32; 2] {
     ];
 }
 
+impl KnownItem for [f32; 3] {
+    // Triple scalars (x, y, z) at 4-byte alignment — three separate
+    // F32 channels, NOT a single Vec3F (whose std430 stride would pad
+    // to 16). Stride is 12. The 3D analog of `[f32; 2]`: the per-
+    // particle force buffer the FluidSim3D integrator chain accumulates
+    // into. The matching WGSL storage element is a packed
+    // `struct { x: f32, y: f32, z: f32 }` (stride 12), read/written via
+    // `.x/.y/.z` — NOT `vec3<f32>` (stride 16).
+    const SPECS: &'static [ChannelSpec] = &[
+        ChannelSpec { name: ChannelName::from_str("x"), ty: ChannelElementType::F32 },
+        ChannelSpec { name: ChannelName::from_str("y"), ty: ChannelElementType::F32 },
+        ChannelSpec { name: ChannelName::from_str("z"), ty: ChannelElementType::F32 },
+    ];
+}
+
 /// Layout descriptor for [`PortType::Array`] wires.
 ///
 /// Two `Array` ports can connect iff their type identity matches. The

@@ -72,6 +72,8 @@ mod frequency_ratio;
 mod fluid_gradient_curl_3d;
 mod fluid_seed_3d;
 mod fluid_simulate_3d;
+mod gradient_central_diff_3d;
+mod curl_slope_force_3d;
 mod scatter_particles_camera;
 mod gain;
 mod gaussian_blur_variable_width;
@@ -279,6 +281,8 @@ pub use fluid_seed_3d::{
     FLUID_SEED_3D_CONTAINER_MODES, FLUID_SEED_3D_PATTERNS, FluidSeed3D,
 };
 pub use fluid_simulate_3d::{FLUID_3D_CONTAINER_MODES, FluidSimulate3D};
+pub use gradient_central_diff_3d::GradientCentralDiff3D;
+pub use curl_slope_force_3d::CurlSlopeForce3D;
 pub use scatter_particles_camera::{SCATTER_CAMERA_MODES, ScatterParticlesCamera};
 pub use gain::Gain;
 pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
