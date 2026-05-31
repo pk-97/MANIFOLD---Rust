@@ -189,6 +189,10 @@ crate::primitive! {
     composition_notes: "Outer-card sliders typically expose pos/aim in world units, color as 0..1 RGB, intensity as a multiplier. `range` means different things per mode (Sun: shadow ortho half-extent, Point: attenuation half-distance) but both are 'how far does this light reach' — pick a value that matches your scene scale. `cast_shadows` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or trigger; toggle off to skip the shadow render pass entirely. `shadow_softness` picks the PCF kernel (3x3 / 5x5 / 7x7) — bigger kernels are more expensive. `shadow_resolution` rarely needs perform-time control; bump it for sharper shadows on large scenes, drop it for performance. Wire `out` into a shadow-aware mesh renderer (renderer handles shadow map generation internally) or into a shading atom's `light` input (replaces scattered light_x/y/z scalars).",
     examples: [],
     picker: { label: "Light", category: Driver },
+    summary: "A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer.",
+    category: MaterialsAndLighting,
+    role: Source,
+    aliases: ["light", "lamp", "sun", "point light"],
 }
 
 impl Primitive for LightNode {

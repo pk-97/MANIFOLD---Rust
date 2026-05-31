@@ -68,6 +68,10 @@ crate::primitive! {
     composition_notes: "Output is fully opaque RGB. Sum with `node.fresnel_rim` (additive) and `node.blinn_specular` (additive) via `node.compose` (mode=Add) to build the full stylised-PBR shading layer. For a single-axis 2-tone matcap, set the unused-axis colors equal (e.g. color_x_low = color_x_high) — the side contribution becomes a constant added to the base.",
     examples: [],
     picker: { label: "Matcap Two-Tone", category: Atom },
+    summary: "Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights.",
+    category: MaterialsAndLighting,
+    role: Filter,
+    aliases: ["matcap", "two tone", "sphere map", "lit sphere"],
 }
 
 impl Primitive for MatcapTwoTone {

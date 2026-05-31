@@ -109,7 +109,11 @@ crate::primitive! {
     ],
     composition_notes: "Both light and view are normalised in-shader. Color alpha is ignored; output alpha = spec weight. For audio-reactive sparkle, wire a beat-driven LFO into `power` (lower power = broader highlight; higher = pinpoint). When `light` is wired, the light's direction overrides `light_x/y/z`; the light's pre-multiplied colour multiplies into the `color` tint (so a yellow light through a magenta surface gives a yellow×magenta highlight).",
     examples: [],
-    picker: { label: "Blinn Specular", category: Atom },
+    picker: { label: "Shininess (Blinn)", category: Atom },
+    summary: "Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting.",
+    category: MaterialsAndLighting,
+    role: Filter,
+    aliases: ["specular", "shininess", "highlight", "blinn"],
 }
 
 impl Primitive for BlinnSpecular {

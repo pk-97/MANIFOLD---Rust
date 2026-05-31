@@ -103,6 +103,10 @@ crate::primitive! {
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer's `light` input stays unwired when this material is in use (Unlit is the only kind where light is truly optional). `color_a < 1.0` is informational — opaque-only rendering for v1; transparency lands as a follow-up. To get the legacy 'flat lit' look from the pre-Material-system render_3d_mesh, use `node.phong_material` with `ambient = 1.0` instead.",
     examples: [],
     picker: { label: "Unlit Material", category: Atom },
+    summary: "A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks.",
+    category: MaterialsAndLighting,
+    role: Source,
+    aliases: ["unlit", "flat", "constant", "material"],
 }
 
 impl Primitive for UnlitMaterial {

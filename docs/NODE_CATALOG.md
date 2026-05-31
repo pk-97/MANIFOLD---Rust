@@ -53,9 +53,9 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.array_math` | List Math | Math & Convert | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
 | `node.array_replicate_polyline_rings` | Replicate Polyline Rings | — | — | Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. |
 | `node.array_unpack_vec2` | Split XY | Math & Convert | Filter | Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them. |
-| `node.bake_equirect_envmap` | Bake Equirect Envmap | — | — | Procedurally bake an HDR studio environment map at the given resolution. |
+| `node.bake_equirect_envmap` | Bake Environment (equirect) | Materials & Lighting | Source | Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting. |
 | `node.basic_shape` | Basic Shape | Generate | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
-| `node.blinn_specular` | Blinn Specular | — | — | Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. |
+| `node.blinn_specular` | Shininess (Blinn) | Materials & Lighting | Filter | Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting. |
 | `node.blob_detect_ffi` | Blob Tracker | Detection & Sampling | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
 | `node.blob_overlay_render` | Blob Overlay | Detection & Sampling | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
 | `node.block_displace_field` | Block Displace Field | — | — | Generator for a per-block random UV-offset field (the datamosh / block-glitch building block). |
@@ -63,7 +63,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.blur_3d_separable` | Blur 3D Separable | — | — | Single-axis separable Gaussian blur on a Texture3D. |
 | `node.box_mask` | Rectangle Mask | Mask | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | `node.brightness` | Brightness | Color & Tone | Filter | Multiplies the image brightness up or down. A plain brightness control. |
-| `node.cel_material` | Cel Material | — | — | Cel-shaded material — Lambert N·L quantized into `cel_bands` discrete bands. |
+| `node.cel_material` | Cel Material | Materials & Lighting | Source | A toon material that snaps the lighting into a few flat bands for a cartoon or cel-shaded look. |
 | `node.centered_uv` | Centered UV | — | — | UV recentered around (cx, cy) with per-axis scale. |
 | `node.channel_mix` | Channel Mixer | Color & Tone | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
 | `node.checkerboard` | Checkerboard | Generate | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
@@ -100,7 +100,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.flatten_to_camera_plane` | Flatten to Camera Plane | — | — | Compress particles toward the camera viewing plane. |
 | `node.flow_field_noise` | Flow Field Noise | — | — | Generate a 2D flow vector field from domain-warped fBM Perlin noise. |
 | `node.fract_texture` | Wrap | Math & Convert | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
-| `node.fresnel_rim` | Fresnel Rim | — | — | Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. |
+| `node.fresnel_rim` | Rim Light (Fresnel) | Materials & Lighting | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
 | `node.gain` | Exposure | Color & Tone | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
 | `node.gaussian_blur` | Gaussian Blur | — | — | Single-axis Gaussian blur. |
 | `node.gaussian_blur_variable_width` | Gaussian Blur (Variable Width) | Blur & Sharpen | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
@@ -117,18 +117,18 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.hash_field_by_seed` | Hash Field by Seed | — | — | Hash an input value-field's RG channels with an added scalar seed: seeded = field.rg + seed·(seed_x, seed_y); Hash2 (mode 0) → out.rg = hash2(seeded) in [0,1]^… |
 | `node.hash_noise_field_2d` | Hash Noise Field 2D | — | — | Pure generator. |
 | `node.hdr_retention_mix` | HDR Mix | Composite | Filter | Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a proces… |
-| `node.heightmap_to_normal` | Heightmap → Normal | — | — | Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. |
+| `node.heightmap_to_normal` | Surface Bumps | Materials & Lighting | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
 | `node.hue_saturation` | Hue / Saturation | Color & Tone | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
 | `node.image_folder` | Image Folder | Generate | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
 | `node.instance_position_jitter` | Instance Position Jitter | — | — | Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. |
 | `node.instance_rotation_jitter` | Instance Rotation Jitter | — | — | Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. |
-| `node.lambert_directional` | Lambert (Directional) | — | — | Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multip… |
+| `node.lambert_directional` | Basic Light (Lambert) | Materials & Lighting | Filter | Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term. |
 | `node.length_vec2` | Length | Math & Convert | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
 | `node.lerp_instance_fields` | Lerp Instance Fields | — | — | Elementwise linear interpolation between two Array<InstanceTransform>s. |
 | `node.levels` | Levels | Color & Tone | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | `node.lic_integrate` | LIC Integrate | — | — | Line Integral Convolution. |
 | `node.linear_gradient` | Linear Gradient | Generate | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
-| `node.matcap_two_tone` | Matcap Two-Tone | — | — | Cross-axis 4-colour matcap from a tangent-space normal map. |
+| `node.matcap_two_tone` | Matcap Two-Tone | Materials & Lighting | Filter | Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights. |
 | `node.mirror_axis` | Flip | Distort & Warp | Filter | Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or di… |
 | `node.mirror_fold_uv` | Mirror | Distort & Warp | Map | Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap … |
 | `node.mix` | Mix | Composite | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
@@ -142,10 +142,10 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.pack_channels` | Pack RGBA | Math & Convert | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | `node.pack_curve_xy` | Pack Curve XY | — | — | Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. |
 | `node.pack_vec4` | Combine XYZW | Math & Convert | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
-| `node.pbr_material` | PBR Material | — | — | Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. |
+| `node.pbr_material` | PBR Material | Materials & Lighting | Source | A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces. |
 | `node.perlin_noise_2d` | Perlin Noise 2D | — | — | Pure generator. |
 | `node.person_segment` | Person Mask | Detection & Sampling | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
-| `node.phong_material` | Phong Material | — | — | Lambert diffuse + Blinn-Phong specular material. |
+| `node.phong_material` | Phong Material | Materials & Lighting | Source | A basic shiny material with soft diffuse shading and a sharp highlight. The cheap go-to for lit 3D surfaces. |
 | `node.polar_field` | Polar Field | — | — | Pure generator. |
 | `node.polytope_edges` | Polytope Edges | — | — | Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. |
 | `node.polytope_vertices` | Polytope Vertices | — | — | Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. |
@@ -197,7 +197,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.torus_wrap_field` | Torus Wrap Field | — | — | Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. |
 | `node.triangulate_grid` | Triangulate Grid | — | — | Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. |
 | `node.trig_texture` | Sine / Cosine | Math & Convert | Filter | Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient. |
-| `node.unlit_material` | Unlit Material | — | — | Flat-colour material — no lighting math, no shadow term. |
+| `node.unlit_material` | Unlit Material | Materials & Lighting | Source | A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks. |
 | `node.uv_displace_by_flow` | UV Displace by Flow | — | — | Sample a source texture at UVs displaced by a 2D flow vector field. |
 | `node.uv_field` | UV Field | — | — | Pure generator. |
 | `node.uv_strip_clamp` | Edge Stretch | Distort & Warp | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
@@ -226,7 +226,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.frequency_ratio` | Frequency Ratio | Control | Control | Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form. |
 | `node.inject_burst` | Inject Burst | Control | Control | On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new materi… |
 | `node.lfo` | LFO | Control | Control | A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free. |
-| `node.light` | Light | — | — | Single light source for 3D lighting pipelines. |
+| `node.light` | Light | Materials & Lighting | Source | A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer. |
 | `node.luminance` | Luminance | Detection & Sampling | Control | Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is. |
 | `node.math` | Math | Control | Control | Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation. |
 | `node.one_euro_filter` | One Euro Filter | Control | Control | Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor in… |

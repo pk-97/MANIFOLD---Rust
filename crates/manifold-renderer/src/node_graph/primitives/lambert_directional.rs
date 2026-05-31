@@ -94,7 +94,11 @@ crate::primitive! {
     ],
     composition_notes: "Light direction is normalised in-shader so any non-zero (x, y, z) works. Default light is over-the-shoulder camera (0.4, 0.6, 0.7). Port-shadowed components let you wire an LFO or `node.color_compass` to orbit the light at performance time. If a `node.light` is wired into `light`, its direction + colour override the scattered `light_x/y/z` scalars; `ambient` still comes from the scalar param so an unwired Light input doesn't strand it. Point lights wire-in as a single direction (no per-pixel attenuation in this flat-screen atom) — for per-pixel attenuation and full PBR, use `node.render_3d_mesh` with a `node.pbr_material` (the material node owns the lighting model).",
     examples: [],
-    picker: { label: "Lambert (Directional)", category: Atom },
+    picker: { label: "Basic Light (Lambert)", category: Atom },
+    summary: "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
+    category: MaterialsAndLighting,
+    role: Filter,
+    aliases: ["lambert", "diffuse", "matte", "basic light"],
 }
 
 impl Primitive for LambertDirectional {

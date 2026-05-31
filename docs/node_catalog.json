@@ -810,11 +810,16 @@
       "type_id": "node.array_unpack_vec2"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "environment map",
+        "equirect",
+        "ibl",
+        "reflection map"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [],
-      "label": "Bake Equirect Envmap",
+      "label": "Bake Environment (equirect)",
       "outputs": [
         {
           "name": "envmap",
@@ -864,9 +869,9 @@
         }
       ],
       "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_3d_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
       "type_id": "node.bake_equirect_envmap"
     },
     {
@@ -1116,8 +1121,13 @@
       "type_id": "node.beat_ramp"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "specular",
+        "shininess",
+        "highlight",
+        "blinn"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -1166,7 +1176,7 @@
           "type": "f32"
         }
       ],
-      "label": "Blinn Specular",
+      "label": "Shininess (Blinn)",
       "outputs": [
         {
           "name": "out",
@@ -1252,9 +1262,9 @@
         }
       ],
       "purpose": "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint). Wire a `node.light` into `light` to drive direction + colour from one source instead of scattered scalars; the wired light's colour multiplies the `color` tint param.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting.",
       "type_id": "node.blinn_specular"
     },
     {
@@ -1980,8 +1990,13 @@
       "type_id": "node.canvas_area_scale"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "cel",
+        "toon",
+        "cartoon",
+        "material"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -2155,9 +2170,9 @@
         }
       ],
       "purpose": "Cel-shaded material — Lambert N·L quantized into `cel_bands` discrete bands. Stylised look; the DigitalPlants aesthetic. The bundled 3D mesh renderers compute per-fragment N·L with the wired light, snap into one of N bands between `band_low` (shadow side) and `band_high` (lit side), and multiply by base_color. Outputs one Material on `out`. Requires a `light` input wired to the renderer.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A toon material that snaps the lighting into a few flat bands for a cartoon or cel-shaded look.",
       "type_id": "node.cel_material"
     },
     {
@@ -5261,8 +5276,13 @@
       "type_id": "node.frequency_ratio"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rim light",
+        "fresnel",
+        "edge glow",
+        "backlight"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -5291,7 +5311,7 @@
           "type": "f32"
         }
       ],
-      "label": "Fresnel Rim",
+      "label": "Rim Light (Fresnel)",
       "outputs": [
         {
           "name": "out",
@@ -5347,9 +5367,9 @@
         }
       ],
       "purpose": "Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. ADDITIVE rim term — black at face-on, `color`-tinted at grazing. Sum with a base shading (matcap, lambert) via `node.compose` mode=Add to layer the rim onto the surface. Defaults match oily-fluid PBR (view=(0,0,1), power=3, color=iridescent magenta).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects.",
       "type_id": "node.fresnel_rim"
     },
     {
@@ -6394,8 +6414,13 @@
       "type_id": "node.hdr_retention_mix"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "surface bumps",
+        "normal map",
+        "bump map",
+        "heightmap"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -6414,7 +6439,7 @@
           "type": "f32"
         }
       ],
-      "label": "Heightmap → Normal",
+      "label": "Surface Bumps",
       "outputs": [
         {
           "name": "out",
@@ -6454,9 +6479,9 @@
         }
       ],
       "purpose": "Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. Coord_space picks the output convention: TangentZ for flat-surface tangent-space shading (OilyFluid lambert/matcap/blinn), WorldYUp for 3D meshes laid out in the XZ plane with Y up (MetallicGlass full-resolution-reflection trick). Larger `z_scale` flattens the normal; smaller steepens it. `aspect` scales the Y-axis gradient for non-square world quads. Output is SIGNED (range [-1, 1] per channel).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture.",
       "type_id": "node.heightmap_to_normal"
     },
     {
@@ -6870,8 +6895,13 @@
       "type_id": "node.invert"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "lambert",
+        "diffuse",
+        "matte",
+        "basic light"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -6905,7 +6935,7 @@
           "type": "f32"
         }
       ],
-      "label": "Lambert (Directional)",
+      "label": "Basic Light (Lambert)",
       "outputs": [
         {
           "name": "out",
@@ -6955,9 +6985,9 @@
         }
       ],
       "purpose": "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.color_ramp` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
       "type_id": "node.lambert_directional"
     },
     {
@@ -7328,8 +7358,13 @@
       "type_id": "node.lic_integrate"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "light",
+        "lamp",
+        "sun",
+        "point light"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -7577,9 +7612,9 @@
         }
       ],
       "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_3d_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "driver",
-      "summary": "",
+      "summary": "A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer.",
       "type_id": "node.light"
     },
     {
@@ -7747,8 +7782,13 @@
       "type_id": "node.masked_mix"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "matcap",
+        "two tone",
+        "sphere map",
+        "lit sphere"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -7791,9 +7831,9 @@
         }
       ],
       "purpose": "Cross-axis 4-colour matcap from a tangent-space normal map. Per pixel: mc=n.xy*0.5+0.5, base=mix(y_low, y_high, mc.y), side=mix(x_low, x_high, mc.x), out=(base+side)*0.5. Two 2-tone gradients per axis combined for a 4-corner matcap look. Defaults reproduce oily-fluid's PBR base palette (deep purple → pale blue Y axis, magenta → teal X axis).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights.",
       "type_id": "node.matcap_two_tone"
     },
     {
@@ -8796,8 +8836,13 @@
       "type_id": "node.pack_vec4"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "pbr",
+        "realistic",
+        "metallic roughness",
+        "material"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -8976,9 +9021,9 @@
         }
       ],
       "purpose": "Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. The workhorse for realistic 3D surfaces. The bundled 3D mesh renderers evaluate the BRDF per fragment, blend with envmap-sampled IBL, and combine with diffuse + emission. `metallic` blends F0 from dielectric (≈4%) to metal (= base_color); `roughness` controls the microfacet spread (sharp 0.01 to fully rough 1.0). Outputs one Material on `out`. Requires BOTH a `light` input AND an `envmap` Texture2D wired to the renderer (the conditional-requirement table enforces this at preset-load).",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces.",
       "type_id": "node.pbr_material"
     },
     {
@@ -9122,8 +9167,13 @@
       "type_id": "node.person_segment"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "phong",
+        "glossy",
+        "specular",
+        "material"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -9332,9 +9382,9 @@
         }
       ],
       "purpose": "Lambert diffuse + Blinn-Phong specular material. Cheap baseline for lit 3D surfaces. The bundled 3D mesh renderers compute per-fragment N·L diffuse and (N·H)^power specular, combine with the wired light's colour, and mix the ambient floor. Outputs one Material on `out`. Requires a `light` input wired to the renderer (Phong needs an illumination source; the conditional-requirement table enforces this at preset-load).",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A basic shiny material with soft diffuse shading and a sharp highlight. The cheap go-to for lit 3D surfaces.",
       "type_id": "node.phong_material"
     },
     {
@@ -13297,8 +13347,13 @@
       "type_id": "node.trigger_gate"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "unlit",
+        "flat",
+        "constant",
+        "material"
+      ],
+      "category": "Materials & Lighting",
       "examples": [],
       "inputs": [
         {
@@ -13432,9 +13487,9 @@
         }
       ],
       "purpose": "Flat-colour material — no lighting math, no shadow term. The renderer writes (base_color + emission) directly. Use for UI overlays, debug visualisation, neon, anything that shouldn't react to lights. The bundled 3D mesh renderers do NOT require a `light` input when this material is wired (the conditional-requirement table lets the light input stay truly optional). Outputs one Material on `out` consumed by render_3d_mesh / render_instanced_3d_mesh. Emission is premultiplied with `emission_intensity` at emission — downstream reads the final emissive directly.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks.",
       "type_id": "node.unlit_material"
     },
     {

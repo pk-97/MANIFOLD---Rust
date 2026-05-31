@@ -130,6 +130,10 @@ crate::primitive! {
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input AND wire a `node.light` into the renderer's `light` input. `cel_bands = 2` collapses to a silhouette/lit-side binary; `cel_bands = 16` approaches smooth shading. `band_low` is the colour-multiplier on the shadow side (typical 0.08 ≈ 8% — matches legacy DigitalPlants), `band_high` is the lit side (1.0 = full brightness). The construction step clamps `cel_bands` into `[2, 16]` to keep downstream shader assumptions stable.",
     examples: [],
     picker: { label: "Cel Material", category: Atom },
+    summary: "A toon material that snaps the lighting into a few flat bands for a cartoon or cel-shaded look.",
+    category: MaterialsAndLighting,
+    role: Source,
+    aliases: ["cel", "toon", "cartoon", "material"],
 }
 
 impl Primitive for CelMaterial {

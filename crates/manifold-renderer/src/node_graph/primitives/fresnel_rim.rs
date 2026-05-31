@@ -77,7 +77,11 @@ crate::primitive! {
     ],
     composition_notes: "view defaults to (0, 0, 1) — camera looking down +Z. Higher `power` sharpens the rim. Color alpha is ignored; output alpha = fresnel weight (handy for compositing the rim only where it's actually contributing). Port-shadowed `power` lets you pulse the rim from a beat or LFO.",
     examples: [],
-    picker: { label: "Fresnel Rim", category: Atom },
+    picker: { label: "Rim Light (Fresnel)", category: Atom },
+    summary: "Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects.",
+    category: MaterialsAndLighting,
+    role: Filter,
+    aliases: ["rim light", "fresnel", "edge glow", "backlight"],
 }
 
 impl Primitive for FresnelRim {

@@ -69,7 +69,11 @@ crate::primitive! {
     ],
     composition_notes: "One-shot per chain rebuild — the runtime allocates a persistent slot for this output; the shader writes once on the first frame and downstream samplers read across frames. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). For non-studio aesthetics author a sibling primitive (sky-gradient, file-loaded HDRI) — this one specifically reproduces the legacy MetallicGlass studio.",
     examples: [],
-    picker: { label: "Bake Equirect Envmap", category: Atom },
+    picker: { label: "Bake Environment (equirect)", category: Atom },
+    summary: "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
+    category: MaterialsAndLighting,
+    role: Source,
+    aliases: ["environment map", "equirect", "ibl", "reflection map"],
 }
 
 impl Primitive for BakeEquirectEnvmap {
