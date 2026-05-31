@@ -108,6 +108,10 @@ struct NodeView {
     /// can read what each node is doing — and, in a later pass, tune it —
     /// without opening a side panel. Empty if the node has no params.
     params: Vec<ParamView>,
+    /// Whether this node is collapsed to its header + ports (param rows
+    /// hidden). Mirrors `GraphCanvas::collapsed` for this node so layout
+    /// and drawing don't have to consult the map.
+    collapsed: bool,
     /// Top-left corner in graph-space (logical pixels, pre pan/zoom).
     pos_graph: (f32, f32),
     inputs: Vec<PortView>,
@@ -126,7 +130,11 @@ impl NodeView {
 
     /// Total height of the on-node parameter block drawn below the header.
     fn params_h(&self) -> f32 {
-        self.params.len() as f32 * PARAM_ROW_H
+        if self.collapsed {
+            0.0
+        } else {
+            self.params.len() as f32 * PARAM_ROW_H
+        }
     }
 
     /// Y offset where port rows start, below the header and the on-node
@@ -281,6 +289,11 @@ pub struct GraphCanvas {
     /// Actions accumulated this frame from canvas interactions.
     /// Drained by the editor window's input loop after each event.
     pending_actions: Vec<PanelAction>,
+    /// Per-node collapse state (UI-only, keyed by runtime node id so it
+    /// survives snapshot rebuilds like positions do). A collapsed node
+    /// hides its on-face param rows but keeps its header and ports, so it
+    /// can still be wired. Absent = expanded.
+    collapsed: ahash::AHashMap<u32, bool>,
 }
 
 impl GraphCanvas {
@@ -299,6 +312,7 @@ impl GraphCanvas {
             selected: None,
             has_graph_mod: false,
             pending_actions: Vec::new(),
+            collapsed: ahash::AHashMap::new(),
         }
     }
 
@@ -358,13 +372,14 @@ impl GraphCanvas {
             .map(|n| (n.id, n.pos_graph))
             .collect();
 
-        self.nodes = snap
+        let new_nodes: Vec<NodeView> = snap
             .nodes
             .iter()
             .map(|n| NodeView {
                 id: n.id,
                 title: n.title.clone(),
                 params: n.parameters.iter().map(format_param_for_node).collect(),
+                collapsed: self.collapsed.get(&n.id).copied().unwrap_or(false),
                 pos_graph: prev_positions
                     .get(&n.id)
                     .copied()
@@ -382,6 +397,7 @@ impl GraphCanvas {
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
             })
             .collect();
+        self.nodes = new_nodes;
         self.wires = snap
             .wires
             .iter()
@@ -630,6 +646,25 @@ impl GraphCanvas {
         }
     }
 
+    /// Hit-test the collapse chevron in a node header (its right edge).
+    /// Returns the node id when the cursor is over the chevron of a node
+    /// that has params (param-less nodes draw no chevron). Checked before
+    /// the header-drag test so toggling collapse doesn't also start a move.
+    fn chevron_under(&self, viewport: Rect, sx: f32, sy: f32) -> Option<u32> {
+        let header_h = NODE_HEADER_HEIGHT * self.zoom;
+        let sw = NODE_WIDTH * self.zoom;
+        let chev_w = 20.0 * self.zoom;
+        self.nodes.iter().find_map(|node| {
+            if node.params.is_empty() {
+                return None;
+            }
+            let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+            let in_x = sx >= nx + sw - chev_w && sx <= nx + sw;
+            let in_y = sy >= ny && sy <= ny + header_h;
+            (in_x && in_y).then_some(node.id)
+        })
+    }
+
     /// Left-mouse button down. Priority order:
     /// 1. "Reset to Default" header button (when graph is diverged).
     /// 2. Output port → start wire-drag.
@@ -649,6 +684,16 @@ impl GraphCanvas {
                 self.pending_actions.push(PanelAction::RevertEffectGraph);
                 return;
             }
+        }
+        // Collapse chevron in a node header toggles that node's param rows.
+        // Checked before ports/header so it doesn't start a wire or a move.
+        if let Some(node_id) = self.chevron_under(viewport, sx, sy) {
+            let now = !self.collapsed.get(&node_id).copied().unwrap_or(false);
+            self.collapsed.insert(node_id, now);
+            if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+                node.collapsed = now;
+            }
+            return;
         }
         if let Some(hit) = self.port_under(viewport, sx, sy) {
             if hit.is_output {
@@ -970,6 +1015,20 @@ impl GraphCanvas {
             TEXT_HEADER,
         );
 
+        // Collapse chevron at the header's right edge, only for nodes that
+        // actually have params to hide. "+" when collapsed (click to
+        // expand), "-" when expanded — the familiar disclosure glyphs.
+        if !node.params.is_empty() {
+            let chev_size = (11.0 * self.zoom).max(8.0);
+            ui.draw_text(
+                sx + sw - 14.0 * self.zoom,
+                sy + (header_h - chev_size) * 0.5,
+                if node.collapsed { "+" } else { "-" },
+                chev_size,
+                TEXT_SECONDARY,
+            );
+        }
+
         // On-node parameter rows: label + value on one line, with a thin
         // fill bar under ranged values, so you can read what each node is
         // doing straight from the canvas without opening a side panel.
@@ -977,7 +1036,9 @@ impl GraphCanvas {
         let text_size = (9.0 * self.zoom).max(7.0);
         let pad_x = 8.0 * self.zoom;
         let inner_w = sw - 2.0 * pad_x;
-        for (i, p) in node.params.iter().enumerate() {
+        // Collapsed nodes hide their param rows (header + ports stay).
+        let visible_params: &[ParamView] = if node.collapsed { &[] } else { &node.params };
+        for (i, p) in visible_params.iter().enumerate() {
             let row_y = sy + header_h + i as f32 * row_h;
             let text_y = row_y + 2.0 * self.zoom;
 
