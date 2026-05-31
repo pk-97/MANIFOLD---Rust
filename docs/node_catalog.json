@@ -1000,14 +1000,14 @@
         },
         {
           "default": "0",
-          "label": "Rotation (rad)",
+          "label": "Rotation",
           "name": "rotation",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
           "tooltip": "Rotates the shape, in degrees.",
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -1761,14 +1761,14 @@
         },
         {
           "default": "0",
-          "label": "Rotation (rad)",
+          "label": "Rotation",
           "name": "rotation",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
           "tooltip": "Spins the rectangle around its center. Wire a knob or LFO to turn it over time.",
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -1886,23 +1886,23 @@
       "params": [
         {
           "default": "0.7",
-          "label": "Orbit (rad)",
+          "label": "Orbit",
           "name": "orbit",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0.3",
-          "label": "Tilt (rad)",
+          "label": "Tilt",
           "name": "tilt",
           "range": [
             "-1.5",
             "1.5"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "4",
@@ -1916,13 +1916,13 @@
         },
         {
           "default": "0.9",
-          "label": "FOV Y (rad)",
+          "label": "FOV Y",
           "name": "fov_y",
           "range": [
             "0.05",
             "2.5"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -1936,13 +1936,13 @@
         },
         {
           "default": "0",
-          "label": "Roll (rad)",
+          "label": "Roll",
           "name": "roll",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0.05",
@@ -4442,13 +4442,13 @@
         },
         {
           "default": "0",
-          "label": "Rotation (rad)",
+          "label": "Rotation",
           "name": "rotation",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -6136,7 +6136,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -6146,7 +6146,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -6156,7 +6156,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_instanced_3d_mesh to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
@@ -7971,14 +7971,14 @@
         },
         {
           "default": "0",
-          "label": "Rotation (rad)",
+          "label": "Rotation",
           "name": "rotation",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
           "tooltip": "The direction the gradient runs, in degrees.",
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "1",
@@ -8257,7 +8257,7 @@
             "6.2831855"
           ],
           "tooltip": "Rotates the mirror line. Set it for a horizontal, vertical, or diagonal flip.",
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Sample input at UVs mirrored across a line through center at `angle` radians. Single-axis 2-fold symmetry (one half visible, other half is mirror). Distinct from `node.transform` fold modes (axis-aligned, both halves visible mirrored) and `node.kaleidoscope` (N-segment radial). Use for tilted symmetry overlays, asymmetric kaleidoscope variants, height-map symmetry in shading chains.",
@@ -11219,13 +11219,13 @@
       "params": [
         {
           "default": "0",
-          "label": "Angle (radians)",
+          "label": "Angle",
           "name": "angle",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Rotate a 2D coordinate field around the origin by `angle` (radians). Reads (x, y) from input R/G, writes rotated (x', y') back to R/G. Collapses the `angle → cos / sin / neg_sin → field_combine(cos, -sin)` chain that any rotated-projection effect would otherwise need.",
@@ -11281,7 +11281,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -11291,7 +11291,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",
@@ -11301,7 +11301,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in WireframeZoo-shaped graphs: polytope_vertices → Rotate3D → (project) → render.",
@@ -11356,7 +11356,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0.4",
@@ -11366,7 +11366,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0.25",
@@ -11376,7 +11376,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Apply 4D rotation (XY, ZW, XW planes) to an Array<Vec4Vertex>. Matches generator_math::rotate_4d bit-for-bit. The transform stage of the 4D wireframe pipeline: producer → Rotate4D → renderer.",
@@ -11415,13 +11415,13 @@
       "params": [
         {
           "default": "1.5707964",
-          "label": "Angle (radians)",
+          "label": "Angle",
           "name": "angle",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle), retained so older presets load.",
@@ -11460,13 +11460,13 @@
       "params": [
         {
           "default": "1.5707964",
-          "label": "Angle (radians)",
+          "label": "Angle",
           "name": "angle",
           "range": [
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         }
       ],
       "purpose": "Rotate the input's RG vec2 field by an arbitrary angle (radians) per pixel. `out.x = v.x*cos - v.y*sin`, `out.y = v.x*sin + v.y*cos`. The general curl-from-gradient atom — defaults to angle = PI/2 (+90° CCW, the divergence-free curl-flow case) but the angle is port-shadow-param so a control wire (LFO, driver, manual slider, clip-trigger envelope) can sweep it continuously. Sweeping the angle is how FluidSim2D's `rotation_angle` knob biases the flow off the pure-curl axis.",
@@ -13730,7 +13730,7 @@
             "-6.2831855",
             "6.2831855"
           ],
-          "type": "float"
+          "type": "angle"
         },
         {
           "default": "0",

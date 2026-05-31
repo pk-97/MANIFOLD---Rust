@@ -42,8 +42,8 @@ crate::primitive! {
     params: [
         ParamDef {
             name: "angle",
-            label: "Angle (radians)",
-            ty: ParamType::Float,
+            label: "Angle",
+            ty: ParamType::Angle,
             default: ParamValue::Float(std::f32::consts::FRAC_PI_2),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],

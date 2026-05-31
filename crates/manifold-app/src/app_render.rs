@@ -2195,6 +2195,7 @@ fn build_graph_editor_view(
             label: p.label.clone(),
             kind: match p.kind {
                 ParamSnapshotKind::Float => GraphEditorParamKind::Float,
+                ParamSnapshotKind::Angle => GraphEditorParamKind::Angle,
                 ParamSnapshotKind::Int => GraphEditorParamKind::Int,
                 ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
                 ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,

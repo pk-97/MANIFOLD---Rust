@@ -162,7 +162,14 @@ fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) ->
         .or_else(|| {
             parameters
                 .iter()
-                .find(|p| matches!(p.kind, ParamSnapshotKind::Float | ParamSnapshotKind::Int))
+                .find(|p| {
+                    matches!(
+                        p.kind,
+                        ParamSnapshotKind::Float
+                            | ParamSnapshotKind::Angle
+                            | ParamSnapshotKind::Int
+                    )
+                })
         })
         .or_else(|| parameters.first())?;
 
@@ -181,6 +188,8 @@ fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) ->
         }
         ParamSnapshotKind::Int => format!("{}", pick.current_value as i64),
         ParamSnapshotKind::Float => format!("{:.2}", pick.current_value),
+        // Stored radians, shown as degrees (see ParamType::Angle).
+        ParamSnapshotKind::Angle => format!("{:.0}°", pick.current_value.to_degrees()),
         ParamSnapshotKind::Trigger => format!("{}", pick.current_value as i64),
         ParamSnapshotKind::Other => "—".to_string(),
     };

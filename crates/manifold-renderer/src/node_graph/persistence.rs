@@ -755,6 +755,7 @@ fn param_type_name(ty: crate::node_graph::parameters::ParamType) -> &'static str
     use crate::node_graph::parameters::ParamType;
     match ty {
         ParamType::Float => "Float",
+        ParamType::Angle => "Angle",
         ParamType::Int => "Int",
         ParamType::Bool => "Bool",
         ParamType::Vec2 => "Vec2",
@@ -777,6 +778,7 @@ fn param_value_matches_type(v: &ParamValue, ty: crate::node_graph::parameters::P
     matches!(
         (ty, v),
         (ParamType::Float, ParamValue::Float(_))
+            | (ParamType::Angle, ParamValue::Float(_))
             | (ParamType::Int, ParamValue::Float(_))
             | (ParamType::Bool, ParamValue::Bool(_))
             | (ParamType::Vec2, ParamValue::Vec2(_))

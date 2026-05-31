@@ -157,6 +157,10 @@ pub struct ParamSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamSnapshotKind {
     Float,
+    /// Float-backed angle. Stored value is RADIANS (so wired modulation and
+    /// preset math stay correct), but the UI displays and edits in DEGREES,
+    /// converting at the slider boundary only. See [`ParamType::Angle`].
+    Angle,
     Int,
     Bool,
     Enum,
@@ -498,6 +502,7 @@ fn title_from_type_id(type_id: &str) -> String {
 fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
     match ty {
         ParamType::Float => ParamSnapshotKind::Float,
+        ParamType::Angle => ParamSnapshotKind::Angle,
         ParamType::Int => ParamSnapshotKind::Int,
         ParamType::Bool => ParamSnapshotKind::Bool,
         ParamType::Enum => ParamSnapshotKind::Enum,

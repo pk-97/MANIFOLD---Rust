@@ -44,6 +44,12 @@ use super::PanelAction;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphEditorParamKind {
     Float,
+    /// Float-backed angle. Behaves exactly like `Float` for storage, drag,
+    /// and serialization (the stored value stays RADIANS so wired modulation
+    /// and preset math stay correct), but the value cell displays DEGREES.
+    /// Conversion happens only at the display boundary in
+    /// `format_inner_param_value`.
+    Angle,
     Int,
     Bool,
     Enum,
@@ -493,6 +499,7 @@ impl GraphEditorPanel {
             let supported = matches!(
                 ps.kind,
                 GraphEditorParamKind::Float
+                    | GraphEditorParamKind::Angle
                     | GraphEditorParamKind::Int
                     | GraphEditorParamKind::Bool
                     | GraphEditorParamKind::Enum
@@ -623,7 +630,9 @@ impl GraphEditorPanel {
 
             if supported {
                 let convert = match ps.kind {
-                    GraphEditorParamKind::Float => ParamConvert::Float,
+                    GraphEditorParamKind::Float | GraphEditorParamKind::Angle => {
+                        ParamConvert::Float
+                    }
                     GraphEditorParamKind::Int => ParamConvert::IntRound,
                     GraphEditorParamKind::Bool => ParamConvert::BoolThreshold,
                     GraphEditorParamKind::Enum => ParamConvert::EnumRound,
@@ -813,7 +822,9 @@ impl GraphEditorPanel {
                 && !*wire_driven
                 && matches!(
                     kind,
-                    GraphEditorParamKind::Float | GraphEditorParamKind::Int
+                    GraphEditorParamKind::Float
+                        | GraphEditorParamKind::Angle
+                        | GraphEditorParamKind::Int
                 )
             {
                 self.drag = Some(DragState {
@@ -853,9 +864,9 @@ impl GraphEditorPanel {
         // presentation hint still drives the rounding above; we just emit
         // the rounded value as a Float scalar.
         let serialized = match drag.kind {
-            GraphEditorParamKind::Float | GraphEditorParamKind::Int => {
-                SerializedParamValue::Float { value: new_v }
-            }
+            GraphEditorParamKind::Float
+            | GraphEditorParamKind::Angle
+            | GraphEditorParamKind::Int => SerializedParamValue::Float { value: new_v },
             _ => return Vec::new(),
         };
         // Look up the param name via the row table. The row layout
@@ -921,9 +932,10 @@ fn value_cell_click_to_param(
         GraphEditorParamKind::Trigger => Some(SerializedParamValue::Float {
             value: current_value + 1.0,
         }),
-        GraphEditorParamKind::Float | GraphEditorParamKind::Int | GraphEditorParamKind::Other => {
-            None
-        }
+        GraphEditorParamKind::Float
+        | GraphEditorParamKind::Angle
+        | GraphEditorParamKind::Int
+        | GraphEditorParamKind::Other => None,
     }
 }
 
@@ -950,6 +962,8 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
         }
         GraphEditorParamKind::Int => format!("{}", p.current_value as i64),
         GraphEditorParamKind::Float => format!("{:.2}", p.current_value),
+        // Stored value is radians; the user always sees and edits degrees.
+        GraphEditorParamKind::Angle => format!("{:.0}°", p.current_value.to_degrees()),
         GraphEditorParamKind::Trigger => "▶ Fire".to_string(),
         GraphEditorParamKind::Other => "—".to_string(),
     }

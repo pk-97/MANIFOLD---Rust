@@ -110,7 +110,7 @@ crate::primitive! {
         ParamDef {
             name: "rot_x",
             label: "Rotation X",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
@@ -118,7 +118,7 @@ crate::primitive! {
         ParamDef {
             name: "rot_y",
             label: "Rotation Y",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
@@ -126,7 +126,7 @@ crate::primitive! {
         ParamDef {
             name: "rot_z",
             label: "Rotation Z",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],

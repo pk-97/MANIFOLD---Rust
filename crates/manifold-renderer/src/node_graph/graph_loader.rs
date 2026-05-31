@@ -585,6 +585,7 @@ pub(crate) fn param_value_matches_type(v: &ParamValue, ty: ParamType) -> bool {
     matches!(
         (ty, v),
         (ParamType::Float, ParamValue::Float(_))
+            | (ParamType::Angle, ParamValue::Float(_))
             | (ParamType::Int, ParamValue::Float(_))
             | (ParamType::Bool, ParamValue::Bool(_))
             | (ParamType::Vec2, ParamValue::Vec2(_))
@@ -602,6 +603,7 @@ pub(crate) fn param_value_matches_type(v: &ParamValue, ty: ParamType) -> bool {
 pub(crate) fn param_type_name(ty: ParamType) -> &'static str {
     match ty {
         ParamType::Float => "Float",
+        ParamType::Angle => "Angle",
         ParamType::Int => "Int",
         ParamType::Bool => "Bool",
         ParamType::Vec2 => "Vec2",

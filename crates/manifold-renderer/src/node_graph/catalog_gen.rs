@@ -170,6 +170,7 @@ fn port_type_str(ty: &PortType) -> String {
 fn param_type_str(t: ParamType) -> &'static str {
     match t {
         ParamType::Float => "float",
+        ParamType::Angle => "angle",
         ParamType::Int => "int",
         ParamType::Bool => "bool",
         ParamType::Vec2 => "vec2",

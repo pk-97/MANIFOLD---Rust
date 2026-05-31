@@ -48,7 +48,7 @@ crate::primitive! {
         ParamDef {
             name: "angle_xy",
             label: "Angle XY",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.6),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
@@ -56,7 +56,7 @@ crate::primitive! {
         ParamDef {
             name: "angle_zw",
             label: "Angle ZW",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.4),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
@@ -64,7 +64,7 @@ crate::primitive! {
         ParamDef {
             name: "angle_xw",
             label: "Angle XW",
-            ty: ParamType::Float,
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.25),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],

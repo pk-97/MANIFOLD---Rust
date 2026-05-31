@@ -60,6 +60,17 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParamType {
     Float,
+    /// An angle. *Presentation* hint only, like `Int`: storage stays
+    /// `ParamValue::Float` in RADIANS, which is the internal and wire unit
+    /// everywhere (correct for the math, and 3D/4D rotation is radian-native).
+    /// The editor and outer-card sliders display and edit this in DEGREES,
+    /// converting radians<->degrees at the UI boundary only. The stored value,
+    /// every wire, and every node's `run()` are untouched, so presets that wire
+    /// a `math` node's radians straight into a rotation are unaffected. Never
+    /// expose radians to the user. `range` stays in radians like the stored
+    /// value (so modulation, which maps a driver onto the range, stays
+    /// correct); the UI converts the bounds to degrees for display.
+    Angle,
     Int,
     Bool,
     Vec2,

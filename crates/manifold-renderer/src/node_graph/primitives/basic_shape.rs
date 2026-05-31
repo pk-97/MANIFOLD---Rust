@@ -86,8 +86,8 @@ crate::primitive! {
         },
         ParamDef {
             name: "rotation",
-            label: "Rotation (rad)",
-            ty: ParamType::Float,
+            label: "Rotation",
+            ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
