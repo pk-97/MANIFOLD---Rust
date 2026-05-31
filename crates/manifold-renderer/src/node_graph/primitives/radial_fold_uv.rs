@@ -64,6 +64,10 @@ crate::primitive! {
     composition_notes: "Verbatim port of the legacy node.kaleidoscope fold (raw atan2 angle, floor-based wedge index, alternating-wedge mirror, polar→cartesian reconstruct). `segments` floors to >= 2 and is port-shadowed so a counter / clip-trigger can drive the wedge count per retrigger. Output UVs are unclamped — let node.remap's Clamp wrap handle bounds (matches the legacy clamp-before-sample). Pair: source → radial_fold_uv → remap(source, uv_field) → mix(source, remapped, Lerp, amount).",
     examples: ["preset.effect.kaleidoscope"],
     picker: { label: "Kaleidoscope", category: Atom },
+    summary: "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
+    category: DistortAndWarp,
+    role: Map,
+    aliases: ["kaleidoscope", "mandala", "radial mirror", "wedges"],
 }
 
 impl Primitive for RadialFoldUv {

@@ -62,6 +62,10 @@ crate::primitive! {
     composition_notes: "Strobe = node.beat_gate (rate, amount, duty) → node.flash (mode). beat_gate already multiplies by its own `amount`, so the effect's strobe depth lives on the gate and flash just applies the resulting scalar. amount=0 passes through unchanged in all modes. Wire wins over the inline param.",
     examples: ["preset.effect.strobe"],
     picker: { label: "Flash", category: Atom },
+    summary: "Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits.",
+    category: Stylize,
+    role: Filter,
+    aliases: ["flash", "strobe", "pulse", "hit"],
 }
 
 impl Primitive for Flash {

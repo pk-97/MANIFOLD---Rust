@@ -1552,8 +1552,13 @@
       "type_id": "node.blur_3d_separable"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rectangle mask",
+        "box mask",
+        "rect",
+        "Rectangle TOP"
+      ],
+      "category": "Mask",
       "examples": [],
       "inputs": [
         {
@@ -1587,7 +1592,7 @@
           "type": "f32"
         }
       ],
-      "label": "Box Mask",
+      "label": "Rectangle Mask",
       "outputs": [
         {
           "name": "out",
@@ -1657,9 +1662,9 @@
         }
       ],
       "purpose": "Rotated rectangular SDF mask (Chebyshev distance). Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. half_width / half_height are extents from the center (same convention as ellipse_mask's radii). For canvas-spanning bands, set the unbounded axis' half-extent ≥ 1.0; combined with rotation that gives rotated band masks for tilt-shift, scanlines, and letterboxes.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge.",
       "type_id": "node.box_mask"
     },
     {
@@ -2355,8 +2360,13 @@
       "type_id": "node.chroma_key"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rgb split",
+        "chromatic aberration",
+        "chroma shift",
+        "color fringe"
+      ],
+      "category": "Distort & Warp",
       "examples": [],
       "inputs": [
         {
@@ -2395,9 +2405,9 @@
         }
       ],
       "purpose": "3-tap RGB sample of `in` displaced by `velocity` (RG). R samples at `uv - velocity*amount/dims`, G at centre, B at `uv + …`. Alpha follows centre. Different from `node.chromatic_aberration` (radial split): this is FLOW-driven, the offset direction comes from a per-pixel velocity field. Used for normal-map chromatic splits in oily-fluid Oil Slick rendering, signed-field chromatic trails, anywhere displacement direction is data not symmetry.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can go negative to swap which way they shift.",
       "type_id": "node.chromatic_displace"
     },
     {
@@ -3908,8 +3918,13 @@
       "type_id": "node.dither"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "dither pattern",
+        "bayer",
+        "halftone",
+        "threshold map"
+      ],
+      "category": "Stylize",
       "examples": [
         "preset.effect.dither"
       ],
@@ -3942,9 +3957,9 @@
         }
       ],
       "purpose": "Pure generator. Emits a per-pixel ordered-dither / halftone threshold in [0,1] (R=G=B=T, A=1) for one of six algorithms (Bayer 8x8, Halftone, Lines, CrossHatch, Blue Noise, Diamond), in screen space. The reusable pattern half of the dither effect — pair with node.dither (consumes a pattern) for the full effect, or feed any halftone / threshold consumer. The quantizer accepts ANY threshold texture, so you can also drive it from hash noise, a custom ramp, or a voronoi field.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Generates the threshold grid that the Dither node uses to decide where pixels flip, with a choice of Bayer, halftone, and other patterns. Feed its output into Dither.",
       "type_id": "node.dither_pattern"
     },
     {
@@ -4075,8 +4090,13 @@
       "type_id": "node.edges_from_grid_uv"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "circle mask",
+        "ellipse mask",
+        "oval",
+        "Circle TOP"
+      ],
+      "category": "Mask",
       "examples": [],
       "inputs": [
         {
@@ -4110,7 +4130,7 @@
           "type": "f32"
         }
       ],
-      "label": "Ellipse Mask",
+      "label": "Circle Mask",
       "outputs": [
         {
           "name": "out",
@@ -4180,9 +4200,9 @@
         }
       ],
       "purpose": "Rotated elliptical SDF mask. Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. Pure UV-space; no canvas-aspect correction. Industry-standard masking convention — pairs with masked_mix downstream, and with node.invert when the polarity needs flipping (e.g. DoF wants outside=1).",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate.",
       "type_id": "node.ellipse_mask"
     },
     {
@@ -4716,8 +4736,13 @@
       "type_id": "node.field_combine"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "film grain",
+        "grain",
+        "noise",
+        "16mm"
+      ],
+      "category": "Stylize",
       "examples": [
         "preset.effect.watercolor"
       ],
@@ -4753,14 +4778,19 @@
         }
       ],
       "purpose": "Multiplicative white-noise grain: out.rgb = src.rgb * (1 - amount * (1 - white_noise(pixel))). Black stays black, bright areas pick up paper-like texture — simulates paper absorbing paint unevenly. Alpha passes through. The grain pass of Watercolor as a reusable atom; `amount` port-shadows the param.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise.",
       "type_id": "node.film_grain"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "flash",
+        "strobe",
+        "pulse",
+        "hit"
+      ],
+      "category": "Stylize",
       "examples": [
         "preset.effect.strobe"
       ],
@@ -4811,9 +4841,9 @@
         }
       ],
       "purpose": "Modulate image brightness by a scalar `amount` in one of three modes: Opacity (col*(1-amount), toward black), White (mix toward white), Gain (col*mix(1,3,amount), brighten 3x). The brightness-apply half of Strobe with the gate factored out — wire node.beat_gate into `amount` for a beat-synced strobe, or an LFO/audio/MIDI for any pulsing flash. `amount` port-shadows the param for live modulation.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits.",
       "type_id": "node.flash"
     },
     {
@@ -7687,8 +7717,13 @@
       "type_id": "node.math"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "flip",
+        "mirror",
+        "reflect",
+        "Flip TOP"
+      ],
+      "category": "Distort & Warp",
       "examples": [],
       "inputs": [
         {
@@ -7722,14 +7757,19 @@
         }
       ],
       "purpose": "Sample input at UVs mirrored across a line through center at `angle` radians. Single-axis 2-fold symmetry (one half visible, other half is mirror). Distinct from `node.transform` fold modes (axis-aligned, both halves visible mirrored) and `node.kaleidoscope` (N-segment radial). Use for tilted symmetry overlays, asymmetric kaleidoscope variants, height-map symmetry in shading chains.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or diagonal flip.",
       "type_id": "node.mirror_axis"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "mirror",
+        "fold",
+        "quad mirror",
+        "reflect"
+      ],
+      "category": "Distort & Warp",
       "examples": [
         "preset.effect.mirror"
       ],
@@ -7761,9 +7801,9 @@
         }
       ],
       "purpose": "Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMirror / FoldX / FoldY / FoldBoth) and emits it (R = folded_u, G = folded_v). Resampling at these coordinates produces the mirrored / folded image. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.transform mirror modes. The affine half (translate/scale/rotate) stays in node.affine_transform.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap to apply the fold to a picture.",
       "type_id": "node.mirror_fold_uv"
     },
     {
@@ -9516,8 +9556,13 @@
       "type_id": "node.radial_burst_force_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "kaleidoscope",
+        "mandala",
+        "radial mirror",
+        "wedges"
+      ],
+      "category": "Distort & Warp",
       "examples": [
         "preset.effect.kaleidoscope"
       ],
@@ -9568,9 +9613,9 @@
         }
       ],
       "purpose": "Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_v). Pair with node.remap (Clamp) to resample a source at the folded coordinates, then node.mix (Lerp) to crossfade — the TD coordinate → remap → blend shape that replaces the fused node.kaleidoscope kernel. Reusable for any radial-symmetry warp.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
       "type_id": "node.radial_fold_uv"
     },
     {
@@ -9707,8 +9752,13 @@
       "type_id": "node.reinhard_tone_map"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "remap",
+        "uv map",
+        "displace",
+        "Remap TOP"
+      ],
+      "category": "Distort & Warp",
       "examples": [
         "preset.effect.kaleidoscope"
       ],
@@ -9755,9 +9805,9 @@
         }
       ],
       "purpose": "Resample `source` at the per-pixel UV coordinates in `uv_field`'s R/G channels (TouchDesigner's Remap TOP). `mode` = Absolute: out(p) = source(uv_field(p).rg); Relative: out(p) = source(p + uv_field(p).rg) — treat the field as a UV *offset* so it sums cleanly with other offset fields. `wrap` picks the out-of-[0,1] policy (Clamp / Repeat / Mirror). The generic UV-warp atom — pair with a coordinate-field producer (polar_field, centered_uv, scale_offset_texture, block_displace_field, optical flow) to build kaleidoscope / mirror / edge-stretch / chromatic split / glitch displace / lens distortion as a visible `coordinate-math → remap → blend` graph rather than a bespoke single-effect shader.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coordinate field into an actual warped picture.",
       "type_id": "node.remap"
     },
     {
@@ -13161,8 +13211,13 @@
       "type_id": "node.uv_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "edge stretch",
+        "slit scan",
+        "smear",
+        "stretch"
+      ],
+      "category": "Distort & Warp",
       "examples": [
         "preset.effect.edge_stretch"
       ],
@@ -13204,9 +13259,9 @@
         }
       ],
       "purpose": "Edge-stretch coordinate generator: clamps the per-pixel UV to a center strip of width `width` on the selected axis (Horiz / Vert / Both) and emits it (R = clamped_u, G = clamped_v). Resampling at these coordinates stretches the edge row/column outward. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.edge_stretch kernel.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap.",
       "type_id": "node.uv_strip_clamp"
     },
     {
@@ -13236,8 +13291,12 @@
       "type_id": "node.value"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "vignette",
+        "edge fade",
+        "border darken"
+      ],
+      "category": "Stylize",
       "examples": [
         "preset.effect.stylized_feedback",
         "preset.effect.mandala"
@@ -13315,9 +13374,9 @@
         }
       ],
       "purpose": "Soft fade-to-black border. Circle = aspect-corrected true circle (cinematic); Ellipse = canvas-fit oval; Rectangle = per-edge fade (hides hard sampling cutoffs in feedback / mirror / displacement chains). `size` sets the inner full-opacity boundary, `softness` is the fade width, `strength` blends the result back against the untouched input.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade.",
       "type_id": "node.vignette"
     },
     {

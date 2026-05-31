@@ -45,6 +45,10 @@ crate::primitive! {
     composition_notes: "white_noise(coord) = fract(sin(dot(coord, vec2(12.9898, 78.233))) * 43758.5453), coord in pixels. Static (no time) — for animated grain, wire a time-varying scalar into amount or chain a per-frame hash offset. Wire wins over param.",
     examples: ["preset.effect.watercolor"],
     picker: { label: "Film Grain", category: Atom },
+    summary: "Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise.",
+    category: Stylize,
+    role: Filter,
+    aliases: ["film grain", "grain", "noise", "16mm"],
 }
 
 impl Primitive for FilmGrain {

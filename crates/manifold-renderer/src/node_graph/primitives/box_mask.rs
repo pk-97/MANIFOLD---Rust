@@ -103,7 +103,11 @@ crate::primitive! {
     ],
     composition_notes: "Mask value = 1 - smoothstep(1 - softness, 1 + softness, max(|x_local|/half_width, |y_local|/half_height)). softness is in normalized half-extent units — softness=0 is a hard edge; softness=1 means the falloff extends a full half-extent beyond the nominal edge. For DoF tilt-shift: cx=0.5, cy=focus_y, half_width=1.0 (spans canvas), half_height=focus_width, softness=0.5, rotation=tilt_angle → pipe through node.invert to get the standard CoC.",
     examples: [],
-    picker: { label: "Box Mask", category: Atom },
+    picker: { label: "Rectangle Mask", category: Atom },
+    summary: "Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge.",
+    category: Mask,
+    role: Source,
+    aliases: ["rectangle mask", "box mask", "rect", "Rectangle TOP"],
 }
 
 impl Primitive for BoxMask {

@@ -62,6 +62,10 @@ crate::primitive! {
     composition_notes: "Verbatim port of uv_transform.wgsl's mirror pass (modes 1..8, before the affine steps): flips are `1 - uv`; QuadMirror folds both axes onto [0.25, 0.75]; FoldX/FoldY/FoldBoth are the triangle-wave `0.5 - abs(uv - 0.5)` per active axis. Output UVs stay in [0, 1] so remap's Clamp wrap is a no-op safety. Pair: source → mirror_fold_uv → remap(source, uv_field) → mix(source, remapped, Lerp, amount). Default mode 6 (FoldX) matches the legacy Mirror preset default.",
     examples: ["preset.effect.mirror"],
     picker: { label: "Mirror", category: Atom },
+    summary: "Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap to apply the fold to a picture.",
+    category: DistortAndWarp,
+    role: Map,
+    aliases: ["mirror", "fold", "quad mirror", "reflect"],
 }
 
 impl Primitive for MirrorFoldUv {

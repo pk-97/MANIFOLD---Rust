@@ -56,6 +56,10 @@ crate::primitive! {
     composition_notes: "Angle is in radians. Defaults to π/4 (45°). Port-shadow on `angle` so a control wire (LFO / time) can rotate the mirror axis over time. UVs that fall outside [0,1] after the rotation round-trip are wrapped via `fract()` rather than clamped — sample with a Repeat sampler upstream if you want seamless behaviour.",
     examples: [],
     picker: { label: "Flip", category: Atom },
+    summary: "Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or diagonal flip.",
+    category: DistortAndWarp,
+    role: Filter,
+    aliases: ["flip", "mirror", "reflect", "Flip TOP"],
 }
 
 impl Primitive for MirrorAxis {

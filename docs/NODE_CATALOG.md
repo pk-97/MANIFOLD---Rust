@@ -61,13 +61,13 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.block_displace_field` | Block Displace Field | — | — | Generator for a per-block random UV-offset field (the datamosh / block-glitch building block). |
 | `node.blur` | Blur | — | — | Separable Gaussian blur — a horizontal then a vertical pass through a per-instance ping-pong texture. |
 | `node.blur_3d_separable` | Blur 3D Separable | — | — | Single-axis separable Gaussian blur on a Texture3D. |
-| `node.box_mask` | Box Mask | — | — | Rotated rectangular SDF mask (Chebyshev distance). |
+| `node.box_mask` | Rectangle Mask | Mask | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | `node.brightness` | Brightness | Color & Tone | Filter | Multiplies the image brightness up or down. A plain brightness control. |
 | `node.cel_material` | Cel Material | — | — | Cel-shaded material — Lambert N·L quantized into `cel_bands` discrete bands. |
 | `node.centered_uv` | Centered UV | — | — | UV recentered around (cx, cy) with per-axis scale. |
 | `node.channel_mix` | Channel Mixer | Color & Tone | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
 | `node.checkerboard` | Checkerboard | — | — | Pure generator. |
-| `node.chromatic_displace` | RGB Split | — | — | 3-tap RGB sample of `in` displaced by `velocity` (RG). |
+| `node.chromatic_displace` | RGB Split | Distort & Warp | Filter | Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can … |
 | `node.clamp_texture` | Clamp | Color & Tone | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
 | `node.clip_trigger_index` | Clip Trigger Index | — | — | Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. |
 | `node.color_ramp` | Gradient Map | Color & Tone | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
@@ -85,18 +85,18 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.displace_mesh` | Displace Mesh | — | — | Perturb the Y component of an Array<MeshVertex> positions grid by sampling a height Texture2D at each vertex's UV. |
 | `node.distance_to_point` | Distance to Point | — | — | Pure generator. |
 | `node.dither` | Dither | Color & Tone | Filter | Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look. |
-| `node.dither_pattern` | Dither Pattern | — | — | Pure generator. |
+| `node.dither_pattern` | Dither Pattern | Stylize | Source | Generates the threshold grid that the Dither node uses to decide where pixels flip, with a choice of Bayer, halftone, and other patterns. Feed its output into … |
 | `node.downsample` | Downsample | — | — | Integer-factor (2x / 4x / 8x) box-filter downsample of a Texture2D. |
 | `node.edges_from_grid_uv` | Edges From Grid UV | — | — | Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. |
-| `node.ellipse_mask` | Ellipse Mask | — | — | Rotated elliptical SDF mask. |
+| `node.ellipse_mask` | Circle Mask | Mask | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
 | `node.euler_step_particles` | Euler Step Particles | — | — | Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. |
 | `node.euler_step_particles_3d` | Euler Step Particles 3D | — | — | Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. |
 | `node.fbm_2d` | fBM 2D | — | — | Pure generator. |
 | `node.fbm_per_instance` | FBM Per Instance | — | — | Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. |
 | `node.feedback` | Feedback | — | — | 1-frame texture delay. |
 | `node.field_combine` | Field Combine | — | — | Per-pixel scalar field: out.rgb = a * in.r + b * in.g + c, alpha = 1. |
-| `node.film_grain` | Film Grain | — | — | Multiplicative white-noise grain: out.rgb = src.rgb * (1 - amount * (1 - white_noise(pixel))). |
-| `node.flash` | Flash | — | — | Modulate image brightness by a scalar `amount` in one of three modes: Opacity (col*(1-amount), toward black), White (mix toward white), Gain (col*mix(1,3,amoun… |
+| `node.film_grain` | Film Grain | Stylize | Filter | Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise. |
+| `node.flash` | Flash | Stylize | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
 | `node.flatten_to_camera_plane` | Flatten to Camera Plane | — | — | Compress particles toward the camera viewing plane. |
 | `node.flow_field_noise` | Flow Field Noise | — | — | Generate a 2D flow vector field from domain-warped fBM Perlin noise. |
 | `node.fract_texture` | Fract Texture | — | — | Per-pixel fract(input.rgb * scale). |
@@ -129,8 +129,8 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.lic_integrate` | LIC Integrate | — | — | Line Integral Convolution. |
 | `node.linear_gradient` | Linear Gradient | — | — | Directional 0→1 ramp in UV space. |
 | `node.matcap_two_tone` | Matcap Two-Tone | — | — | Cross-axis 4-colour matcap from a tangent-space normal map. |
-| `node.mirror_axis` | Flip | — | — | Sample input at UVs mirrored across a line through center at `angle` radians. |
-| `node.mirror_fold_uv` | Mirror | — | — | Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMi… |
+| `node.mirror_axis` | Flip | Distort & Warp | Filter | Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or di… |
+| `node.mirror_fold_uv` | Mirror | Distort & Warp | Map | Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap … |
 | `node.mix` | Mix | — | — | Combine two textures with one of 8 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay, Divide), crossfaded back against A by `amount`. |
 | `node.mux_array` | Mux (array) | — | — | N-way Array<f32> selector. |
 | `node.mux_scalar` | Mux (scalar) | — | — | N-way scalar selector. |
@@ -154,10 +154,10 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.project_3d` | Project 3D | — | — | Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. |
 | `node.project_4d` | Project 4D | — | — | Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_… |
 | `node.radial_burst_force_field` | Radial Burst Force Field | — | — | Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. |
-| `node.radial_fold_uv` | Kaleidoscope | — | — | Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_… |
+| `node.radial_fold_uv` | Kaleidoscope | Distort & Warp | Map | Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to … |
 | `node.radial_offset_field` | Radial Offset Field | Distort & Warp | Map | Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node. |
 | `node.reinhard_tone_map` | Reinhard Tone Map | — | — | Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simpl… |
-| `node.remap` | Remap | — | — | Resample `source` at the per-pixel UV coordinates in `uv_field`'s R/G channels (TouchDesigner's Remap TOP). |
+| `node.remap` | Remap | Distort & Warp | Filter | Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coord… |
 | `node.render_3d_mesh` | Render 3D Mesh | — | — | Bundled 3D mesh renderer (TouchDesigner / Blender shape). |
 | `node.render_filled_rects` | Filled Rects | — | — | Instanced filled-rectangle overlay composited onto a source texture. |
 | `node.render_instanced_3d_mesh` | Render Instanced 3D Mesh | — | — | Bundled instanced 3D mesh renderer. |
@@ -200,8 +200,8 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.unlit_material` | Unlit Material | — | — | Flat-colour material — no lighting math, no shadow term. |
 | `node.uv_displace_by_flow` | UV Displace by Flow | — | — | Sample a source texture at UVs displaced by a 2D flow vector field. |
 | `node.uv_field` | UV Field | — | — | Pure generator. |
-| `node.uv_strip_clamp` | Edge Stretch | — | — | Edge-stretch coordinate generator: clamps the per-pixel UV to a center strip of width `width` on the selected axis (Horiz / Vert / Both) and emits it (R = clam… |
-| `node.vignette` | Vignette | — | — | Soft fade-to-black border. |
+| `node.uv_strip_clamp` | Edge Stretch | Distort & Warp | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
+| `node.vignette` | Vignette | Stylize | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | `node.voronoi_2d` | Voronoi 2D | Noise | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 | `node.wet_dry` | Wet/Dry | — | — | Crossfade a processed `wet` texture back over the original `dry` texture by a `wet_dry` factor [0,1]. |
 | `node.wgsl_compute` | WGSL Compute | — | — | User-authored WGSL compute escape hatch — the shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived fro… |

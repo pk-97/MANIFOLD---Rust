@@ -50,6 +50,10 @@ crate::primitive! {
     composition_notes: "Velocity is read from RG; BA ignored. `amount` is in pixels — resolution-independent (shader divides by dims internally). Negative amount inverts the R/B sampling direction. Sample is bilinear; out-of-bounds uses the sampler's default clamp mode.",
     examples: [],
     picker: { label: "RGB Split", category: Atom },
+    summary: "Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can go negative to swap which way they shift.",
+    category: DistortAndWarp,
+    role: Filter,
+    aliases: ["rgb split", "chromatic aberration", "chroma shift", "color fringe"],
 }
 
 impl Primitive for ChromaticDisplace {

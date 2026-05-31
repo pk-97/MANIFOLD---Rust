@@ -48,6 +48,10 @@ crate::primitive! {
     composition_notes: "Screen-space: pixel_pos = id + 0.5 (matches the legacy fused dither). Pattern density is intrinsic to the output pixel grid, so it stays size-coherent across render-scale changes. Output is constant in time. Pair: dither_pattern -> dither(in=source, pattern=dither_pattern.out, amount).",
     examples: ["preset.effect.dither"],
     picker: { label: "Dither Pattern", category: Atom },
+    summary: "Generates the threshold grid that the Dither node uses to decide where pixels flip, with a choice of Bayer, halftone, and other patterns. Feed its output into Dither.",
+    category: Stylize,
+    role: Source,
+    aliases: ["dither pattern", "bayer", "halftone", "threshold map"],
 }
 
 impl Primitive for DitherPattern {
