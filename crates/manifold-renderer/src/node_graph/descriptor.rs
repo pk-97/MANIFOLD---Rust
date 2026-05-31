@@ -207,17 +207,28 @@ pub fn descriptor_for(type_id: &str) -> Option<&'static NodeDescriptor> {
 // `type_id` join doesn't already give, and one block is easier to audit.
 
 macro_rules! hand_descriptor {
+    // Minimal form: type_id + purpose, everything else unset.
     ($type_id:literal, $purpose:literal) => {
-        hand_descriptor!($type_id, $purpose, aliases: []);
+        hand_descriptor!(@build $type_id, $purpose, "", Category::Uncategorized, Role::Unknown, []);
     };
-    ($type_id:literal, $purpose:literal, aliases: [ $($alias:literal),* $(,)? ]) => {
+    // Full form: friendly summary, category, role, and search aliases.
+    ($type_id:literal, $purpose:literal,
+        summary: $summary:literal,
+        category: $cat:ident,
+        role: $role:ident,
+        aliases: [ $($alias:literal),* $(,)? ] $(,)?
+    ) => {
+        hand_descriptor!(@build $type_id, $purpose, $summary, Category::$cat, Role::$role, [ $($alias),* ]);
+    };
+    // Internal builder.
+    (@build $type_id:literal, $purpose:literal, $summary:expr, $cat:expr, $role:expr, [ $($alias:literal),* ]) => {
         inventory::submit! {
             NodeDescriptor {
                 type_id: $type_id,
                 purpose: $purpose,
-                summary: "",
-                category: Category::Uncategorized,
-                role: Role::Unknown,
+                summary: $summary,
+                category: $cat,
+                role: $role,
                 aliases: &[ $($alias),* ],
                 examples: &[],
             }
@@ -228,15 +239,27 @@ macro_rules! hand_descriptor {
 // Color (color.rs)
 hand_descriptor!(
     "node.brightness",
-    "Pixel-local brightness multiply: out.rgb = in.rgb * brightness; alpha passes through."
+    "Pixel-local brightness multiply: out.rgb = in.rgb * brightness, alpha passes through.",
+    summary: "Multiplies the image brightness up or down. A plain brightness control.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["brightness", "Level TOP"],
 );
 hand_descriptor!(
     "node.channel_mix",
-    "4×4 RGBA matrix transform — each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix."
+    "4x4 RGBA matrix transform: each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix.",
+    summary: "Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["channel mixer", "matrix", "swizzle", "Channel Mix TOP"],
 );
 hand_descriptor!(
     "node.color_ramp",
-    "Map a scalar / luma input through a two-stop colour gradient (Color A → Color B). The palette-lookup atom behind tints and heat-map looks."
+    "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
+    summary: "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["gradient map", "color ramp", "duotone", "Lookup TOP"],
 );
 
 // Filter (filter.rs)

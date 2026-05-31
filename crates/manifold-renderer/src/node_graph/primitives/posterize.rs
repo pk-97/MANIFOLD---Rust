@@ -46,6 +46,10 @@ crate::primitive! {
     composition_notes: "Quantizes to N levels as round(c * (N-1)) / (N-1) per channel — so the [0,1] endpoints are preserved and N=2 gives pure black/white per channel. `levels` floors to >= 2. The scalar input is the standard port-shadow: a connected wire wins over the inline param.",
     examples: ["preset.effect.dither"],
     picker: { label: "Posterize", category: Atom },
+    summary: "Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["posterize", "quantize", "banding"],
 }
 
 impl Primitive for Posterize {

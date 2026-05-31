@@ -101,6 +101,10 @@ crate::primitive! {
     composition_notes: "For typical SDR work: leave mode=SDR, choose a curve. For HDR10 export pipelines: mode=PQ. For macOS native HDR display: mode=EDR. exposure is the linear pre-multiplier (1.0 = no change); paper_white and max_nits are only used in HDR modes. Khronos PBR Neutral preserves saturation better than ACES for very bright colors; AgX gives a more natural look at the cost of slightly muted saturation.",
     examples: [],
     picker: { label: "Tone Map", category: Atom },
+    summary: "Brings an HDR image down to a viewable range with a choice of film-style curves. Use it as the last step before display or export.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["tonemap", "aces", "agx", "hdr", "filmic"],
 }
 
 impl Primitive for ToneMap {

@@ -47,6 +47,10 @@ crate::primitive! {
     composition_notes: "Pure affine around the 0.5 pivot — no clamp, so dark pixels can go negative at contrast > 1. Follow with node.clamp_texture (min 0) before consumers that need bounded input; Color Grade does exactly this at the end of its chain. Wire wins over param.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Contrast", category: Atom },
+    summary: "Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["contrast", "Level TOP"],
 }
 
 impl Primitive for Contrast {

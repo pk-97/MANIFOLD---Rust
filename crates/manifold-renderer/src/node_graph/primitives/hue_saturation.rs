@@ -65,6 +65,10 @@ crate::primitive! {
     composition_notes: "Hue rotation wraps (fract on the [0,1] hue ring), so any degree value is valid. Saturation clamps to [0,1] in HSV space after scaling; value is an unclamped multiplier (HDR-safe). Alpha passes through. Each scalar input is the standard port-shadow: a connected wire wins over the inline param.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Hue / Saturation", category: Atom },
+    summary: "Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["hue", "saturation", "hsv", "recolour", "HSV Adjust TOP"],
 }
 
 impl Primitive for HueSaturation {

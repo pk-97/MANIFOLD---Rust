@@ -1663,8 +1663,11 @@
       "type_id": "node.box_mask"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "brightness",
+        "Level TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [],
       "inputs": [
         {
@@ -1688,10 +1691,10 @@
           "type": "vec3"
         }
       ],
-      "purpose": "Pixel-local brightness multiply: out.rgb = in.rgb * brightness; alpha passes through.",
-      "role": "Unknown",
+      "purpose": "Pixel-local brightness multiply: out.rgb = in.rgb * brightness, alpha passes through.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Multiplies the image brightness up or down. A plain brightness control.",
       "type_id": "node.brightness"
     },
     {
@@ -2181,8 +2184,13 @@
       "type_id": "node.centered_uv"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "channel mixer",
+        "matrix",
+        "swizzle",
+        "Channel Mix TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [],
       "inputs": [
         {
@@ -2224,10 +2232,10 @@
           "type": "vec4"
         }
       ],
-      "purpose": "4×4 RGBA matrix transform — each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix.",
-      "role": "Unknown",
+      "purpose": "4x4 RGBA matrix transform: each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix.",
       "type_id": "node.channel_mix"
     },
     {
@@ -2393,8 +2401,12 @@
       "type_id": "node.chromatic_displace"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "clamp",
+        "saturate",
+        "limit"
+      ],
+      "category": "Color & Tone",
       "examples": [],
       "inputs": [
         {
@@ -2443,9 +2455,9 @@
         }
       ],
       "purpose": "Per-pixel clamp on RGB: out.rgb = clamp(in.rgb, min, max). Alpha passes through unchanged. The saturate() atom: pair after scale_offset_texture / power_texture / trig_texture / any chain that produces unbounded output, before LUT lookups / pow with fractional exponent / displacement scales that need a defined input range. Defaults to [0, 1].",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node.",
       "type_id": "node.clamp_texture"
     },
     {
@@ -2584,8 +2596,13 @@
       "type_id": "node.color_lut"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "gradient map",
+        "color ramp",
+        "duotone",
+        "Lookup TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [],
       "inputs": [
         {
@@ -2615,10 +2632,10 @@
           "type": "color"
         }
       ],
-      "purpose": "Map a scalar / luma input through a two-stop colour gradient (Color A → Color B). The palette-lookup atom behind tints and heat-map looks.",
-      "role": "Unknown",
+      "purpose": "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
       "type_id": "node.color_ramp"
     },
     {
@@ -2668,8 +2685,12 @@
       "type_id": "node.color_sample"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "colorize",
+        "tint",
+        "duotone"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.color_grade"
       ],
@@ -2750,9 +2771,9 @@
         }
       ],
       "purpose": "Tint an image toward a hue, masked per-pixel by (brightness × neutrality × focus): a selective colorize/duotone toward highlights. Bright neutral pixels take the tint; dark or already-saturated pixels resist it. `amount` is colorize strength [0,1], `hue` the tint hue (deg), `saturation` the tint saturation, `focus` how tightly the mask favours highlights/neutrals (0 = tint everything). All four port-shadow their params for live modulation.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Tints the image toward a single colour, strongest on the bright neutral areas. Good for duotones and washes.",
       "type_id": "node.colorize"
     },
     {
@@ -3029,8 +3050,11 @@
       "type_id": "node.container_repel_force_3d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "contrast",
+        "Level TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.color_grade"
       ],
@@ -3066,9 +3090,9 @@
         }
       ],
       "purpose": "Pivot-around-0.5 contrast: out = (c - 0.5) * contrast + 0.5. 1.0 = unchanged, >1 = punchier, <1 = flatter. Alpha passes through. The `contrast` input port shadows the param for live modulation. HDR-safe affine — use this rather than node.levels for contrast (levels' gamma pow NaNs on the negatives a contrast push produces).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey.",
       "type_id": "node.contrast"
     },
     {
@@ -3837,8 +3861,12 @@
       "type_id": "node.distance_to_point"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "dither",
+        "bayer",
+        "ordered dither"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.dither"
       ],
@@ -3874,9 +3902,9 @@
         }
       ],
       "purpose": "Luminance-preserving dither quantize driven by an external threshold pattern. Quantizes Rec.709 luma to 8->2 levels (by `amount`), dither-biased by the `pattern` input's R channel, preserves hue, and crossfades against the source. Pair with node.dither_pattern for the classic six patterns, or feed any threshold texture.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look.",
       "type_id": "node.dither"
     },
     {
@@ -5181,8 +5209,13 @@
       "type_id": "node.fresnel_rim"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "gain",
+        "brightness",
+        "exposure",
+        "Level TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.strobe"
       ],
@@ -5218,9 +5251,9 @@
         }
       ],
       "purpose": "Multiply the input texture's RGB by a scalar gain. Alpha passes through unchanged. The `gain` input port is the standard control-wire shadow of the `gain` param — wire any scalar source (LFO, BeatGate, Luminance, …) to make the gain react in real time.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black.",
       "type_id": "node.gain"
     },
     {
@@ -6264,8 +6297,14 @@
       "type_id": "node.heightmap_to_normal"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "hue",
+        "saturation",
+        "hsv",
+        "recolour",
+        "HSV Adjust TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.color_grade"
       ],
@@ -6331,9 +6370,9 @@
         }
       ],
       "purpose": "HSV colour adjust: rotate hue (degrees), scale saturation, scale value. RGB→HSV→adjust→RGB (TD HSV Adjust / Blender Hue-Saturation-Value). The standalone colour-rotation atom — saturation/value are multipliers (1.0 = unchanged). All three are port-shadowed scalars: wire an LFO / MIDI / driver to sweep hue live. Color Grade composes from this.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour.",
       "type_id": "node.hue_saturation"
     },
     {
@@ -6820,8 +6859,13 @@
       "type_id": "node.lerp_instance_fields"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "levels",
+        "gamma",
+        "curves",
+        "Level TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.generator.metallic_glass"
       ],
@@ -6917,9 +6961,9 @@
         }
       ],
       "purpose": "Fused tone-shape atom: out.rgb = pow(clamp(in.rgb * scale + offset, lo, hi), gamma). Alpha pass-through. Collapses the scale_offset_texture → clamp_texture → power_texture trio (and its bandwidth) into one dispatch. Reach for this wherever a per-channel affine remap, clamp, and gamma all appear together — MetallicGlass height/metallic chains, halation bloom shaping, hue ramps.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points.",
       "type_id": "node.levels"
     },
     {
@@ -9161,8 +9205,12 @@
       "type_id": "node.polytope_vertices"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "posterize",
+        "quantize",
+        "banding"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.dither"
       ],
@@ -9198,9 +9246,9 @@
         }
       ],
       "purpose": "Posterize: quantize each RGB channel to `levels` discrete steps (round to nearest, endpoints included). Alpha pass-through. The standalone quantize atom (TD / Blender posterize) — `levels` is a port-shadowed scalar so a beat/LFO can crush the palette rhythmically. Dither composes from this.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result.",
       "type_id": "node.posterize"
     },
     {
@@ -12462,8 +12510,14 @@
       "type_id": "node.threshold"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "tonemap",
+        "aces",
+        "agx",
+        "hdr",
+        "filmic"
+      ],
+      "category": "Color & Tone",
       "examples": [],
       "inputs": [
         {
@@ -12536,9 +12590,9 @@
         }
       ],
       "purpose": "HDR → display tone mapping with selectable curve (Narkowicz ACES / Hill ACES / AgX / Khronos PBR Neutral) and output mode (SDR / PQ for HDR10 export / EDR for macOS / EDR passthrough). Per-channel curves, alpha pass-through. For a simple Reinhard-only path matching FluidSim's display bit-for-bit, use node.reinhard_tone_map.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Brings an HDR image down to a viewable range with a choice of film-style curves. Use it as the last step before display or export.",
       "type_id": "node.tone_map"
     },
     {

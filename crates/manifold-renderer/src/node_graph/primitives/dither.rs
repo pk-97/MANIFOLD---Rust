@@ -48,6 +48,10 @@ crate::primitive! {
     composition_notes: "`pattern` and `in` must share dimensions (the shader reads both via textureLoad at the same pixel). `amount` drives both the quantization level count (8 at 0 -> 2 at 1) and the final crossfade, matching the legacy fused dither. Split out of the old monolithic dither so the pattern is a reusable atom.",
     examples: ["preset.effect.dither"],
     picker: { label: "Dither", category: Atom },
+    summary: "Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["dither", "bayer", "ordered dither"],
 }
 
 impl Primitive for Dither {

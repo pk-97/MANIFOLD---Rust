@@ -419,9 +419,16 @@ pub fn generated_block() -> String {
         out.push('\n');
         let _ = writeln!(out, "### {} ({})", stratum.heading(), group.len());
         out.push('\n');
-        let _ = writeln!(out, "| type_id | label | category | role | purpose |");
+        let _ = writeln!(out, "| type_id | label | category | role | summary |");
         let _ = writeln!(out, "|---|---|---|---|---|");
         for r in group {
+            // Prefer the friendly summary when one is filled, falling back to
+            // the first sentence of the technical purpose.
+            let blurb = if r.summary.is_empty() {
+                first_sentence(r.purpose)
+            } else {
+                r.summary
+            };
             let _ = writeln!(
                 out,
                 "| `{}` | {} | {} | {} | {} |",
@@ -429,7 +436,7 @@ pub fn generated_block() -> String {
                 opt_cell(r.label),
                 cat_cell(r.category),
                 role_cell(r.role),
-                md_cell(first_sentence(r.purpose)),
+                md_cell(blurb),
             );
         }
     }
