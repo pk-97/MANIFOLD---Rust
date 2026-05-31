@@ -59,7 +59,11 @@ crate::primitive! {
     ],
     composition_notes: "Pair with `node.gain` for level-rider effects (AutoGain) where uniform RGB scaling would push highlights into / out of clip. Wire the gained branch into `compressed` and the un-gained source into `reference`. retention defaults to 1.0 (HDR ceiling pinned). The retention input is port-shadowable so the value can ride a control wire when needed.",
     examples: ["preset.effect.auto_gain"],
-    picker: { label: "HDR Retention Mix", category: Atom },
+    picker: { label: "HDR Mix", category: Atom },
+    summary: "Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a process is flattening your highlights.",
+    category: Composite,
+    role: Filter,
+    aliases: ["hdr mix", "highlight retention", "hdr blend"],
 }
 
 impl Primitive for HdrRetentionMix {

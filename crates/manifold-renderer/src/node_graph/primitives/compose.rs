@@ -67,6 +67,10 @@ crate::primitive! {
     composition_notes: "Use Lerp for pure crossfades; Add/Screen for additive bloom-style merges; Multiply for darkening masks; Max for tonemap-safe brightening; Overlay for contrast-preserving combines; Divide for per-channel `a/b` (useful for normalising one field by another — e.g. density-driven scaling fields in fluid sims). Divide guards against divide-by-near-zero by returning 0 when `b` is below 1e-6.",
     examples: ["composite.bloom", "composite.halation"],
     picker: { label: "Mix", category: Atom },
+    summary: "Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node.",
+    category: Composite,
+    role: Filter,
+    aliases: ["mix", "blend", "composite", "Composite TOP"],
 }
 
 pub const MIX_TYPE_ID: &str = "node.mix";

@@ -54,7 +54,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.array_replicate_polyline_rings` | Replicate Polyline Rings | — | — | Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. |
 | `node.array_unpack_vec2` | Array Unpack Vec2 | — | — | Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). |
 | `node.bake_equirect_envmap` | Bake Equirect Envmap | — | — | Procedurally bake an HDR studio environment map at the given resolution. |
-| `node.basic_shape` | Basic Shape | — | — | Single-dispatch 2D SDF shape — Square / Diamond / Octagon — rasterised into an RGBA16F texture with anti-aliased edges. |
+| `node.basic_shape` | Basic Shape | Generate | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
 | `node.blinn_specular` | Blinn Specular | — | — | Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. |
 | `node.blob_detect_ffi` | Blob Detect (FFI) | — | — | Sparse blob detection (bright-region tracking) via the manifold_native BlobDetector FFI plugin. |
 | `node.blob_overlay_render` | Blob Overlay | — | — | Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. |
@@ -66,7 +66,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.cel_material` | Cel Material | — | — | Cel-shaded material — Lambert N·L quantized into `cel_bands` discrete bands. |
 | `node.centered_uv` | Centered UV | — | — | UV recentered around (cx, cy) with per-axis scale. |
 | `node.channel_mix` | Channel Mixer | Color & Tone | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
-| `node.checkerboard` | Checkerboard | — | — | Pure generator. |
+| `node.checkerboard` | Checkerboard | Generate | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | `node.chromatic_displace` | RGB Split | Distort & Warp | Filter | Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can … |
 | `node.clamp_texture` | Clamp | Color & Tone | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
 | `node.clip_trigger_index` | Clip Trigger Index | — | — | Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. |
@@ -93,7 +93,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.euler_step_particles_3d` | Euler Step Particles 3D | — | — | Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. |
 | `node.fbm_2d` | fBM 2D | — | — | Pure generator. |
 | `node.fbm_per_instance` | FBM Per Instance | — | — | Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. |
-| `node.feedback` | Feedback | — | — | 1-frame texture delay. |
+| `node.feedback` | Feedback | Composite | Filter | Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through … |
 | `node.field_combine` | Field Combine | — | — | Per-pixel scalar field: out.rgb = a * in.r + b * in.g + c, alpha = 1. |
 | `node.film_grain` | Film Grain | Stylize | Filter | Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise. |
 | `node.flash` | Flash | Stylize | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
@@ -103,7 +103,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.fresnel_rim` | Fresnel Rim | — | — | Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. |
 | `node.gain` | Exposure | Color & Tone | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
 | `node.gaussian_blur` | Gaussian Blur | — | — | Single-axis Gaussian blur. |
-| `node.gaussian_blur_variable_width` | Gaussian Blur (Variable Width) | — | — | Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. |
+| `node.gaussian_blur_variable_width` | Gaussian Blur (Variable Width) | Blur & Sharpen | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
 | `node.generate_cube_mesh` | Generate Cube Mesh | — | — | Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. |
 | `node.generate_grid_mesh` | Generate Grid Mesh | — | — | Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. |
 | `node.generate_grid_uv` | Generate Grid UV | — | — | Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_s… |
@@ -112,14 +112,14 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.generate_tesseract_vertices` | Generate Tesseract Vertices | — | — | Emit the 16 corner vertices of a 4D hypercube (tesseract) scaled to magnitude 0.25 plus its 32-edge wireframe topology as paired Array<Vec4Vertex> + Array<Edge… |
 | `node.gradient_central_diff` | Gradient (Central Diff) | — | — | Per-pixel central-difference gradient of a single input channel. |
 | `node.gradient_central_diff_3d` | Gradient (Central Diff 3D) | — | — | 6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. |
-| `node.gradient_ramp` | Gradient | — | — | General N-stop gradient / LUT generator. |
+| `node.gradient_ramp` | Gradient | Generate | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | `node.grid_uv_field` | Grid UV Field | — | — | Emit an Array<vec2<f32>> of UV positions on an N×N grid in [0,1]² space, sampling each cell at its centre: for idx = row*N + col, uv = ((col+0.5)/N, (row+0.5)/… |
 | `node.hash_field_by_seed` | Hash Field by Seed | — | — | Hash an input value-field's RG channels with an added scalar seed: seeded = field.rg + seed·(seed_x, seed_y); Hash2 (mode 0) → out.rg = hash2(seeded) in [0,1]^… |
 | `node.hash_noise_field_2d` | Hash Noise Field 2D | — | — | Pure generator. |
-| `node.hdr_retention_mix` | HDR Retention Mix | — | — | Preserve a reference texture's above-1.0 highlight energy through a compressed texture's gain adjustment. |
+| `node.hdr_retention_mix` | HDR Mix | Composite | Filter | Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a proces… |
 | `node.heightmap_to_normal` | Heightmap → Normal | — | — | Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. |
 | `node.hue_saturation` | Hue / Saturation | Color & Tone | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
-| `node.image_folder` | Image Folder | — | — | Scrub through a folder of images via a position scalar (0..1). |
+| `node.image_folder` | Image Folder | Generate | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
 | `node.instance_position_jitter` | Instance Position Jitter | — | — | Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. |
 | `node.instance_rotation_jitter` | Instance Rotation Jitter | — | — | Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. |
 | `node.lambert_directional` | Lambert (Directional) | — | — | Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multip… |
@@ -127,11 +127,11 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.lerp_instance_fields` | Lerp Instance Fields | — | — | Elementwise linear interpolation between two Array<InstanceTransform>s. |
 | `node.levels` | Levels | Color & Tone | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | `node.lic_integrate` | LIC Integrate | — | — | Line Integral Convolution. |
-| `node.linear_gradient` | Linear Gradient | — | — | Directional 0→1 ramp in UV space. |
+| `node.linear_gradient` | Linear Gradient | Generate | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
 | `node.matcap_two_tone` | Matcap Two-Tone | — | — | Cross-axis 4-colour matcap from a tangent-space normal map. |
 | `node.mirror_axis` | Flip | Distort & Warp | Filter | Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or di… |
 | `node.mirror_fold_uv` | Mirror | Distort & Warp | Map | Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap … |
-| `node.mix` | Mix | — | — | Combine two textures with one of 8 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay, Divide), crossfaded back against A by `amount`. |
+| `node.mix` | Mix | Composite | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
 | `node.mux_array` | Mux (array) | — | — | N-way Array<f32> selector. |
 | `node.mux_scalar` | Mux (scalar) | — | — | N-way scalar selector. |
 | `node.mux_texture` | Mux (texture) | — | — | Dynamic N-way Texture2D selector — `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. |
@@ -159,11 +159,11 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.reinhard_tone_map` | Reinhard Tone Map | — | — | Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simpl… |
 | `node.remap` | Remap | Distort & Warp | Filter | Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coord… |
 | `node.render_3d_mesh` | Render 3D Mesh | — | — | Bundled 3D mesh renderer (TouchDesigner / Blender shape). |
-| `node.render_filled_rects` | Filled Rects | — | — | Instanced filled-rectangle overlay composited onto a source texture. |
+| `node.render_filled_rects` | Draw Rectangles | Generate | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
 | `node.render_instanced_3d_mesh` | Render Instanced 3D Mesh | — | — | Bundled instanced 3D mesh renderer. |
-| `node.render_lines` | Render Lines | — | — | Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. |
-| `node.render_text` | Render Text | — | — | Render a text string to the output texture. |
-| `node.render_value_overlay` | Value Overlay | — | — | Lightweight bitmap-font numeric labels at multiple positions, composited onto a source texture. |
+| `node.render_lines` | Draw Lines | Generate | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
+| `node.render_text` | Render Text | Generate | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
+| `node.render_value_overlay` | Value Overlay | Generate | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 | `node.resolve_3d_accumulator` | Resolve 3D Accumulator | — | — | Read a u32 fixed-point 3D accumulator buffer (produced by node.scatter_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the resul… |
 | `node.resolve_accumulator` | Resolve Accumulator | — | — | Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density text… |
 | `node.rotate_2d` | Rotate | — | — | Rotate a 2D coordinate field around the origin by `angle` (radians). |
@@ -181,7 +181,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.scatter_particles_camera` | Scatter Particles Camera | — | — | Fused 3D→2D camera projection + atomic-add scatter. |
 | `node.seed_particles` | Seed Particles | — | — | Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). |
 | `node.seed_particles_from_texture` | Seed Particles From Texture | — | — | Exact-placement particle seeding from a Texture2D density mask. |
-| `node.sharpen` | Sharpen | — | — | Single-knob 4-neighbour Laplacian unsharp mask. |
+| `node.sharpen` | Sharpen | Blur & Sharpen | Filter | Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper. |
 | `node.simplex_field_2d` | Simplex Field 2D | — | — | Pure generator. |
 | `node.simplex_noise_2d` | Simplex Noise 2D | — | — | Pure generator. |
 | `node.simplex_noise_force_3d_at_particles` | Simplex Noise Force 3D at Particles | — | — | Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. |
@@ -203,7 +203,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.uv_strip_clamp` | Edge Stretch | Distort & Warp | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
 | `node.vignette` | Vignette | Stylize | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | `node.voronoi_2d` | Voronoi 2D | Noise | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
-| `node.wet_dry` | Wet/Dry | — | — | Crossfade a processed `wet` texture back over the original `dry` texture by a `wet_dry` factor [0,1]. |
+| `node.wet_dry` | Wet/Dry | Composite | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 | `node.wgsl_compute` | WGSL Compute | — | — | User-authored WGSL compute escape hatch — the shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived fro… |
 | `node.wrap_particles_torus` | Wrap Particles (Torus) | — | — | Per-particle toroidal wrap: position.xy = fract(position.xy + 1). |
 

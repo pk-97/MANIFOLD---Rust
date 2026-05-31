@@ -89,6 +89,10 @@ crate::primitive! {
     composition_notes: "step_size = width_sample × max_radius + 1.0 along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures. ScatterAsGatherByCoC: each neighbor only contributes if its CoC (sampled from the `width` texture's R channel) ≥ the center pixel's CoC, OR the center is itself very blurry (CoC > 0.5). For DoF parity set max_radius = 6.0 and weighting_mode = ScatterAsGatherByCoC; the kernel matches the legacy DoF blur byte-for-byte.",
     examples: [],
     picker: { label: "Gaussian Blur (Variable Width)", category: Atom },
+    summary: "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
+    category: BlurAndSharpen,
+    role: Filter,
+    aliases: ["variable blur", "depth blur", "selective blur", "depth of field"],
     extra_fields: {
         pipelines: AHashMap<u32, GpuComputePipeline> = AHashMap::new(),
     },

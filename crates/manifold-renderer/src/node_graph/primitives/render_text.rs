@@ -142,6 +142,10 @@ crate::primitive! {
     composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing` to animate them. The R8Unorm glyph bitmap is dirty-cached internally — re-rasterization only happens when text, font, font size (= size × output_height), or styling actually change, so per-frame cost is just the composite dispatch. Output is white text on black; pair with downstream `node.color_grade` or `node.invert` to tint or invert.",
     examples: ["assets/generator-presets/Text.json"],
     picker: { label: "Render Text", category: Atom },
+    summary: "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
+    category: Generate,
+    role: Filter,
+    aliases: ["text", "render text", "title", "Text TOP"],
     extra_fields: {
         rasterizer: TextRasterizer = TextRasterizer::new(),
         text_texture: Option<manifold_gpu::GpuTexture> = None,

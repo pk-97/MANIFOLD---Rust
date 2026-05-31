@@ -845,8 +845,13 @@
       "type_id": "node.bake_equirect_envmap"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "basic shape",
+        "square",
+        "diamond",
+        "octagon"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [
         {
@@ -950,9 +955,9 @@
         }
       ],
       "purpose": "Single-dispatch 2D SDF shape — Square / Diamond / Octagon — rasterised into an RGBA16F texture with anti-aliased edges. One instance draws one shape; pick which via the static `shape` enum param. `rotation`, `is_wireframe`, and the geometric params (aspect/scale/line) are port-shadows-param so cycling and easing live in the outer graph. Mux multiple `node.basic_shape` instances at the output for runtime shape selection (the BasicShapes.json pattern).",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it.",
       "type_id": "node.basic_shape"
     },
     {
@@ -2244,8 +2249,13 @@
       "type_id": "node.channel_mix"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "checkerboard",
+        "checker",
+        "grid",
+        "test pattern"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [],
       "label": "Checkerboard",
@@ -2288,9 +2298,9 @@
         }
       ],
       "purpose": "Pure generator. Alternating black/white squares at configurable scale. Output is binary {0, 1} broadcast to RGB (A = 1). Useful as a debug/diagnostic pattern, a mask for node.compose, or a base for grid-aligned effects.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks.",
       "type_id": "node.checkerboard"
     },
     {
@@ -4628,8 +4638,13 @@
       "type_id": "node.fbm_per_instance"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "feedback",
+        "frame delay",
+        "trails",
+        "Feedback TOP"
+      ],
+      "category": "Composite",
       "examples": [
         "preset.effect.stylized_feedback"
       ],
@@ -4659,9 +4674,9 @@
       ],
       "params": [],
       "purpose": "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims. Optional `reset_trigger` zeroes the persistent state texture on integer-edge changes (scene cut + state clear pattern).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through a blend.",
       "type_id": "node.feedback"
     },
     {
@@ -5405,8 +5420,13 @@
       "type_id": "node.gaussian_blur"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "variable blur",
+        "depth blur",
+        "selective blur",
+        "depth of field"
+      ],
+      "category": "Blur & Sharpen",
       "examples": [],
       "inputs": [
         {
@@ -5471,9 +5491,9 @@
         }
       ],
       "purpose": "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Three quality levels (9-/17-/25-tap kernels at σ≈2/4/6) and an optional CoC-driven scatter-as-gather weighting that prevents sharp pixels bleeding into blurry regions — load-bearing for DoF-class effects.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
       "type_id": "node.gaussian_blur_variable_width"
     },
     {
@@ -5996,8 +6016,13 @@
       "type_id": "node.gradient_central_diff_3d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "gradient",
+        "color ramp",
+        "lut",
+        "palette"
+      ],
+      "category": "Generate",
       "examples": [
         "preset.effect.infrared"
       ],
@@ -6034,9 +6059,9 @@
         }
       ],
       "purpose": "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = (x+0.5)/width * domain, evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like.",
       "type_id": "node.gradient_ramp"
     },
     {
@@ -6213,8 +6238,12 @@
       "type_id": "node.hash_noise_field_2d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "hdr mix",
+        "highlight retention",
+        "hdr blend"
+      ],
+      "category": "Composite",
       "examples": [
         "preset.effect.auto_gain"
       ],
@@ -6235,7 +6264,7 @@
           "type": "f32"
         }
       ],
-      "label": "HDR Retention Mix",
+      "label": "HDR Mix",
       "outputs": [
         {
           "name": "out",
@@ -6255,9 +6284,9 @@
         }
       ],
       "purpose": "Preserve a reference texture's above-1.0 highlight energy through a compressed texture's gain adjustment. Per-pixel: SDR body from `compressed`, HDR portion lerps between compressed's HDR and reference's HDR by `retention`. retention=1 keeps the HDR ceiling anchored to reference; retention=0 passes compressed through unchanged.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a process is flattening your highlights.",
       "type_id": "node.hdr_retention_mix"
     },
     {
@@ -6406,8 +6435,13 @@
       "type_id": "node.hue_saturation"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "image folder",
+        "image sequence",
+        "stills",
+        "Movie File In TOP"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [
         {
@@ -6483,9 +6517,9 @@
         }
       ],
       "purpose": "Scrub through a folder of images via a position scalar (0..1). The host sets the folder path on the outer-card String binding; the primitive scans it, sorts alphabetically, and loads slices on demand in a background thread. Built-in aspect-fit + uv_scale matches the legacy MRI volume display so downstream primitives don't have to reinvent it.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position.",
       "type_id": "node.image_folder"
     },
     {
@@ -7436,8 +7470,13 @@
       "type_id": "node.light"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "linear gradient",
+        "ramp",
+        "fade",
+        "Ramp TOP"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [
         {
@@ -7511,9 +7550,9 @@
         }
       ],
       "purpose": "Directional 0→1 ramp in UV space. Output: RGB = ramp value (0 on the negative side of the rotated axis, 1 on the positive side, smoothstep transition of width `softness` centred at (cx, cy)), A = 1. The straight-line gradient — pairs with masked_mix for fades / wipes, with node.invert to flip direction, or with a 1D LUT (node.lut1d) to remap the ramp into arbitrary value curves.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects.",
       "type_id": "node.linear_gradient"
     },
     {
@@ -7807,8 +7846,13 @@
       "type_id": "node.mirror_fold_uv"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "mix",
+        "blend",
+        "composite",
+        "Composite TOP"
+      ],
+      "category": "Composite",
       "examples": [
         "composite.bloom",
         "composite.halation"
@@ -7870,9 +7914,9 @@
         }
       ],
       "purpose": "Combine two textures with one of 8 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay, Divide), crossfaded back against A by `amount`. At amount=0 returns A unchanged; at amount=1 returns the full blended result. Lerp mode is a pure linear crossfade. Divide mode is per-channel `a / b`, guarded against divide-by-near-zero (returns 0 when `b` is below epsilon — same convention as `node.array_math` Divide).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node.",
       "type_id": "node.mix"
     },
     {
@@ -9874,8 +9918,13 @@
       "type_id": "node.render_3d_mesh"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "draw rectangles",
+        "filled rects",
+        "boxes",
+        "bars"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [
         {
@@ -9889,7 +9938,7 @@
           "type": "Array"
         }
       ],
-      "label": "Filled Rects",
+      "label": "Draw Rectangles",
       "outputs": [
         {
           "name": "out",
@@ -9925,9 +9974,9 @@
         }
       ],
       "purpose": "Instanced filled-rectangle overlay composited onto a source texture. Each item in the input Channels[X, Y, WIDTH, HEIGHT] array draws one axis-aligned filled rectangle with the configured color and alpha. Additive blend. Zero-size items are skipped. For gauge fills, center dots, debug regions, VU meters, status bars, selection boxes.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays.",
       "type_id": "node.render_filled_rects"
     },
     {
@@ -10002,8 +10051,13 @@
       "type_id": "node.render_instanced_3d_mesh"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "draw lines",
+        "render lines",
+        "strokes",
+        "wireframe"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [
         {
@@ -10017,7 +10071,7 @@
           "type": "Array"
         }
       ],
-      "label": "Render Lines",
+      "label": "Draw Lines",
       "outputs": [
         {
           "name": "color",
@@ -10135,14 +10189,19 @@
         }
       ],
       "purpose": "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.pack_curve_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays.",
       "type_id": "node.render_lines"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "text",
+        "render text",
+        "title",
+        "Text TOP"
+      ],
+      "category": "Generate",
       "examples": [
         "assets/generator-presets/Text.json"
       ],
@@ -10300,14 +10359,19 @@
         }
       ],
       "purpose": "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing are port-shadows-param scalars. CPU-rasterizes the glyphs via CoreText into an internal R8Unorm bitmap (dirty-cached — only re-rasterized when text/font/size/style change), then composites white-on-black into the output with aspect correction. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
       "type_id": "node.render_text"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "value overlay",
+        "debug text",
+        "readout",
+        "numbers"
+      ],
+      "category": "Generate",
       "examples": [],
       "inputs": [
         {
@@ -10430,9 +10494,9 @@
         }
       ],
       "purpose": "Lightweight bitmap-font numeric labels at multiple positions, composited onto a source texture. Embedded 5×7 glyph atlas (0-9, A-F, hex, coords). Format enum selects display: Index (decimal), Hex (0Xnn), Coord (xxx,yyy from X/Y channels), Float3 (value×1000). For diagnostic HUDs, data-viz annotation layers, debug overlays.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph.",
       "type_id": "node.render_value_overlay"
     },
     {
@@ -11617,8 +11681,12 @@
       "type_id": "node.seed_particles_from_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "sharpen",
+        "unsharp mask",
+        "crisp"
+      ],
+      "category": "Blur & Sharpen",
       "examples": [],
       "inputs": [
         {
@@ -11652,9 +11720,9 @@
         }
       ],
       "purpose": "Single-knob 4-neighbour Laplacian unsharp mask. `amount = 0` passes the source through unchanged; positive values add increasingly aggressive edge enhancement. Curated wrapper over the same math node.convolution_2d_9tap can express, factored out so one outer-card slider drives sharpening directly without needing five affine_scalar nodes to compute kernel weights.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper.",
       "type_id": "node.sharpen"
     },
     {
@@ -13561,8 +13629,13 @@
       "type_id": "node.watercolor"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "wet dry",
+        "dry wet",
+        "blend amount",
+        "mix amount"
+      ],
+      "category": "Composite",
       "examples": [
         "composite.bloom",
         "composite.halation",
@@ -13605,9 +13678,9 @@
         }
       ],
       "purpose": "Crossfade a processed `wet` texture back over the original `dry` texture by a `wet_dry` factor [0,1]. At 0 returns dry unchanged; at 1 returns wet. RGBA-wide lerp.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect.",
       "type_id": "node.wet_dry"
     },
     {

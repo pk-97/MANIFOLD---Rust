@@ -196,7 +196,11 @@ crate::primitive! {
     ],
     composition_notes: "edge_thickness is half-thickness in screen-fraction units (≈0.002 = ~1px at 1080p). `vert_size = 1.0` matches the legacy `generator_math::DEFAULT_DOT_RADIUS` (0.005 screen-fraction). `beat_flash_amount = 0` disables the per-beat luminance pulse. `animate`-mode draws a window of `window`-fraction of the edges with a smooth fade at the trailing edge — speed in proportion to (segment_count / 100) * dt * 60, matching the legacy LineGeneratorHelper. Color values above 1.0 produce HDR bloom-friendly output (additive blending).",
     examples: [],
-    picker: { label: "Render Lines", category: Atom },
+    picker: { label: "Draw Lines", category: Atom },
+    summary: "Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays.",
+    category: Generate,
+    role: Filter,
+    aliases: ["draw lines", "render lines", "strokes", "wireframe"],
     extra_fields: {
         render_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         msaa_texture: Option<manifold_gpu::GpuTexture> = None,

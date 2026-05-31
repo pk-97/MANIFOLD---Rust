@@ -65,7 +65,11 @@ crate::primitive! {
     ],
     composition_notes: "Wire a Channels[X, Y, WIDTH, HEIGHT] source (detection regions, gauge rects from a wgsl_compute, or manually authored rects) into the `rects` port. X/Y are rect centre in normalised 0..1 coords; WIDTH/HEIGHT are full extent. rect_count caps iteration — safe to leave at 32 even when the active count is lower (zero-size items are skipped). For outlined rectangles use render_lines instead.",
     examples: [],
-    picker: { label: "Filled Rects", category: Atom },
+    picker: { label: "Draw Rectangles", category: Atom },
+    summary: "Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays.",
+    category: Generate,
+    role: Filter,
+    aliases: ["draw rectangles", "filled rects", "boxes", "bars"],
     extra_fields: {
         render_pipeline: Option<GpuRenderPipeline> = None,
     },

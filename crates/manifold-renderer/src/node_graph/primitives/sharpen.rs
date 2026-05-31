@@ -50,6 +50,10 @@ crate::primitive! {
     composition_notes: "Port-shadowable amount input — wire a single outer-card Sharpen slider straight to this node's amount port via presetMetadata.bindings (convert: Float). amount = 0 fast-paths to a passthrough (no Laplacian taps). The tap spacing reads `textureDimensions` of the source, so the kernel scales with source resolution. For wider blurs prefer node.gaussian_blur_variable_width — this primitive is for crisp edge enhancement, not arbitrary radius work.",
     examples: [],
     picker: { label: "Sharpen", category: Atom },
+    summary: "Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper.",
+    category: BlurAndSharpen,
+    role: Filter,
+    aliases: ["sharpen", "unsharp mask", "crisp"],
 }
 
 impl Primitive for Sharpen {
