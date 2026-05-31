@@ -693,6 +693,7 @@ fn parse_uniform(
             default,
             range: None,
             enum_values: &[],
+            kind: crate::node_graph::parameters::ParamSemantic::Plain,
         });
         // Port-shadow each non-pad uniform member with an OPTIONAL
         // ScalarF32 input. evaluate() prefers the wired value if

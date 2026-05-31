@@ -27,6 +27,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Float(1.0),
         range: Some((0.0, 8.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "scale",
@@ -35,6 +36,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Float(1.0),
         range: Some((0.1, 16.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "palette_a",
@@ -43,6 +45,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Color([0.0, 0.2, 0.6, 1.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "palette_b",
@@ -51,6 +54,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Color([1.0, 0.4, 0.0, 1.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

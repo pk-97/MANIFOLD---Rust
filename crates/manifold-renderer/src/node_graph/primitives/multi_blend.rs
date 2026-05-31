@@ -49,6 +49,7 @@ const MULTI_BLEND_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(DEFAULT_INPUTS as f32),
         range: Some((2.0, MAX_INPUTS as f32)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "divisor",
@@ -57,6 +58,7 @@ const MULTI_BLEND_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(1.0),
         range: Some((0.0, 100.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

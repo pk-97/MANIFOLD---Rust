@@ -204,6 +204,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(0.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "beat",
@@ -212,6 +213,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(0.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "aspect",
@@ -220,6 +222,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(1.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "trigger_count",
@@ -228,6 +231,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(0.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "anim_progress",
@@ -236,6 +240,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(0.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "output_width",
@@ -244,6 +249,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(1920.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "output_height",
@@ -252,6 +258,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         default: ParamValue::Float(1080.0),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

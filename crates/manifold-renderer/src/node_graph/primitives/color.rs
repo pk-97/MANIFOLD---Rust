@@ -41,6 +41,7 @@ const BRIGHTNESS_PARAMS: [ParamDef; 1] = [ParamDef {
     default: ParamValue::Vec3([0.2126, 0.7152, 0.0722]),
     range: None,
     enum_values: &[],
+    kind: crate::node_graph::parameters::ParamSemantic::Plain,
 }];
 
 #[repr(C)]
@@ -164,6 +165,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Vec4([1.0, 0.0, 0.0, 0.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "row1",
@@ -172,6 +174,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Vec4([0.0, 1.0, 0.0, 0.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "row2",
@@ -180,6 +183,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Vec4([0.0, 0.0, 1.0, 0.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "row3",
@@ -188,6 +192,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Vec4([0.0, 0.0, 0.0, 1.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 
@@ -320,6 +325,7 @@ const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Color([0.0, 0.0, 0.0, 1.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "color_b",
@@ -328,6 +334,7 @@ const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
         range: None,
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

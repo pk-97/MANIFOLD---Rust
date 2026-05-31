@@ -86,6 +86,7 @@ const INJECT_BURST_PARAMS: [ParamDef; 1] = [ParamDef {
     default: ParamValue::Float(0.5),
     range: Some((0.01, 5.0)),
     enum_values: &[],
+    kind: crate::node_graph::parameters::ParamSemantic::Plain,
 }];
 
 /// Bit-exact mirror of `fluid_sim_core::random_inject_uv`. Returns

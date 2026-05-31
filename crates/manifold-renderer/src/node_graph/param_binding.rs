@@ -239,6 +239,15 @@ pub struct ResolvedBinding {
     /// (invert or a non-Linear curve); `None` for static bindings and
     /// identity User bindings, which then pay nothing and stay 1:1.
     pub(crate) reshape: Option<Reshape>,
+    /// Semantic kind of the target inner param ([`ParamSemantic`]),
+    /// carried so [`ResolvedBinding::apply`] can wrap the written value
+    /// for wrapping kinds (Angle / Hue / Phase) at the single binding
+    /// write boundary. [`ParamSemantic::Plain`] for static and
+    /// generator-literal bindings — the wrap is gated inside
+    /// [`crate::node_graph::parameters::wrap_value`], so a `Plain` kind
+    /// is a guaranteed passthrough and every existing show stays
+    /// byte-identical.
+    pub(crate) kind: crate::node_graph::parameters::ParamSemantic,
 }
 
 /// Non-identity card-slider reshape applied to a User binding's value at the
@@ -313,6 +322,9 @@ impl ResolvedBinding {
             source: BindingSource::Static,
             source_index,
             reshape: None,
+            // Static spec bindings don't wrap — `Plain` is a guaranteed
+            // passthrough in `wrap_value`.
+            kind: crate::node_graph::parameters::ParamSemantic::Plain,
         })
     }
 
@@ -342,13 +354,16 @@ impl ResolvedBinding {
         // Pull the `&'static str` off the inner node's `ParamDef`
         // list so the resolved target carries a stable, allocation-free
         // param name (instead of leaking the user binding's owned
-        // string).
-        let target_param = inst
+        // string). Capture the target param's `ParamSemantic` kind in
+        // the same pass so the write boundary can wrap Angle/Hue/Phase
+        // values via `wrap_value`.
+        let target_def = inst
             .node
             .parameters()
             .iter()
-            .map(|p| p.name)
-            .find(|name| *name == core.inner_param.as_str())?;
+            .find(|p| p.name == core.inner_param.as_str())?;
+        let target_param = target_def.name;
+        let kind = target_def.kind;
         let convert = match core.convert {
             manifold_core::effects::ParamConvert::Float => ParamConvert::Float,
             manifold_core::effects::ParamConvert::IntRound => ParamConvert::IntRound,
@@ -377,6 +392,7 @@ impl ResolvedBinding {
                     invert: core.invert,
                     curve: core.curve,
                 }),
+            kind,
         })
     }
 
@@ -397,6 +413,13 @@ impl ResolvedBinding {
             Some(r) => r.apply(value),
             None => value,
         };
+        // Wrap the value for wrapping semantics (Angle / Hue / Phase) at
+        // the single binding write boundary. Gated inside `wrap_value`:
+        // a `Plain` kind passes through untouched, so static / generator
+        // bindings and every non-angle param are byte-identical. For
+        // angles this is `rem_euclid(TAU)`, a no-op on the rendered
+        // result because every angle consumer feeds it through cos/sin.
+        let value = crate::node_graph::parameters::wrap_value(value, self.kind);
         let pv = convert_param_value(self.convert, value);
         match &self.target {
             ResolvedTarget::Composite { outer_name } => handle
@@ -699,6 +722,7 @@ pub fn outer_routings_from_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::parameters::ParamSemantic;
 
     #[test]
     fn reshape_invert_curve_and_identity() {
@@ -743,7 +767,7 @@ mod tests {
     // the static / user / fan-out / cache code paths. `Mix` carries an
     // `Enum` `mode` param and is the fixture for the `EnumRound`
     // routing test.
-    use crate::node_graph::primitives::{AffineTransform, FEEDBACK_TYPE_ID, Mix};
+    use crate::node_graph::primitives::{AffineTransform, FEEDBACK_TYPE_ID, Mix, Rotate3D};
 
     // ---- Conversion tests ----
 
@@ -837,6 +861,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            kind: ParamSemantic::Plain,
         }
     }
 
@@ -975,6 +1000,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            kind: ParamSemantic::Plain,
         };
         let err = binding.apply(&mut g, None, 0.5).unwrap_err();
         assert!(matches!(err, GraphError::ParamNotFound { .. }));
@@ -999,6 +1025,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            kind: ParamSemantic::Plain,
         };
         binding.apply(&mut g, None, 0.0).unwrap();
         assert_eq!(
@@ -1010,6 +1037,59 @@ mod tests {
             g.get_node(mix).unwrap().params.get("mode"),
             Some(&ParamValue::Enum(2))
         );
+    }
+
+    /// A User binding onto an `Angle`-semantic inner param wraps the
+    /// written value via `wrap_value` (rem_euclid TAU) at the single
+    /// binding write boundary. `Rotate3D::angle_x` is `ParamType::Angle`,
+    /// so its derived `ParamSemantic` is `Angle` and `from_user` carries
+    /// that kind onto the resolved binding.
+    ///
+    /// The wrap is a no-op on the *rendered* result: every angle consumer
+    /// (here `node.rotate_3d`'s WGSL) feeds the value through cos/sin,
+    /// which are 2π-periodic, so `theta` and `theta.rem_euclid(TAU)`
+    /// produce identical rotation. This test asserts the stored param,
+    /// which is the observable difference, not a render change.
+    #[test]
+    fn angle_param_binding_wraps_written_value_over_tau() {
+        use std::f32::consts::TAU;
+        let mut g = Graph::new();
+        let rot = g.add_node_named("rot", Box::new(Rotate3D::new()));
+        let core = manifold_core::effects::UserParamBinding {
+            id: "user.rot.angle_x.1".to_string(),
+            label: "Angle X".to_string(),
+            node_handle: "rot".to_string(),
+            inner_param: "angle_x".to_string(),
+            min: 0.0,
+            max: TAU,
+            default_value: 0.0,
+            convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: true,
+            invert: false,
+            curve: Default::default(),
+        };
+        let handles = vec![(Cow::Borrowed("rot"), rot)];
+        let rb = ResolvedBinding::from_user(&core, &g, &handles, 0).unwrap();
+        // The resolved binding must have picked up the Angle kind off the
+        // inner ParamDef.
+        assert_eq!(rb.kind, ParamSemantic::Angle);
+
+        // Apply a value well past TAU (2.5 turns).
+        let raw = 2.5 * TAU;
+        rb.apply(&mut g, None, raw).unwrap();
+        let written = match g.get_node(rot).unwrap().params.get("angle_x") {
+            Some(ParamValue::Float(f)) => *f,
+            other => panic!("expected Float angle_x, got {other:?}"),
+        };
+        let expected = raw.rem_euclid(TAU); // == 0.5 * TAU
+        assert!(
+            (written - expected).abs() < 1e-4,
+            "angle binding must store the wrapped value: written={written}, expected={expected}",
+        );
+        // Sanity: cos/sin of the raw and wrapped angles agree, proving
+        // the wrap is render-invariant for any angle consumer.
+        assert!((raw.cos() - written.cos()).abs() < 1e-4);
+        assert!((raw.sin() - written.sin()).abs() < 1e-4);
     }
 
     #[test]
@@ -1032,6 +1112,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            kind: ParamSemantic::Plain,
         };
         binding.apply(&mut g, None, 0.42).unwrap();
         assert_eq!(
@@ -1067,6 +1148,7 @@ mod tests {
                 source: BindingSource::Static,
                 source_index: 1,
                 reshape: None,
+                kind: ParamSemantic::Plain,
             },
         ];
 
@@ -1211,6 +1293,7 @@ mod tests {
                 source: BindingSource::Static,
                 source_index: 0,
                 reshape: None,
+                kind: ParamSemantic::Plain,
             },
             ResolvedBinding {
                 id: Cow::Borrowed("zoom"),
@@ -1224,6 +1307,7 @@ mod tests {
                 source: BindingSource::Static,
                 source_index: 0, // same outer slot as `amount`
                 reshape: None,
+                kind: ParamSemantic::Plain,
             },
         ];
         // ONE outer value, applied to BOTH inner targets.

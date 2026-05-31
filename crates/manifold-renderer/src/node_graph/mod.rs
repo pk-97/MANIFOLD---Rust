@@ -79,7 +79,10 @@ pub use param_binding::{
     ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,
     binding_value, outer_routings_from_bindings,
 };
-pub use parameters::{ParamDef, ParamType, ParamValue};
+pub use parameters::{
+    ParamDef, ParamSemantic, ParamType, ParamValue, SemanticDefaults, kind_for_param_type,
+    semantic_defaults, wrap_value,
+};
 pub use persistence::{
     EffectGraphDefExt, GRAPH_DOCUMENT_VERSION, GraphDocument, LoadError, NodeConstructor,
     NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,

@@ -87,6 +87,7 @@ const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "sensitivity",
@@ -95,6 +96,7 @@ const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "target",
@@ -103,6 +105,7 @@ const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

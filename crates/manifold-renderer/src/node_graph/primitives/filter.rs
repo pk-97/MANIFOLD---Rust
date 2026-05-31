@@ -43,6 +43,7 @@ const THRESHOLD_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "softness",
@@ -51,6 +52,7 @@ const THRESHOLD_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(0.0),
         range: Some((0.0, 1.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 
@@ -188,6 +190,7 @@ const BLUR_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(4.0),
         range: Some((0.0, 64.0)),
         enum_values: &[],
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "mode",
@@ -196,6 +199,7 @@ const BLUR_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Enum(0), // Gaussian
         range: None,
         enum_values: BLUR_MODES,
+        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

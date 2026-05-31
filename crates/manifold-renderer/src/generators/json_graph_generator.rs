@@ -432,6 +432,9 @@ impl JsonGraphGenerator {
                         source_index,
                         // Generator bindings don't carry a card reshape yet.
                         reshape: None,
+                        // Generator-literal bindings don't wrap — `Plain`
+                        // is a guaranteed passthrough in `wrap_value`.
+                        kind: crate::node_graph::ParamSemantic::Plain,
                     })
                 }
                 BindingTarget::Composite { .. } => None,

@@ -87,6 +87,7 @@ const TRIGGER_EASE_TO_PARAMS: [ParamDef; 1] = [ParamDef {
     default: ParamValue::Float(DEFAULT_WINDOW_BEATS),
     range: Some((0.0625, 4.0)),
     enum_values: &[],
+    kind: crate::node_graph::parameters::ParamSemantic::Plain,
 }];
 
 #[derive(Debug)]
