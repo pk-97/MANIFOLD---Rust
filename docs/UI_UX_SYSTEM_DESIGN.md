@@ -193,6 +193,62 @@ This is the live performance instrument
 macro is how a knob feels right under the fingers mid-show. It is
 instrument-building, not authoring polish.
 
+**Design + build plan (from the `param-mapping-editor-design` workflow,
+2026-05-31).** The binding already carries the linear remap; we expose + extend
+it:
+- **Reuse, don't invent.** MANIFOLD already ships `MacroCurve` (Linear /
+  Exponential / Logarithmic / SCurve, `macro_bank.rs`) with a pure
+  `apply(t) -> [0,1]`. The binding reuses it verbatim — one curve type app-wide.
+- **Model:** add `#[serde(default)] invert: bool` + `curve: MacroCurve` to
+  `UserParamBinding` (`effects.rs`). serde(default) ⇒ invert=false /
+  curve=Linear for every saved show, exact 1:1, zero migration (same pattern as
+  `convert` / `is_angle`).
+- **Apply at the one write boundary.** `ResolvedBinding::apply`
+  (`param_binding.rs`) is the single per-frame point where the card slot crosses
+  into the inner param. Reshape there: normalize to [0,1] within [min,max] →
+  invert (1−n) → `curve.apply(n)` → scale to min+(max−min)·n → existing convert.
+  **Identity early-skip** when invert=false && curve=Linear, so every existing
+  binding is byte-identical to today and the per-frame write path drivers /
+  Ableton / envelopes share is untouched.
+- **Edit + undo.** `EditUserParamBindingCommand` mirrors
+  `ToggleEffectParamExposeCommand` (locator + reverse-state); never touches the
+  binding `id` (it is forever). Drag-driven min/max uses the
+  snapshot/changed/commit triad (one undo entry per drag). Bumps
+  `user_param_bindings_version` so the renderer re-resolves.
+- **Surface:** an in-place popover off the knob (§4), built **surface-agnostic**
+  so it later serves the card knob, Ableton, and driver/envelope. Reuses
+  `build_trim_handles` (min/max), the Ableton INV button style, `config_btn_style`
+  (curve dropdown).
+- **Order:** (1) model fields, (2) renderer carry+apply behind the identity
+  skip, (3) command+undo, (4) PanelAction+app_render route, (5) popover, (6)
+  live verify. Steps 1–4 are byte-identical until a user opts in.
+
+**THE STRUCTURAL PAYOFF (Peter, 2026-05-31): this editor REPLACES the
+`affine_scalar` mapping nodes scattered through every graph.** Those nodes exist
+*only* to remap a card slider onto a param range — the card param wires to an
+`affine_scalar.a` (scale) input, not the target directly — so they are plumbing,
+not signal, and they dominate the noise in complex graphs (the 3D fluid-sim
+generator is mostly a tower of them). A binding's min/max **is** an affine remap
+(scale = max−min, offset = min), invert is the negative scale, curve is the
+non-linearity an affine can't do — so the editor's write-boundary reshape does
+everything a mapping affine does and more. deg→rad affines are already redundant
+via `ParamType::Angle`. **Migration (after the editor ships):** per preset, fold
+each *mapping-only* affine (criterion: a card-exposed param feeds it, it does
+pure scale+offset, its output drives exactly one target with no other consumers)
+into its binding's min/max/curve, rewire the card param straight to the target,
+delete the node. Genuine in-graph-math affines stay. Across the 46 presets this
+is a fan-out **migration workflow**, one agent per graph; the payoff is every
+effect/generator graph shedding its mapping tower.
+
+**Forks (Peter's call before the visible build):** unify all three range systems
+now vs card-binding-first (rec: card first — the popover is surface-agnostic so
+Ableton/driver adopt it later); curve set (rec: the four `MacroCurve` shapes; a
+custom/editable curve is the deferred Table widget); invert-then-curve order
+(rec: yes, matches the Ableton source-invert order); unit scope (rec: defer a
+full Unit enum, surface only the existing `is_angle` degrees toggle); trigger
+location (wire onto the temporary sidebar rows now vs wait for on-node knobs
+§4-pass-3).
+
 ---
 
 ## 6. Previews + data-flow — understand a graph at a glance
