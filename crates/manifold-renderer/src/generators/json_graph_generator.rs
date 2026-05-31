@@ -430,6 +430,8 @@ impl JsonGraphGenerator {
                             BindingSource::Static
                         },
                         source_index,
+                        // Generator bindings don't carry a card reshape yet.
+                        reshape: None,
                     })
                 }
                 BindingTarget::Composite { .. } => None,

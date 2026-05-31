@@ -235,6 +235,41 @@ pub struct ResolvedBinding {
     /// binding's own position in `EffectSlot.bindings` once fan-out
     /// is expressed.
     pub source_index: usize,
+    /// `Some` only for User bindings with a non-identity card mapping
+    /// (invert or a non-Linear curve); `None` for static bindings and
+    /// identity User bindings, which then pay nothing and stay 1:1.
+    pub(crate) reshape: Option<Reshape>,
+}
+
+/// Non-identity card-slider reshape applied to a User binding's value at the
+/// write boundary: normalize the value within `[min, max]`, optional invert,
+/// then the response curve, then scale back into `[min, max]`. Built (`Some`)
+/// only for User bindings whose invert/curve differ from identity
+/// (false / Linear), so every existing show carries `None` and stays
+/// byte-identical with zero per-frame cost.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Reshape {
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: manifold_core::macro_bank::MacroCurve,
+}
+
+impl Reshape {
+    /// Reshape a physical slot value through invert + curve, staying within
+    /// `[min, max]`. Identity passthrough when the range is degenerate.
+    fn apply(&self, value: f32) -> f32 {
+        let range = self.max - self.min;
+        if range.abs() < f32::EPSILON {
+            return value;
+        }
+        let mut n = ((value - self.min) / range).clamp(0.0, 1.0);
+        if self.invert {
+            n = 1.0 - n;
+        }
+        n = self.curve.apply(n);
+        self.min + range * n
+    }
 }
 
 impl ResolvedBinding {
@@ -277,6 +312,7 @@ impl ResolvedBinding {
             convert: b.convert,
             source: BindingSource::Static,
             source_index,
+            reshape: None,
         })
     }
 
@@ -331,6 +367,16 @@ impl ResolvedBinding {
             convert,
             source: BindingSource::User,
             source_index,
+            // Only carry a reshape when the card mapping is non-identity, so
+            // every existing binding (invert=false, curve=Linear) stays 1:1.
+            reshape: (core.invert
+                || core.curve != manifold_core::macro_bank::MacroCurve::Linear)
+                .then_some(Reshape {
+                    min: core.min,
+                    max: core.max,
+                    invert: core.invert,
+                    curve: core.curve,
+                }),
         })
     }
 
@@ -345,6 +391,12 @@ impl ResolvedBinding {
         handle: Option<&CompositeHandle>,
         value: f32,
     ) -> Result<(), GraphError> {
+        // Card-slider reshape (invert + response curve) for User bindings
+        // that opted in; identity / static bindings skip it entirely.
+        let value = match &self.reshape {
+            Some(r) => r.apply(value),
+            None => value,
+        };
         let pv = convert_param_value(self.convert, value);
         match &self.target {
             ResolvedTarget::Composite { outer_name } => handle
@@ -647,6 +699,43 @@ pub fn outer_routings_from_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reshape_invert_curve_and_identity() {
+        use manifold_core::macro_bank::MacroCurve;
+        // Identity (Linear, no invert): value passes through unchanged.
+        let id = Reshape {
+            min: 0.0,
+            max: 10.0,
+            invert: false,
+            curve: MacroCurve::Linear,
+        };
+        assert!((id.apply(2.5) - 2.5).abs() < 1e-4);
+        // Invert: 25% of the range becomes 75%.
+        let inv = Reshape {
+            min: 0.0,
+            max: 10.0,
+            invert: true,
+            curve: MacroCurve::Linear,
+        };
+        assert!((inv.apply(2.5) - 7.5).abs() < 1e-4);
+        // SCurve (Hermite 3t^2-2t^3): n=0.25 -> 0.15625 -> *10 = 1.5625.
+        let s = Reshape {
+            min: 0.0,
+            max: 10.0,
+            invert: false,
+            curve: MacroCurve::SCurve,
+        };
+        assert!((s.apply(2.5) - 1.5625).abs() < 1e-3);
+        // Degenerate range: passthrough, no divide-by-zero.
+        let deg = Reshape {
+            min: 5.0,
+            max: 5.0,
+            invert: false,
+            curve: MacroCurve::Exponential,
+        };
+        assert!((deg.apply(42.0) - 42.0).abs() < 1e-6);
+    }
     use crate::node_graph::boundary_nodes::Source;
     // AffineTransform stands in for the legacy stateful-feedback
     // fixture: it has multiple `Float` params (`scale`, `translate_x`,
@@ -747,6 +836,7 @@ mod tests {
             convert: ParamConvert::Float,
             source: BindingSource::Static,
             source_index: 0,
+            reshape: None,
         }
     }
 
@@ -884,6 +974,7 @@ mod tests {
             convert: ParamConvert::Float,
             source: BindingSource::Static,
             source_index: 0,
+            reshape: None,
         };
         let err = binding.apply(&mut g, None, 0.5).unwrap_err();
         assert!(matches!(err, GraphError::ParamNotFound { .. }));
@@ -907,6 +998,7 @@ mod tests {
             convert: ParamConvert::EnumRound,
             source: BindingSource::Static,
             source_index: 0,
+            reshape: None,
         };
         binding.apply(&mut g, None, 0.0).unwrap();
         assert_eq!(
@@ -939,6 +1031,7 @@ mod tests {
             convert: ParamConvert::Float,
             source: BindingSource::Static,
             source_index: 0,
+            reshape: None,
         };
         binding.apply(&mut g, None, 0.42).unwrap();
         assert_eq!(
@@ -973,6 +1066,7 @@ mod tests {
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
                 source_index: 1,
+                reshape: None,
             },
         ];
 
@@ -1116,6 +1210,7 @@ mod tests {
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
                 source_index: 0,
+                reshape: None,
             },
             ResolvedBinding {
                 id: Cow::Borrowed("zoom"),
@@ -1128,6 +1223,7 @@ mod tests {
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
                 source_index: 0, // same outer slot as `amount`
+                reshape: None,
             },
         ];
         // ONE outer value, applied to BOTH inner targets.
