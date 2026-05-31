@@ -71,7 +71,6 @@ const ENVELOPE_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(0.005),
         range: Some((0.0, 5.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "release",
@@ -80,7 +79,6 @@ const ENVELOPE_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 10.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

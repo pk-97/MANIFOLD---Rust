@@ -89,7 +89,6 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.0001),
         range: Some((0.0, 0.1)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "dissipation",
@@ -98,7 +97,6 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.99),
         range: Some((0.9, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "vorticity",
@@ -107,7 +105,6 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.0),
         range: Some((0.0, 4.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "jacobi_iterations",
@@ -116,7 +113,6 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(20.0),
         range: Some((1.0, 60.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         // Fallback dye colour when the `dye_color` input port is unwired.
@@ -126,7 +122,6 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Vec3([1.0, 0.5, 0.2]),
         range: None,
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

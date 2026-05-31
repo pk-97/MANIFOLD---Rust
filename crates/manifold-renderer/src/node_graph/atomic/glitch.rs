@@ -41,7 +41,6 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "mode",
@@ -50,7 +49,6 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Enum(4), // Combined
         range: None,
         enum_values: GLITCH_MODES,
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "shift_amount",
@@ -59,7 +57,6 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Float(0.05),
         range: Some((0.0, 0.5)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "block_size",
@@ -68,7 +65,6 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         default: ParamValue::Float(16.0),
         range: Some((1.0, 128.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

@@ -95,7 +95,6 @@ const MUX_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(0.0),
         range: Some((0.0, (MAX_INPUTS - 1) as f32)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "num_inputs",
@@ -104,7 +103,6 @@ const MUX_PARAMS: [ParamDef; 2] = [
         default: ParamValue::Float(DEFAULT_INPUTS as f32),
         range: Some((2.0, MAX_INPUTS as f32)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

@@ -569,8 +569,7 @@ macro_rules! primitive {
                 )*
             ];
 
-            const PARAMS: &'static [$crate::node_graph::parameters::ParamDef] =
-                $crate::__primitive_params!($($params)*);
+            const PARAMS: &'static [$crate::node_graph::parameters::ParamDef] = &[ $($params)* ];
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =
@@ -609,102 +608,6 @@ macro_rules! primitive {
                 examples: &[ $( $( $ex ),* )? ],
             }
         }
-    };
-}
-
-/// Internal TT-muncher for the `params: [...]` list.
-///
-/// Authors write `ParamDef { name, label, ty, default, range,
-/// enum_values }` literals **without** the `kind` field — exactly as the
-/// ~185 existing macro-authored params already do. This muncher consumes
-/// each literal one at a time and re-emits a *complete* `ParamDef` with
-/// `kind` populated:
-///
-/// - default: derived from `ty` via `kind_for_param_type` — `Angle` /
-///   `Frequency` storage types carry their semantic for free, everything
-///   else lands `Plain`. So existing angle/frequency params get their
-///   semantic with zero edits.
-/// - override: append a trailing `semantic: <Ident>` field on the
-///   literal (e.g. `semantic: Scale`) to set the kind explicitly. The
-///   per-param fan-out (assigning Gain/Mix/Radius/… to specific params)
-///   uses this, but no param uses it yet in this infrastructure pass.
-///
-/// Matching the six named fields explicitly (rather than a raw
-/// `$($tt)*` body) keeps the emit correct regardless of trailing-comma
-/// style and lets `default` / `range` carry their own nested commas via
-/// `:expr` fragments.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __primitive_params {
-    // Terminal: emit the accumulated slice.
-    (@accum [ $($acc:tt)* ]) => {
-        &[ $($acc)* ]
-    };
-
-    // One ParamDef literal with an explicit `semantic:` override, more follow.
-    (@accum [ $($acc:tt)* ]
-        ParamDef {
-            name: $name:expr,
-            label: $label:expr,
-            ty: $ty:expr,
-            default: $default:expr,
-            range: $range:expr,
-            enum_values: $enum_values:expr,
-            semantic: $sem:ident $(,)?
-        }
-        $(, $($rest:tt)* )?
-    ) => {
-        $crate::__primitive_params!(@accum [
-            $($acc)*
-            // Bare `ParamDef` (not the full path) so the authoring
-            // file's existing `use ...::ParamDef` import stays consumed —
-            // macro_rules resolves type paths at the call site, same as
-            // the verbatim literal did before this muncher existed.
-            ParamDef {
-                name: $name,
-                label: $label,
-                ty: $ty,
-                default: $default,
-                range: $range,
-                enum_values: $enum_values,
-                kind: $crate::node_graph::parameters::ParamSemantic::$sem,
-            },
-        ] $( $($rest)* )?)
-    };
-
-    // One ParamDef literal, kind derived from `ty`, more follow.
-    (@accum [ $($acc:tt)* ]
-        ParamDef {
-            name: $name:expr,
-            label: $label:expr,
-            ty: $ty:expr,
-            default: $default:expr,
-            range: $range:expr,
-            enum_values: $enum_values:expr $(,)?
-        }
-        $(, $($rest:tt)* )?
-    ) => {
-        $crate::__primitive_params!(@accum [
-            $($acc)*
-            // Bare `ParamDef` — see the note in the override arm above.
-            ParamDef {
-                name: $name,
-                label: $label,
-                ty: $ty,
-                default: $default,
-                range: $range,
-                enum_values: $enum_values,
-                kind: $crate::node_graph::parameters::kind_for_param_type($ty),
-            },
-        ] $( $($rest)* )?)
-    };
-
-    // Public entry: start with an empty accumulator. Placed last so the
-    // `@accum` arms above are matched first — otherwise this catch-all
-    // `$($body:tt)*` would re-wrap an already-`@accum`-prefixed call and
-    // recurse forever.
-    ($($body:tt)*) => {
-        $crate::__primitive_params!(@accum [] $($body)*)
     };
 }
 
@@ -1135,73 +1038,6 @@ mod tests {
         assert_eq!(SmokeTestNoExtras::COMPOSITION_NOTES, "");
         assert!(SmokeTestNoExtras::EXAMPLES.is_empty());
         assert!(SmokeTestNoExtras::PARAMS.is_empty());
-    }
-
-    // Exercises the `kind` auto-population the muncher injects: a plain
-    // Float lands `Plain`, an `Angle` ty derives `Angle`, a `Frequency`
-    // ty derives `Frequency`, and a trailing `semantic:` field overrides
-    // the ty-derived value.
-    crate::primitive! {
-        name: SmokeTestKindDerivation,
-        type_id: "node.__smoke_test_kind",
-        purpose: "Validates that primitive! auto-populates ParamDef.kind from ty (with semantic override).",
-        inputs: {},
-        outputs: { out: Texture2D },
-        params: [
-            ParamDef {
-                name: "plain",
-                label: "Plain",
-                ty: ParamType::Float,
-                default: ParamValue::Float(0.0),
-                range: Some((0.0, 1.0)),
-                enum_values: &[],
-            },
-            ParamDef {
-                name: "angle",
-                label: "Angle",
-                ty: ParamType::Angle,
-                default: ParamValue::Float(0.0),
-                range: Some((0.0, std::f32::consts::TAU)),
-                enum_values: &[],
-            },
-            ParamDef {
-                name: "freq",
-                label: "Freq",
-                ty: ParamType::Frequency,
-                default: ParamValue::Float(1.0),
-                range: None,
-                enum_values: &[],
-            },
-            ParamDef {
-                name: "scale",
-                label: "Scale",
-                ty: ParamType::Float,
-                default: ParamValue::Float(1.0),
-                range: Some((0.1, 10.0)),
-                enum_values: &[],
-                semantic: Scale,
-            },
-        ],
-    }
-
-    impl Primitive for SmokeTestKindDerivation {
-        fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
-    }
-
-    #[test]
-    fn macro_auto_populates_param_kind_from_ty_with_override() {
-        use crate::node_graph::parameters::ParamSemantic;
-
-        let p = SmokeTestKindDerivation::PARAMS;
-        assert_eq!(p[0].name, "plain");
-        assert_eq!(p[0].kind, ParamSemantic::Plain);
-        assert_eq!(p[1].name, "angle");
-        assert_eq!(p[1].kind, ParamSemantic::Angle);
-        assert_eq!(p[2].name, "freq");
-        assert_eq!(p[2].kind, ParamSemantic::Frequency);
-        // Trailing `semantic: Scale` overrides the ty-derived Plain.
-        assert_eq!(p[3].name, "scale");
-        assert_eq!(p[3].kind, ParamSemantic::Scale);
     }
 
     // Test fixture struct used to exercise the `Array(T)` macro syntax.

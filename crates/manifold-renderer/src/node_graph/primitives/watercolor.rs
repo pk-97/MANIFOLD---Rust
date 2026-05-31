@@ -226,7 +226,6 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "displace",
@@ -235,7 +234,6 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.001),
         range: Some((0.0001, 0.01)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "blur",
@@ -244,7 +242,6 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(2.0),
         range: Some((0.5, 8.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "decay",
@@ -253,7 +250,6 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.99),
         range: Some((0.9, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "time",
@@ -262,7 +258,6 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         default: ParamValue::Float(0.0),
         range: Some((0.0, 1e9)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

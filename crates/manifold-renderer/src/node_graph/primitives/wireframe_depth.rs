@@ -68,7 +68,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(1.0),
         range: Some((0.0, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "density",
@@ -77,7 +76,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(260.0),
         range: Some((16.0, 280.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "width",
@@ -86,7 +84,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(1.5),
         range: Some((0.4, 3.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "z_scale",
@@ -95,7 +92,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(1.35),
         range: Some((0.0, 2.5)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "smooth",
@@ -104,7 +100,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(0.90),
         range: Some((0.0, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "subject",
@@ -113,7 +108,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "blend",
@@ -122,7 +116,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Enum(6),
         range: Some((0.0, 6.0)),
         enum_values: WIREFRAME_DEPTH_BLEND_MODES,
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "wire_res",
@@ -131,7 +124,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(1.0),
         range: Some((0.5, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "mesh_rate",
@@ -140,7 +132,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Enum(0),
         range: Some((1.0, 4.0)),
         enum_values: WIREFRAME_DEPTH_MESH_RATES,
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "flow",
@@ -149,7 +140,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Enum(1),
         range: Some((0.0, 1.0)),
         enum_values: WIREFRAME_DEPTH_ONOFF,
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "lock",
@@ -158,7 +148,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Enum(1),
         range: Some((0.0, 1.0)),
         enum_values: WIREFRAME_DEPTH_ONOFF,
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
     ParamDef {
         name: "edge_follow",
@@ -167,7 +156,6 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
         default: ParamValue::Float(0.5),
         range: Some((0.0, 1.0)),
         enum_values: &[],
-        kind: crate::node_graph::parameters::ParamSemantic::Plain,
     },
 ];
 

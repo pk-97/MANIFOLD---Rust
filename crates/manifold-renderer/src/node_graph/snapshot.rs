@@ -667,7 +667,6 @@ mod tests {
                         default: ParamValue::Float(0.0),
                         range: Some((-1.0, 1.0)),
                         enum_values: &[],
-                        kind: crate::node_graph::parameters::ParamSemantic::Plain,
                     },
                     ParamDef {
                         name: "mode",
@@ -676,7 +675,6 @@ mod tests {
                         default: ParamValue::Enum(0),
                         range: None,
                         enum_values: &["A", "B", "C"],
-                        kind: crate::node_graph::parameters::ParamSemantic::Plain,
                     },
                 ],
             }),

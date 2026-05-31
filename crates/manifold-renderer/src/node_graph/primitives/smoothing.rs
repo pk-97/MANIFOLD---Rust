@@ -69,7 +69,6 @@ const SMOOTHING_PARAMS: [ParamDef; 1] = [ParamDef {
     default: ParamValue::Float(0.1),
     range: Some((0.001, 2.0)),
     enum_values: &[],
-    kind: crate::node_graph::parameters::ParamSemantic::Plain,
 }];
 
 #[derive(Debug)]
