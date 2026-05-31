@@ -6,7 +6,7 @@
 // total_weight, written to R; GBA = (0, 0, 1).
 //
 // Classic flow-visualisation technique. Two common source choices:
-//   - Hash noise (`node.hash_noise_field_2d`) → streamline patterns
+//   - Hash noise (`node.noise` Random) → streamline patterns
 //     (the oily-fluid Lines mode).
 //   - A scalar derived from the velocity / state itself → flow-aligned
 //     intensity (the oily-fluid Flow Field mode samples

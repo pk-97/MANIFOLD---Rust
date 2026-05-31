@@ -2,7 +2,7 @@
 //! (multi-octave 3D simplex) at each UV in an `Array<vec2<f32>>`,
 //! emit `Array<f32>`.
 //!
-//! Per-instance counterpart to `node.fbm_2d` — which samples
+//! Per-instance counterpart to `node.noise` — which samples
 //! per-pixel into a Texture2D. This primitive samples per buffer
 //! slot into an Array<f32>, the right shape for driving per-instance
 //! state in mesh-instancing pipelines (petal displacement on a
@@ -38,7 +38,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 crate::primitive! {
     name: FbmPerInstance,
     type_id: "node.fbm_per_instance",
-    purpose: "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.fbm_2d. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
+    purpose: "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
     inputs: {
         uv: Array([f32; 2]) required,
         scale: ScalarF32 optional,

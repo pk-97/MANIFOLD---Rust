@@ -4944,7 +4944,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.fbm_2d. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
+      "purpose": "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with.",
@@ -12765,7 +12765,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Pure generator. 3D Perlin-style simplex noise sampled at `(uv * scale + offset, z)`. Outputs the SIGNED noise value in approximately [-1, +1] to the R channel (GBA = 0, 0, 1). The Z axis is what makes a static node produce an evolving field — animate `z` for turbulent shimmer in place; pan `offset_x` / `offset_y` for directional flow through a frozen field. Use this when noise drives downstream math (displacement, color injection, fluid-sim seeding); use `node.simplex_noise_2d` when you want a [0, 1] visual texture.",
+      "purpose": "Pure generator. 3D Perlin-style simplex noise sampled at `(uv * scale + offset, z)`. Outputs the SIGNED noise value in approximately [-1, +1] to the R channel (GBA = 0, 0, 1). The Z axis is what makes a static node produce an evolving field — animate `z` for turbulent shimmer in place; pan `offset_x` / `offset_y` for directional flow through a frozen field. Use this when noise drives downstream math (displacement, color injection, fluid-sim seeding); use `node.noise` when you want a [0, 1] visual texture.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Signed simplex noise output as a field, used to drive flows and displacements rather than shown directly.",
@@ -13172,7 +13172,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.simplex_noise_2d (which samples per-pixel into a Texture2D). For each idx: out[idx] = simplex3d(vec3(uv[idx] * scale + offset, z)). All four shaping inputs (scale / z / offset_x / offset_y) are port-shadow-param so a time wire can drive `z` (animated noise field) or an LFO can pan `offset_*` (scrolling noise) without dragging extra Value nodes in.",
+      "purpose": "Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise (which samples per-pixel into a Texture2D). For each idx: out[idx] = simplex3d(vec3(uv[idx] * scale + offset, z)). All four shaping inputs (scale / z / offset_x / offset_y) are port-shadow-param so a time wire can drive `z` (animated noise field) or an LFO can pan `offset_*` (scrolling noise) without dragging extra Value nodes in.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field.",

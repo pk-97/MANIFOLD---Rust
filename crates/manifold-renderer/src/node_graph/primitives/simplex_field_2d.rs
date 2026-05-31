@@ -3,7 +3,7 @@
 //!
 //! Output is the raw signed noise value (approximately [-1, +1])
 //! written to the R channel; GBA = (0, 0, 1). Distinct from
-//! `node.simplex_noise_2d` which is 2D and remaps to [0, 1] for
+//! `node.noise` which is 2D and remaps to [0, 1] for
 //! visual use.
 //!
 //! Use this when noise drives downstream math — fluid-sim seed
@@ -39,7 +39,7 @@ struct SimplexFieldUniforms {
 crate::primitive! {
     name: SimplexField2D,
     type_id: "node.simplex_field_2d",
-    purpose: "Pure generator. 3D Perlin-style simplex noise sampled at `(uv * scale + offset, z)`. Outputs the SIGNED noise value in approximately [-1, +1] to the R channel (GBA = 0, 0, 1). The Z axis is what makes a static node produce an evolving field — animate `z` for turbulent shimmer in place; pan `offset_x` / `offset_y` for directional flow through a frozen field. Use this when noise drives downstream math (displacement, color injection, fluid-sim seeding); use `node.simplex_noise_2d` when you want a [0, 1] visual texture.",
+    purpose: "Pure generator. 3D Perlin-style simplex noise sampled at `(uv * scale + offset, z)`. Outputs the SIGNED noise value in approximately [-1, +1] to the R channel (GBA = 0, 0, 1). The Z axis is what makes a static node produce an evolving field — animate `z` for turbulent shimmer in place; pan `offset_x` / `offset_y` for directional flow through a frozen field. Use this when noise drives downstream math (displacement, color injection, fluid-sim seeding); use `node.noise` when you want a [0, 1] visual texture.",
     inputs: {
         scale_x: ScalarF32 optional,
         scale_y: ScalarF32 optional,

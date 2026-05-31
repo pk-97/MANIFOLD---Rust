@@ -1,7 +1,7 @@
 //! `node.simplex_per_instance` — sample 3D simplex noise at each
 //! UV position in an `Array<vec2<f32>>`, emit `Array<f32>`.
 //!
-//! Per-instance counterpart to `node.simplex_noise_2d` — which
+//! Per-instance counterpart to `node.noise` — which
 //! samples noise per-pixel into a Texture2D. This primitive samples
 //! per buffer slot into an Array<f32>, the right shape for driving
 //! per-instance state in mesh-instancing pipelines (per-particle
@@ -40,7 +40,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 crate::primitive! {
     name: SimplexPerInstance,
     type_id: "node.simplex_per_instance",
-    purpose: "Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.simplex_noise_2d (which samples per-pixel into a Texture2D). For each idx: out[idx] = simplex3d(vec3(uv[idx] * scale + offset, z)). All four shaping inputs (scale / z / offset_x / offset_y) are port-shadow-param so a time wire can drive `z` (animated noise field) or an LFO can pan `offset_*` (scrolling noise) without dragging extra Value nodes in.",
+    purpose: "Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise (which samples per-pixel into a Texture2D). For each idx: out[idx] = simplex3d(vec3(uv[idx] * scale + offset, z)). All four shaping inputs (scale / z / offset_x / offset_y) are port-shadow-param so a time wire can drive `z` (animated noise field) or an LFO can pan `offset_*` (scrolling noise) without dragging extra Value nodes in.",
     inputs: {
         uv: Array([f32; 2]) required,
         scale: ScalarF32 optional,
@@ -85,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the input `uv` array (one noise sample per UV). `scale` is the same notion of frequency as in node.simplex_noise_2d: ~1 = one cell across the UV range, ~32 = fine grain. Drive `z` from a time wire to animate the noise; drive `offset_*` from an LFO to pan. Bit-exact with `simplex3d(...)` from noise_common.wgsl — same source file is prepended at pipeline creation.",
+    composition_notes: "Output capacity follows the input `uv` array (one noise sample per UV). `scale` is the same notion of frequency as in node.noise: ~1 = one cell across the UV range, ~32 = fine grain. Drive `z` from a time wire to animate the noise; drive `offset_*` from an LFO to pan. Bit-exact with `simplex3d(...)` from noise_common.wgsl — same source file is prepended at pipeline creation.",
     examples: [],
     picker: { label: "Simplex Noise (per copy)", category: Atom },
     summary: "Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field.",

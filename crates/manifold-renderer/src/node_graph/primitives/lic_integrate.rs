@@ -3,7 +3,7 @@
 //! `source.r` along the path. Classic flow visualisation atom.
 //!
 //! Two common source choices:
-//!   - Hash noise (`node.hash_noise_field_2d`) → streamline patterns.
+//!   - Hash noise (`node.noise` Random) → streamline patterns.
 //!   - Derived scalar (e.g. `length(velocity)` via `node.length_vec2`)
 //!     → flow-aligned intensity.
 

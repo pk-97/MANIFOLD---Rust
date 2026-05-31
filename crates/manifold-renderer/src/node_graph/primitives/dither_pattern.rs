@@ -10,7 +10,7 @@
 //! (which consumes a pattern) for the full effect, or feed the threshold field
 //! into any halftone / posterize / mask consumer. Because the pattern is now an
 //! atom, the quantizer can be driven by ANY threshold texture — blue noise from
-//! `node.hash_noise_field_2d`, a custom ramp, a voronoi field, etc.
+//! `node.noise`, a custom ramp, a voronoi field, etc.
 
 use manifold_gpu::GpuBinding;
 

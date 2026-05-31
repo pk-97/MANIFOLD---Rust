@@ -2,10 +2,10 @@
 // `(uv * scale + offset, z)`. Output is the raw signed noise value in
 // approximately [-1, +1], written to the R channel; GBA = (0, 0, 1).
 //
-// Distinct from `node.simplex_noise_2d`:
+// Distinct from `node.noise` (Simplex):
 //   - This is 3D: the `z` axis lets a single static node sample an
 //     evolving noise field (animate `z` over time = turbulent shimmer
-//     in place, vs `simplex_noise_2d`'s offset_x/y which pans through
+//     in place, vs `node.noise`'s offset_x/y which pans through
 //     a static field).
 //   - Output is SIGNED — caller scales/biases with downstream gain /
 //     scale_offset_texture as needed. `simplex_noise_2d` is remapped to
