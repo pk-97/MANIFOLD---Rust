@@ -55,7 +55,11 @@ crate::primitive! {
     ],
     composition_notes: "PROJ_SCALE = 0.25 matches the legacy WireframeZoo / Tesseract default. The 4D → 3D collapse uses proj_dist as the W-axis camera distance; small values produce strong 4D distortion. Active count = input vertex buffer's capacity; output must be sized at least as large.",
     examples: [],
-    picker: { label: "Project 4D", category: Atom },
+    picker: { label: "Flatten 4D → 3D", category: Atom },
+    summary: "Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["project 4d", "flatten", "4d to 3d"],
 }
 
 impl Primitive for Project4D {

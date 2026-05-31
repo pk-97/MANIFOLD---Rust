@@ -56,7 +56,11 @@ crate::primitive! {
     ],
     composition_notes: "max_capacity is the chain-build pre-allocation ceiling — defaults to 36 (exactly one cube). Larger values pad the buffer with zero-vertex entries; useful only if downstream consumers expect a multi-mesh buffer. size scales the [-0.5, 0.5] unit cube. For non-cube wireframe shapes use node.polytope_vertices + node.polytope_edges.",
     examples: [],
-    picker: { label: "Generate Cube Mesh", category: Atom },
+    picker: { label: "Cube Mesh", category: Atom },
+    summary: "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["cube mesh", "box", "cube", "Box SOP"],
 }
 
 impl Primitive for GenerateCubeMesh {

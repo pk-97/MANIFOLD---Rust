@@ -87,7 +87,11 @@ crate::primitive! {
     ],
     composition_notes: "Output capacity is fixed at PLATONIC_MAX_VERTS (20 — the dodecahedron count); slots past the active shape's vertex count are zero-padded so a downstream rotate/project chain never reads garbage. Indices written are stable per shape and match the paired `node.polytope_edges` topology — wire the same `shape` scalar to both atoms so vertices and edges agree.",
     examples: [],
-    picker: { label: "Polytope Vertices", category: Atom },
+    picker: { label: "Platonic Solid Points", category: Atom },
+    summary: "Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["platonic solid", "polytope", "vertices", "points"],
 }
 
 impl Primitive for PolytopeVertices {

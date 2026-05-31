@@ -71,6 +71,10 @@ crate::primitive! {
     composition_notes: "Active count = input buffer's vertex count (full pass-through; capacity-bound only). Output normals are rotated alongside positions so downstream rendering / lighting stays correct. For 4D rotation (Tesseract / Duocylinder) use node.rotate_4d.",
     examples: [],
     picker: { label: "Rotate 3D", category: Atom },
+    summary: "Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["rotate 3d", "spin", "tumble", "euler"],
 }
 
 impl Primitive for Rotate3D {

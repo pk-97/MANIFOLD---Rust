@@ -1762,8 +1762,13 @@
       "type_id": "node.brightness"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "orbit camera",
+        "camera",
+        "viewpoint",
+        "Camera COMP"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -1899,9 +1904,9 @@
         }
       ],
       "purpose": "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y) — matches the inline orbit formula every legacy 3D renderer used. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "driver",
-      "summary": "",
+      "summary": "A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering.",
       "type_id": "node.camera_orbit"
     },
     {
@@ -3804,8 +3809,13 @@
       "type_id": "node.digital_plants_render"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "displace mesh",
+        "push mesh",
+        "height",
+        "terrain"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -3819,7 +3829,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Displace Mesh",
+      "label": "Push Mesh",
       "outputs": [
         {
           "name": "out",
@@ -3869,9 +3879,9 @@
         }
       ],
       "purpose": "Perturb the Y component of an Array<MeshVertex> positions grid by sampling a height Texture2D at each vertex's UV. cols/rows describe the source grid topology; UV = (col / (cols-1), row / (rows-1)). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement.",
       "type_id": "node.displace_mesh"
     },
     {
@@ -5616,11 +5626,16 @@
       "type_id": "node.gaussian_blur_variable_width"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "cube mesh",
+        "box",
+        "cube",
+        "Box SOP"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [],
-      "label": "Generate Cube Mesh",
+      "label": "Cube Mesh",
       "outputs": [
         {
           "name": "vertices",
@@ -5650,14 +5665,19 @@
         }
       ],
       "purpose": "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.generate_instance_transforms + node.render_instanced_3d_mesh to draw a field of cubes.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
       "type_id": "node.generate_cube_mesh"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "grid mesh",
+        "plane",
+        "terrain",
+        "Grid SOP"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -5671,7 +5691,7 @@
           "type": "f32"
         }
       ],
-      "label": "Generate Grid Mesh",
+      "label": "Grid Mesh",
       "outputs": [
         {
           "name": "vertices",
@@ -5731,9 +5751,9 @@
         }
       ],
       "purpose": "Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. Pair with a displacement primitive that perturbs Y from a Texture2D, then route to node.render_3d_mesh. The unlock for MetallicGlass-shaped graphs where the displacement source is wire-controlled.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh.",
       "type_id": "node.generate_grid_mesh"
     },
     {
@@ -5802,11 +5822,16 @@
       "type_id": "node.generate_grid_uv"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "arrange copies",
+        "instance layout",
+        "scatter",
+        "place"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [],
-      "label": "Generate Instance Transforms",
+      "label": "Arrange Copies",
       "outputs": [
         {
           "name": "instances",
@@ -5928,9 +5953,9 @@
         }
       ],
       "purpose": "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_instanced_3d_mesh to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
       "type_id": "node.generate_instance_transforms"
     },
     {
@@ -6011,11 +6036,16 @@
       "type_id": "node.generate_range"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "tesseract",
+        "hypercube",
+        "4d cube",
+        "polytope"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [],
-      "label": "Generate Tesseract Vertices",
+      "label": "Tesseract Points (4D)",
       "outputs": [
         {
           "name": "vertices",
@@ -6028,9 +6058,9 @@
       ],
       "params": [],
       "purpose": "Emit the 16 corner vertices of a 4D hypercube (tesseract) scaled to magnitude 0.25 plus its 32-edge wireframe topology as paired Array<Vec4Vertex> + Array<EdgePair>. Feed both into node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired) to reproduce the legacy Tesseract generator's pipeline. The 4D counterpart of node.polytope_vertices + node.polytope_edges.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds the points and edges of a tesseract, a 4D cube, ready to rotate in 4D and flatten down to something you can draw.",
       "type_id": "node.generate_tesseract_vertices"
     },
     {
@@ -9428,8 +9458,13 @@
       "type_id": "node.polar_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "platonic solid",
+        "polytope",
+        "edges",
+        "wireframe"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -9438,7 +9473,7 @@
           "type": "f32"
         }
       ],
-      "label": "Polytope Edges",
+      "label": "Platonic Solid Edges",
       "outputs": [
         {
           "name": "edges",
@@ -9461,14 +9496,19 @@
         }
       ],
       "purpose": "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.render_lines (vertices → points, edges → edges) for a 3D wireframe.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe.",
       "type_id": "node.polytope_edges"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "platonic solid",
+        "polytope",
+        "vertices",
+        "points"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -9477,7 +9517,7 @@
           "type": "f32"
         }
       ],
-      "label": "Polytope Vertices",
+      "label": "Platonic Solid Points",
       "outputs": [
         {
           "name": "vertices",
@@ -9500,9 +9540,9 @@
         }
       ],
       "purpose": "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.render_lines for a 3D wireframe.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry.",
       "type_id": "node.polytope_vertices"
     },
     {
@@ -9599,8 +9639,13 @@
       "type_id": "node.power_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "project 3d",
+        "flatten",
+        "perspective",
+        "camera projection"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -9619,7 +9664,7 @@
           "type": "f32"
         }
       ],
-      "label": "Project 3D",
+      "label": "Flatten 3D → 2D",
       "outputs": [
         {
           "name": "out",
@@ -9659,14 +9704,18 @@
         }
       ],
       "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.render_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",
       "type_id": "node.project_3d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "project 4d",
+        "flatten",
+        "4d to 3d"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -9675,7 +9724,7 @@
           "type": "Array"
         }
       ],
-      "label": "Project 4D",
+      "label": "Flatten 4D → 3D",
       "outputs": [
         {
           "name": "out",
@@ -9705,9 +9754,9 @@
         }
       ],
       "purpose": "Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_dist / (proj_dist + p3z)). Bit-exact port of generator_math::project_4d. The 4D-equivalent of node.project_3d for Tesseract / Duocylinder decomposition.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape.",
       "type_id": "node.project_4d"
     },
     {
@@ -10077,8 +10126,13 @@
       "type_id": "node.remap"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "render mesh",
+        "draw 3d",
+        "rasterize",
+        "Render TOP"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -10117,7 +10171,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Render 3D Mesh",
+      "label": "Render Mesh",
       "outputs": [
         {
           "name": "color",
@@ -10134,9 +10188,9 @@
       ],
       "params": [],
       "purpose": "Bundled 3D mesh renderer (TouchDesigner / Blender shape). Reads an Array<MeshVertex> as a triangle list, takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), and emits a shaded `color` Texture2D plus optional G-buffer outputs (`world_pos`, `world_normal`). The material's MaterialKind picks the fragment shader — Unlit / Phong / PBR / Cel. Per-kind requirements: Unlit needs no light. Phong / Cel need `light`. PBR needs `light` AND `envmap`. Surface textures sample at each fragment's mesh UV (the per-vertex `uv` channel interpolated through the rasterizer), so the texture sticks to the geometry as the camera moves — the industry-standard mesh-UV pattern. normal_map is interpreted as a world-space signed normal; roughness_map's red channel replaces the material's scalar roughness when wired.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image.",
       "type_id": "node.render_3d_mesh"
     },
     {
@@ -10202,8 +10256,13 @@
       "type_id": "node.render_filled_rects"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "render copies",
+        "instancing",
+        "instances",
+        "Geometry COMP"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -10247,7 +10306,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Render Instanced 3D Mesh",
+      "label": "Render Copies",
       "outputs": [
         {
           "name": "color",
@@ -10267,9 +10326,9 @@
         }
       ],
       "purpose": "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects.",
       "type_id": "node.render_instanced_3d_mesh"
     },
     {
@@ -10853,8 +10912,13 @@
       "type_id": "node.rotate_2d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rotate 3d",
+        "spin",
+        "tumble",
+        "euler"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -10918,14 +10982,18 @@
         }
       ],
       "purpose": "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in WireframeZoo-shaped graphs: polytope_vertices → Rotate3D → (project) → render.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning.",
       "type_id": "node.rotate_3d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rotate 4d",
+        "4d spin",
+        "hyperrotation"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -10989,9 +11057,9 @@
         }
       ],
       "purpose": "Apply 4D rotation (XY, ZW, XW planes) to an Array<Vec4Vertex>. Matches generator_math::rotate_4d bit-for-bit. The transform stage of the 4D wireframe pipeline: producer → Rotate4D → renderer.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out.",
       "type_id": "node.rotate_4d"
     },
     {
@@ -13120,8 +13188,13 @@
       "type_id": "node.track_persist"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "triangulate",
+        "make triangles",
+        "mesh",
+        "surface"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -13130,7 +13203,7 @@
           "type": "Array"
         }
       ],
-      "label": "Triangulate Grid",
+      "label": "Make Triangles",
       "outputs": [
         {
           "name": "out",
@@ -13160,9 +13233,9 @@
         }
       ],
       "purpose": "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.generate_grid_mesh (positions) and node.render_3d_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render.",
       "type_id": "node.triangulate_grid"
     },
     {

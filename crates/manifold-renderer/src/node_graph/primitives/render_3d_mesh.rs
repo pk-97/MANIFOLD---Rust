@@ -81,7 +81,11 @@ crate::primitive! {
     params: [],
     composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model. Pair with `node.camera_orbit` for `camera`, `node.light` for `light`, and (PBR only) `node.bake_equirect_envmap` for `envmap`. The G-buffer outputs (`world_pos`, `world_normal`) stay available for downstream deferred-shading-style work; they don't depend on material and won't compile their pipelines unless wired downstream. The `color` output is the primary path. Output formats are Rgba16Float.",
     examples: [],
-    picker: { label: "Render 3D Mesh", category: Atom },
+    picker: { label: "Render Mesh", category: Atom },
+    summary: "Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["render mesh", "draw 3d", "rasterize", "Render TOP"],
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         world_pos_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,

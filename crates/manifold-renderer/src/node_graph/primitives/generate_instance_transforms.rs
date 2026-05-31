@@ -134,7 +134,11 @@ crate::primitive! {
     ],
     composition_notes: "max_capacity is chain-build allocation ceiling — pre-allocates max_capacity × 32 bytes. active_count is a free slider. Rotation params apply to every instance uniformly — for per-instance varying rotation, write a downstream transform primitive that perturbs `rot_pad`.",
     examples: [],
-    picker: { label: "Generate Instance Transforms", category: Atom },
+    picker: { label: "Arrange Copies", category: Atom },
+    summary: "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["arrange copies", "instance layout", "scatter", "place"],
 }
 
 impl Primitive for GenerateInstanceTransforms {

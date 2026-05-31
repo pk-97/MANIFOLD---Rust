@@ -81,7 +81,11 @@ crate::primitive! {
     ],
     composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). instance_count is clamped to the wired instance buffer's capacity. The instance Array dictates how many copies are drawn. Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model; pair with `node.light` (required for Phong/PBR/Cel) and `node.bake_equirect_envmap` (required for PBR).",
     examples: [],
-    picker: { label: "Render Instanced 3D Mesh", category: Atom },
+    picker: { label: "Render Copies", category: Atom },
+    summary: "Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["render copies", "instancing", "instances", "Geometry COMP"],
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,

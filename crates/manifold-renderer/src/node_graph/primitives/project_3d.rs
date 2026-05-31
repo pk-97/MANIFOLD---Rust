@@ -78,7 +78,11 @@ crate::primitive! {
     ],
     composition_notes: "Orthographic mode matches WireframeZoo's bit-exact behaviour (PROJ_SCALE = 0.25 by default; scales xy directly, ignores z). Perspective mode applies s = proj_dist / (proj_dist + z) scaling — useful when the upstream geometry has meaningful depth variation. Active count = input buffer's vertex count; output buffer should be at least the same size.",
     examples: [],
-    picker: { label: "Project 3D", category: Atom },
+    picker: { label: "Flatten 3D → 2D", category: Atom },
+    summary: "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["project 3d", "flatten", "perspective", "camera projection"],
 }
 
 impl Primitive for Project3D {

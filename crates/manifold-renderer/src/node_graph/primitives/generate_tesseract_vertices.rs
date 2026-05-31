@@ -56,7 +56,11 @@ crate::primitive! {
     params: [],
     composition_notes: "Vertex coordinates are (sign(i&1), sign(i&2), sign(i&4), sign(i&8)) * 0.125 — the 0.125 = 0.25 / 2 scaling normalises the corner magnitude (sqrt(4) = 2) to 0.25, matching the legacy PROJ_SCALE screen-fit factor. Edges connect (i, i^bit) for bit ∈ {1, 2, 4, 8} where j > i — 32 edges total, the canonical hypercube wireframe. Both outputs are pre-sized to fit exactly: vertices=16, edges=32. The 4D-shape vertex-set primitive — pipe through rotate_4d / project_4d / render_lines (with proj_scale defaulted to 1.0) to render.",
     examples: [],
-    picker: { label: "Generate Tesseract Vertices", category: Atom },
+    picker: { label: "Tesseract Points (4D)", category: Atom },
+    summary: "Builds the points and edges of a tesseract, a 4D cube, ready to rotate in 4D and flatten down to something you can draw.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["tesseract", "hypercube", "4d cube", "polytope"],
 }
 
 /// Compute the canonical hypercube wireframe topology — 32 edges connecting

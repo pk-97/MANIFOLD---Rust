@@ -88,7 +88,11 @@ crate::primitive! {
     ],
     composition_notes: "max_capacity ≥ resolution_x × resolution_y. The chain build pre-allocates max_capacity × 32 bytes and triggers a rebuild when changed; resolution sliders only write uniforms. Default 256×256 = 65k vertices ≈ 2 MB. size_x / size_y are port-shadows-param: aspect-correct the mesh by wiring `system.generator_input.aspect → math.multiply(b=2.0) → size_x` (matches the legacy MetallicGlass mesh that spans [-aspect, +aspect] in X).",
     examples: [],
-    picker: { label: "Generate Grid Mesh", category: Atom },
+    picker: { label: "Grid Mesh", category: Atom },
+    summary: "Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["grid mesh", "plane", "terrain", "Grid SOP"],
 }
 
 impl Primitive for GenerateGridMesh {

@@ -80,7 +80,11 @@ crate::primitive! {
     ],
     composition_notes: "displaced_y = src.y + (height_sample.r - height_bias) * displacement. height_bias = 0.5 centers the displacement (matches MetallicGlass's behaviour where 0.5-luma maps to no displacement). displacement = 0.0 is pass-through. Bilinear texture sampling. Normals are passed through unchanged — the downstream TriangulateGrid recomputes them from displaced positions.",
     examples: [],
-    picker: { label: "Displace Mesh", category: Atom },
+    picker: { label: "Push Mesh", category: Atom },
+    summary: "Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["displace mesh", "push mesh", "height", "terrain"],
 }
 
 impl Primitive for DisplaceMesh {
