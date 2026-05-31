@@ -50,7 +50,11 @@ crate::primitive! {
     ],
     composition_notes: "Selector rounds to nearest int, clamps to [0, 8). Port-shadows-param: inline param drives the choice when the input wire is absent. The unwired-selected-slot case yields a zero-filled output. Same-frame caveat: if a selected input is GPU-written by an upstream compute primitive, the mux's CPU memcpy may miss the write without an explicit fence — for the first user (NestedCubes) both upstream sources are CPU-write so this isn't an issue, but a GPU-side copy variant is the right shape if a future consumer needs it.",
     examples: [],
-    picker: { label: "Mux (array)", category: Atom },
+    picker: { label: "Switch (array)", category: Atom },
+    summary: "Picks one of several incoming lists and passes it through, chosen by a selector number.",
+    category: Routing,
+    role: Filter,
+    aliases: ["switch", "mux", "selector"],
 }
 
 impl Primitive for MuxArray {

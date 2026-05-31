@@ -451,8 +451,12 @@
       "type_id": "node.apply_radial_burst_to_particles"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "connect nearest",
+        "nearest neighbour",
+        "constellation"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -496,9 +500,9 @@
         }
       ],
       "purpose": "For each item in a Channels[X, Y, WIDTH, HEIGHT] array, find its nearest neighbour within max_distance and emit an EdgePair (A_INDEX, B_INDEX). Sparse nearest-neighbour graph generation. Wire detection regions, particle positions, or any sparse-position array; output connects to render_lines edges port for connection-line visualisation.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs.",
       "type_id": "node.array_connect_nearest"
     },
     {
@@ -558,8 +562,12 @@
       "type_id": "node.array_diffuse_particles"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "array feedback",
+        "list feedback",
+        "frame delay"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -587,14 +595,18 @@
       ],
       "params": [],
       "purpose": "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle.",
       "type_id": "node.array_feedback"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "list math",
+        "array math",
+        "Math CHOP"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -628,7 +640,7 @@
           "type": "f32"
         }
       ],
-      "label": "Array Math",
+      "label": "List Math",
       "outputs": [
         {
           "name": "out",
@@ -704,9 +716,9 @@
         }
       ],
       "purpose": "Element-wise math over Array<f32>. One bundled primitive (op enum) covering the common shaping vocabulary: binary (Add/Subtract/Multiply/Divide/Min/Max/Mix read `a` + `b`); unary (ScaleOffset, ShapePowClip, MirrorRamp, Clamp01, Abs, Sin, Cos — read `a` only, ignore `b`). Op-specific scalars (scale / offset / exp / bias) are port-shadow-param so they can be modulated by control wires. Divide-by-near-zero clamps to 0 to keep NaN/Inf out of downstream consumers. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node.",
       "type_id": "node.array_math"
     },
     {
@@ -760,8 +772,12 @@
       "type_id": "node.array_replicate_polyline_rings"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "split xy",
+        "unpack",
+        "unzip"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -770,7 +786,7 @@
           "type": "Array"
         }
       ],
-      "label": "Array Unpack Vec2",
+      "label": "Split XY",
       "outputs": [
         {
           "name": "x",
@@ -783,9 +799,9 @@
       ],
       "params": [],
       "purpose": "Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). Composition glue so Array<f32> math primitives can operate on individual axes of a vec2 wire — UV coordinates, 2D positions, 2D velocities — without each scalar-math primitive needing a vec2-input variant.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them.",
       "type_id": "node.array_unpack_vec2"
     },
     {
@@ -3977,8 +3993,13 @@
       "type_id": "node.dither_pattern"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "downsample",
+        "downscale",
+        "shrink",
+        "Resolution TOP"
+      ],
+      "category": "Routing",
       "examples": [
         "preset.generator.oily_fluid"
       ],
@@ -4014,9 +4035,9 @@
         }
       ],
       "purpose": "Integer-factor (2x / 4x / 8x) box-filter downsample of a Texture2D. Output dims = input dims / factor; the executor allocates the downstream slot at the smaller size so subsequent passes (e.g. a gaussian blur) run at reduced bandwidth. Used as the front of multi-resolution pipelines — quarter-res velocity blur in oily fluid, bloom mip starts, CoC pyramids, etc.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look.",
       "type_id": "node.downsample"
     },
     {
@@ -7938,8 +7959,12 @@
       "type_id": "node.mix"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "switch",
+        "mux",
+        "selector"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [
         {
@@ -7988,7 +8013,7 @@
           "type": "Array"
         }
       ],
-      "label": "Mux (array)",
+      "label": "Switch (array)",
       "outputs": [
         {
           "name": "out",
@@ -8008,14 +8033,19 @@
         }
       ],
       "purpose": "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.mux_scalar / node.mux_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Picks one of several incoming lists and passes it through, chosen by a selector number.",
       "type_id": "node.mux_array"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "switch",
+        "mux",
+        "selector",
+        "Switch CHOP"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [
         {
@@ -8064,7 +8094,7 @@
           "type": "f32"
         }
       ],
-      "label": "Mux (scalar)",
+      "label": "Switch (value)",
       "outputs": [
         {
           "name": "out",
@@ -8132,14 +8162,19 @@
         }
       ],
       "purpose": "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Every input is port-shadows-param — wire dynamic sources into the ports, or set the inline `in_N` params for static option tables (curated frequency rates, side counts, gate constants). Useful for trigger-driven parameter switching.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live.",
       "type_id": "node.mux_scalar"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "switch",
+        "mux",
+        "selector",
+        "Switch TOP"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [
         {
@@ -8188,7 +8223,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Mux (texture)",
+      "label": "Switch (texture)",
       "outputs": [
         {
           "name": "out",
@@ -8217,10 +8252,10 @@
           "type": "int"
         }
       ],
-      "purpose": "Dynamic N-way Texture2D selector — `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes.",
-      "role": "Unknown",
+      "purpose": "Dynamic N-way Texture2D selector. `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in.",
       "type_id": "node.mux_texture"
     },
     {
@@ -8493,8 +8528,12 @@
       "type_id": "node.optical_flow_estimate"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "pack rgba",
+        "combine channels",
+        "merge channels"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -8568,9 +8607,9 @@
         }
       ],
       "purpose": "Pack four single-channel textures into one RGBA output by reading the R channel of each input into the matching output channel. Optional inputs default to the constant `default_a` (0.0 for r/g/b, 1.0 for a). Use when an atomic decomposition has computed each channel separately and downstream consumers expect packed data.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart.",
       "type_id": "node.pack_channels"
     },
     {
@@ -8620,8 +8659,12 @@
       "type_id": "node.pack_curve_xy"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "combine xyzw",
+        "pack vec4",
+        "zip"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -8645,7 +8688,7 @@
           "type": "Array"
         }
       ],
-      "label": "Pack Vec4",
+      "label": "Combine XYZW",
       "outputs": [
         {
           "name": "out",
@@ -8654,9 +8697,9 @@
       ],
       "params": [],
       "purpose": "Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. The 4D analogue of node.pack_curve_xy: zips axis-separated channels (built by generate_grid_uv → array_math chains) into the typed wire that node.rotate_4d / project_4d / render_lines consume. Pure structural transformation — no scale bake; per-shape magnitude normalisation is applied upstream via array_math(ScaleOffset) since the constant is shape-specific (0.125 for tesseract, 0.176776695 for duocylinder, …). Pair with generate_grid_uv + array_math(Cos|Sin) + edges_from_grid_uv to author any (u, v)-parametric 4D surface in pure JSON. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve.",
       "type_id": "node.pack_vec4"
     },
     {
@@ -10527,8 +10570,12 @@
       "type_id": "node.render_value_overlay"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "resolve scatter 3d",
+        "accumulator",
+        "volume read back"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -10537,7 +10584,7 @@
           "type": "Array"
         }
       ],
-      "label": "Resolve 3D Accumulator",
+      "label": "Resolve Scatter (3D)",
       "outputs": [
         {
           "name": "density",
@@ -10567,14 +10614,18 @@
         }
       ],
       "purpose": "Read a u32 fixed-point 3D accumulator buffer (produced by node.scatter_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample.",
       "type_id": "node.resolve_3d_accumulator"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "resolve scatter",
+        "accumulator",
+        "read back"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -10583,7 +10634,7 @@
           "type": "Array"
         }
       ],
-      "label": "Resolve Accumulator",
+      "label": "Resolve Scatter",
       "outputs": [
         {
           "name": "density",
@@ -10603,9 +10654,9 @@
         }
       ],
       "purpose": "Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat.",
       "type_id": "node.resolve_accumulator"
     },
     {
@@ -11107,8 +11158,12 @@
       "type_id": "node.saturation"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "sum into bins",
+        "accumulator",
+        "histogram"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -11122,7 +11177,7 @@
           "type": "f32"
         }
       ],
-      "label": "Scalar Array Accumulator",
+      "label": "Sum Into Bins",
       "outputs": [
         {
           "name": "accumulated",
@@ -11158,9 +11213,9 @@
         }
       ],
       "purpose": "Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. Generic envelope-mode driver — pair with a trigger_count source to advance N parallel scalars synchronously. NestedCubes envelope mode is the first user.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time.",
       "type_id": "node.scalar_array_accumulator"
     },
     {
@@ -13732,8 +13787,13 @@
       "type_id": "node.wet_dry"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "wgsl",
+        "compute",
+        "custom shader",
+        "GLSL TOP"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [
         {
@@ -13757,10 +13817,10 @@
           "type": "float"
         }
       ],
-      "purpose": "User-authored WGSL compute escape hatch — the shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived from the source via naga introspection. Backs effect families too varied to enumerate as fixed primitives.",
-      "role": "Unknown",
+      "purpose": "User-authored WGSL compute escape hatch. The shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived from the source via naga introspection. Backs effect families too varied to enumerate as fixed primitives.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A blank compute node you write your own WGSL shader into. The escape hatch for effects the built-in nodes don't cover, where the shader defines its own inputs and outputs.",
       "type_id": "node.wgsl_compute"
     },
     {

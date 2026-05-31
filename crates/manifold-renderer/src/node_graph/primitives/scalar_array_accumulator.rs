@@ -61,7 +61,11 @@ crate::primitive! {
     ],
     composition_notes: "Trigger detection mirrors legacy NestedCubes: a fresh `trigger_count > last_seen` event adds `increment` to every accumulator element. `increment` is port-shadows-param so it can be modulated. Output capacity comes from the `capacity` param at chain-build time. `initial` is an optional 1×N (or larger) Table param; the first frame copies its row 0 into the accumulator so the starting pose isn't forced to zeros. Accumulator state is fresh on rebuild (per the graph-editor-is-authoring-not-perform rule); same trigger_count across rebuild won't double-add.",
     examples: [],
-    picker: { label: "Scalar Array Accumulator", category: Driver },
+    picker: { label: "Sum Into Bins", category: Driver },
+    summary: "Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time.",
+    category: MathAndConvert,
+    role: Control,
+    aliases: ["sum into bins", "accumulator", "histogram"],
     extra_fields: {
         accumulator: Vec<f32> = Vec::new(),
         last_trigger_count: Option<u32> = None,

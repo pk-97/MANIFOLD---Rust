@@ -49,10 +49,10 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.apply_radial_burst_3d_to_particles` | Apply Radial Burst 3D (Particles) | — | — | Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. |
 | `node.apply_radial_burst_to_particles` | Apply Radial Burst (Particles) | — | — | Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV an… |
 | `node.array_diffuse_particles` | Diffuse Particles | — | — | Apply a per-particle hash-based random kick to `Particle.velocity`. |
-| `node.array_feedback` | Array Feedback | — | — | One-frame delay for Array<Particle>: this frame's input becomes next frame's output. |
-| `node.array_math` | Array Math | — | — | Element-wise math over Array<f32>. |
+| `node.array_feedback` | Array Feedback | Math & Convert | Filter | Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle. |
+| `node.array_math` | List Math | Math & Convert | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
 | `node.array_replicate_polyline_rings` | Replicate Polyline Rings | — | — | Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. |
-| `node.array_unpack_vec2` | Array Unpack Vec2 | — | — | Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). |
+| `node.array_unpack_vec2` | Split XY | Math & Convert | Filter | Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them. |
 | `node.bake_equirect_envmap` | Bake Equirect Envmap | — | — | Procedurally bake an HDR studio environment map at the given resolution. |
 | `node.basic_shape` | Basic Shape | Generate | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
 | `node.blinn_specular` | Blinn Specular | — | — | Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. |
@@ -86,7 +86,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.distance_to_point` | Distance to Point | — | — | Pure generator. |
 | `node.dither` | Dither | Color & Tone | Filter | Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look. |
 | `node.dither_pattern` | Dither Pattern | Stylize | Source | Generates the threshold grid that the Dither node uses to decide where pixels flip, with a choice of Bayer, halftone, and other patterns. Feed its output into … |
-| `node.downsample` | Downsample | — | — | Integer-factor (2x / 4x / 8x) box-filter downsample of a Texture2D. |
+| `node.downsample` | Downsample | Routing | Filter | Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look. |
 | `node.edges_from_grid_uv` | Edges From Grid UV | — | — | Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. |
 | `node.ellipse_mask` | Circle Mask | Mask | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
 | `node.euler_step_particles` | Euler Step Particles | — | — | Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. |
@@ -132,16 +132,16 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.mirror_axis` | Flip | Distort & Warp | Filter | Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or di… |
 | `node.mirror_fold_uv` | Mirror | Distort & Warp | Map | Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap … |
 | `node.mix` | Mix | Composite | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
-| `node.mux_array` | Mux (array) | — | — | N-way Array<f32> selector. |
-| `node.mux_scalar` | Mux (scalar) | — | — | N-way scalar selector. |
-| `node.mux_texture` | Mux (texture) | — | — | Dynamic N-way Texture2D selector — `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. |
+| `node.mux_array` | Switch (array) | Routing | Filter | Picks one of several incoming lists and passes it through, chosen by a selector number. |
+| `node.mux_scalar` | Switch (value) | Routing | Filter | Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live. |
+| `node.mux_texture` | Switch (texture) | Routing | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
 | `node.neighbor_smooth` | Neighbor Smooth | — | — | 5-point cross-neighborhood smoothing of an Array<InstanceTransform> arranged as an NxN grid. |
 | `node.nested_cubes_geometry` | Nested Cubes Geometry | — | — | Render a 5-instance gap-face cube field with EMA-smoothed per-instance Y rotation, per-face scatter, and a per-face envelope-driven kick on each trigger. |
 | `node.normalize_vec2` | Normalize | Math & Convert | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | `node.optical_flow_estimate` | Optical Flow | — | — | Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. |
-| `node.pack_channels` | Pack RGBA | — | — | Pack four single-channel textures into one RGBA output by reading the R channel of each input into the matching output channel. |
+| `node.pack_channels` | Pack RGBA | Math & Convert | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | `node.pack_curve_xy` | Pack Curve XY | — | — | Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. |
-| `node.pack_vec4` | Pack Vec4 | — | — | Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. |
+| `node.pack_vec4` | Combine XYZW | Math & Convert | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
 | `node.pbr_material` | PBR Material | — | — | Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. |
 | `node.perlin_noise_2d` | Perlin Noise 2D | — | — | Pure generator. |
 | `node.person_segment` | Person Segment | — | — | Person / human segmentation via the native plugin's process_subject_mask API. |
@@ -164,8 +164,8 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.render_lines` | Draw Lines | Generate | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | `node.render_text` | Render Text | Generate | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
 | `node.render_value_overlay` | Value Overlay | Generate | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
-| `node.resolve_3d_accumulator` | Resolve 3D Accumulator | — | — | Read a u32 fixed-point 3D accumulator buffer (produced by node.scatter_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the resul… |
-| `node.resolve_accumulator` | Resolve Accumulator | — | — | Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density text… |
+| `node.resolve_3d_accumulator` | Resolve Scatter (3D) | Math & Convert | Filter | Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample. |
+| `node.resolve_accumulator` | Resolve Scatter | Math & Convert | Filter | Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat. |
 | `node.rotate_2d` | Rotate | — | — | Rotate a 2D coordinate field around the origin by `angle` (radians). |
 | `node.rotate_3d` | Rotate 3D | — | — | Apply XYZ Euler rotation to an Array<MeshVertex>. |
 | `node.rotate_4d` | Rotate 4D | — | — | Apply 4D rotation (XY, ZW, XW planes) to an Array<Vec4Vertex>. |
@@ -204,7 +204,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.vignette` | Vignette | Stylize | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | `node.voronoi_2d` | Voronoi 2D | Noise | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 | `node.wet_dry` | Wet/Dry | Composite | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
-| `node.wgsl_compute` | WGSL Compute | — | — | User-authored WGSL compute escape hatch — the shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived fro… |
+| `node.wgsl_compute` | WGSL Compute | Routing | Filter | A blank compute node you write your own WGSL shader into. The escape hatch for effects the built-in nodes don't cover, where the shader defines its own inputs … |
 | `node.wrap_particles_torus` | Wrap Particles (Torus) | — | — | Per-particle toroidal wrap: position.xy = fract(position.xy + 1). |
 
 ### Drivers (28)
@@ -212,7 +212,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | type_id | label | category | role | summary |
 |---|---|---|---|---|
 | `node.affine_scalar` | Affine Scalar | — | — | Scalar affine remap: out = a * scale + offset. |
-| `node.array_connect_nearest` | Connect Nearest | — | — | For each item in a Channels[X, Y, WIDTH, HEIGHT] array, find its nearest neighbour within max_distance and emit an EdgePair (A_INDEX, B_INDEX). |
+| `node.array_connect_nearest` | Connect Nearest | Math & Convert | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
 | `node.beat_gate` | BeatGate | — | — | Beat-synced square gate. |
 | `node.beat_ramp` | BeatRamp | — | — | Per-beat attack envelope: out = clamp(fract(beats·rate) / attack, 0, 1). |
 | `node.camera_orbit` | Orbit Camera | — | — | Orbit-style perspective camera source. |
@@ -232,7 +232,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.one_euro_filter` | One Euro Filter | — | — | Adaptive temporal low-pass (1€ filter) on a Channels array. |
 | `node.peak` | Peak | — | — | Peak (max) Rec. |
 | `node.sample_and_hold` | Sample & Hold | — | — | Capture an input scalar on each trigger-edge and hold it until the next edge — freezes the trigger-time value so mid-decay slider moves don't leak through. |
-| `node.scalar_array_accumulator` | Scalar Array Accumulator | — | — | Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. |
+| `node.scalar_array_accumulator` | Sum Into Bins | Math & Convert | Control | Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time. |
 | `node.smoothing` | Smoothing | — | — | Exponential one-pole smoothing on a scalar wire — response time ≈ `time_constant` seconds, frame-rate-independent. |
 | `node.texture_dimensions` | Texture Size | Math & Convert | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
 | `node.track_persist` | Track Persist | — | — | Greedy nearest-neighbour identity tracking with grace-period retention. |

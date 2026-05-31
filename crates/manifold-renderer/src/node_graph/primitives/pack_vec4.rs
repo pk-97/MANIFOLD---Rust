@@ -39,7 +39,11 @@ crate::primitive! {
     params: [],
     composition_notes: "Output capacity follows the `x` input (mirrors node.pack_curve_xy / node.array_math) so the pack auto-sizes to whatever the upstream channel length is. Processing truncates to min(x, y, z, w, out) so a shorter channel naturally clips the vertex count. No scale or projection constant is baked — the caller is responsible for any magnitude normalisation. For 4D wireframe surfaces using the existing rotate_4d / project_4d pipeline, multiply each channel by the legacy PROJ_SCALE-equivalent (0.176776695 for duocylinder, 0.125 for tesseract) via an array_math(ScaleOffset) node placed between the trig output and this pack — keeps the magnitude convention with the rest of the 4D family.",
     examples: [],
-    picker: { label: "Pack Vec4", category: Atom },
+    picker: { label: "Combine XYZW", category: Atom },
+    summary: "Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["combine xyzw", "pack vec4", "zip"],
 }
 
 impl Primitive for PackVec4 {

@@ -293,7 +293,7 @@ inventory::submit! {
         type_id: MUX_TEXTURE_TYPE_ID,
         create: || Box::new(MuxTexture::new()),
         picker: Some(crate::node_graph::palette::PickerInfo {
-            label: "Mux (texture)",
+            label: "Switch (texture)",
             category: crate::node_graph::palette::PaletteCategory::Atom,
         }),
     }

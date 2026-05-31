@@ -48,6 +48,10 @@ crate::primitive! {
     composition_notes: "Wire blob_detect_ffi or track_persist output → this primitive's `in` port. Output `edges` connects to render_lines' `edges` port; the same `in` source wires to render_lines' `points` port (via pack_curve_xy or a wgsl_compute that extracts X,Y). max_distance is in the same coordinate space as the input (normalised 0..1 for blob detections). Each item gets at most one edge to its nearest qualifying neighbour.",
     examples: [],
     picker: { label: "Connect Nearest", category: Driver },
+    summary: "For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs.",
+    category: MathAndConvert,
+    role: Control,
+    aliases: ["connect nearest", "nearest neighbour", "constellation"],
 }
 
 impl Primitive for ArrayConnectNearest {

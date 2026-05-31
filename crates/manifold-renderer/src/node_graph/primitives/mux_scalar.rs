@@ -47,7 +47,11 @@ crate::primitive! {
     ],
     composition_notes: "Selector value rounds to nearest int, clamps to [0, 8). Both `selector` and every `in_N` data input is port-shadows-param: wire dynamic sources when needed, otherwise set the static fallback inline on the param. This lets a 5-option curated mux ship as ONE node with five inline params rather than six nodes (mux + five `node.value` constants feeding it); the future node UI surfaces the inline values on the node body. No GPU dispatch. Mux-shaped 'input selection' is the documented §7 exception to the no-dead-state rule — the user's mental model of a mux accommodates non-selected inputs being inert.",
     examples: [],
-    picker: { label: "Mux (scalar)", category: Atom },
+    picker: { label: "Switch (value)", category: Atom },
+    summary: "Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live.",
+    category: Routing,
+    role: Filter,
+    aliases: ["switch", "mux", "selector", "Switch CHOP"],
 }
 
 const MUX_SCALAR_INPUT_PORT_NAMES: [&str; 8] = [

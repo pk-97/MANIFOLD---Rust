@@ -36,7 +36,11 @@ crate::primitive! {
     params: [],
     composition_notes: "Both outputs sized to the input capacity (chain build enforces). One dispatch per frame; per-element work is two scalar writes. Pair upstream with node.grid_uv_field (extract uv.y to drive a mirror_ramp on the height axis) or any other vec2-emitting producer.",
     examples: [],
-    picker: { label: "Array Unpack Vec2", category: Atom },
+    picker: { label: "Split XY", category: Atom },
+    summary: "Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["split xy", "unpack", "unzip"],
 }
 
 impl Primitive for ArrayUnpackVec2 {

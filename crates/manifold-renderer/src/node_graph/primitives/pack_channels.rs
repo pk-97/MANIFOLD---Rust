@@ -65,6 +65,10 @@ crate::primitive! {
     composition_notes: "Each input reads `.r` of the source — to pack a multi-channel input use `node.scale_offset_texture` or `node.field_combine` upstream to project the desired channel onto R. When an input port is unwired the corresponding output channel takes the `default_*` value. All wired inputs must share dimensions; output matches.",
     examples: [],
     picker: { label: "Pack RGBA", category: Atom },
+    summary: "Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["pack rgba", "combine channels", "merge channels"],
 }
 
 #[repr(C)]

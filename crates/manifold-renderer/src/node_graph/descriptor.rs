@@ -275,13 +275,21 @@ hand_descriptor!(
 // Routing (mux_texture.rs)
 hand_descriptor!(
     "node.mux_texture",
-    "Dynamic N-way Texture2D selector — `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes."
+    "Dynamic N-way Texture2D selector. `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes.",
+    summary: "Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in.",
+    category: Routing,
+    role: Filter,
+    aliases: ["switch", "mux", "selector", "Switch TOP"],
 );
 
 // WGSL escape hatch (wgsl_compute.rs)
 hand_descriptor!(
     "node.wgsl_compute",
-    "User-authored WGSL compute escape hatch — the shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived from the source via naga introspection. Backs effect families too varied to enumerate as fixed primitives."
+    "User-authored WGSL compute escape hatch. The shader is the contract: ports, uniform layout, workgroup size, binding map and output formats are all derived from the source via naga introspection. Backs effect families too varied to enumerate as fixed primitives.",
+    summary: "A blank compute node you write your own WGSL shader into. The escape hatch for effects the built-in nodes don't cover, where the shader defines its own inputs and outputs.",
+    category: Routing,
+    role: Filter,
+    aliases: ["wgsl", "compute", "custom shader", "GLSL TOP"],
 );
 
 // Control-rate scalar plumbing (driver primitives)

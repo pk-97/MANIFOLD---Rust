@@ -61,7 +61,11 @@ crate::primitive! {
     ],
     composition_notes: "vol_res × vol_res × vol_depth must match the producing ScatterParticles3D primitive. Output Texture3D must be Rgba16Float — the shader writes via texture_storage_3d<rgba16float, write>. The output volume is pre-bound by the chain build at the same dimensions; the accumulator buffer is sized vol_res² × vol_depth × 4 bytes.",
     examples: [],
-    picker: { label: "Resolve 3D Accumulator", category: Atom },
+    picker: { label: "Resolve Scatter (3D)", category: Atom },
+    summary: "Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["resolve scatter 3d", "accumulator", "volume read back"],
 }
 
 impl Primitive for Resolve3DAccumulator {
