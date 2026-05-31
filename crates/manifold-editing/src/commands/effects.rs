@@ -485,6 +485,8 @@ impl Command for ToggleEffectParamExposeCommand {
                     default_value: meta.default_value,
                     convert: meta.convert,
                     is_angle: meta.is_angle,
+                    invert: false,
+                    curve: Default::default(),
                 };
                 effect.append_user_binding(binding);
                 ReverseState::Exposed { user_param_id: id }

@@ -792,6 +792,8 @@ mod tests {
             default_value: 0.95,
             convert: manifold_core::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         };
         let rb = ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0)
             .expect("user binding hydrates");
@@ -819,6 +821,8 @@ mod tests {
             default_value: 0.5,
             convert: manifold_core::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         };
         let handles: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_user(&core, &g, &handles, 0).is_none());
@@ -838,6 +842,8 @@ mod tests {
             default_value: 0.5,
             convert: manifold_core::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         };
         assert!(ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0).is_none());
     }
@@ -1002,6 +1008,8 @@ mod tests {
             default_value: 0.95,
             convert: manifold_core::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1034,6 +1042,8 @@ mod tests {
             default_value: 0.97,
             convert: manifold_core::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1066,6 +1076,8 @@ mod tests {
             default_value: 0.95,
             convert: manifold_core::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];

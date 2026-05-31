@@ -258,6 +258,19 @@ pub struct UserParamBinding {
     /// alignment pass backfills it from the registry.
     #[serde(default)]
     pub is_angle: bool,
+    /// Card-slider invert. When true the normalized slider position is
+    /// flipped (card-left drives inner-max) at the renderer write boundary.
+    /// Mapping-only: the stored slot stays physical-valued, so drivers /
+    /// Ableton / envelopes writing the same slot are unaffected.
+    /// `serde(default)` (false) keeps every saved show 1:1.
+    #[serde(default)]
+    pub invert: bool,
+    /// Card-slider response curve, applied to the normalized position at the
+    /// renderer write boundary (after invert, before scaling to [min, max]).
+    /// Reuses the macro-bank curve so the whole app shares one curve type.
+    /// `serde(default)` (Linear) keeps every saved show 1:1.
+    #[serde(default)]
+    pub curve: crate::macro_bank::MacroCurve,
 }
 
 // ─── Param Value (per-slot state) ───
@@ -2745,6 +2758,8 @@ mod tests {
             default_value: 0.25,
             convert: ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         }
     }
 
@@ -2985,6 +3000,8 @@ mod tests {
             default_value: 0.0,
             convert: ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         });
         let pd = ParamSource::get_param_def(&fx, 1);
         assert_eq!(pd.id, "user.uv.translate.1");

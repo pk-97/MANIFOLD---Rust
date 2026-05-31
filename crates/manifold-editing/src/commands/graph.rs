@@ -1337,6 +1337,8 @@ fn mirror_effect_side(
             default_value: inner_default,
             convert: inner_convert,
             is_angle: inner_is_angle,
+            invert: false,
+            curve: Default::default(),
         };
         effect.append_user_binding(binding);
         EffectMirrorReverse::AppendedUserBinding {

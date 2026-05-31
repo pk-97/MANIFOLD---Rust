@@ -1150,6 +1150,8 @@ mod tests {
             default_value: 0.0,
             convert: crate::effects::ParamConvert::Float,
             is_angle: false,
+            invert: false,
+            curve: Default::default(),
         }
     }
 
