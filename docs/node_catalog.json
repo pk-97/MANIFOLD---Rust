@@ -12592,7 +12592,7 @@
       "purpose": "HDR → display tone mapping with selectable curve (Narkowicz ACES / Hill ACES / AgX / Khronos PBR Neutral) and output mode (SDR / PQ for HDR10 export / EDR for macOS / EDR passthrough). Per-channel curves, alpha pass-through. For a simple Reinhard-only path matching FluidSim's display bit-for-bit, use node.reinhard_tone_map.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Brings an HDR image down to a viewable range with a choice of film-style curves. Use it as the last step before display or export.",
+      "summary": "Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the bright highlights down smoothly so they don't clip to flat white, and on an HDR display it can keep those highlights bright by mapping to an HDR output instead. The curve choice sets how that rolloff looks.",
       "type_id": "node.tone_map"
     },
     {

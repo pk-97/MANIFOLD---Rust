@@ -193,7 +193,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.texture_advect` | Texture Advect | — | — | Backward (semi-Lagrangian) advection of a texture by a 2D velocity field. |
 | `node.texture_sum_5` | Texture Sum 5 | — | — | Per-pixel weighted-sum of five textures: out = (a+b+c+d+e) / divisor. |
 | `node.threshold` | Threshold | — | — | Pixel-local luma threshold with a smoothstep falloff of width `softness` — isolates bright regions for bloom / highlight masks. |
-| `node.tone_map` | Tone Map | Color & Tone | Filter | Brings an HDR image down to a viewable range with a choice of film-style curves. Use it as the last step before display or export. |
+| `node.tone_map` | Tone Map | Color & Tone | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 | `node.torus_wrap_field` | Torus Wrap Field | — | — | Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. |
 | `node.triangulate_grid` | Triangulate Grid | — | — | Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. |
 | `node.trig_texture` | Trig Texture | — | — | Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). |
