@@ -81,6 +81,10 @@ crate::primitive! {
     composition_notes: "Output values are roughly in [-1, 1] (raw fBM range). Pair with a UV displacement primitive that scales by a `displace_weight` (Watercolor uses 0.001). z_scale = 0.01 gives Watercolor's default slow evolution; raise for faster animation. warp_scale = 0 skips the two domain-warp fBM evaluations entirely (the cheap direct-eval flow the original Watercolor used); raise it for swirlier flow. resolution = half/quarter generates the field at reduced resolution (4× / 16× cheaper) — the field is low-frequency so downstream bilinear sampling upscales it cleanly; full-res is the default.",
     examples: [],
     picker: { label: "Flow Field Noise", category: Atom },
+    summary: "Generates a swirling 2D flow field from layered noise, the velocity field you feed into advect or displace for fluid-like motion.",
+    category: Noise,
+    role: Source,
+    aliases: ["flow field", "noise flow", "velocity", "curl"],
 }
 
 impl Primitive for FlowFieldNoise {

@@ -265,11 +265,19 @@ hand_descriptor!(
 // Filter (filter.rs)
 hand_descriptor!(
     "node.threshold",
-    "Pixel-local luma threshold with a smoothstep falloff of width `softness` — isolates bright regions for bloom / highlight masks. Fully fuseable."
+    "Pixel-local luma threshold with a smoothstep falloff of width `softness`. Isolates bright regions for bloom and highlight masks.",
+    summary: "Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask.",
+    category: Mask,
+    role: Filter,
+    aliases: ["threshold", "highlight mask", "isolate", "key"],
 );
 hand_descriptor!(
     "node.blur",
-    "Separable Gaussian blur — a horizontal then a vertical pass through a per-instance ping-pong texture. `radius` sets the kernel width. Neighborhood op (breaks pixel-local fusion, accepts pixel-local tail-fusion)."
+    "Separable Gaussian blur, a horizontal then a vertical pass through a per-instance ping-pong texture. `radius` sets the kernel width.",
+    summary: "Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur.",
+    category: BlurAndSharpen,
+    role: Filter,
+    aliases: ["blur", "gaussian", "soft", "Blur TOP"],
 );
 
 // Routing (mux_texture.rs)
@@ -391,13 +399,25 @@ hand_descriptor!(
 // Boundary nodes (boundary_nodes.rs)
 hand_descriptor!(
     "system.source",
-    "Effect-chain input boundary — the host pre-binds the upstream texture here."
+    "Effect-chain input boundary. The host pre-binds the upstream texture here.",
+    summary: "The incoming image at the start of an effect chain. Wired in automatically.",
+    category: Routing,
+    role: Source,
+    aliases: ["source", "input"],
 );
 hand_descriptor!(
     "system.generator_input",
-    "Generator graph entry boundary — emits the per-frame scalar context: time, beat, aspect, trigger_count, anim_progress."
+    "Generator graph entry boundary. Emits the per-frame scalar context: time, beat, aspect, trigger_count, anim_progress.",
+    summary: "The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically.",
+    category: Routing,
+    role: Source,
+    aliases: ["generator input", "context", "time beat"],
 );
 hand_descriptor!(
     "system.final_output",
-    "Output boundary for both effect chains and generators — the host pre-binds the final output texture here."
+    "Output boundary for both effect chains and generators. The host pre-binds the final output texture here.",
+    summary: "The final image leaving a chain or generator. Wired in automatically.",
+    category: Routing,
+    role: Sink,
+    aliases: ["output", "final output"],
 );

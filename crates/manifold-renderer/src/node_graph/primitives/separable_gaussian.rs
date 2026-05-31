@@ -109,6 +109,10 @@ crate::primitive! {
     composition_notes: "Fixed mode: same `kernel_size` and `step` on H + V for separable isotropic blur; kernels are normalized so DC gain = 1. Dynamic mode: bit-exact wrap of legacy `gaussian_blur_compute.wgsl` — feed `radius` (pixels) from a canvas-aware math chain so the perceived blur scales with the output resolution (the FluidSim convention is `blur_radius * bw/640`). Dynamic + radius=0 = single-tap sample (the legacy downsample trick). `address_mode = Repeat` for toroidal sims (FluidSim2D) — edge-spanning blur kernels then wrap continuously, so wrap-position particles flow visually across the screen edge.",
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
     picker: { label: "Gaussian Blur", category: Atom },
+    summary: "A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions.",
+    category: BlurAndSharpen,
+    role: Filter,
+    aliases: ["gaussian blur", "blur", "soft", "Blur TOP"],
     extra_fields: {
         // Track the GpuAddressMode the cached sampler was created
         // with so we can rebuild it on address_mode param edits.

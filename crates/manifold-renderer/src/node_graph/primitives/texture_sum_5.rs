@@ -47,6 +47,10 @@ crate::primitive! {
     composition_notes: "divisor=1 for a plain sum, divisor=5 for the canonical five-term average. Divide-by-zero clamps to 0 to keep the output finite. The shader does not clamp the range — a five-term sum of [-1,1] sin terms with divisor=5 lands in [-1,1] (so it feeds directly into smoothstep_bipolar without further scaling).",
     examples: [],
     picker: { label: "Texture Sum 5", category: Atom },
+    summary: "Adds up to five images into one in a single node, with an option to average instead of sum. Collapses a stack of blends into one step.",
+    category: Composite,
+    role: Filter,
+    aliases: ["add textures", "sum", "blend", "multi blend"],
 }
 
 impl Primitive for TextureSum5 {

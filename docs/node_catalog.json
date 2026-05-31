@@ -1524,8 +1524,13 @@
       "type_id": "node.block_displace_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "blur",
+        "gaussian",
+        "soft",
+        "Blur TOP"
+      ],
+      "category": "Blur & Sharpen",
       "examples": [],
       "inputs": [
         {
@@ -1564,10 +1569,10 @@
           "type": "enum"
         }
       ],
-      "purpose": "Separable Gaussian blur — a horizontal then a vertical pass through a per-instance ping-pong texture. `radius` sets the kernel width. Neighborhood op (breaks pixel-local fusion, accepts pixel-local tail-fusion).",
-      "role": "Unknown",
+      "purpose": "Separable Gaussian blur, a horizontal then a vertical pass through a per-instance ping-pong texture. `radius` sets the kernel width.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur.",
       "type_id": "node.blur"
     },
     {
@@ -4662,8 +4667,13 @@
       "type_id": "node.euler_step_particles_3d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "fbm",
+        "fractal noise",
+        "octaves",
+        "turbulence"
+      ],
+      "category": "Noise",
       "examples": [],
       "inputs": [],
       "label": "fBM 2D",
@@ -4736,9 +4746,9 @@
         }
       ],
       "purpose": "Pure generator. Octave-summed Perlin noise (fractional Brownian motion). Each octave doubles frequency (or `lacunarity`× it) and halves amplitude (or `persistence`× it). Output remapped to [0, 1], broadcast to RGB (A = 1). Workhorse for terrain, clouds, organic textures with multi-scale detail.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Layered noise that stacks several octaves for rich, detailed texture, the fractal look behind clouds, terrain, and smoke.",
       "type_id": "node.fbm_2d"
     },
     {
@@ -5154,8 +5164,13 @@
       "type_id": "node.flatten_to_camera_plane"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "flow field",
+        "noise flow",
+        "velocity",
+        "curl"
+      ],
+      "category": "Noise",
       "examples": [],
       "inputs": [],
       "label": "Flow Field Noise",
@@ -5203,9 +5218,9 @@
         }
       ],
       "purpose": "Generate a 2D flow vector field from domain-warped fBM Perlin noise. Zero inputs. Output: Rgba16Float texture with flow_x in R, flow_y in B (G=0, A=1.0) — matches the Watercolor flow-map convention so it composes with UV displacement primitives that read .rb as offset.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Generates a swirling 2D flow field from layered noise, the velocity field you feed into advect or displace for fluid-like motion.",
       "type_id": "node.flow_field_noise"
     },
     {
@@ -5548,8 +5563,13 @@
       "type_id": "node.gain"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "gaussian blur",
+        "blur",
+        "soft",
+        "Blur TOP"
+      ],
+      "category": "Blur & Sharpen",
       "examples": [
         "composite.bloom",
         "composite.halation",
@@ -5660,9 +5680,9 @@
         }
       ],
       "purpose": "Single-axis Gaussian blur. Pair an H pass with a V pass for an isotropic blur. Two algorithms behind one primitive: Fixed (default) uses precomputed 9/17/25-tap kernels at σ≈2/4/6 with `step` controlling per-tap UV stride — cheap, deterministic, used by Halation / DoF / Bloom / OilyFluid. Dynamic uses the legacy fluid-sim algorithm — sigma = max(radius/3, 1), bilinear tap-pair loop, `radius` is in pixels — required for bit-exact FluidSim2D parity (the perceived stroke width depends on the dynamic curve specifically). Set `radius_mode = Dynamic` and wire `radius` to switch algorithms; `kernel_size` and `step` are ignored in Dynamic mode. Dynamic with radius=0 collapses to a single-tap nearest-neighbor sample — the legacy downsample trick.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions.",
       "type_id": "node.gaussian_blur"
     },
     {
@@ -6465,8 +6485,13 @@
       "type_id": "node.hash_field_by_seed"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "hash noise",
+        "white noise",
+        "static",
+        "random"
+      ],
+      "category": "Noise",
       "examples": [],
       "inputs": [
         {
@@ -6525,9 +6550,9 @@
         }
       ],
       "purpose": "Pure generator. Uncorrelated per-pixel white-ish noise via wang_hash on quantised (uv*scale + offset). R = noise value in [0, 1]; GBA = (0, 0, 1). Distinct from `node.simplex_noise_2d` (smooth correlated) — this is high-frequency hash noise for film grain, dust, dither sources, and LIC ink (line-integral-convolution streamline visualisation).",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Sharp per-pixel random noise with no smoothing, the harsh static look. Good for grain, sparkle, and dissolve effects.",
       "type_id": "node.hash_noise_field_2d"
     },
     {
@@ -9264,8 +9289,13 @@
       "type_id": "node.peak"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "perlin",
+        "noise",
+        "clouds",
+        "Noise TOP"
+      ],
+      "category": "Noise",
       "examples": [],
       "inputs": [],
       "label": "Perlin Noise 2D",
@@ -9308,9 +9338,9 @@
         }
       ],
       "purpose": "Pure generator. Classic 2D Perlin gradient noise, remapped to [0, 1] and broadcast to RGB (A = 1). Different aesthetic from node.simplex_noise_2d: square-grid artifacts at low scales, smoother lobes.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Smooth, cloudy random noise, the classic for organic textures and slow-moving fields. Soft and rounded compared to other noise types.",
       "type_id": "node.perlin_noise_2d"
     },
     {
@@ -10188,8 +10218,12 @@
       "type_id": "node.radial_offset_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "reinhard",
+        "tonemap",
+        "hdr"
+      ],
+      "category": "Color & Tone",
       "examples": [],
       "inputs": [
         {
@@ -10248,9 +10282,9 @@
         }
       ],
       "purpose": "Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simple (`x/(x+1)`, the textbook Reinhard curve, matches the legacy MetallicGlass render terminal bit-for-bit). intensity + contrast are port-shadowed pre-multipliers — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node.",
       "type_id": "node.reinhard_tone_map"
     },
     {
@@ -12277,8 +12311,12 @@
       "type_id": "node.sharpen"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "simplex field",
+        "noise field",
+        "flow"
+      ],
+      "category": "Noise",
       "examples": [],
       "inputs": [
         {
@@ -12379,14 +12417,18 @@
         }
       ],
       "purpose": "Pure generator. 3D Perlin-style simplex noise sampled at `(uv * scale + offset, z)`. Outputs the SIGNED noise value in approximately [-1, +1] to the R channel (GBA = 0, 0, 1). The Z axis is what makes a static node produce an evolving field — animate `z` for turbulent shimmer in place; pan `offset_x` / `offset_y` for directional flow through a frozen field. Use this when noise drives downstream math (displacement, color injection, fluid-sim seeding); use `node.simplex_noise_2d` when you want a [0, 1] visual texture.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Signed simplex noise output as a field, used to drive flows and displacements rather than shown directly.",
       "type_id": "node.simplex_field_2d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "simplex",
+        "noise",
+        "Noise TOP"
+      ],
+      "category": "Noise",
       "examples": [],
       "inputs": [],
       "label": "Simplex Noise 2D",
@@ -12429,9 +12471,9 @@
         }
       ],
       "purpose": "Pure generator. Classic 2D Simplex noise (Ashima Arts) remapped to [0, 1], broadcast to RGB (A = 1). The workhorse procedural noise for organic patterns, terrain, clouds, watercolor textures.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Smooth random noise similar to Perlin but cleaner and with fewer directional artifacts. A good general-purpose noise.",
       "type_id": "node.simplex_noise_2d"
     },
     {
@@ -13120,8 +13162,13 @@
       "type_id": "node.texture_dimensions"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "add textures",
+        "sum",
+        "blend",
+        "multi blend"
+      ],
+      "category": "Composite",
       "examples": [],
       "inputs": [
         {
@@ -13170,14 +13217,19 @@
         }
       ],
       "purpose": "Per-pixel weighted-sum of five textures: out = (a+b+c+d+e) / divisor. divisor=1 keeps the result a plain sum (compose mode), divisor=5 turns it into an average. Collapses the four-deep Mix(Add) chain (+ optional scale_offset_texture for division) that a manual N-term composition would otherwise need.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Adds up to five images into one in a single node, with an option to average instead of sum. Collapses a stack of blends into one step.",
       "type_id": "node.texture_sum_5"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "threshold",
+        "highlight mask",
+        "isolate",
+        "key"
+      ],
+      "category": "Mask",
       "examples": [],
       "inputs": [
         {
@@ -13215,10 +13267,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Pixel-local luma threshold with a smoothstep falloff of width `softness` — isolates bright regions for bloom / highlight masks. Fully fuseable.",
-      "role": "Unknown",
+      "purpose": "Pixel-local luma threshold with a smoothstep falloff of width `softness`. Isolates bright regions for bloom and highlight masks.",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask.",
       "type_id": "node.threshold"
     },
     {
@@ -14586,8 +14638,11 @@
       "type_id": "node.wrap_particles_torus"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "output",
+        "final output"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [
         {
@@ -14599,15 +14654,19 @@
       "label": null,
       "outputs": [],
       "params": [],
-      "purpose": "Output boundary for both effect chains and generators — the host pre-binds the final output texture here.",
-      "role": "Unknown",
+      "purpose": "Output boundary for both effect chains and generators. The host pre-binds the final output texture here.",
+      "role": "Sink",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "The final image leaving a chain or generator. Wired in automatically.",
       "type_id": "system.final_output"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "generator input",
+        "context",
+        "time beat"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [],
       "label": null,
@@ -14685,15 +14744,18 @@
           "type": "float"
         }
       ],
-      "purpose": "Generator graph entry boundary — emits the per-frame scalar context: time, beat, aspect, trigger_count, anim_progress.",
-      "role": "Unknown",
+      "purpose": "Generator graph entry boundary. Emits the per-frame scalar context: time, beat, aspect, trigger_count, anim_progress.",
+      "role": "Source",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically.",
       "type_id": "system.generator_input"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "source",
+        "input"
+      ],
+      "category": "Routing",
       "examples": [],
       "inputs": [],
       "label": null,
@@ -14704,10 +14766,10 @@
         }
       ],
       "params": [],
-      "purpose": "Effect-chain input boundary — the host pre-binds the upstream texture here.",
-      "role": "Unknown",
+      "purpose": "Effect-chain input boundary. The host pre-binds the upstream texture here.",
+      "role": "Source",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "The incoming image at the start of an effect chain. Wired in automatically.",
       "type_id": "system.source"
     }
   ],

@@ -216,7 +216,7 @@ mod tests {
             .iter()
             .find(|e| e.type_id == MuxArray::TYPE_ID)
             .expect("mux_array should be registered as a palette atom");
-        assert_eq!(entry.label, "Mux (array)");
+        assert_eq!(entry.label, "Switch (array)");
         assert!(matches!(entry.category, PaletteCategory::Atom));
     }
 }

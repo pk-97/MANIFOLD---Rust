@@ -58,6 +58,10 @@ crate::primitive! {
     composition_notes: "Drive offset_x / offset_y from an LFO or beat counter to animate. Scale governs cell size: ~1 = one cell across the image, ~32 = fine grain. Output is grayscale and pre-remapped to [0, 1]; chain into node.scale_offset_texture to recover signed noise, or into node.lut1d for color mapping. Pair with node.fbm_2d for richer multi-octave detail.",
     examples: [],
     picker: { label: "Simplex Noise 2D", category: Atom },
+    summary: "Smooth random noise similar to Perlin but cleaner and with fewer directional artifacts. A good general-purpose noise.",
+    category: Noise,
+    role: Source,
+    aliases: ["simplex", "noise", "Noise TOP"],
 }
 
 impl Primitive for SimplexNoise2D {

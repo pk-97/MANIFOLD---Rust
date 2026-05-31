@@ -57,6 +57,10 @@ crate::primitive! {
     composition_notes: "Output is pre-remapped to [0, 1]; chain into node.scale_offset_texture (a=2, b=-1) to recover signed noise. Animate by driving offset_x / offset_y from an LFO. Same gradient table as node.flow_field_noise so layered compositions look coherent.",
     examples: [],
     picker: { label: "Perlin Noise 2D", category: Atom },
+    summary: "Smooth, cloudy random noise, the classic for organic textures and slow-moving fields. Soft and rounded compared to other noise types.",
+    category: Noise,
+    role: Source,
+    aliases: ["perlin", "noise", "clouds", "Noise TOP"],
 }
 
 impl Primitive for PerlinNoise2D {

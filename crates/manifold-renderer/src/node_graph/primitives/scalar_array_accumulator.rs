@@ -213,7 +213,7 @@ mod tests {
             .iter()
             .find(|e| e.type_id == ScalarArrayAccumulator::TYPE_ID)
             .expect("scalar_array_accumulator should be registered as a palette atom");
-        assert_eq!(entry.label, "Scalar Array Accumulator");
+        assert_eq!(entry.label, "Sum Into Bins");
         assert!(matches!(entry.category, PaletteCategory::Driver));
     }
 }

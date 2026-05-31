@@ -86,6 +86,10 @@ crate::primitive! {
     composition_notes: "Octaves clamped to [1, 8] in-shader (8 octaves is more than enough perceptually and bounds the inner loop for the WGSL compiler). lacunarity = 2.0 + persistence = 0.5 is the classic 'pink-spectrum' fBM. Drop persistence to ~0.3 for cleaner large shapes; raise toward 1.0 for spiky noise.",
     examples: [],
     picker: { label: "fBM 2D", category: Atom },
+    summary: "Layered noise that stacks several octaves for rich, detailed texture, the fractal look behind clouds, terrain, and smoke.",
+    category: Noise,
+    role: Source,
+    aliases: ["fbm", "fractal noise", "octaves", "turbulence"],
 }
 
 impl Primitive for Fbm2D {

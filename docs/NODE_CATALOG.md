@@ -59,7 +59,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.blob_detect_ffi` | Blob Tracker | Detection & Sampling | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
 | `node.blob_overlay_render` | Blob Overlay | Detection & Sampling | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
 | `node.block_displace_field` | Block Displace Field | Fields & Coordinates | Source | Outputs a grid of random block offsets, the displacement map behind datamosh and block-glitch looks. Feed it into Remap. |
-| `node.blur` | Blur | — | — | Separable Gaussian blur — a horizontal then a vertical pass through a per-instance ping-pong texture. |
+| `node.blur` | Blur | Blur & Sharpen | Filter | Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur. |
 | `node.blur_3d_separable` | Blur (3D) | Blur & Sharpen | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
 | `node.box_mask` | Rectangle Mask | Mask | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | `node.brightness` | Brightness | Color & Tone | Filter | Multiplies the image brightness up or down. A plain brightness control. |
@@ -91,18 +91,18 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.ellipse_mask` | Circle Mask | Mask | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
 | `node.euler_step_particles` | Move Particles (Euler step) | Particles 2D | Filter | Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move. |
 | `node.euler_step_particles_3d` | Move Particles (3D, Euler step) | Particles 3D | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
-| `node.fbm_2d` | fBM 2D | — | — | Pure generator. |
+| `node.fbm_2d` | fBM 2D | Noise | Source | Layered noise that stacks several octaves for rich, detailed texture, the fractal look behind clouds, terrain, and smoke. |
 | `node.fbm_per_instance` | Fractal Noise (per copy) | Particles 2D | Filter | Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with. |
 | `node.feedback` | Feedback | Composite | Filter | Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through … |
 | `node.field_combine` | Field Combine | Fields & Coordinates | Map | Mixes the channels of a coordinate field into one value with weights and an offset. The math step that turns coordinates into a custom gradient. |
 | `node.film_grain` | Film Grain | Stylize | Filter | Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise. |
 | `node.flash` | Flash | Stylize | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
 | `node.flatten_to_camera_plane` | Flatten to Camera Plane | — | — | Compress particles toward the camera viewing plane. |
-| `node.flow_field_noise` | Flow Field Noise | — | — | Generate a 2D flow vector field from domain-warped fBM Perlin noise. |
+| `node.flow_field_noise` | Flow Field Noise | Noise | Source | Generates a swirling 2D flow field from layered noise, the velocity field you feed into advect or displace for fluid-like motion. |
 | `node.fract_texture` | Wrap | Math & Convert | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 | `node.fresnel_rim` | Rim Light (Fresnel) | Materials & Lighting | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
 | `node.gain` | Exposure | Color & Tone | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
-| `node.gaussian_blur` | Gaussian Blur | — | — | Single-axis Gaussian blur. |
+| `node.gaussian_blur` | Gaussian Blur | Blur & Sharpen | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
 | `node.gaussian_blur_variable_width` | Gaussian Blur (Variable Width) | Blur & Sharpen | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
 | `node.generate_cube_mesh` | Cube Mesh | 3D Geometry | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | `node.generate_grid_mesh` | Grid Mesh | 3D Geometry | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
@@ -115,7 +115,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.gradient_ramp` | Gradient | Generate | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | `node.grid_uv_field` | Grid UV Field | Fields & Coordinates | Source | Outputs a grid of sample points across the frame as a list, used to drive instanced shapes or sample a field at regular spots. |
 | `node.hash_field_by_seed` | Hash Field by Seed | Fields & Coordinates | Map | Scrambles a coordinate field by a seed so the same input gives a different but stable random offset per seed. Used to re-randomise a pattern on a trigger. |
-| `node.hash_noise_field_2d` | Hash Noise Field 2D | — | — | Pure generator. |
+| `node.hash_noise_field_2d` | Hash Noise Field 2D | Noise | Source | Sharp per-pixel random noise with no smoothing, the harsh static look. Good for grain, sparkle, and dissolve effects. |
 | `node.hdr_retention_mix` | HDR Mix | Composite | Filter | Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a proces… |
 | `node.heightmap_to_normal` | Surface Bumps | Materials & Lighting | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
 | `node.hue_saturation` | Hue / Saturation | Color & Tone | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
@@ -143,7 +143,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.pack_curve_xy` | Combine XY (curve) | 3D Geometry | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | `node.pack_vec4` | Combine XYZW | Math & Convert | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
 | `node.pbr_material` | PBR Material | Materials & Lighting | Source | A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces. |
-| `node.perlin_noise_2d` | Perlin Noise 2D | — | — | Pure generator. |
+| `node.perlin_noise_2d` | Perlin Noise 2D | Noise | Source | Smooth, cloudy random noise, the classic for organic textures and slow-moving fields. Soft and rounded compared to other noise types. |
 | `node.person_segment` | Person Mask | Detection & Sampling | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
 | `node.phong_material` | Phong Material | Materials & Lighting | Source | A basic shiny material with soft diffuse shading and a sharp highlight. The cheap go-to for lit 3D surfaces. |
 | `node.polar_field` | Polar Field | Fields & Coordinates | Source | Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes. |
@@ -156,7 +156,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.radial_burst_force_field` | Explosion Force | Particles 2D | Source | Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion. |
 | `node.radial_fold_uv` | Kaleidoscope | Distort & Warp | Map | Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to … |
 | `node.radial_offset_field` | Radial Offset Field | Distort & Warp | Map | Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node. |
-| `node.reinhard_tone_map` | Reinhard Tone Map | — | — | Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simpl… |
+| `node.reinhard_tone_map` | Reinhard Tone Map | Color & Tone | Filter | A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node. |
 | `node.remap` | Remap | Distort & Warp | Filter | Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coord… |
 | `node.render_3d_mesh` | Render Mesh | 3D Geometry | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
 | `node.render_filled_rects` | Draw Rectangles | Generate | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
@@ -182,8 +182,8 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.seed_particles` | Spawn Particles | Particles 2D | Source | Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain. |
 | `node.seed_particles_from_texture` | Spawn From Image | Particles 2D | Source | Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image. |
 | `node.sharpen` | Sharpen | Blur & Sharpen | Filter | Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper. |
-| `node.simplex_field_2d` | Simplex Field 2D | — | — | Pure generator. |
-| `node.simplex_noise_2d` | Simplex Noise 2D | — | — | Pure generator. |
+| `node.simplex_field_2d` | Simplex Field 2D | Noise | Source | Signed simplex noise output as a field, used to drive flows and displacements rather than shown directly. |
+| `node.simplex_noise_2d` | Simplex Noise 2D | Noise | Source | Smooth random noise similar to Perlin but cleaner and with fewer directional artifacts. A good general-purpose noise. |
 | `node.simplex_noise_force_3d_at_particles` | Turbulence (3D, simplex) | Particles 3D | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 | `node.simplex_noise_force_at_particles` | Turbulence (simplex) | Particles 2D | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | `node.simplex_per_instance` | Simplex Noise (per copy) | Particles 2D | Filter | Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field. |
@@ -191,8 +191,8 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.slope_displace` | Slope Displace | Fields & Coordinates | Filter | Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks. |
 | `node.smoothstep_texture` | Smoothstep | Math & Convert | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
 | `node.texture_advect` | Texture Advect | Fields & Coordinates | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
-| `node.texture_sum_5` | Texture Sum 5 | — | — | Per-pixel weighted-sum of five textures: out = (a+b+c+d+e) / divisor. |
-| `node.threshold` | Threshold | — | — | Pixel-local luma threshold with a smoothstep falloff of width `softness` — isolates bright regions for bloom / highlight masks. |
+| `node.texture_sum_5` | Texture Sum 5 | Composite | Filter | Adds up to five images into one in a single node, with an option to average instead of sum. Collapses a stack of blends into one step. |
+| `node.threshold` | Threshold | Mask | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 | `node.tone_map` | Tone Map | Color & Tone | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 | `node.torus_wrap_field` | Torus Wrap Field | 3D Geometry | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | `node.triangulate_grid` | Make Triangles | 3D Geometry | Filter | Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render. |
@@ -254,9 +254,9 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.rotate_vec2_90` | — | Fields & Coordinates | Map | Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector. |
 | `node.watercolor` | — | Stylize | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 | `node.wireframe_depth` | — | Stylize | Filter | A wireframe overlay driven by AI depth, drawing a mesh that follows the shape of whatever is in frame. A legacy bundle still being decomposed. |
-| `system.final_output` | — | — | — | Output boundary for both effect chains and generators — the host pre-binds the final output texture here. |
-| `system.generator_input` | — | — | — | Generator graph entry boundary — emits the per-frame scalar context: time, beat, aspect, trigger_count, anim_progress. |
-| `system.source` | — | — | — | Effect-chain input boundary — the host pre-binds the upstream texture here. |
+| `system.final_output` | — | Routing | Sink | The final image leaving a chain or generator. Wired in automatically. |
+| `system.generator_input` | — | Routing | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |
+| `system.source` | — | Routing | Source | The incoming image at the start of an effect chain. Wired in automatically. |
 
 ### Effect & generator presets (45)
 

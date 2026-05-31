@@ -60,6 +60,10 @@ crate::primitive! {
     composition_notes: "Higher scale = finer noise (more cells across the canvas). Offsets shift the hash seed — animate them with an LFO for a flowing-dither look. Output is statistically uniform across [0, 1], not Gaussian; pair with `node.smoothstep_texture` or `node.tone_map` to shape distribution.",
     examples: [],
     picker: { label: "Hash Noise Field 2D", category: Atom },
+    summary: "Sharp per-pixel random noise with no smoothing, the harsh static look. Good for grain, sparkle, and dissolve effects.",
+    category: Noise,
+    role: Source,
+    aliases: ["hash noise", "white noise", "static", "random"],
 }
 
 impl Primitive for HashNoiseField2D {
