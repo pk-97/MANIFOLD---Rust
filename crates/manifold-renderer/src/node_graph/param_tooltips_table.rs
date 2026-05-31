@@ -192,3 +192,85 @@ crate::param_tooltips!("node.compressor_envelope", {
     "sensitivity" => "How quickly the envelope reacts to changes in the input level.",
     "target" => "The level the compressor aims to hold the signal at.",
 });
+
+// ─── Generate ────────────────────────────────────────────────────────
+
+crate::param_tooltips!("node.basic_shape", {
+    "shape" => "Which shape to draw, square, diamond, or octagon.",
+    "aspect" => "Stretches the shape wider or taller.",
+    "scale" => "How big the shape is.",
+    "line" => "Thickness of the outline when wireframe is on.",
+    "rotation" => "Rotates the shape, in degrees.",
+    "is_wireframe" => "Draw just the outline instead of a filled shape.",
+});
+
+crate::param_tooltips!("node.checkerboard", {
+    "scale" => "How many squares fill the frame. Higher means smaller squares.",
+    "offset_x" => "Slides the grid sideways.",
+    "offset_y" => "Slides the grid up and down.",
+});
+
+crate::param_tooltips!("node.linear_gradient", {
+    "cx" => "Horizontal point the gradient pivots around.",
+    "cy" => "Vertical pivot point.",
+    "rotation" => "The direction the gradient runs, in degrees.",
+    "softness" => "How sharp or soft the transition is.",
+});
+
+// ─── Detection & Sampling ────────────────────────────────────────────
+
+crate::param_tooltips!("node.person_segment", {
+    "analysis_max_dim" => "The resolution the AI runs at. Lower is faster but rougher.",
+    "update_interval" => "How often to re-run the detection, in frames. Higher saves performance.",
+    "smoothing" => "How much to smooth the mask over time to reduce flicker.",
+});
+
+// ─── Routing ─────────────────────────────────────────────────────────
+
+crate::param_tooltips!("node.mux_scalar", {
+    "selector" => "Picks which input to pass through, by number.",
+});
+
+crate::param_tooltips!("node.mux_array", {
+    "selector" => "Picks which input list to pass through, by number.",
+});
+
+crate::param_tooltips!("node.mux_texture", {
+    "selector" => "Picks which input image to pass through, by number.",
+    "num_inputs" => "How many inputs to expose. The node grows or shrinks to match.",
+});
+
+crate::param_tooltips!("node.downsample", {
+    "factor" => "How much to shrink the image. 2 is half size, 4 is a quarter, and so on.",
+});
+
+// ─── Math & Convert ──────────────────────────────────────────────────
+
+crate::param_tooltips!("node.smoothstep_texture", {
+    "low" => "The input value where the output starts rising from 0.",
+    "high" => "The input value where the output reaches 1. Below low and above high are flat.",
+});
+
+// ─── Mask / Fields ───────────────────────────────────────────────────
+
+crate::param_tooltips!("node.distance_to_point", {
+    "cx" => "Horizontal position of the point to measure from.",
+    "cy" => "Vertical position of the point.",
+    "scale" => "Multiplies the distance, controlling how fast it brightens with range.",
+    "scale_x" => "Stretches the distance horizontally, for an oval falloff.",
+    "scale_y" => "Stretches the distance vertically.",
+});
+
+// ─── Particles ───────────────────────────────────────────────────────
+
+crate::param_tooltips!("node.seed_particles", {
+    "max_capacity" => "The most particles this can ever hold, set when the chain is built.",
+    "active_count" => "How many particles to spawn and keep alive.",
+    "seed_offset" => "Changes the random layout. Move it to get a different spread.",
+    "seed_mode" => "How the starting positions are chosen.",
+});
+
+crate::param_tooltips!("node.euler_step_particles", {
+    "active_count" => "How many particles are alive and being moved.",
+    "speed" => "How fast the particles move each step.",
+});

@@ -962,6 +962,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Which shape to draw, square, diamond, or octagon.",
           "type": "enum"
         },
         {
@@ -972,6 +973,7 @@
             "0.1",
             "10"
           ],
+          "tooltip": "Stretches the shape wider or taller.",
           "type": "float"
         },
         {
@@ -982,6 +984,7 @@
             "0.25",
             "3"
           ],
+          "tooltip": "How big the shape is.",
           "type": "float"
         },
         {
@@ -992,6 +995,7 @@
             "0.0005",
             "0.03"
           ],
+          "tooltip": "Thickness of the outline when wireframe is on.",
           "type": "float"
         },
         {
@@ -1002,6 +1006,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Rotates the shape, in degrees.",
           "type": "float"
         },
         {
@@ -1012,6 +1017,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Draw just the outline instead of a filled shape.",
           "type": "float"
         }
       ],
@@ -2402,6 +2408,7 @@
             "0",
             "128"
           ],
+          "tooltip": "How many squares fill the frame. Higher means smaller squares.",
           "type": "float"
         },
         {
@@ -2412,6 +2419,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the grid sideways.",
           "type": "float"
         },
         {
@@ -2422,6 +2430,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the grid up and down.",
           "type": "float"
         }
       ],
@@ -4053,6 +4062,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Horizontal position of the point to measure from.",
           "type": "float"
         },
         {
@@ -4063,6 +4073,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Vertical position of the point.",
           "type": "float"
         },
         {
@@ -4073,6 +4084,7 @@
             "0",
             "16"
           ],
+          "tooltip": "Multiplies the distance, controlling how fast it brightens with range.",
           "type": "float"
         },
         {
@@ -4083,6 +4095,7 @@
             "0",
             "16"
           ],
+          "tooltip": "Stretches the distance horizontally, for an oval falloff.",
           "type": "float"
         },
         {
@@ -4093,6 +4106,7 @@
             "0",
             "16"
           ],
+          "tooltip": "Stretches the distance vertically.",
           "type": "float"
         }
       ],
@@ -4234,6 +4248,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How much to shrink the image. 2 is half size, 4 is a quarter, and so on.",
           "type": "enum"
         }
       ],
@@ -4614,6 +4629,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles are alive and being moved.",
           "type": "int"
         },
         {
@@ -4624,6 +4640,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How fast the particles move each step.",
           "type": "float"
         }
       ],
@@ -7938,6 +7955,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Horizontal point the gradient pivots around.",
           "type": "float"
         },
         {
@@ -7948,6 +7966,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Vertical pivot point.",
           "type": "float"
         },
         {
@@ -7958,6 +7977,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "The direction the gradient runs, in degrees.",
           "type": "float"
         },
         {
@@ -7968,6 +7988,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How sharp or soft the transition is.",
           "type": "float"
         }
       ],
@@ -8436,6 +8457,7 @@
             "0",
             "7"
           ],
+          "tooltip": "Picks which input list to pass through, by number.",
           "type": "float"
         }
       ],
@@ -8517,6 +8539,7 @@
             "0",
             "7"
           ],
+          "tooltip": "Picks which input to pass through, by number.",
           "type": "float"
         },
         {
@@ -8646,6 +8669,7 @@
             "0",
             "31"
           ],
+          "tooltip": "Picks which input image to pass through, by number.",
           "type": "float"
         },
         {
@@ -8656,6 +8680,7 @@
             "2",
             "32"
           ],
+          "tooltip": "How many inputs to expose. The node grows or shrinks to match.",
           "type": "int"
         }
       ],
@@ -9441,6 +9466,7 @@
             "64",
             "1024"
           ],
+          "tooltip": "The resolution the AI runs at. Lower is faster but rougher.",
           "type": "int"
         },
         {
@@ -9451,6 +9477,7 @@
             "1",
             "30"
           ],
+          "tooltip": "How often to re-run the detection, in frames. Higher saves performance.",
           "type": "int"
         },
         {
@@ -9461,6 +9488,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much to smooth the mask over time to reduce flicker.",
           "type": "float"
         }
       ],
@@ -12196,6 +12224,7 @@
             "1024",
             "16000000"
           ],
+          "tooltip": "The most particles this can ever hold, set when the chain is built.",
           "type": "int"
         },
         {
@@ -12206,6 +12235,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to spawn and keep alive.",
           "type": "int"
         },
         {
@@ -12216,6 +12246,7 @@
             "0",
             "1000000"
           ],
+          "tooltip": "Changes the random layout. Move it to get a different spread.",
           "type": "int"
         },
         {
@@ -12226,6 +12257,7 @@
           ],
           "label": "Seed Mode",
           "name": "seed_mode",
+          "tooltip": "How the starting positions are chosen.",
           "type": "enum"
         }
       ],
@@ -13115,6 +13147,7 @@
             "-8",
             "8"
           ],
+          "tooltip": "The input value where the output starts rising from 0.",
           "type": "float"
         },
         {
@@ -13125,6 +13158,7 @@
             "-8",
             "8"
           ],
+          "tooltip": "The input value where the output reaches 1. Below low and above high are flat.",
           "type": "float"
         }
       ],
