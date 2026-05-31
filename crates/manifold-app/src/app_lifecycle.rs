@@ -720,16 +720,29 @@ impl Application {
         );
     }
 
-    /// Open the node-graph editor window. Sized at 75% of the primary
-    /// window's logical inner size and positioned near it (winit picks
-    /// the placement; the user can drag it onto a secondary monitor).
+    /// Open the node-graph editor window — or, if it is already open,
+    /// summon it to the front.
     ///
-    /// No-op if the editor is already open. Phase 2 smoke test: the
-    /// window renders a solid dark grey clear each frame; Phase 4
-    /// will host an actual `UIRoot` here.
+    /// First open: sized at 75% of the primary window's logical inner
+    /// size, placed by winit. Subsequent opens restore the position and
+    /// size the window had when it was last closed
+    /// ([`Self::graph_editor_geometry`]), so it lands where the user left
+    /// it. The window stays first-class (AltTab / Cmd-` see it as its own
+    /// window); this method just guarantees the toggle always brings it
+    /// forward instead of no-opping, which is what stops it getting lost
+    /// behind the main window.
     pub(crate) fn open_graph_editor(&mut self, event_loop: &ActiveEventLoop) {
         if self.graph_editor.is_some() {
-            log::debug!("[GraphEditor] Already open — ignoring open request");
+            // Already open — bring it to the front rather than no-op. It is
+            // a first-class window, so a click on the main window can leave
+            // it behind; re-pressing Cmd+Shift+G (or clicking the card
+            // button) must always re-summon it.
+            if let Some(wid) = self.graph_editor_window_id
+                && let Some(ws) = self.window_registry.get(&wid)
+            {
+                ws.window.set_minimized(false);
+                ws.window.focus_window();
+            }
             return;
         }
 
@@ -755,9 +768,13 @@ impl Application {
             })
             .unwrap_or((960, 540, 1.0));
 
-        let attrs = winit::window::Window::default_attributes()
+        let mut attrs = winit::window::Window::default_attributes()
             .with_title("MANIFOLD — Graph Editor")
             .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h));
+        // Reopen where the user last left it (position + size), if known.
+        if let Some((pos, size)) = self.graph_editor_geometry {
+            attrs = attrs.with_position(pos).with_inner_size(size);
+        }
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => std::sync::Arc::new(w),
@@ -837,6 +854,19 @@ impl Application {
         #[cfg(target_os = "macos")]
         if let Some(ws) = self.graph_editor.as_mut() {
             ws.ui_display_link = None;
+        }
+        // Remember where the user left the window so a later reopen lands
+        // in the same place and size instead of winit's default cascade.
+        if let Some(wid) = self.graph_editor_window_id {
+            let geom = self.window_registry.get(&wid).and_then(|ws| {
+                ws.window
+                    .outer_position()
+                    .ok()
+                    .map(|pos| (pos, ws.window.inner_size()))
+            });
+            if geom.is_some() {
+                self.graph_editor_geometry = geom;
+            }
         }
         if let Some(wid) = self.graph_editor_window_id.take() {
             self.window_registry.remove(&wid);

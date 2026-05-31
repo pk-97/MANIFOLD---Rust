@@ -274,6 +274,11 @@ pub struct Application {
     /// `WindowId` of the graph editor window when open. Paired with
     /// `graph_editor` — both are `Some` together or both `None`.
     pub(crate) graph_editor_window_id: Option<WindowId>,
+    /// Remembered outer position + inner size of the editor window from
+    /// its last close, so reopening lands where the user left it instead
+    /// of winit's default cascade. `None` until the first close.
+    pub(crate) graph_editor_geometry:
+        Option<(winit::dpi::PhysicalPosition<i32>, winit::dpi::PhysicalSize<u32>)>,
     /// Read-only graph canvas hosted in the editor. `Some` while the
     /// editor window is open; cleared on close. Phase 4 seeds it with
     /// a hardcoded view of `NodeGraphTestFX`'s graph.
@@ -459,6 +464,7 @@ impl Application {
             ws: Workspace::new(WorkspaceKind::Main),
             graph_editor: None,
             graph_editor_window_id: None,
+            graph_editor_geometry: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
             graph_palette: manifold_ui::panels::graph_palette::GraphPalette::new(),

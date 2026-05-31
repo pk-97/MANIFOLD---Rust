@@ -257,43 +257,47 @@ hard to recover — two top-level windows competing. Other panels sit at fixed
 coordinates (inspector 320px right, palette 200px left, canvas centre): arranged
 *for* the user, not *by* them.
 
-**Target — stop making the editor a window.** Bring it **inside the main
-window** as a toggleable workspace. One window, nothing to lose focus to.
-- **Composed, not blackout.** The in-window editor is the graph canvas + palette
-  with a **mini timeline** strip across the bottom and the **output preview**
-  kept visible — so you patch with the instrument still in front of you
-  (TD-style), not a context blackout.
-- **Reuse the perform-mode swap.** Perform mode
-  ([`perform_mode/`](../crates/manifold-app/src/perform_mode/)) already proves
-  the exact mechanism: a master `active` flag short-circuits the main window's
-  `tick_and_render` to a different layout; enter/exit are deferred through
-  `about_to_wait` (window mutations need `ActiveEventLoop` in scope); input is
-  routed through mode helpers; UI state is quiesced on entry and force-rebuilt on
-  exit; the **content thread and output window are untouched**. The editor
-  in-window is the same swap to a different layout — Cmd+Shift+G flips the flag
-  instead of spawning a window.
-- **The one genuinely new piece** is a small **layout arranger** placing
-  {canvas + palette, mini-timeline, preview} into regions. Panels are already
-  viewport-`Rect`-parameterized, so this is layout math over existing draw code,
-  not new rendering — and it is the first concrete brick of the dock/snap system.
-  (Difference from perform mode: that swap draws a *bespoke* HUD; this one
-  *composes shrunk versions of existing panels*. Same mechanism, more reuse.)
-- **Fuller version:** those regions become dockable / snappable with default
-  homes and keyboard toggles (the TD/Blender workspace); the docked unit is the
-  **same boundary primitive**, not a special "panel" type.
+**Decided (2026-05-31) — keep the editor a first-class window, make it
+well-behaved. SHIPPED.** The original pain was not "it is a separate window," it
+was "it is a *badly-behaved* one that falls behind the main window, and the
+hotkey then does nothing." The fundamental fix keeps the editor a normal,
+first-class window (so **AltTab and Cmd-` surface it as its own window**) and
+guarantees it can never get stuck:
+- **Always summon to front.** `open_graph_editor` now refocuses the existing
+  window instead of no-opping when already open, so Cmd+Shift+G (and the card
+  buttons) always bring it forward (`Window::focus_window` + `set_minimized(false)`).
+- **Remember its place.** Outer position + inner size are captured on close and
+  restored on reopen (`Application::graph_editor_geometry`), so it lands where
+  you left it.
+- **Why not a child / owned window:** a macOS child window rides the parent and
+  cannot fall behind, but it is *excluded* from AltTab and Cmd-` — it stops being
+  its own window. That trades away exactly the native window-switching we want.
+  First-class + guaranteed-summon gives "never stuck" without that cost, and is
+  simpler (no parent-window API, touches no render or input path).
 
-The only thing a separate window buys is a second monitor, which is moot — the
-editor is authoring-only and never used mid-show. In-window wins. (Stopgap if
-ever needed without the refactor: make it an *owned child* of the main window so
-it travels with focus — but that papers over the thing we are replacing.)
+**Deferred to the layout phase — in-window docking.** The richer end-state is
+still to bring the editor *inside* the main window as a dockable region, composed
+with a mini timeline + the live preview, **reusing the perform-mode render-path
+swap**: a master `active` flag short-circuits `tick_and_render` to a different
+layout; enter/exit deferred through `about_to_wait` (window mutations need
+`ActiveEventLoop` in scope); input rerouted; UI quiesced on entry and rebuilt on
+exit; **content thread + output window untouched**. The `editor-in-window-audit`
+workflow mapped the full additive 7-step migration (state struct → lifecycle
+handler → `tick_editor_mode` into the main offscreen → input re-keyed on
+`editor.active` → toggle → compose timeline+preview → delete the window), with
+the GPU-surface-sharing, ProMotion-cadence, and mid-drag-leak risks called out.
+That plan stays valid for when we build the dock/snap workspace — it is **not**
+blocked by the window fix above. Until then the well-behaved separate window is
+the right tool: it keeps the full timeline + inspector visible *alongside* the
+graph, which suits authoring (two real panes, not a strip).
 
 ---
 
 ## 9. Recommended build order
 
-1. **Window → in-window overlay** (§8). The daily friction; foundation of the
-   layout system; unblocks "neat / toggle / snap." On-node controls render into
-   a viewport either way, so they are unaffected.
+1. **Window behaviour fix** (§8) — first-class window + always-summon-to-front +
+   remembered geometry. **Shipped.** (In-window docking is deferred to the layout
+   phase; the `editor-in-window-audit` 7-step plan is kept for it.)
 2. **On-node controls** (§4), in the four passes. Read-only first to tune the
    look.
 3. **Search-first, category-grouped palette** (§3b) off the descriptor backend,
