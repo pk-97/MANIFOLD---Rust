@@ -143,7 +143,11 @@ crate::primitive! {
     ],
     composition_notes: "max_capacity is read by the chain build at allocation time (set once when authoring the preset). threshold sets the brightness cutoff in 0..1; sensitivity controls how aggressively bright regions merge into one blob. Until the first inference completes, the output buffer is all zeros — downstream consumers should skip zero-size entries.",
     examples: [],
-    picker: { label: "Blob Detect (FFI)", category: Atom },
+    picker: { label: "Blob Tracker", category: Atom },
+    summary: "Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals.",
+    category: DetectionAndSampling,
+    role: Filter,
+    aliases: ["blob tracker", "blob detect", "tracking", "bright spots"],
     extra_fields: {
         upload_pipeline: Option<GpuComputePipeline> = None,
         downsample_pipeline: Option<GpuComputePipeline> = None,

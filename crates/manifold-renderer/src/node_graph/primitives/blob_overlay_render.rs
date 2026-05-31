@@ -78,6 +78,10 @@ crate::primitive! {
     composition_notes: "Wire node.blob_detect_ffi.blobs → this primitive's blobs port. `blob_count` is an upper bound (the shader iterates this many entries from the array but skips any with zero width/height, so it's safe to leave at 32 even if the actual detection count is lower). `border_width` is in UV units (0.003 ≈ 2px at 720p). For thicker boxes raise this; for solid filled boxes set border_width > max(blob.width, blob.height).",
     examples: [],
     picker: { label: "Blob Overlay", category: Atom },
+    summary: "Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking.",
+    category: DetectionAndSampling,
+    role: Filter,
+    aliases: ["blob overlay", "tracking boxes", "debug view"],
 }
 
 impl Primitive for BlobOverlayRender {

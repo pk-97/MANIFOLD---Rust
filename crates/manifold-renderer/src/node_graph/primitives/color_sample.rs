@@ -67,7 +67,11 @@ crate::primitive! {
     ],
     composition_notes: "Single-pixel read at the configured UV (clamped to [0, 1]). Pair upstream with a `MipChain` to sample a *region* average instead of a single texel — sampling mip N reads the box-filtered 2^N×2^N neighbourhood. Use the `luma` port directly when you only need brightness — it's the same Rec.709 weighting Luminance applies frame-wide.",
     examples: [],
-    picker: { label: "ColorSample", category: Driver },
+    picker: { label: "Color Sample", category: Driver },
+    summary: "Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from.",
+    category: DetectionAndSampling,
+    role: Control,
+    aliases: ["color sample", "eyedropper", "pick color", "probe"],
     extra_fields: {
         measure_buffer: Option<GpuBuffer> = None,
         previous_value: [f32; 3] = [0.0, 0.0, 0.0],

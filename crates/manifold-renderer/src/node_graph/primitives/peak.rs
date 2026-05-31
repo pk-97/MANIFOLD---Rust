@@ -30,6 +30,10 @@ crate::primitive! {
     composition_notes: "Texture→Scalar bridge. Sparse-samples at 256 grid positions and emits the max; constant-time regardless of resolution but not pixel-exact. Pair with `node.luminance` (average) when you want both: peak for transients, average for sustained level.",
     examples: [],
     picker: { label: "Peak", category: Driver },
+    summary: "Measures the brightest point in the image and outputs it as a single number. Reacts to the highlights rather than the overall brightness.",
+    category: DetectionAndSampling,
+    role: Control,
+    aliases: ["peak", "max brightness", "highlight"],
     extra_fields: {
         measure_buffer: Option<GpuBuffer> = None,
         previous_value: f32 = 0.0,

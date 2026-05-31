@@ -66,6 +66,10 @@ crate::primitive! {
     composition_notes: "Wire between blob_detect_ffi and one_euro_filter. match_radius is the maximum Euclidean distance (in normalised 0..1 coords) for a detection to claim an existing track — raise for fast-moving blobs, lower for dense scenes. grace_frames controls how long an unmatched track persists before removal — raise for intermittent detections, lower for responsive cleanup. Output capacity matches input capacity; zero-filled slots beyond the active tracked count.",
     examples: [],
     picker: { label: "Track Persist", category: Driver },
+    summary: "Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around.",
+    category: DetectionAndSampling,
+    role: Filter,
+    aliases: ["track persist", "identity", "tracking", "id smoothing"],
     extra_fields: {
         tracked: Vec<TrackedItem> = Vec::new(),
         tracked_count: usize = 0,

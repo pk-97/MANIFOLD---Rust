@@ -52,6 +52,10 @@ crate::primitive! {
     composition_notes: "Texture→Scalar bridge. Sparse-samples at 256 grid positions — fast and constant-time regardless of input resolution, but not pixel-exact. Chain a `MipChain` upstream if exact reduction matters. Output lags input by one frame due to GPU readback.",
     examples: [],
     picker: { label: "Luminance", category: Driver },
+    summary: "Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is.",
+    category: DetectionAndSampling,
+    role: Control,
+    aliases: ["luminance", "brightness", "average", "level"],
     extra_fields: {
         measure_buffer: Option<GpuBuffer> = None,
         previous_value: f32 = 0.0,

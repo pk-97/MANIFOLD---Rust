@@ -109,7 +109,11 @@ crate::primitive! {
     ],
     composition_notes: "Wire output → node.compose `mask` input (or `node.masked_mix`) to apply effects selectively to people vs background. Combine with depth_estimate_midas via node.mix Multiply for depth-AND-person-gated isolation. Lower analysis_max_dim for faster inference at coarser masks; higher update_interval reduces CPU load at the cost of temporal lag. smoothing controls worker-side temporal blend — α = 0.55 matches the legacy WireframeDepth behavior. If the native plugin's subject API is unavailable (older plugin builds without the segmentation model), logs a warning once and outputs black.",
     examples: [],
-    picker: { label: "Person Segment", category: Atom },
+    picker: { label: "Person Mask", category: Atom },
+    summary: "Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them.",
+    category: DetectionAndSampling,
+    role: Filter,
+    aliases: ["person mask", "segmentation", "people", "matte"],
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         mask_worker: Option<BackgroundWorker<MaskRequest, MaskResponse>> = None,

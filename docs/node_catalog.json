@@ -1258,8 +1258,13 @@
       "type_id": "node.blinn_specular"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "blob tracker",
+        "blob detect",
+        "tracking",
+        "bright spots"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -1268,7 +1273,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Blob Detect (FFI)",
+      "label": "Blob Tracker",
       "outputs": [
         {
           "name": "blobs",
@@ -1328,14 +1333,18 @@
         }
       ],
       "purpose": "Sparse blob detection (bright-region tracking) via the manifold_native BlobDetector FFI plugin. Input: any Texture2D. Output: Array<Blob> (16-byte items: x, y, width, height in normalized 0..1 image space). First N entries are valid blobs (N = detected count, capped at 32); remaining entries are zeroed. Pair with downstream blob-overlay render primitives to draw the boxes, or wire to any consumer that iterates Array<Blob>.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals.",
       "type_id": "node.blob_detect_ffi"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "blob overlay",
+        "tracking boxes",
+        "debug view"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -1395,9 +1404,9 @@
         }
       ],
       "purpose": "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_detect_ffi for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking.",
       "type_id": "node.blob_overlay_render"
     },
     {
@@ -2706,8 +2715,13 @@
       "type_id": "node.color_ramp"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "color sample",
+        "eyedropper",
+        "pick color",
+        "probe"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -2716,7 +2730,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "ColorSample",
+      "label": "Color Sample",
       "outputs": [
         {
           "name": "out",
@@ -2746,9 +2760,9 @@
         }
       ],
       "purpose": "Read a single pixel from the input texture at the configured `uv`. Emits `out` (Vec3 RGB) and `luma` (Rec.709-weighted brightness scalar). Bridge for pulling representative colours or per-region brightness out of an image. One frame of latency.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from.",
       "type_id": "node.color_sample"
     },
     {
@@ -3550,8 +3564,13 @@
       "type_id": "node.cylinder_wrap_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "depth map",
+        "midas",
+        "depth",
+        "ai depth"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -3560,7 +3579,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "MiDaS Depth",
+      "label": "Depth Map",
       "outputs": [
         {
           "name": "out",
@@ -3590,9 +3609,9 @@
         }
       ],
       "purpose": "MiDaS monocular depth estimation via FFI native plugin, wrapped as a primitive. Input: any Texture2D frame. Output: depth map (R = G = B = depth ∈ [0, 1], near = 1, far = 0; A = 1). Inference runs on a background worker thread with ~2-3 frame latency; output is bilinear-upsampled from an analysis-resolution staging texture into the runtime-allocated output. Until first inference completes, the output is black.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2D footage.",
       "type_id": "node.depth_estimate_midas"
     },
     {
@@ -7650,8 +7669,13 @@
       "type_id": "node.linear_gradient"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "luminance",
+        "brightness",
+        "average",
+        "level"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -7669,9 +7693,9 @@
       ],
       "params": [],
       "purpose": "Average Rec. 709 luminance of the input texture, emitted as a scalar on `out` (range [0, 1]). Bridge from image domain to control domain — wire this into any scalar input to make the effect respond to its own brightness. One frame of latency on the measurement.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is.",
       "type_id": "node.luminance"
     },
     {
@@ -8542,8 +8566,13 @@
       "type_id": "node.one_euro_filter"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "optical flow",
+        "motion",
+        "flow",
+        "velocity"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -8586,9 +8615,9 @@
         }
       ],
       "purpose": "Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. Wraps FfiDepthEstimator::compute_flow on a background worker that holds the previous frame internally and pairs it with the current. Input: any Texture2D. Outputs: (a) Rgba16Float flow map with R=flow_x, G=confidence, B=flow_y, A=valid_mask (R/B layout matches node.flow_field_noise and node.uv_displace_by_flow); (b) scalar cut_score — global-motion-compensated frame-difference, crosses ~0.28 on hard scene cuts, near zero on continuous motion.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion.",
       "type_id": "node.optical_flow_estimate"
     },
     {
@@ -8953,8 +8982,12 @@
       "type_id": "node.pbr_material"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "peak",
+        "max brightness",
+        "highlight"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -8972,9 +9005,9 @@
       ],
       "params": [],
       "purpose": "Peak (max) Rec. 709 luminance of the input texture, emitted as a scalar on `out` (range [0, 1]). Bridge from image domain to control domain — drives knobs that should respond to the brightest spot rather than overall brightness. One frame of latency on the measurement.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Measures the brightest point in the image and outputs it as a single number. Reacts to the highlights rather than the overall brightness.",
       "type_id": "node.peak"
     },
     {
@@ -9028,8 +9061,13 @@
       "type_id": "node.perlin_noise_2d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "person mask",
+        "segmentation",
+        "people",
+        "matte"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -9038,7 +9076,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Person Segment",
+      "label": "Person Mask",
       "outputs": [
         {
           "name": "out",
@@ -9078,9 +9116,9 @@
         }
       ],
       "purpose": "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person), A = 1. Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them.",
       "type_id": "node.person_segment"
     },
     {
@@ -12976,8 +13014,13 @@
       "type_id": "node.torus_wrap_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "track persist",
+        "identity",
+        "tracking",
+        "id smoothing"
+      ],
+      "category": "Detection & Sampling",
       "examples": [],
       "inputs": [
         {
@@ -13021,9 +13064,9 @@
         }
       ],
       "purpose": "Greedy nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y). Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around.",
       "type_id": "node.track_persist"
     },
     {

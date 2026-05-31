@@ -56,8 +56,8 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.bake_equirect_envmap` | Bake Equirect Envmap | — | — | Procedurally bake an HDR studio environment map at the given resolution. |
 | `node.basic_shape` | Basic Shape | Generate | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
 | `node.blinn_specular` | Blinn Specular | — | — | Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. |
-| `node.blob_detect_ffi` | Blob Detect (FFI) | — | — | Sparse blob detection (bright-region tracking) via the manifold_native BlobDetector FFI plugin. |
-| `node.blob_overlay_render` | Blob Overlay | — | — | Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. |
+| `node.blob_detect_ffi` | Blob Tracker | Detection & Sampling | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
+| `node.blob_overlay_render` | Blob Overlay | Detection & Sampling | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
 | `node.block_displace_field` | Block Displace Field | — | — | Generator for a per-block random UV-offset field (the datamosh / block-glitch building block). |
 | `node.blur` | Blur | — | — | Separable Gaussian blur — a horizontal then a vertical pass through a per-instance ping-pong texture. |
 | `node.blur_3d_separable` | Blur 3D Separable | — | — | Single-axis separable Gaussian blur on a Texture3D. |
@@ -79,7 +79,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.convolution_2d_9tap` | Custom Convolution | — | — | General 3×3 non-separable convolution with a user-supplied kernel (9 float weights k0..k8 in row-major order, k4 = center). |
 | `node.curl_slope_force_3d` | Curl + Slope Force 3D | — | — | Combine a vec3 gradient Texture3D into a force field: cross the gradient with a unit reference axis for curl (tangential orbit around density peaks) and add th… |
 | `node.cylinder_wrap_field` | Cylinder Wrap Field | — | — | Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. |
-| `node.depth_estimate_midas` | MiDaS Depth | — | — | MiDaS monocular depth estimation via FFI native plugin, wrapped as a primitive. |
+| `node.depth_estimate_midas` | Depth Map | Detection & Sampling | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
 | `node.diffuse_force_3d_at_particles` | Diffuse Force 3D at Particles | — | — | Per-particle incoherent 3D random kick added in-place to an Array<[f32; 3]> force buffer, weighted by local density. |
 | `node.digital_plants_render` | Digital Plants Render | — | — | Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-… |
 | `node.displace_mesh` | Displace Mesh | — | — | Perturb the Y component of an Array<MeshVertex> positions grid by sampling a height Texture2D at each vertex's UV. |
@@ -138,13 +138,13 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.neighbor_smooth` | Neighbor Smooth | — | — | 5-point cross-neighborhood smoothing of an Array<InstanceTransform> arranged as an NxN grid. |
 | `node.nested_cubes_geometry` | Nested Cubes Geometry | — | — | Render a 5-instance gap-face cube field with EMA-smoothed per-instance Y rotation, per-face scatter, and a per-face envelope-driven kick on each trigger. |
 | `node.normalize_vec2` | Normalize | Math & Convert | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
-| `node.optical_flow_estimate` | Optical Flow | — | — | Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. |
+| `node.optical_flow_estimate` | Optical Flow | Detection & Sampling | Filter | Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion. |
 | `node.pack_channels` | Pack RGBA | Math & Convert | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | `node.pack_curve_xy` | Pack Curve XY | — | — | Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. |
 | `node.pack_vec4` | Combine XYZW | Math & Convert | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
 | `node.pbr_material` | PBR Material | — | — | Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. |
 | `node.perlin_noise_2d` | Perlin Noise 2D | — | — | Pure generator. |
-| `node.person_segment` | Person Segment | — | — | Person / human segmentation via the native plugin's process_subject_mask API. |
+| `node.person_segment` | Person Mask | Detection & Sampling | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
 | `node.phong_material` | Phong Material | — | — | Lambert diffuse + Blinn-Phong specular material. |
 | `node.polar_field` | Polar Field | — | — | Pure generator. |
 | `node.polytope_edges` | Polytope Edges | — | — | Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. |
@@ -218,7 +218,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.camera_orbit` | Orbit Camera | — | — | Orbit-style perspective camera source. |
 | `node.canvas_area_scale` | Canvas Area Scale | Control | Control | Outputs how big the canvas is compared to a reference size, used to keep particle brightness steady when the resolution changes. |
 | `node.clip_trigger_cycle` | Clip Trigger Cycle | Control | Control | Steps through a range on each clip trigger, never landing on the same value twice in a row. Drives never-repeat preset cycling. |
-| `node.color_sample` | ColorSample | — | — | Read a single pixel from the input texture at the configured `uv`. |
+| `node.color_sample` | Color Sample | Detection & Sampling | Control | Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from. |
 | `node.compressor_envelope` | Compressor Envelope | Control | Control | Takes a signal level and produces a gain that ducks when the input is loud, the way an audio compressor rides the volume. Use it for auto-gain on brightness. |
 | `node.cycle_table_row` | Cycle Table Row | Control | Control | Steps through the rows of a small built-in table on each clip trigger, emitting one row of numbers at a time. A way to sequence preset values. |
 | `node.envelope_decay` | Envelope Decay | Control | Control | Snaps to full on each trigger then fades back to zero at a rate you set. The classic one-shot envelope for hits and flashes. |
@@ -227,15 +227,15 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.inject_burst` | Inject Burst | Control | Control | On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new materi… |
 | `node.lfo` | LFO | Control | Control | A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free. |
 | `node.light` | Light | — | — | Single light source for 3D lighting pipelines. |
-| `node.luminance` | Luminance | — | — | Average Rec. |
+| `node.luminance` | Luminance | Detection & Sampling | Control | Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is. |
 | `node.math` | Math | Control | Control | Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation. |
 | `node.one_euro_filter` | One Euro Filter | Control | Control | Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor in… |
-| `node.peak` | Peak | — | — | Peak (max) Rec. |
+| `node.peak` | Peak | Detection & Sampling | Control | Measures the brightest point in the image and outputs it as a single number. Reacts to the highlights rather than the overall brightness. |
 | `node.sample_and_hold` | Sample & Hold | Control | Control | Grabs the value of a signal at each trigger and holds it steady until the next one. Freezes a moving value so later wiggles don't leak through. |
 | `node.scalar_array_accumulator` | Sum Into Bins | Math & Convert | Control | Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time. |
 | `node.smoothing` | Smoothing | Control | Control | Smooths a jumpy control signal into a gentle glide, with the response time set in seconds. The same feel holds whatever the frame rate. |
 | `node.texture_dimensions` | Texture Size | Math & Convert | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
-| `node.track_persist` | Track Persist | — | — | Greedy nearest-neighbour identity tracking with grace-period retention. |
+| `node.track_persist` | Track Persist | Detection & Sampling | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | `node.trigger_ease_to` | Trigger Ease To | Control | Control | On each trigger it eases smoothly from its current value to a new target over a number of beats, then rests. A beat-clocked glide between values. |
 | `node.trigger_gate` | Trigger Gate | Control | Control | Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off. |
 | `node.value` | Value | Control | Source | Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside. |
