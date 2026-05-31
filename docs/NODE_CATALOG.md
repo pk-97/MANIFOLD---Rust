@@ -69,7 +69,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.checkerboard` | Checkerboard | Generate | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | `node.chromatic_displace` | RGB Split | Distort & Warp | Filter | Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can … |
 | `node.clamp_texture` | Clamp | Color & Tone | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
-| `node.clip_trigger_index` | Clip Trigger Index | — | — | Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. |
+| `node.clip_trigger_index` | Clip Trigger Index | Control | Control | Counts how many times a clip has been triggered and wraps it to a range, so each retrigger steps to the next slot. Drives preset cycling. |
 | `node.color_ramp` | Gradient Map | Color & Tone | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
 | `node.colorize` | Colorize | Color & Tone | Filter | Tints the image toward a single colour, strongest on the bright neutral areas. Good for duotones and washes. |
 | `node.consecutive_edges` | Consecutive Edges | — | — | Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). |
@@ -211,34 +211,34 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 
 | type_id | label | category | role | summary |
 |---|---|---|---|---|
-| `node.affine_scalar` | Affine Scalar | — | — | Scalar affine remap: out = a * scale + offset. |
+| `node.affine_scalar` | Scale + Offset (value) | Control | Control | Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert. |
 | `node.array_connect_nearest` | Connect Nearest | Math & Convert | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
-| `node.beat_gate` | BeatGate | — | — | Beat-synced square gate. |
-| `node.beat_ramp` | BeatRamp | — | — | Per-beat attack envelope: out = clamp(fract(beats·rate) / attack, 0, 1). |
+| `node.beat_gate` | Beat Gate | Control | Control | A square pulse locked to the tempo, on for part of each beat and off for the rest. The strobe and chop building block. |
+| `node.beat_ramp` | Beat Ramp | Control | Control | Rises from 0 to 1 across each beat then snaps back, a sawtooth locked to the tempo. Wire it into anything you want to sweep in time with the music. |
 | `node.camera_orbit` | Orbit Camera | — | — | Orbit-style perspective camera source. |
-| `node.canvas_area_scale` | Canvas Area Scale | — | — | Emit (width * height) / reference_area as a scalar. |
-| `node.clip_trigger_cycle` | Clip Trigger Cycle | — | — | Defense-in-depth `trigger_count % modulus` cycle: emits a value in [0, modulus) on each new trigger_count, advancing past would-be repeats so consecutive emiss… |
+| `node.canvas_area_scale` | Canvas Area Scale | Control | Control | Outputs how big the canvas is compared to a reference size, used to keep particle brightness steady when the resolution changes. |
+| `node.clip_trigger_cycle` | Clip Trigger Cycle | Control | Control | Steps through a range on each clip trigger, never landing on the same value twice in a row. Drives never-repeat preset cycling. |
 | `node.color_sample` | ColorSample | — | — | Read a single pixel from the input texture at the configured `uv`. |
-| `node.compressor_envelope` | Compressor Envelope | — | — | Audio-compressor envelope path applied to a scalar signal level — log-domain, program-dependent attack/release with ratio compression toward a target; out is a… |
-| `node.cycle_table_row` | Cycle Table Row | — | — | Cycle through a curated `Table` of f32 rows on each clip trigger, emitting the selected row as `Array<f32>`. |
-| `node.envelope_decay` | Envelope Decay | — | — | Exponential one-shot decay — snaps to 1.0 on each integer-edge change of `trigger`, then decays frame-rate-independently (env *= exp(-decay_rate · dt)). |
-| `node.envelope_follower_ar` | Envelope Follower (A/R) | — | — | Asymmetric attack/release envelope follower on a scalar — switches time constant on rising (`attack`) vs falling (`release`) input. |
-| `node.frequency_ratio` | Frequency Ratio | — | — | Emit two scalars from a curated table of small-integer harmonic ratios. |
-| `node.inject_burst` | Inject Burst | — | — | Fixed-duration burst state machine — on each new `trigger` (when enabled) runs a burst for `duration` seconds emitting active=1, a 0→1 phase ramp, and a stable… |
+| `node.compressor_envelope` | Compressor Envelope | Control | Control | Takes a signal level and produces a gain that ducks when the input is loud, the way an audio compressor rides the volume. Use it for auto-gain on brightness. |
+| `node.cycle_table_row` | Cycle Table Row | Control | Control | Steps through the rows of a small built-in table on each clip trigger, emitting one row of numbers at a time. A way to sequence preset values. |
+| `node.envelope_decay` | Envelope Decay | Control | Control | Snaps to full on each trigger then fades back to zero at a rate you set. The classic one-shot envelope for hits and flashes. |
+| `node.envelope_follower_ar` | Envelope Follower (A/R) | Control | Control | Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth. |
+| `node.frequency_ratio` | Frequency Ratio | Control | Control | Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form. |
+| `node.inject_burst` | Inject Burst | Control | Control | On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new materi… |
 | `node.lfo` | LFO | Control | Control | A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free. |
 | `node.light` | Light | — | — | Single light source for 3D lighting pipelines. |
 | `node.luminance` | Luminance | — | — | Average Rec. |
-| `node.math` | Math | — | — | Scalar arithmetic. |
-| `node.one_euro_filter` | One Euro Filter | — | — | Adaptive temporal low-pass (1€ filter) on a Channels array. |
+| `node.math` | Math | Control | Control | Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation. |
+| `node.one_euro_filter` | One Euro Filter | Control | Control | Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor in… |
 | `node.peak` | Peak | — | — | Peak (max) Rec. |
-| `node.sample_and_hold` | Sample & Hold | — | — | Capture an input scalar on each trigger-edge and hold it until the next edge — freezes the trigger-time value so mid-decay slider moves don't leak through. |
+| `node.sample_and_hold` | Sample & Hold | Control | Control | Grabs the value of a signal at each trigger and holds it steady until the next one. Freezes a moving value so later wiggles don't leak through. |
 | `node.scalar_array_accumulator` | Sum Into Bins | Math & Convert | Control | Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time. |
-| `node.smoothing` | Smoothing | — | — | Exponential one-pole smoothing on a scalar wire — response time ≈ `time_constant` seconds, frame-rate-independent. |
+| `node.smoothing` | Smoothing | Control | Control | Smooths a jumpy control signal into a gentle glide, with the response time set in seconds. The same feel holds whatever the frame rate. |
 | `node.texture_dimensions` | Texture Size | Math & Convert | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
 | `node.track_persist` | Track Persist | — | — | Greedy nearest-neighbour identity tracking with grace-period retention. |
-| `node.trigger_ease_to` | Trigger Ease To | — | — | Beat-clocked snap-and-glide — on each trigger edge eases from the current value to the incoming `target` along a cubic ease-out over `window_beats` beats, then… |
-| `node.trigger_gate` | Trigger Gate | — | — | Gate a trigger_count scalar stream. |
-| `node.value` | Value | — | — | Emit a constant scalar value on the `out` port. |
+| `node.trigger_ease_to` | Trigger Ease To | Control | Control | On each trigger it eases smoothly from its current value to a new target over a number of beats, then rests. A beat-clocked glide between values. |
+| `node.trigger_gate` | Trigger Gate | Control | Control | Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off. |
+| `node.value` | Value | Control | Source | Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside. |
 
 ### Unlisted (registered, not in palette) (13)
 

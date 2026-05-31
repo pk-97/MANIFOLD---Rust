@@ -51,7 +51,11 @@ crate::primitive! {
     ],
     composition_notes: "Use to remap one scalar to another via a single affine step. Defaults (scale=1, offset=0) pass through. For `freq = 3 + 5 * complexity`: scale=5, offset=3, a=complexity (wired or bound). For `t = time * speed`: scale=speed_value, offset=0 (or just use Math.Multiply if `scale` is itself a wire). Negative `scale` lets you express subtractions inline (e.g. `0.3 - 0.28*c` is scale=-0.28, offset=0.3).",
     examples: [],
-    picker: { label: "Affine Scalar", category: Driver },
+    picker: { label: "Scale + Offset (value)", category: Driver },
+    summary: "Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert.",
+    category: Control,
+    role: Control,
+    aliases: ["scale offset", "rescale", "map range", "attenuvert"],
 }
 
 impl Primitive for AffineScalar {

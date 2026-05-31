@@ -65,6 +65,10 @@ crate::primitive! {
     composition_notes: "Wire after any noisy Channels producer (blob_detect_ffi, depth_estimate_midas, audio analyzer). min_cutoff sets the baseline smoothing when the signal is still — lower = more smoothing. beta controls how aggressively the filter opens up during fast motion — higher = more responsive to speed. d_cutoff is the derivative filter's cutoff — rarely needs changing. All three are port-shadows-param so control wires can modulate them per-frame.",
     examples: [],
     picker: { label: "One Euro Filter", category: Driver },
+    summary: "Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor input.",
+    category: Control,
+    role: Control,
+    aliases: ["one euro filter", "smooth", "1 euro filter", "denoise"],
     extra_fields: {
         prev: Vec<f32> = Vec::new(),
         dx: Vec<f32> = Vec::new(),

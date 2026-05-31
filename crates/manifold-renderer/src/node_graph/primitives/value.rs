@@ -36,6 +36,10 @@ crate::primitive! {
     composition_notes: "First-class building block of the control-wire surface. Future LFO / Math / Beat primitives slot in next to this with the same Scalar(F32) output shape.",
     examples: [],
     picker: { label: "Value", category: Driver },
+    summary: "Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside.",
+    category: Control,
+    role: Source,
+    aliases: ["value", "constant", "Constant CHOP"],
 }
 
 impl Primitive for Value {

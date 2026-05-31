@@ -295,31 +295,59 @@ hand_descriptor!(
 // Control-rate scalar plumbing (driver primitives)
 hand_descriptor!(
     "node.compressor_envelope",
-    "Audio-compressor envelope path applied to a scalar signal level — log-domain, program-dependent attack/release with ratio compression toward a target; out is a gain multiplier in [0.1, 10.0]. Stateful."
+    "Audio-compressor envelope path applied to a scalar signal level. Log-domain, program-dependent attack/release with ratio compression toward a target. Out is a gain multiplier in [0.1, 10.0]. Stateful.",
+    summary: "Takes a signal level and produces a gain that ducks when the input is loud, the way an audio compressor rides the volume. Use it for auto-gain on brightness.",
+    category: Control,
+    role: Control,
+    aliases: ["compressor", "auto gain", "envelope", "duck"],
 );
 hand_descriptor!(
     "node.envelope_decay",
-    "Exponential one-shot decay — snaps to 1.0 on each integer-edge change of `trigger`, then decays frame-rate-independently (env *= exp(-decay_rate · dt)). Drives clip-trigger envelope modes."
+    "Exponential one-shot decay. Snaps to 1.0 on each integer-edge change of `trigger`, then decays frame-rate-independently (env *= exp(-decay_rate · dt)). Drives clip-trigger envelope modes.",
+    summary: "Snaps to full on each trigger then fades back to zero at a rate you set. The classic one-shot envelope for hits and flashes.",
+    category: Control,
+    role: Control,
+    aliases: ["envelope decay", "decay", "one shot", "ar envelope"],
 );
 hand_descriptor!(
     "node.envelope_follower_ar",
-    "Asymmetric attack/release envelope follower on a scalar — switches time constant on rising (`attack`) vs falling (`release`) input. The audio-style counterpart to the symmetric node.smoothing."
+    "Asymmetric attack/release envelope follower on a scalar. Switches time constant on rising (`attack`) vs falling (`release`) input. The audio-style counterpart to the symmetric node.smoothing.",
+    summary: "Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth.",
+    category: Control,
+    role: Control,
+    aliases: ["envelope follower", "attack release", "follower", "ar"],
 );
 hand_descriptor!(
     "node.inject_burst",
-    "Fixed-duration burst state machine — on each new `trigger` (when enabled) runs a burst for `duration` seconds emitting active=1, a 0→1 phase ramp, and a stable hashed pick point. Drives FluidSim2D's inject mode."
+    "Fixed-duration burst state machine. On each new `trigger` (when enabled) runs a burst for `duration` seconds emitting active=1, a 0 to 1 phase ramp, and a stable hashed pick point. Drives FluidSim2D's inject mode.",
+    summary: "On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new material on a hit.",
+    category: Control,
+    role: Control,
+    aliases: ["inject burst", "burst", "puff", "impulse"],
 );
 hand_descriptor!(
     "node.sample_and_hold",
-    "Capture an input scalar on each trigger-edge and hold it until the next edge — freezes the trigger-time value so mid-decay slider moves don't leak through."
+    "Capture an input scalar on each trigger-edge and hold it until the next edge. Freezes the trigger-time value so mid-decay slider moves don't leak through.",
+    summary: "Grabs the value of a signal at each trigger and holds it steady until the next one. Freezes a moving value so later wiggles don't leak through.",
+    category: Control,
+    role: Control,
+    aliases: ["sample and hold", "latch", "hold", "s&h"],
 );
 hand_descriptor!(
     "node.smoothing",
-    "Exponential one-pole smoothing on a scalar wire — response time ≈ `time_constant` seconds, frame-rate-independent. Symmetric (single time constant)."
+    "Exponential one-pole smoothing on a scalar wire. Response time is about `time_constant` seconds, frame-rate-independent. Symmetric (single time constant).",
+    summary: "Smooths a jumpy control signal into a gentle glide, with the response time set in seconds. The same feel holds whatever the frame rate.",
+    category: Control,
+    role: Control,
+    aliases: ["smoothing", "lag", "glide", "Lag CHOP"],
 );
 hand_descriptor!(
     "node.trigger_ease_to",
-    "Beat-clocked snap-and-glide — on each trigger edge eases from the current value to the incoming `target` along a cubic ease-out over `window_beats` beats, then rests until the next trigger."
+    "Beat-clocked snap-and-glide. On each trigger edge eases from the current value to the incoming `target` along a cubic ease-out over `window_beats` beats, then rests until the next trigger.",
+    summary: "On each trigger it eases smoothly from its current value to a new target over a number of beats, then rests. A beat-clocked glide between values.",
+    category: Control,
+    role: Control,
+    aliases: ["trigger ease", "glide", "ease to", "ramp to"],
 );
 
 // Vector field (rotate_vec2_by_angle.rs — legacy alias)

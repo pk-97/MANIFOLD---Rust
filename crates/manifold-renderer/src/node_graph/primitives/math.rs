@@ -68,6 +68,10 @@ crate::primitive! {
     composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate. Sin and Cos are unary ops that read `a` only (in radians) and ignore `b`; convenient for deriving rotation coefficients from time wires when composing rotating procedural fields. Floor and Ceil are unary; the canonical use is bracket-interp scaffolding (a_lo = floor(freq), a_hi = ceil(freq), a_lerp = freq - a_lo) for graphs that morph smoothly between integer-parameter samples of a curve family (Lissajous, Rose, etc.).",
     examples: [],
     picker: { label: "Math", category: Driver },
+    summary: "Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation.",
+    category: Control,
+    role: Control,
+    aliases: ["math", "calculate", "Math CHOP"],
 }
 
 impl Primitive for Math {

@@ -46,6 +46,10 @@ crate::primitive! {
     composition_notes: "modulus = 7 matches FluidSim's seed-pattern cycle; other generators dial in their own row count. Both inputs are port-shadows-param. Idempotent within a frame: repeated calls at the same trigger_count return the cached emission.",
     examples: [],
     picker: { label: "Clip Trigger Cycle", category: Driver },
+    summary: "Steps through a range on each clip trigger, never landing on the same value twice in a row. Drives never-repeat preset cycling.",
+    category: Control,
+    role: Control,
+    aliases: ["clip trigger cycle", "cycle", "rotate"],
     extra_fields: {
         cycle: ClipTriggerCycle = ClipTriggerCycle::new(),
     },

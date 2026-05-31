@@ -71,7 +71,11 @@ crate::primitive! {
     ],
     composition_notes: "Output is `0` or `amount` (not blended). For smooth-edged strobes, wire through `node.lfo` (square shape) and a slew/smoothing primitive instead. `duty` defaults to 0.5 — matches the gate in `node.strobe`. Wiring an LFO or envelope into `amount` produces a beat-quantised modulated gate.",
     examples: [],
-    picker: { label: "BeatGate", category: Driver },
+    picker: { label: "Beat Gate", category: Driver },
+    summary: "A square pulse locked to the tempo, on for part of each beat and off for the rest. The strobe and chop building block.",
+    category: Control,
+    role: Control,
+    aliases: ["beat gate", "strobe", "tempo gate", "chop"],
 }
 
 impl Primitive for BeatGate {

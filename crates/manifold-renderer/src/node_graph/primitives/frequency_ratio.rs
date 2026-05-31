@@ -60,6 +60,10 @@ crate::primitive! {
     composition_notes: "Index rounds to nearest integer and wraps modulo 10, so wiring an unbounded counter into the input port cycles through the table. The table is small-integer ratios chosen for visually-clean closed Lissajous curves — for non-Lissajous uses the same harmonic vocabulary still produces musically-coherent outputs.",
     examples: [],
     picker: { label: "Frequency Ratio", category: Driver },
+    summary: "Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form.",
+    category: Control,
+    role: Control,
+    aliases: ["frequency ratio", "harmonic", "interval"],
     extra_fields: {
         clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
     },

@@ -43,6 +43,10 @@ crate::primitive! {
     composition_notes: "Wire system.generator_input.trigger_count → trigger_count input. Modulus is the cycle length (3 for a tri-state axis swap, 8 for an eight-variant pattern bank). Pass raw trigger_count — never pre-wrap via math.modulo upstream; the gate's idempotence detection compares against the last raw value it saw, so pre-wrapping breaks the cycle (the 67f8db94 bug class). Output is `current_index` as f32 in [0, modulus). State is preserved across frames inside the primitive's extra_fields and resets on generator rebuild — accepted authoring-time trade-off per §10.",
     examples: [],
     picker: { label: "Clip Trigger Index", category: Atom },
+    summary: "Counts how many times a clip has been triggered and wraps it to a range, so each retrigger steps to the next slot. Drives preset cycling.",
+    category: Control,
+    role: Control,
+    aliases: ["clip trigger index", "trigger count", "cycle index"],
     extra_fields: {
         cycle: ClipTriggerCycle = ClipTriggerCycle::new(),
     },

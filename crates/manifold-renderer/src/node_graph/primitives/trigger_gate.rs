@@ -41,6 +41,10 @@ crate::primitive! {
     composition_notes: "Both `trigger_count` and `enable` are port-shadows-param. When the enable wire is present, values > 0.5 are treated as enabled (BoolThreshold semantics). When absent, the `enable` param drives. State (last_input, output_count) is fresh on rebuild per the graph-editor-is-authoring-not-perform rule.",
     examples: ["NestedCubes"],
     picker: { label: "Trigger Gate", category: Driver },
+    summary: "Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off.",
+    category: Control,
+    role: Control,
+    aliases: ["trigger gate", "gate", "enable"],
     extra_fields: {
         last_input: Option<u32> = None,
         output_count: u32 = 0,

@@ -32,8 +32,13 @@
       "type_id": "node.abs_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "scale offset",
+        "rescale",
+        "map range",
+        "attenuvert"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -52,7 +57,7 @@
           "type": "f32"
         }
       ],
-      "label": "Affine Scalar",
+      "label": "Scale + Offset (value)",
       "outputs": [
         {
           "name": "out",
@@ -92,9 +97,9 @@
         }
       ],
       "purpose": "Scalar affine remap: out = a * scale + offset. The scalar counterpart of node.scale_offset_texture — collapses Value+Math+Value+Math derivations like `3 + 5*x` or `0.3 - 0.28*x` into a single node. All three inputs are port-shadows-param: an inline param value drives the op when the wire is unwired.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert.",
       "type_id": "node.affine_scalar"
     },
     {
@@ -981,11 +986,16 @@
       "type_id": "node.basic_shape"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "beat gate",
+        "strobe",
+        "tempo gate",
+        "chop"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [],
-      "label": "BeatGate",
+      "label": "Beat Gate",
       "outputs": [
         {
           "name": "out",
@@ -1047,14 +1057,19 @@
         }
       ],
       "purpose": "Beat-synced square gate. Outputs `0` when off and `amount` when on, flipping at the `duty` point within each cycle of the selected note rate. Stateless and seek-safe — the same musical pattern as `node.strobe`'s internal gate, surfaced as a wireable scalar source.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "A square pulse locked to the tempo, on for part of each beat and off for the rest. The strobe and chop building block.",
       "type_id": "node.beat_gate"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "beat ramp",
+        "saw",
+        "tempo ramp",
+        "phase"
+      ],
+      "category": "Control",
       "examples": [
         "preset.effect.voronoi_prism"
       ],
@@ -1065,7 +1080,7 @@
           "type": "f32"
         }
       ],
-      "label": "BeatRamp",
+      "label": "Beat Ramp",
       "outputs": [
         {
           "name": "out",
@@ -1095,9 +1110,9 @@
         }
       ],
       "purpose": "Per-beat attack envelope: out = clamp(fract(beats·rate) / attack, 0, 1). Snaps to 0 each beat, ramps to 1 over the first `attack` fraction of the cycle, then holds. The musician-facing pop-in envelope (Voronoi Prism fades cells in over the first 15% of each beat). Stateless / seek-safe — reads FrameTime.beats (or a wired `beat`). Wire into any scalar (gain, mask multiplier, opacity) for a beat-synced attack.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Rises from 0 to 1 across each beat then snaps back, a sawtooth locked to the tempo. Wire it into anything you want to sweep in time with the music.",
       "type_id": "node.beat_ramp"
     },
     {
@@ -1871,8 +1886,12 @@
       "type_id": "node.camera_orbit"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "canvas area scale",
+        "resolution compensation",
+        "area"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -1946,9 +1965,9 @@
         }
       ],
       "purpose": "Emit (width * height) / reference_area as a scalar. The brightness compensation atom for splat-based density displays — wire `width` from `system.generator_input.output_width` and `height` from `system.generator_input.output_height`, then multiply the result into a tone-map's `intensity` so the canvas stays equally bright across output resolutions.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Outputs how big the canvas is compared to a reference size, used to keep particle brightness steady when the resolution changes.",
       "type_id": "node.canvas_area_scale"
     },
     {
@@ -2501,8 +2520,12 @@
       "type_id": "node.clamp_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "clip trigger cycle",
+        "cycle",
+        "rotate"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -2536,14 +2559,18 @@
         }
       ],
       "purpose": "Defense-in-depth `trigger_count % modulus` cycle: emits a value in [0, modulus) on each new trigger_count, advancing past would-be repeats so consecutive emissions never duplicate. Pair with `node.fluid_seed.pattern` for the legacy 7-pattern re-seed cycle, or any other discrete selector that must never fire the same row twice in a row. Pass RAW `trigger_count` (never pre-wrapped) — the cycle handles the modulus internally and pre-wrapping breaks idempotence.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Steps through a range on each clip trigger, never landing on the same value twice in a row. Drives never-repeat preset cycling.",
       "type_id": "node.clip_trigger_cycle"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "clip trigger index",
+        "trigger count",
+        "cycle index"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -2577,9 +2604,9 @@
         }
       ],
       "purpose": "Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. The graph-level counterpart to a primitive's internal clip-trigger cycling (Plasma does this inline). Use as `mux_texture.selector` to swap between N upstream variants on each clip retrigger; pair with `mux_scalar` and a static-axis param to support both manual and trigger-driven modes from one outer-card toggle.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Counts how many times a clip has been triggered and wraps it to a range, so each retrigger steps to the next slot. Drives preset cycling.",
       "type_id": "node.clip_trigger_index"
     },
     {
@@ -2817,8 +2844,13 @@
       "type_id": "node.colorize"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "compressor",
+        "auto gain",
+        "envelope",
+        "duck"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -2886,10 +2918,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Audio-compressor envelope path applied to a scalar signal level — log-domain, program-dependent attack/release with ratio compression toward a target; out is a gain multiplier in [0.1, 10.0]. Stateful.",
-      "role": "Unknown",
+      "purpose": "Audio-compressor envelope path applied to a scalar signal level. Log-domain, program-dependent attack/release with ratio compression toward a target. Out is a gain multiplier in [0.1, 10.0]. Stateful.",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Takes a signal level and produces a gain that ducks when the input is loud, the way an audio compressor rides the volume. Use it for auto-gain on brightness.",
       "type_id": "node.compressor_envelope"
     },
     {
@@ -3391,8 +3423,12 @@
       "type_id": "node.curl_slope_force_3d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "cycle table row",
+        "sequence",
+        "step"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -3417,9 +3453,9 @@
         }
       ],
       "purpose": "Cycle through a curated `Table` of f32 rows on each clip trigger, emitting the selected row as `Array<f32>`. The generic preset-cycler primitive — pair with any consumer that takes a variable-length float buffer (per-instance angles, channel triplets, rhythm steps) plus a trigger source from generator_input. Output capacity = table.col_count(); rows are dimensionally consistent (enforced at JSON load).",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Steps through the rows of a small built-in table on each clip trigger, emitting one row of numbers at a time. A way to sequence preset values.",
       "type_id": "node.cycle_table_row"
     },
     {
@@ -4241,8 +4277,13 @@
       "type_id": "node.ellipse_mask"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "envelope decay",
+        "decay",
+        "one shot",
+        "ar envelope"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -4275,15 +4316,20 @@
           "type": "float"
         }
       ],
-      "purpose": "Exponential one-shot decay — snaps to 1.0 on each integer-edge change of `trigger`, then decays frame-rate-independently (env *= exp(-decay_rate · dt)). Drives clip-trigger envelope modes.",
-      "role": "Unknown",
+      "purpose": "Exponential one-shot decay. Snaps to 1.0 on each integer-edge change of `trigger`, then decays frame-rate-independently (env *= exp(-decay_rate · dt)). Drives clip-trigger envelope modes.",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Snaps to full on each trigger then fades back to zero at a rate you set. The classic one-shot envelope for hits and flashes.",
       "type_id": "node.envelope_decay"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "envelope follower",
+        "attack release",
+        "follower",
+        "ar"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -4336,10 +4382,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Asymmetric attack/release envelope follower on a scalar — switches time constant on rising (`attack`) vs falling (`release`) input. The audio-style counterpart to the symmetric node.smoothing.",
-      "role": "Unknown",
+      "purpose": "Asymmetric attack/release envelope follower on a scalar. Switches time constant on rising (`attack`) vs falling (`release`) input. The audio-style counterpart to the symmetric node.smoothing.",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth.",
       "type_id": "node.envelope_follower_ar"
     },
     {
@@ -5152,8 +5198,12 @@
       "type_id": "node.fract_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "frequency ratio",
+        "harmonic",
+        "interval"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -5186,9 +5236,9 @@
         }
       ],
       "purpose": "Emit two scalars from a curated table of small-integer harmonic ratios. `a:b` maps to a musical interval (1:2 octave, 2:3 fifth, 3:4 fourth, …). Indexing the 10-row table is the clip-trigger primitive for shape generators (Lissajous-style curves) that want clean musically-meaningful closed shapes instead of non-closing scribbles. `index` is port-shadows-param so a counter / trigger source can drive the variety per retrigger.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form.",
       "type_id": "node.frequency_ratio"
     },
     {
@@ -6558,8 +6608,13 @@
       "type_id": "node.image_folder"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "inject burst",
+        "burst",
+        "puff",
+        "impulse"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -6604,10 +6659,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Fixed-duration burst state machine — on each new `trigger` (when enabled) runs a burst for `duration` seconds emitting active=1, a 0→1 phase ramp, and a stable hashed pick point. Drives FluidSim2D's inject mode.",
-      "role": "Unknown",
+      "purpose": "Fixed-duration burst state machine. On each new `trigger` (when enabled) runs a burst for `duration` seconds emitting active=1, a 0 to 1 phase ramp, and a stable hashed pick point. Drives FluidSim2D's inject mode.",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new material on a hit.",
       "type_id": "node.inject_burst"
     },
     {
@@ -7718,8 +7773,12 @@
       "type_id": "node.matcap_two_tone"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "math",
+        "calculate",
+        "Math CHOP"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -7789,9 +7848,9 @@
         }
       ],
       "purpose": "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation.",
       "type_id": "node.math"
     },
     {
@@ -8412,8 +8471,13 @@
       "type_id": "node.normalize_vec2"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "one euro filter",
+        "smooth",
+        "1 euro filter",
+        "denoise"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -8472,9 +8536,9 @@
         }
       ],
       "purpose": "Adaptive temporal low-pass (1€ filter) on a Channels array. Low cutoff when the signal is still (heavy smoothing, eliminates jitter); raises cutoff when the signal moves fast (responsive tracking, no perceptible lag). Per-channel per-sample independent filter. Wire detection regions, DNN depth scalars, audio bins, or any noisy signal that needs temporal stabilisation.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor input.",
       "type_id": "node.one_euro_filter"
     },
     {
@@ -10925,8 +10989,13 @@
       "type_id": "node.rotate_vec2_by_angle"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "sample and hold",
+        "latch",
+        "hold",
+        "s&h"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -10948,10 +11017,10 @@
         }
       ],
       "params": [],
-      "purpose": "Capture an input scalar on each trigger-edge and hold it until the next edge — freezes the trigger-time value so mid-decay slider moves don't leak through.",
-      "role": "Unknown",
+      "purpose": "Capture an input scalar on each trigger-edge and hold it until the next edge. Freezes the trigger-time value so mid-decay slider moves don't leak through.",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Grabs the value of a signal at each trigger and holds it steady until the next one. Freezes a moving value so later wiggles don't leak through.",
       "type_id": "node.sample_and_hold"
     },
     {
@@ -12422,8 +12491,13 @@
       "type_id": "node.slope_displace"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "smoothing",
+        "lag",
+        "glide",
+        "Lag CHOP"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -12461,10 +12535,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Exponential one-pole smoothing on a scalar wire — response time ≈ `time_constant` seconds, frame-rate-independent. Symmetric (single time constant).",
-      "role": "Unknown",
+      "purpose": "Exponential one-pole smoothing on a scalar wire. Response time is about `time_constant` seconds, frame-rate-independent. Symmetric (single time constant).",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Smooths a jumpy control signal into a gentle glide, with the response time set in seconds. The same feel holds whatever the frame rate.",
       "type_id": "node.smoothing"
     },
     {
@@ -13086,8 +13160,13 @@
       "type_id": "node.trig_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "trigger ease",
+        "glide",
+        "ease to",
+        "ramp to"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [
         {
@@ -13125,15 +13204,19 @@
           "type": "float"
         }
       ],
-      "purpose": "Beat-clocked snap-and-glide — on each trigger edge eases from the current value to the incoming `target` along a cubic ease-out over `window_beats` beats, then rests until the next trigger.",
-      "role": "Unknown",
+      "purpose": "Beat-clocked snap-and-glide. On each trigger edge eases from the current value to the incoming `target` along a cubic ease-out over `window_beats` beats, then rests until the next trigger.",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "On each trigger it eases smoothly from its current value to a new target over a number of beats, then rests. A beat-clocked glide between values.",
       "type_id": "node.trigger_ease_to"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "trigger gate",
+        "gate",
+        "enable"
+      ],
+      "category": "Control",
       "examples": [
         "NestedCubes"
       ],
@@ -13165,9 +13248,9 @@
         }
       ],
       "purpose": "Gate a trigger_count scalar stream. When `enable` is true, advances pass through (output += input - previous_input). When false, advances are absorbed — output stays frozen and re-enabling does NOT fire a backlog. Equivalent to the legacy `if triggered { advance }` gate pattern, expressed as a graph wire instead of consumer-internal state.",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off.",
       "type_id": "node.trigger_gate"
     },
     {
@@ -13436,8 +13519,12 @@
       "type_id": "node.uv_strip_clamp"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "value",
+        "constant",
+        "Constant CHOP"
+      ],
+      "category": "Control",
       "examples": [],
       "inputs": [],
       "label": "Value",
@@ -13456,9 +13543,9 @@
         }
       ],
       "purpose": "Emit a constant scalar value on the `out` port. Drive any scalar input by wiring this in; the consumer's same-named param becomes the fallback for when the wire is absent.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside.",
       "type_id": "node.value"
     },
     {

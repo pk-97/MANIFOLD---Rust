@@ -83,6 +83,10 @@ crate::primitive! {
     composition_notes: "Pair with `system.generator_input.output_width` and `output_height` to compute the runtime canvas-area ratio against the configured `reference_area` (default 1920×1080 = 2,073,600). Use the output to scale a tone-map's `intensity` so splat-based density displays stay perceptually consistent across resolutions. `reference_area = 0` falls back to 1.0 (passthrough) to avoid div-by-zero on misconfigured presets. `min_width` / `min_height` clamp the inputs upward — set to 640 / 360 for FluidSim2D parity so small windows don't dim below usable brightness.",
     examples: [],
     picker: { label: "Canvas Area Scale", category: Driver },
+    summary: "Outputs how big the canvas is compared to a reference size, used to keep particle brightness steady when the resolution changes.",
+    category: Control,
+    role: Control,
+    aliases: ["canvas area scale", "resolution compensation", "area"],
 }
 
 impl Primitive for CanvasAreaScale {
