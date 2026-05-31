@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 203 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 204 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -111,16 +111,13 @@ _Generated from the node registry. Do not hand-edit. 203 nodes registered, group
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
 | Value Overlay | `node.render_value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 
-### Noise (7)
+### Noise (4)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| fBM 2D | `node.fbm_2d` | Source | Layered noise that stacks several octaves for rich, detailed texture, the fractal look behind clouds, terrain, and smoke. |
 | Flow Field Noise | `node.flow_field_noise` | Source | Generates a swirling 2D flow field from layered noise, the velocity field you feed into advect or displace for fluid-like motion. |
-| Hash Noise Field 2D | `node.hash_noise_field_2d` | Source | Sharp per-pixel random noise with no smoothing, the harsh static look. Good for grain, sparkle, and dissolve effects. |
-| Perlin Noise 2D | `node.perlin_noise_2d` | Source | Smooth, cloudy random noise, the classic for organic textures and slow-moving fields. Soft and rounded compared to other noise types. |
+| Noise | `node.noise` | Source | Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin and Simplex are smooth and organi… |
 | Simplex Field 2D | `node.simplex_field_2d` | Source | Signed simplex noise output as a field, used to drive flows and displacements rather than shown directly. |
-| Simplex Noise 2D | `node.simplex_noise_2d` | Source | Smooth random noise similar to Perlin but cleaner and with fewer directional artifacts. A good general-purpose noise. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
 ### Mask (4)
@@ -327,6 +324,15 @@ _Generated from the node registry. Do not hand-edit. 203 nodes registered, group
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
+
+### Uncategorized (4)
+
+| Node | type_id | role | summary |
+|---|---|---|---|
+| — | `node.fbm_2d` | — | — |
+| — | `node.hash_noise_field_2d` | — | — |
+| — | `node.perlin_noise_2d` | — | — |
+| — | `node.simplex_noise_2d` | — | — |
 
 ### Effect & generator presets (45)
 
