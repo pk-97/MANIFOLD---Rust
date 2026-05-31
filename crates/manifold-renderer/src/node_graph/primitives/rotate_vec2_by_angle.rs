@@ -51,7 +51,11 @@ crate::primitive! {
     ],
     composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_2d` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). Legacy type-ID `node.rotate_vec2_90` aliases to this primitive; saved projects keep working with the default PI/2 angle.",
     examples: [],
-    picker: { label: "Rotate Vec2 (Angle)", category: Atom },
+    picker: { label: "Rotate Vector", category: Atom },
+    summary: "Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["rotate vector", "turn", "rotate flow"],
 }
 
 // Type-ID alias so saved projects referencing the legacy

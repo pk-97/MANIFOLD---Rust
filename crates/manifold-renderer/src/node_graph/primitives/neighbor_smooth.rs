@@ -52,7 +52,11 @@ crate::primitive! {
     ],
     composition_notes: "grid_size must match the producer upstream (DigitalPlants uses 400×400 = 160k instances). Total active = grid_size² capped at buffer capacity. center_weight=0.6 matches the DigitalPlants default; 1.0 disables smoothing; 0.2 is heavy smoothing. The 4 neighbor weights are uniformly (1-center)/4 each.",
     examples: [],
-    picker: { label: "Neighbor Smooth", category: Atom },
+    picker: { label: "Smooth (neighbors)", category: Atom },
+    summary: "Averages each point with its neighbours on a grid, smoothing out a bumpy field of values or positions.",
+    category: FieldsAndCoordinates,
+    role: Filter,
+    aliases: ["smooth", "neighbor average", "blur grid"],
 }
 
 impl Primitive for NeighborSmooth {

@@ -55,7 +55,11 @@ crate::primitive! {
     ],
     composition_notes: "Steps × dt = effective LIC half-length in pixels (oily Flow Field uses 16×2 ≈ 32px streaks; Lines uses 20×1.5 ≈ 30px streaks). Velocity is normalised per-step (direction-only) — the magnitude scales the *advection rate* through `node.texture_advect`, not the LIC walk length. Output may exceed [0, 1] for sources with high local variance; pair downstream with `node.smoothstep_texture` (thresholding into clean lines) or `node.tone_map` (smooth grade).",
     examples: [],
-    picker: { label: "LIC Integrate", category: Atom },
+    picker: { label: "Flow Lines (LIC)", category: Atom },
+    summary: "Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture.",
+    category: FieldsAndCoordinates,
+    role: Filter,
+    aliases: ["flow lines", "lic", "streamlines", "flow viz"],
 }
 
 impl Primitive for LicIntegrate {

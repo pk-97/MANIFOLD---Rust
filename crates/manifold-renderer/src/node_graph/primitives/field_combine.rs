@@ -67,6 +67,10 @@ crate::primitive! {
     composition_notes: "Defaults (a=1, b=0, c=0) pass uv.x through unchanged. For Plasma-style rotated fields, wire `a` and `b` from node.math (Cos / Sin of time) and derive `c` to keep the field centered. Reads only R and G of the input — alpha and blue are ignored, alpha is forced to 1 on output.",
     examples: [],
     picker: { label: "Field Combine", category: Atom },
+    summary: "Mixes the channels of a coordinate field into one value with weights and an offset. The math step that turns coordinates into a custom gradient.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["field combine", "channel mix", "linear combine"],
 }
 
 impl Primitive for FieldCombine {

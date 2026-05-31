@@ -76,7 +76,11 @@ crate::primitive! {
     ],
     composition_notes: "Output is a SIGNED vec2 field. Pair with `node.normalize_vec2` for direction-only gradients (used in fluid-sim curl forcing), or feed directly into `node.rotate_vec2_by_angle` for arbitrary-angle curl flow. For a per-channel gradient of an RG texture (oily-fluid pattern), instance this primitive twice with channel=R and channel=G and combine downstream. Defaults (Texel + Clamp) preserve legacy oily-fluid / heightmap behaviour. Use scale_mode=UV + wrap_mode=Repeat to compose with `scale_offset_texture` + `rotate_vec2_by_angle` as the decomposed `fluid_gradient_rotate` pipeline.",
     examples: [],
-    picker: { label: "Gradient (Central Diff)", category: Atom },
+    picker: { label: "Edge Slope", category: Atom },
+    summary: "Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects.",
+    category: FieldsAndCoordinates,
+    role: Filter,
+    aliases: ["gradient", "edge slope", "derivative", "sobel"],
     extra_fields: {
         repeat_sampler: Option<manifold_gpu::GpuSampler> = None,
     },

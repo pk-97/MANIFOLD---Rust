@@ -746,8 +746,13 @@
       "type_id": "node.array_math"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "repeat outline",
+        "rings",
+        "concentric",
+        "replicate"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -766,7 +771,7 @@
           "type": "Array"
         }
       ],
-      "label": "Replicate Polyline Rings",
+      "label": "Repeat Outline (rings)",
       "outputs": [
         {
           "name": "outline",
@@ -790,9 +795,9 @@
         }
       ],
       "purpose": "Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. Per-ring uniform scale on the outline; per-ring index shift on the edges (sentinel-preserving). The K-fold replication atom for line-based generators: pair a single polygon / Lissajous / Rose curve outline + edges with a `scales` Array<f32> (from generate_range + array_math) to produce concentric, parallax, or stacked variations of the source polyline. The ring count is `min(scales.capacity, max_rings)`; output capacity is `input.capacity * max_rings` so the chain build pre-allocates the full stack at plan time.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings.",
       "type_id": "node.array_replicate_polyline_rings"
     },
     {
@@ -1439,8 +1444,12 @@
       "type_id": "node.blob_overlay_render"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "block displace",
+        "datamosh",
+        "glitch blocks"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [
         "preset.effect.glitch"
       ],
@@ -1505,9 +1514,9 @@
         }
       ],
       "purpose": "Generator for a per-block random UV-offset field (the datamosh / block-glitch building block). Quantises the canvas into block_size-pixel blocks, hashes each (animated by time), and emits `offset` (RG = signed per-block UV displacement, gated so only a fraction of blocks move) and `hash` (R = raw per-block hash in [0,1) for downstream per-block accents that must align with the displaced blocks). Feed `offset` into node.remap (Relative mode) — alone or summed with other offset fields via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs a grid of random block offsets, the displacement map behind datamosh and block-glitch looks. Feed it into Remap.",
       "type_id": "node.block_displace_field"
     },
     {
@@ -1558,8 +1567,12 @@
       "type_id": "node.blur"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "blur 3d",
+        "volume blur",
+        "smooth"
+      ],
+      "category": "Blur & Sharpen",
       "examples": [],
       "inputs": [
         {
@@ -1573,7 +1586,7 @@
           "type": "f32"
         }
       ],
-      "label": "Blur 3D Separable",
+      "label": "Blur (3D)",
       "outputs": [
         {
           "name": "out",
@@ -1624,9 +1637,9 @@
         }
       ],
       "purpose": "Single-axis separable Gaussian blur on a Texture3D. Mode selects scalar (samples .r, writes single channel) or vector (samples .rgba, writes all channels). For a full 3-axis separable blur, wire three instances with ping-pong textures (axis=X(a→b), axis=Y(b→a), axis=Z(a→b)). Bilinear tap-pairing halves the sample count vs a naive Gaussian.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions.",
       "type_id": "node.blur_3d_separable"
     },
     {
@@ -2200,8 +2213,12 @@
       "type_id": "node.cel_material"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "centered uv",
+        "centered coordinates",
+        "radial"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -2275,9 +2292,9 @@
         }
       ],
       "purpose": "UV recentered around (cx, cy) with per-axis scale. out.r = (uv.x - cx) * scale_x, out.g = (uv.y - cy) * scale_y. The canonical centered/aspect-corrected coordinate space for procedural patterns — replaces the explicit (uv - center) * (aspect, 1) * inverse_scale chain a centered field would otherwise need. Defaults cx = cy = 0.5 preserve screen-centered behaviour.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs each pixel's position measured from a centre point, so the middle reads zero and the edges spread out. The base for radial and zoom effects.",
       "type_id": "node.centered_uv"
     },
     {
@@ -2978,8 +2995,12 @@
       "type_id": "node.compressor_envelope"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "edge pairs",
+        "connect points",
+        "polyline"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -2988,7 +3009,7 @@
           "type": "f32"
         }
       ],
-      "label": "Consecutive Edges",
+      "label": "Edge Pairs",
       "outputs": [
         {
           "name": "edges",
@@ -3024,9 +3045,9 @@
         }
       ],
       "purpose": "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.render_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream render_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",
       "type_id": "node.consecutive_edges"
     },
     {
@@ -3527,8 +3548,12 @@
       "type_id": "node.cycle_table_row"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "cylinder wrap",
+        "curved surface",
+        "wrap"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -3612,9 +3637,9 @@
         }
       ],
       "purpose": "Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, r = base_radius * pow(max(1 - uv.y, 0), taper) + radius_disp, y = (uv.y - 0.5) * height_scale, pos = (r·cos θ, y, r·sin θ). The taper curve narrows the radius toward uv.y=1 — produces stem / vase / cone / conifer shapes. Optional radius_disp Array<f32> adds per-instance radial noise (typically driven by node.simplex_per_instance + shaping). All scalar params are port-shadow so the cylinder can be animated by control wires.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry.",
       "type_id": "node.cylinder_wrap_field"
     },
     {
@@ -3923,8 +3948,12 @@
       "type_id": "node.displace_mesh"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "distance",
+        "radial gradient",
+        "circle field"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -4013,9 +4042,9 @@
         }
       ],
       "purpose": "Pure generator. Per-pixel Euclidean distance from a configurable center in UV space, broadcast to R/G/B (A=1). Building block for radial fields, circle fields, and tunnel-like compositions.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs how far each pixel is from a chosen point, bright far away and dark near it. A radial gradient you build circle masks and ripples from.",
       "type_id": "node.distance_to_point"
     },
     {
@@ -4207,8 +4236,12 @@
       "type_id": "node.edge_detect"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "grid edges",
+        "wireframe",
+        "topology"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -4217,7 +4250,7 @@
           "type": "f32"
         }
       ],
-      "label": "Edges From Grid UV",
+      "label": "Grid Edges",
       "outputs": [
         {
           "name": "edges",
@@ -4237,9 +4270,9 @@
         }
       ],
       "purpose": "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.pack_vec4 to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines.",
       "type_id": "node.edges_from_grid_uv"
     },
     {
@@ -4848,8 +4881,12 @@
       "type_id": "node.feedback"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "field combine",
+        "channel mix",
+        "linear combine"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -4913,9 +4950,9 @@
         }
       ],
       "purpose": "Per-pixel scalar field: out.rgb = a * in.r + b * in.g + c, alpha = 1. Projects a 2D coordinate texture (typically uv_field output) onto any linear combination of its channels, with an optional constant offset. All three coefficients (a, b, c) accept scalar wires for per-frame-derived transforms (rotation, aspect, scale).",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Mixes the channels of a coordinate field into one value with weights and an offset. The math step that turns coordinates into a custom gradient.",
       "type_id": "node.field_combine"
     },
     {
@@ -5810,8 +5847,12 @@
       "type_id": "node.generate_grid_mesh"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "grid points",
+        "uv grid",
+        "parametric"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -5825,7 +5866,7 @@
           "type": "f32"
         }
       ],
-      "label": "Generate Grid UV",
+      "label": "Grid Points (UV)",
       "outputs": [
         {
           "name": "u_values",
@@ -5869,9 +5910,9 @@
         }
       ],
       "purpose": "Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_size² entries in row-major order (idx = iu * grid_size + iv). The parametric-surface authoring atom: pair with array_math (Cos / Sin / ScaleOffset) + pack_vec4 + edges_from_grid_uv to author any (u, v)-parametric surface in the graph — Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh — without a per-surface Rust atom. End-exclusive sampling matches periodic-surface conventions where the wrap edge is supplied by edges_from_grid_uv. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes.",
       "type_id": "node.generate_grid_uv"
     },
     {
@@ -6117,8 +6158,13 @@
       "type_id": "node.generate_tesseract_vertices"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "gradient",
+        "edge slope",
+        "derivative",
+        "sobel"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -6127,7 +6173,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Gradient (Central Diff)",
+      "label": "Edge Slope",
       "outputs": [
         {
           "name": "out",
@@ -6169,14 +6215,18 @@
         }
       ],
       "purpose": "Per-pixel central-difference gradient of a single input channel. Output: (dx, dy, 0, 1) in RGBA. `scale_mode` selects Texel-space (`(R - L) * 0.5` — default, matches oily-fluid / heightmap-to-normal usage) or UV-space (`(R - L) * W * 0.5` per-axis — multiplies by the dimension halves so output is in per-UV-unit space, what fluid-sim gradient-rotate needs). `wrap_mode` selects Clamp (default, bilinear-clamp sampler) or Repeat (toroidal sampler for cyclic fluid sims). The standard vec2 gradient atom: feeds Sobel edge detectors, fluid-sim curl-from-color extraction, heightmap→normal pipelines, reaction-diffusion flow seeding.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects.",
       "type_id": "node.gradient_central_diff"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "gradient 3d",
+        "edge slope",
+        "volume gradient"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [
         "FluidSimulation3D"
       ],
@@ -6187,7 +6237,7 @@
           "type": "Texture3D"
         }
       ],
-      "label": "Gradient (Central Diff 3D)",
+      "label": "Edge Slope (3D)",
       "outputs": [
         {
           "name": "gradient",
@@ -6217,9 +6267,9 @@
         }
       ],
       "purpose": "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.gradient_central_diff. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.curl_slope_force_3d for the FluidSim3D force field.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim.",
       "type_id": "node.gradient_central_diff_3d"
     },
     {
@@ -6272,8 +6322,12 @@
       "type_id": "node.gradient_ramp"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "grid uv",
+        "sample grid",
+        "points"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [],
       "label": "Grid UV Field",
@@ -6296,14 +6350,19 @@
         }
       ],
       "purpose": "Emit an Array<vec2<f32>> of UV positions on an N×N grid in [0,1]² space, sampling each cell at its centre: for idx = row*N + col, uv = ((col+0.5)/N, (row+0.5)/N). Foundational producer for per-instance noise samplers (simplex/fbm per_instance) and topology-wrap primitives (cylinder/torus wrap field). Output capacity equals grid_size² and is pre-allocated at chain-build time from the `grid_size` param.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs a grid of sample points across the frame as a list, used to drive instanced shapes or sample a field at regular spots.",
       "type_id": "node.grid_uv_field"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "hash",
+        "randomise",
+        "seed",
+        "scramble"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [
         "preset.effect.voronoi_prism"
       ],
@@ -6373,9 +6432,9 @@
         }
       ],
       "purpose": "Hash an input value-field's RG channels with an added scalar seed: seeded = field.rg + seed·(seed_x, seed_y); Hash2 (mode 0) → out.rg = hash2(seeded) in [0,1]^2, Hash1 (mode 1) → out.rgb = hash1(seeded) in [0,1]. The 're-hash a value field by a seed' atom — feed node.voronoi_2d's cell_id output (RG) + a beat_floor seed to get per-cell randoms that re-roll each beat (Voronoi Prism's per-beat content shuffle / visibility). General: any value field, any seed.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Scrambles a coordinate field by a seed so the same input gives a different but stable random offset per seed. Used to re-randomise a pattern on a trigger.",
       "type_id": "node.hash_field_by_seed"
     },
     {
@@ -7394,8 +7453,13 @@
       "type_id": "node.lfo"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "flow lines",
+        "lic",
+        "streamlines",
+        "flow viz"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -7419,7 +7483,7 @@
           "type": "f32"
         }
       ],
-      "label": "LIC Integrate",
+      "label": "Flow Lines (LIC)",
       "outputs": [
         {
           "name": "out",
@@ -7449,9 +7513,9 @@
         }
       ],
       "purpose": "Line Integral Convolution. For each pixel, walks N steps forward and N steps backward along the normalised velocity field, weighted-accumulating `source.r` along the path. Output = weighted_sum / total_weight in R; GBA = (0, 0, 1). Steps capped at 64. The classic flow-visualisation atom: pair `source` with a hash-noise texture for streamlines (oily-fluid Lines), or with a derived heightmap for flow-aligned intensity (oily-fluid Flow Field).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture.",
       "type_id": "node.lic_integrate"
     },
     {
@@ -8479,8 +8543,12 @@
       "type_id": "node.mux_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "smooth",
+        "neighbor average",
+        "blur grid"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -8489,7 +8557,7 @@
           "type": "Array"
         }
       ],
-      "label": "Neighbor Smooth",
+      "label": "Smooth (neighbors)",
       "outputs": [
         {
           "name": "out",
@@ -8519,9 +8587,9 @@
         }
       ],
       "purpose": "5-point cross-neighborhood smoothing of an Array<InstanceTransform> arranged as an NxN grid. Smooths the xyz position; scale and rotation pass through. Border instances fall back to self. Drives plant-stalk-style smoothed motion in instanced renderers — pair upstream with a procedural compute that emits noisy positions, then this primitive cleans them.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Averages each point with its neighbours on a grid, smoothing out a bumpy field of values or positions.",
       "type_id": "node.neighbor_smooth"
     },
     {
@@ -8843,8 +8911,12 @@
       "type_id": "node.pack_channels"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "combine xy",
+        "pack curve",
+        "zip points"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -8863,7 +8935,7 @@
           "type": "f32"
         }
       ],
-      "label": "Pack Curve XY",
+      "label": "Combine XY (curve)",
       "outputs": [
         {
           "name": "out",
@@ -8883,9 +8955,9 @@
         }
       ],
       "purpose": "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.array_unpack_vec2; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Zips two number lists, X and Y, into one list of points ready to draw as a line or curve.",
       "type_id": "node.pack_curve_xy"
     },
     {
@@ -9485,8 +9557,12 @@
       "type_id": "node.phong_material"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "polar",
+        "angle distance",
+        "radial coordinates"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [],
       "label": "Polar Field",
@@ -9519,9 +9595,9 @@
         }
       ],
       "purpose": "Pure generator. Per-pixel polar coordinates around a configurable center: R = angle (atan2, normalized to [0,1]), G = radius (UV distance), B = 0, A = 1. Building block for spirals, rotations, kaleidoscopes, and any radial composition.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes.",
       "type_id": "node.polar_field"
     },
     {
@@ -10943,8 +11019,12 @@
       "type_id": "node.resolve_accumulator"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rotate coordinates",
+        "rotate field",
+        "spin"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -10978,9 +11058,9 @@
         }
       ],
       "purpose": "Rotate a 2D coordinate field around the origin by `angle` (radians). Reads (x, y) from input R/G, writes rotated (x', y') back to R/G. Collapses the `angle → cos / sin / neg_sin → field_combine(cos, -sin)` chain that any rotated-projection effect would otherwise need.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform.",
       "type_id": "node.rotate_2d"
     },
     {
@@ -11176,8 +11256,12 @@
       "type_id": "node.rotate_vec2_90"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rotate vector",
+        "turn",
+        "rotate flow"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -11191,7 +11275,7 @@
           "type": "f32"
         }
       ],
-      "label": "Rotate Vec2 (Angle)",
+      "label": "Rotate Vector",
       "outputs": [
         {
           "name": "out",
@@ -11211,9 +11295,9 @@
         }
       ],
       "purpose": "Rotate the input's RG vec2 field by an arbitrary angle (radians) per pixel. `out.x = v.x*cos - v.y*sin`, `out.y = v.x*sin + v.y*cos`. The general curl-from-gradient atom — defaults to angle = PI/2 (+90° CCW, the divergence-free curl-flow case) but the angle is port-shadow-param so a control wire (LFO, driver, manual slider, clip-trigger envelope) can sweep it continuously. Sweeping the angle is how FluidSim2D's `rotation_angle` knob biases the flow off the pure-curl axis.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount.",
       "type_id": "node.rotate_vec2_by_angle"
     },
     {
@@ -11354,8 +11438,12 @@
       "type_id": "node.sample_texture_at_particles"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "sample volume",
+        "slice",
+        "3d to 2d"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -11414,9 +11502,9 @@
         }
       ],
       "purpose": "Sample a Texture3D at a fixed Z slice to produce a Texture2D. UV scale + center re-frame the slice into the output texture. Drives \"peel a 2D plane out of a volume\" use cases: MRI-style display, debug visualisation of volumetric fluid density, or any future Phase D volume rendering.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field.",
       "type_id": "node.sample_volume_2d"
     },
     {
@@ -11585,8 +11673,13 @@
       "type_id": "node.scale_offset_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "scanline jitter",
+        "vhs",
+        "tearing",
+        "glitch"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [
         "preset.effect.glitch"
       ],
@@ -11647,9 +11740,9 @@
         }
       ],
       "purpose": "Generator for a per-row random horizontal-offset field (the VHS / horizontal-tearing building block). Hashes each scanline row (animated by time) and emits `offset` (R = signed horizontal UV shift per row, gated by `scanline` so only a fraction of rows tear). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs a random horizontal offset per row, the displacement behind VHS tearing and horizontal glitch. Feed it into Remap.",
       "type_id": "node.scanline_jitter_field"
     },
     {
@@ -12595,8 +12688,13 @@
       "type_id": "node.simplex_per_instance"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "sine wave",
+        "sin term",
+        "plasma",
+        "wave"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -12615,7 +12713,7 @@
           "type": "f32"
         }
       ],
-      "label": "Projected Sin Term",
+      "label": "Sine Wave (projected)",
       "outputs": [
         {
           "name": "out",
@@ -12695,14 +12793,18 @@
         }
       ],
       "purpose": "Fused linear-projection + sin term: out = sin((a*field.r + b*field.g + c) * freq * freq_scale + time * time_scale). One node per term of any sum-of-sines pattern (Plasma, moiré, standing waves). For a linear projection of UV channels set (a, b) to pick the projection; for a pre-computed scalar field (distance, noise) leave defaults (a=1, b=0, c=0) so it reads the broadcast R channel.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns.",
       "type_id": "node.sin_term"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "slope displace",
+        "emboss warp",
+        "paint"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [
         "preset.effect.watercolor"
       ],
@@ -12758,9 +12860,9 @@
         }
       ],
       "purpose": "Emboss-style displacement: soft-light-blend `base` over `image`, take the luminance Sobel gradient of the blend at a `step`-pixel offset, and displace `image` by gradient × `weight`. Output is `image` resampled at the displaced UV. Watercolor's slope pass as a reusable atom — the pigment-pooling edge-pull that follows contrast contours.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks.",
       "type_id": "node.slope_displace"
     },
     {
@@ -12876,8 +12978,13 @@
       "type_id": "node.smoothstep_texture"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "advect",
+        "transport",
+        "flow",
+        "fluid"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -12926,9 +13033,9 @@
         }
       ],
       "purpose": "Backward (semi-Lagrangian) advection of a texture by a 2D velocity field. For each output pixel: sample the source at `uv - velocity.rg * dt / dims`. The universal fluid op — used for color advection by velocity, self-advection of velocity by itself, smoke / dye / paint transport. `dt` is in pixels-per-frame and resolution-independent.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation.",
       "type_id": "node.texture_advect"
     },
     {
@@ -13158,8 +13265,12 @@
       "type_id": "node.tone_map"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "torus wrap",
+        "donut",
+        "wrap"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -13243,9 +13354,9 @@
         }
       ],
       "purpose": "Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, phi = uv.y * TAU, pos = ((R + r·cos φ)·cos θ, r·sin φ, (R + r·cos φ)·sin θ). Optional Array<f32> normal_disp pushes each instance along the outward surface normal — drive from node.fbm_per_instance × petal-amplitude for flower-style petal displacement. `fold_angle` rotates the whole field around the X axis (port-shadow, drive from time for continuous animation). Generic across rings, halos, donuts, flower discs, gateways.",
-      "role": "Unknown",
+      "role": "Map",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface.",
       "type_id": "node.torus_wrap_field"
     },
     {
@@ -13683,8 +13794,12 @@
       "type_id": "node.unlit_material"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "flow displace",
+        "advect",
+        "warp by flow"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -13728,14 +13843,19 @@
         }
       ],
       "purpose": "Sample a source texture at UVs displaced by a 2D flow vector field. offset = (flow.rb - bias) * weight. Pair with node.flow_field_noise upstream for procedural distortion (Watercolor-style), or with any other primitive that emits 2-channel offsets packed in R/B (e.g. an upstream node.convolution_2d_9tap configured as a gradient).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field.",
       "type_id": "node.uv_displace_by_flow"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "uv",
+        "coordinates",
+        "position",
+        "uv map"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [],
       "label": "UV Field",
@@ -13747,9 +13867,9 @@
       ],
       "params": [],
       "purpose": "Pure generator. Writes per-pixel UV coordinates as a texture: R = u (0..1 left-to-right), G = v (0..1 top-to-bottom), B = 0, A = 1. Foundation primitive of the procedural texture math family — compose with math/noise/distance/polar primitives to author novel procedural textures.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns.",
       "type_id": "node.uv_field"
     },
     {

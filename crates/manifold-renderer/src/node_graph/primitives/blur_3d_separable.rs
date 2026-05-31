@@ -75,7 +75,11 @@ crate::primitive! {
     ],
     composition_notes: "vol_res must match the input/output Texture3D dimensions. radius is in voxel units; sigma = max(radius/2.5, 0.5). Scalar mode preserves green/blue/alpha as zero/zero/one (writes single channel via .r). Vector mode preserves all four channels. Sampler is repeat-mode (toroidal wrap on edges).",
     examples: [],
-    picker: { label: "Blur 3D Separable", category: Atom },
+    picker: { label: "Blur (3D)", category: Atom },
+    summary: "Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions.",
+    category: BlurAndSharpen,
+    role: Filter,
+    aliases: ["blur 3d", "volume blur", "smooth"],
     extra_fields: {
         vector_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
     },

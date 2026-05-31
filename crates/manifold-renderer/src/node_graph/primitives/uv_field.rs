@@ -24,6 +24,10 @@ crate::primitive! {
     composition_notes: "Pairs with node.sin_texture / cos_texture / fract_texture / scale_offset_texture for per-axis sinusoids and stripes. Pairs with node.distance_to_point for radial fields. Output texel center sampling is (i+0.5)/dims (standard convention).",
     examples: [],
     picker: { label: "UV Field", category: Atom },
+    summary: "Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns.",
+    category: FieldsAndCoordinates,
+    role: Source,
+    aliases: ["uv", "coordinates", "position", "uv map"],
 }
 
 impl Primitive for UvField {

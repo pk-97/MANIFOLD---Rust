@@ -72,7 +72,11 @@ crate::primitive! {
     ],
     composition_notes: "End-exclusive sampling: u[iu*n+iv] = iu * (u_max/n), v[iu*n+iv] = iv * (v_max/n). u_max and v_max default to TAU so a default-configured grid sweeps one full period along each axis — the right shape for closed parametric surfaces (torus / Duocylinder / sphere). For terrain-style open meshes set both to 1.0 and treat the sweep as normalised UV. grid_size is read at plan time to size the buffers (grid_size²); changing it at runtime triggers a chain rebuild — drive `active_count` through an outer-card slider only at authoring time. u_max / v_max are port-shadowed so an LFO can sweep the domain at performance time without recompilation.",
     examples: [],
-    picker: { label: "Generate Grid UV", category: Atom },
+    picker: { label: "Grid Points (UV)", category: Atom },
+    summary: "Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["grid points", "uv grid", "parametric"],
 }
 
 /// Read `grid_size` from the params bag, clamped to the valid range.

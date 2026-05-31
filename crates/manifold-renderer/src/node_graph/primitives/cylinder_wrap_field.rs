@@ -90,6 +90,10 @@ crate::primitive! {
     composition_notes: "Output capacity follows the `uv` input. `instance_scale` is written into the .w of pos_scale on every emitted InstanceTransform — pair with node.torus_wrap_field downstream of node.mux_array<InstanceTransform> and feed the SAME scale wire into both so the .w stays continuous across a cyl↔tor morph. Rotation is left at zero on every output; pair with node.instance_rotation_jitter downstream for hash-driven per-instance rotation. Taper = 0 disables tapering (straight cylinder); larger values sharpen the top.",
     examples: [],
     picker: { label: "Cylinder Wrap Field", category: Atom },
+    summary: "Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry.",
+    category: Geometry3D,
+    role: Map,
+    aliases: ["cylinder wrap", "curved surface", "wrap"],
 }
 
 impl Primitive for CylinderWrapField {

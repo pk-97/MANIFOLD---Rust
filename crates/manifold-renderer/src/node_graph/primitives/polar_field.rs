@@ -49,6 +49,10 @@ crate::primitive! {
     composition_notes: "Angle is normalized so a full sweep is 0..1 (handy for direct lut1d / sin compositions). Pair node.polar_field → node.sin_texture for sector patterns, → node.fract_texture(scale) for repeating wedges, → node.compose multiplicatively with a radius mask for circular sectors.",
     examples: [],
     picker: { label: "Polar Field", category: Atom },
+    summary: "Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes.",
+    category: FieldsAndCoordinates,
+    role: Source,
+    aliases: ["polar", "angle distance", "radial coordinates"],
 }
 
 impl Primitive for PolarField {

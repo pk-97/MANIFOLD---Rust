@@ -73,6 +73,10 @@ crate::primitive! {
     composition_notes: "slice_z is clamped to [0, 1] in-shader; values outside the volume's Z range produce the boundary texel (sampler clamp). Bilinear filtering across X/Y/Z; the slice is interpolated between adjacent Z layers so smooth slice_z drives produce smooth animation. Output is Rgba16Float — the shader passes through whatever channels the volume has.",
     examples: [],
     picker: { label: "Sample Volume 2D", category: Atom },
+    summary: "Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field.",
+    category: FieldsAndCoordinates,
+    role: Filter,
+    aliases: ["sample volume", "slice", "3d to 2d"],
 }
 
 impl Primitive for SampleVolume2D {

@@ -68,6 +68,10 @@ crate::primitive! {
     composition_notes: "offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Sum it with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp). G/B are 0 so a relative remap leaves the vertical axis untouched.",
     examples: ["preset.effect.glitch"],
     picker: { label: "Scanline Jitter Field", category: Atom },
+    summary: "Outputs a random horizontal offset per row, the displacement behind VHS tearing and horizontal glitch. Feed it into Remap.",
+    category: FieldsAndCoordinates,
+    role: Source,
+    aliases: ["scanline jitter", "vhs", "tearing", "glitch"],
 }
 
 impl Primitive for ScanlineJitterField {

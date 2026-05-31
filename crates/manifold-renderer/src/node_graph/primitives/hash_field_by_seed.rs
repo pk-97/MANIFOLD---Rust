@@ -76,6 +76,10 @@ crate::primitive! {
     composition_notes: "Reads `field` via textureLoad (no interpolation) so a per-cell-constant field (voronoi_2d's cell_id) stays exact across cell boundaries — field and output must be the same resolution (true in a single-canvas graph). hash2 / hash1 constants are verbatim from the legacy Voronoi Prism. `seed` port-shadows the param: wire generator_input.beat → node.math(Floor) for the per-beat reshuffle. seed_x/seed_y set the per-axis seed weights (prism offset uses 1.73/2.91, visibility uses 0.17/0.31).",
     examples: ["preset.effect.voronoi_prism"],
     picker: { label: "Hash Field by Seed", category: Atom },
+    summary: "Scrambles a coordinate field by a seed so the same input gives a different but stable random offset per seed. Used to re-randomise a pattern on a trigger.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["hash", "randomise", "seed", "scramble"],
 }
 
 impl Primitive for HashFieldBySeed {

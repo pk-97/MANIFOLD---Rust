@@ -60,6 +60,10 @@ crate::primitive! {
     composition_notes: "Velocity is read from the RG channels of `velocity`; BA ignored. Output samples preserve all RGBA channels of `in`. Use Repeat for toroidal fluid sims (the oily-fluid family); Clamp when off-canvas samples should fade to edge color. For self-advection (advect velocity by itself), wire the same velocity to BOTH `in` and `velocity`. Negative `dt` runs the advection backwards (useful for trail-erase effects). The `dt` port shadows the param so an LFO can pulse the flow.",
     examples: [],
     picker: { label: "Texture Advect", category: Atom },
+    summary: "Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation.",
+    category: FieldsAndCoordinates,
+    role: Filter,
+    aliases: ["advect", "transport", "flow", "fluid"],
     extra_fields: {
         sampler_repeat: Option<manifold_gpu::GpuSampler> = None,
         sampler_clamp: Option<manifold_gpu::GpuSampler> = None,

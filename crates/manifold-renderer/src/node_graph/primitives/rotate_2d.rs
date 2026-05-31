@@ -55,6 +55,10 @@ crate::primitive! {
     composition_notes: "Use upstream of node.field_combine to extract a rotated coordinate channel as a scalar field (Plasma's v5 rotated-X term). Counter-clockwise: positive angle rotates +X toward +Y. Input must be a coordinate texture (centered_uv, uv_field, etc.) — the primitive does not resample image content.",
     examples: [],
     picker: { label: "Rotate", category: Atom },
+    summary: "Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["rotate coordinates", "rotate field", "spin"],
 }
 
 impl Primitive for Rotate2D {

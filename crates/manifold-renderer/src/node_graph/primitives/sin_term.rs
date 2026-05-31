@@ -106,7 +106,11 @@ crate::primitive! {
     ],
     composition_notes: "Pick (a, b, c) to choose the field projection: (1,0,0)=along X, (0,1,0)=along Y, (1,1,0)=diagonal X+Y. Pair with `node.rotate_2d` upstream for rotated projections — feed the rotated UV in and keep (a, b) = (1, 0). Wire `freq` from a shared value node and `time` from system.generator_input.time so all five terms in a Plasma-style sum stay phase-coherent.",
     examples: [],
-    picker: { label: "Projected Sin Term", category: Atom },
+    picker: { label: "Sine Wave (projected)", category: Atom },
+    summary: "Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["sine wave", "sin term", "plasma", "wave"],
 }
 
 impl Primitive for SinTerm {

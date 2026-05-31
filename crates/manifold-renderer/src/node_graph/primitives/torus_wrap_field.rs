@@ -87,6 +87,10 @@ crate::primitive! {
     composition_notes: "Output capacity follows the `uv` input. Pair upstream with node.fbm_per_instance scaled by an outer-card petal-amplitude (via node.array_math::ScaleOffset) to drive `normal_disp` for flower-petal-style fracturing. `instance_scale` is written into pos_scale.w — wire the SAME scale source into both this and node.cylinder_wrap_field when muxing across a morph so .w stays continuous. `fold_angle` is the X-axis rotation of the entire field about the origin — generic enough to be useful for any toroidal field that wants continuous rotation animation.",
     examples: [],
     picker: { label: "Torus Wrap Field", category: Atom },
+    summary: "Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface.",
+    category: Geometry3D,
+    role: Map,
+    aliases: ["torus wrap", "donut", "wrap"],
 }
 
 impl Primitive for TorusWrapField {
