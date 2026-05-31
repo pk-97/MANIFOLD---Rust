@@ -7582,14 +7582,14 @@
         },
         {
           "default": "1",
-          "label": "Angular Rate (rad/s)",
+          "label": "Speed",
           "name": "angular_rate",
           "range": [
             "0",
             "100"
           ],
           "tooltip": "The free-running speed in Hz, used only when Sync is off.",
-          "type": "float"
+          "type": "frequency"
         },
         {
           "default": "0",
@@ -7642,7 +7642,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous angular frequency `angular_rate` (rad/s) — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention. Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
+      "purpose": "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous `Speed` set in Hz in the editor (stored internally as rad/s — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention). Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
       "role": "Control",
       "stratum": "driver",
       "summary": "A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free.",

@@ -48,7 +48,7 @@ pub const LFO_RATE_MODES: &[&str] = &["Musical", "Free"];
 crate::primitive! {
     name: Lfo,
     type_id: "node.lfo",
-    purpose: "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous angular frequency `angular_rate` (rad/s) — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention. Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
+    purpose: "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous `Speed` set in Hz in the editor (stored internally as rad/s — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention). Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
     inputs: {},
     outputs: {
         out: ScalarF32,
@@ -72,8 +72,10 @@ crate::primitive! {
         },
         ParamDef {
             name: "angular_rate",
-            label: "Angular Rate (rad/s)",
-            ty: ParamType::Float,
+            label: "Speed",
+            // Stored rad/s (the oscillator math unit); the editor shows and
+            // edits this in Hz. See `ParamType::Frequency`.
+            ty: ParamType::Frequency,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 100.0)),
             enum_values: &[],

@@ -171,6 +171,7 @@ fn param_type_str(t: ParamType) -> &'static str {
     match t {
         ParamType::Float => "float",
         ParamType::Angle => "angle",
+        ParamType::Frequency => "frequency",
         ParamType::Int => "int",
         ParamType::Bool => "bool",
         ParamType::Vec2 => "vec2",

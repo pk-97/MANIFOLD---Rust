@@ -161,6 +161,10 @@ pub enum ParamSnapshotKind {
     /// preset math stay correct), but the UI displays and edits in DEGREES,
     /// converting at the slider boundary only. See [`ParamType::Angle`].
     Angle,
+    /// Float-backed frequency. Stored value is RADIANS PER SECOND, but the UI
+    /// displays and edits in HERTZ (rad/s ÷ 2π), at the slider boundary only.
+    /// See [`ParamType::Frequency`].
+    Frequency,
     Int,
     Bool,
     Enum,
@@ -503,6 +507,7 @@ fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
     match ty {
         ParamType::Float => ParamSnapshotKind::Float,
         ParamType::Angle => ParamSnapshotKind::Angle,
+        ParamType::Frequency => ParamSnapshotKind::Frequency,
         ParamType::Int => ParamSnapshotKind::Int,
         ParamType::Bool => ParamSnapshotKind::Bool,
         ParamType::Enum => ParamSnapshotKind::Enum,

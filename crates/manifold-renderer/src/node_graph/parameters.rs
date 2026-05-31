@@ -71,6 +71,15 @@ pub enum ParamType {
     /// value (so modulation, which maps a driver onto the range, stays
     /// correct); the UI converts the bounds to degrees for display.
     Angle,
+    /// A frequency. *Presentation* hint only, exactly like `Angle`: storage
+    /// stays `ParamValue::Float` in RADIANS PER SECOND (the internal unit the
+    /// oscillator math uses: phase advances `seconds * rate`). The editor
+    /// displays and edits this in HERTZ, converting rad/s<->Hz (× / ÷ 2π) at
+    /// the UI boundary only. The stored value, every wire, and every `run()`
+    /// are untouched, so presets that set or bind the rate are unaffected.
+    /// Never expose rad/s to the user — it is nice to think in Hz. `range`
+    /// stays in rad/s like the stored value; the UI converts the bounds to Hz.
+    Frequency,
     Int,
     Bool,
     Vec2,

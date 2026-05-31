@@ -50,6 +50,10 @@ pub enum GraphEditorParamKind {
     /// Conversion happens only at the display boundary in
     /// `format_inner_param_value`.
     Angle,
+    /// Float-backed frequency. Behaves exactly like `Float` for storage, drag,
+    /// and serialization (stored value stays RADIANS PER SECOND), but the value
+    /// cell displays HERTZ (rad/s ÷ 2π). Display-only, like `Angle`.
+    Frequency,
     Int,
     Bool,
     Enum,
@@ -500,6 +504,7 @@ impl GraphEditorPanel {
                 ps.kind,
                 GraphEditorParamKind::Float
                     | GraphEditorParamKind::Angle
+                    | GraphEditorParamKind::Frequency
                     | GraphEditorParamKind::Int
                     | GraphEditorParamKind::Bool
                     | GraphEditorParamKind::Enum
@@ -630,9 +635,9 @@ impl GraphEditorPanel {
 
             if supported {
                 let convert = match ps.kind {
-                    GraphEditorParamKind::Float | GraphEditorParamKind::Angle => {
-                        ParamConvert::Float
-                    }
+                    GraphEditorParamKind::Float
+                    | GraphEditorParamKind::Angle
+                    | GraphEditorParamKind::Frequency => ParamConvert::Float,
                     GraphEditorParamKind::Int => ParamConvert::IntRound,
                     GraphEditorParamKind::Bool => ParamConvert::BoolThreshold,
                     GraphEditorParamKind::Enum => ParamConvert::EnumRound,
@@ -825,6 +830,7 @@ impl GraphEditorPanel {
                     kind,
                     GraphEditorParamKind::Float
                         | GraphEditorParamKind::Angle
+                        | GraphEditorParamKind::Frequency
                         | GraphEditorParamKind::Int
                 )
             {
@@ -867,6 +873,7 @@ impl GraphEditorPanel {
         let serialized = match drag.kind {
             GraphEditorParamKind::Float
             | GraphEditorParamKind::Angle
+            | GraphEditorParamKind::Frequency
             | GraphEditorParamKind::Int => SerializedParamValue::Float { value: new_v },
             _ => return Vec::new(),
         };
@@ -935,6 +942,7 @@ fn value_cell_click_to_param(
         }),
         GraphEditorParamKind::Float
         | GraphEditorParamKind::Angle
+        | GraphEditorParamKind::Frequency
         | GraphEditorParamKind::Int
         | GraphEditorParamKind::Other => None,
     }
@@ -965,6 +973,10 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
         GraphEditorParamKind::Float => format!("{:.2}", p.current_value),
         // Stored value is radians; the user always sees and edits degrees.
         GraphEditorParamKind::Angle => format!("{:.0}°", p.current_value.to_degrees()),
+        // Stored value is rad/s; the user always sees and edits Hz.
+        GraphEditorParamKind::Frequency => {
+            format!("{:.2} Hz", p.current_value / std::f32::consts::TAU)
+        }
         GraphEditorParamKind::Trigger => "▶ Fire".to_string(),
         GraphEditorParamKind::Other => "—".to_string(),
     }

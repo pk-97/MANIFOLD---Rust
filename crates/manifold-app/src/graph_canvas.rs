@@ -167,6 +167,7 @@ fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) ->
                         p.kind,
                         ParamSnapshotKind::Float
                             | ParamSnapshotKind::Angle
+                            | ParamSnapshotKind::Frequency
                             | ParamSnapshotKind::Int
                     )
                 })
@@ -190,6 +191,9 @@ fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) ->
         ParamSnapshotKind::Float => format!("{:.2}", pick.current_value),
         // Stored radians, shown as degrees (see ParamType::Angle).
         ParamSnapshotKind::Angle => format!("{:.0}°", pick.current_value.to_degrees()),
+        ParamSnapshotKind::Frequency => {
+            format!("{:.2} Hz", pick.current_value / std::f32::consts::TAU)
+        }
         ParamSnapshotKind::Trigger => format!("{}", pick.current_value as i64),
         ParamSnapshotKind::Other => "—".to_string(),
     };
