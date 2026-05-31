@@ -21,6 +21,8 @@ use manifold_renderer::node_graph::{GraphSnapshot, PortKindSnapshot};
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::PanelAction;
 
+use crate::mapping_popover::MappingPopover;
+
 const HEADER_HEIGHT: f32 = 28.0;
 const NODE_WIDTH: f32 = 168.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
@@ -422,7 +424,29 @@ pub struct GraphCanvas {
     /// hides its on-face param rows but keeps its header and ports, so it
     /// can still be wired. Absent = expanded.
     collapsed: ahash::AHashMap<u32, bool>,
+    /// In-place mapping editor for a card binding, anchored on the param
+    /// row it was right-clicked from. Surface-agnostic widget; the canvas
+    /// just hosts it, draws it on top of the nodes, and forwards pointer
+    /// events to it while it's open. Closed by default.
+    mapping_popover: MappingPopover,
+    /// Wall-clock seconds at the last empty-canvas left-press, used to
+    /// detect a double-click on empty space (which opens the node picker
+    /// instead of starting a pan). `None` until the first such press, and
+    /// reset to `None` after a double-click fires so a third press starts
+    /// a fresh single-click rather than re-triggering.
+    last_empty_click_time: Option<f32>,
+    /// Screen-space cursor at the last empty-canvas left-press. Paired with
+    /// `last_empty_click_time` so a double-click only registers when the
+    /// two presses land within a few pixels of each other.
+    last_empty_click_pos: (f32, f32),
 }
+
+/// Max seconds between two empty-canvas presses for them to count as a
+/// double-click. Matches the typical OS double-click window.
+const DOUBLE_CLICK_SECONDS: f32 = 0.3;
+/// Max screen-space distance (px) between the two presses of a double-click.
+/// A drag further than this is two separate single-clicks, not a double.
+const DOUBLE_CLICK_RADIUS_PX: f32 = 4.0;
 
 impl GraphCanvas {
     pub fn new() -> Self {
@@ -441,6 +465,9 @@ impl GraphCanvas {
             has_graph_mod: false,
             pending_actions: Vec::new(),
             collapsed: ahash::AHashMap::new(),
+            mapping_popover: MappingPopover::new(),
+            last_empty_click_time: None,
+            last_empty_click_pos: (0.0, 0.0),
         }
     }
 
@@ -453,10 +480,15 @@ impl GraphCanvas {
         self.has_graph_mod = has_mod;
     }
 
-    /// Drain editor actions queued by canvas interactions. Called
-    /// once per input event by the editor window's present path.
+    /// Drain editor actions queued by canvas interactions — including the
+    /// mapping popover's `EffectMapping*` edits, so the app's existing
+    /// dispatch (which routes them to `EditUserParamBindingCommand`) sees
+    /// them on the same pass as canvas actions. Called once per input
+    /// event by the editor window's present path.
     pub fn drain_actions(&mut self) -> Vec<PanelAction> {
-        std::mem::take(&mut self.pending_actions)
+        let mut actions = std::mem::take(&mut self.pending_actions);
+        actions.extend(self.mapping_popover.drain_actions());
+        actions
     }
 
     /// Emit a `RemoveGraphNode` action for the currently-selected
@@ -726,6 +758,116 @@ impl GraphCanvas {
         None
     }
 
+    /// Screen-space rect of one on-node param row, by `(node_id,
+    /// param_index)`. Mirrors `param_row_under`'s layout exactly so an
+    /// anchored popover lines up with the row it was opened from. `None`
+    /// for a missing node / out-of-range index.
+    fn param_row_rect(&self, viewport: Rect, node_id: u32, pi: usize) -> Option<Rect> {
+        let node = self.find_node(node_id)?;
+        if pi >= node.params.len() {
+            return None;
+        }
+        let header_h = NODE_HEADER_HEIGHT * self.zoom;
+        let row_h = PARAM_ROW_H * self.zoom;
+        let sw = NODE_WIDTH * self.zoom;
+        let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        let row_top = ny + header_h + pi as f32 * row_h;
+        Some(Rect::new(nx, row_top, sw, row_h))
+    }
+
+    /// The inner-param name of one on-node param row, by `(node_id,
+    /// param_index)`. The app joins this with the snapshot's
+    /// `node_handle` to look up the matching `UserParamBinding`.
+    pub fn param_name_at(&self, node_id: u32, pi: usize) -> Option<String> {
+        self.find_node(node_id)
+            .and_then(|n| n.params.get(pi))
+            .map(|p| p.name.clone())
+    }
+
+    /// Right-button press on the canvas. If it lands on an expanded
+    /// param row, returns `(node_id, param_index)` so the app can resolve
+    /// whether that inner param is exposed as a card binding and, if so,
+    /// open the mapping popover via `open_mapping_popover`. Returns `None`
+    /// for clicks that miss every param row (the app then leaves the
+    /// canvas alone). A right-click anywhere first dismisses an open
+    /// popover.
+    pub fn on_right_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) -> Option<(u32, usize)> {
+        // A right-click outside the open popover dismisses it (and is
+        // otherwise treated as a fresh hit-test).
+        if self.mapping_popover.is_open() && !self.mapping_popover.contains_point(sx, sy) {
+            self.mapping_popover.close();
+        }
+        self.param_row_under(viewport, sx, sy)
+    }
+
+    /// Open the mapping popover for a resolved binding, anchored on its
+    /// param row. Called by the app after `on_right_button_down` reports
+    /// a row AND the app has confirmed that row's inner param is exposed
+    /// as a `UserParamBinding` (passing its current mapping in here). The
+    /// canvas owns the anchor geometry; the app owns the binding lookup.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_mapping_popover(
+        &mut self,
+        viewport: Rect,
+        node_id: u32,
+        pi: usize,
+        binding_id: String,
+        label: String,
+        min: f32,
+        max: f32,
+        invert: bool,
+        curve: manifold_core::macro_bank::MacroCurve,
+        range: Option<(f32, f32)>,
+    ) {
+        let Some(anchor) = self.param_row_rect(viewport, node_id, pi) else {
+            return;
+        };
+        // Clip the popover to the canvas body (below the header strip).
+        let clip = Rect::new(
+            viewport.x,
+            viewport.y + HEADER_HEIGHT,
+            viewport.w,
+            (viewport.h - HEADER_HEIGHT).max(0.0),
+        );
+        self.mapping_popover
+            .open(binding_id, label, min, max, invert, curve, range, anchor, clip);
+    }
+
+    /// Forward a left-button press to the open popover. Returns `true`
+    /// when the popover consumed it (a handle/button hit, or any click
+    /// inside the panel). A press outside the panel returns `false` and
+    /// closes the popover, so the host can fall through to the normal
+    /// canvas left-click path.
+    pub fn popover_on_left_press(&mut self, sx: f32, sy: f32) -> bool {
+        if !self.mapping_popover.is_open() {
+            return false;
+        }
+        if self.mapping_popover.on_press(sx, sy) {
+            true
+        } else {
+            self.mapping_popover.close();
+            false
+        }
+    }
+
+    /// Forward pointer motion to the open popover (drives the live range
+    /// drag + handle hover). No-op when closed.
+    pub fn popover_on_move(&mut self, sx: f32, sy: f32) {
+        self.mapping_popover.on_move(sx, sy);
+    }
+
+    /// Forward a left-button release to the open popover (commits a range
+    /// drag). No-op when closed.
+    pub fn popover_on_left_release(&mut self) {
+        self.mapping_popover.on_release();
+    }
+
+    /// `true` while the mapping popover is open. The host checks this so a
+    /// left-click is routed to the popover first.
+    pub fn popover_open(&self) -> bool {
+        self.mapping_popover.is_open()
+    }
+
     /// Hit-test ports near the cursor. Searches all output then input
     /// ports of every node, returning the first within `PORT_HIT_RADIUS`
     /// graph-space units of the cursor. Outputs take priority over
@@ -864,8 +1006,13 @@ impl GraphCanvas {
     ///    inputs via drag-from-output).
     /// 5. Node header → start node-move drag.
     /// 6. Node body → select.
-    /// 7. Empty canvas → clear selection, start pan.
-    pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) {
+    /// 7. Empty canvas, double-click → open the node picker at the cursor.
+    /// 8. Empty canvas, single click → clear selection, start pan.
+    ///
+    /// `now` is a frame-monotonic wall-clock time in seconds, threaded in
+    /// from the window event loop, used to distinguish a double-click on
+    /// empty space from a pan-start single click.
+    pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32, now: f32) {
         // Header button has priority over everything else — it sits in
         // the chrome above the canvas surface.
         if self.has_graph_mod {
@@ -946,9 +1093,34 @@ impl GraphCanvas {
             }
             None => {
                 self.selected = None;
-                self.drag_mode = DragMode::Pan;
-                self.drag_anchor = (sx, sy);
-                self.drag_pan_start = self.pan;
+                // Double-click on empty space opens the node picker at the
+                // cursor instead of panning. Two presses within the time +
+                // distance window count as a double-click.
+                let dx = sx - self.last_empty_click_pos.0;
+                let dy = sy - self.last_empty_click_pos.1;
+                let is_double = self
+                    .last_empty_click_time
+                    .map(|t| now - t < DOUBLE_CLICK_SECONDS)
+                    .unwrap_or(false)
+                    && (dx * dx + dy * dy) < DOUBLE_CLICK_RADIUS_PX * DOUBLE_CLICK_RADIUS_PX;
+                if is_double {
+                    // Latch reset so a third press doesn't triple-fire.
+                    self.last_empty_click_time = None;
+                    let (gx, gy) = self.to_graph(viewport, sx, sy);
+                    self.pending_actions.push(PanelAction::OpenNodePicker {
+                        screen_pos: (sx, sy),
+                        graph_pos: (gx, gy),
+                    });
+                } else {
+                    // First press of a potential double-click — record it and
+                    // start the pan as usual. A single click pans exactly as
+                    // before.
+                    self.last_empty_click_time = Some(now);
+                    self.last_empty_click_pos = (sx, sy);
+                    self.drag_mode = DragMode::Pan;
+                    self.drag_anchor = (sx, sy);
+                    self.drag_pan_start = self.pan;
+                }
             }
         }
     }
@@ -1132,6 +1304,10 @@ impl GraphCanvas {
         {
             self.draw_node(ui, viewport, canvas, node);
         }
+
+        // Mapping popover floats above everything else so its handles and
+        // buttons are never buried under a node it overlaps.
+        self.mapping_popover.render(ui);
     }
 
     fn draw_ghost_wire(

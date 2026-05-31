@@ -240,6 +240,43 @@ pub enum PanelAction {
         is_angle: bool,
     },
 
+    // ── User param-binding mapping edits ──────────────────────────────
+    //
+    // Emitted by the graph-editor mapping sidebar when the user edits a
+    // `UserParamBinding`'s card-slider mapping (display label, min/max
+    // range, invert flag, response curve). The app layer resolves the
+    // watched effect target + index from `current_editor_target` and
+    // routes to `EditUserParamBindingCommand`, addressing the binding by
+    // its stable `binding_id` (never mutated).
+    //
+    // The min/max range uses the snapshot/changed/commit triad so a drag
+    // coalesces into ONE undo entry: snapshot captures the pre-drag
+    // value at drag start, changed writes the live value each frame
+    // (no undo command), commit records the single command on release.
+    // Label / invert / curve are discrete (text-entry / single-click /
+    // cycle), so each fires its own one-shot edit command directly.
+    /// Snapshot the binding's `(min, max)` before a range drag begins.
+    EffectMappingRangeSnapshot { binding_id: String },
+    /// Live `(min, max)` update during a range drag — writes the local
+    /// project + content thread but records no undo command.
+    EffectMappingRangeChanged {
+        binding_id: String,
+        min: f32,
+        max: f32,
+    },
+    /// Commit a range drag — records the single `EditUserParamBinding`
+    /// undo command spanning the whole drag.
+    EffectMappingRangeCommit { binding_id: String },
+    /// Set the binding's display label. One-shot edit (one undo entry).
+    EffectMappingLabel { binding_id: String, label: String },
+    /// Set the binding's card-slider invert flag. One-shot edit.
+    EffectMappingInvert { binding_id: String, invert: bool },
+    /// Set the binding's response curve. One-shot edit.
+    EffectMappingCurve {
+        binding_id: String,
+        curve: manifold_core::macro_bank::MacroCurve,
+    },
+
     // ── Graph editor mutations (Phase 4) ──────────────────────────────
     //
     // Sent by the graph-editor canvas + palette. The app layer resolves
@@ -249,6 +286,21 @@ pub enum PanelAction {
     /// Add a new node of `type_id` to the watched graph at the canvas
     /// center. Emitted by clicking an entry in the palette.
     AddGraphNode { type_id: String },
+    /// Open the node picker over the canvas, anchored at `screen_pos`, to
+    /// spawn the chosen node at `graph_pos`. Emitted by a double-click on
+    /// empty canvas space. The app resolves the spawn into an
+    /// `AddGraphNodeAt` once a node is picked.
+    OpenNodePicker {
+        screen_pos: (f32, f32),
+        graph_pos: (f32, f32),
+    },
+    /// Add a new node of `type_id` at a specific `graph_pos`. Emitted after
+    /// a node is chosen in the picker (the positioned sibling of
+    /// `AddGraphNode`, which drops at a fixed canvas spot).
+    AddGraphNodeAt {
+        type_id: String,
+        graph_pos: (f32, f32),
+    },
     /// Connect an output port to an input port. Emitted by the
     /// wire-drag completion path on the canvas.
     ConnectPorts {

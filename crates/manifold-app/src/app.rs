@@ -209,6 +209,10 @@ pub struct Application {
     pub(crate) target_snapshot: Option<f32>,
     /// Envelope range drag snapshot (min, max) for undo.
     pub(crate) range_snapshot: Option<(f32, f32)>,
+    /// User param-binding mapping range drag snapshot `(min, max)` for
+    /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
+    /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
+    pub(crate) mapping_range_snapshot: Option<(f32, f32)>,
 
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub(crate) active_inspector_drag: Option<ActiveInspectorDrag>,
@@ -433,6 +437,7 @@ impl Application {
             adsr_snapshot: None,
             target_snapshot: None,
             range_snapshot: None,
+            mapping_range_snapshot: None,
             active_inspector_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,
@@ -1899,14 +1904,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // need it even for clicks that land in the sidebar.
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.on_pointer_move(viewport, logical_x, logical_y);
+                        // Drive the mapping popover's live range drag /
+                        // handle hover. No-op when the popover is closed.
+                        canvas.popover_on_move(logical_x, logical_y);
                     }
                     // Forward into the editor's UITree only when the
                     // cursor sits in either margin (palette on the left
                     // or expose-panel sidebar on the right). Move
                     // events from the canvas region would just cause
-                    // spurious hover/exit on tree nodes.
+                    // spurious hover/exit on tree nodes — except when the
+                    // node picker is open, which overlays the whole window
+                    // and wants hover feedback on its cells everywhere.
                     let in_panel = logical_x < palette_width || logical_x >= sidebar_x;
-                    if in_panel
+                    let picker_open = self
+                        .graph_editor
+                        .as_ref()
+                        .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
+                    if (in_panel || picker_open)
                         && let Some(ed) = self.graph_editor.as_mut()
                     {
                         ed.ui_root.input.process_pointer(
@@ -2010,6 +2024,46 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             WindowEvent::MouseInput { button, state, .. } => {
                 if is_graph_editor {
+                    // Node picker is modal: when open it claims every click in
+                    // the editor window. Route the press/release straight into
+                    // the editor UITree (which holds the popup's backdrop +
+                    // cells) and bypass the canvas / popover / in_panel split.
+                    // The resulting Click event is drained + dispatched to the
+                    // popup in `present_*` / the editor drain loop.
+                    let picker_open = self
+                        .graph_editor
+                        .as_ref()
+                        .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
+                    if picker_open {
+                        // Cursor in editor-window logical coords. The canvas
+                        // tracks it on CursorMoved; read it out before the
+                        // mutable editor borrow.
+                        let (cx, cy) = self
+                            .graph_canvas
+                            .as_ref()
+                            .map(|c| c.cursor())
+                            .unwrap_or((0.0, 0.0));
+                        if button == MouseButton::Left
+                            && let Some(ed) = self.graph_editor.as_mut()
+                        {
+                            let action = match state {
+                                ElementState::Pressed => {
+                                    manifold_ui::input::PointerAction::Down
+                                }
+                                ElementState::Released => {
+                                    manifold_ui::input::PointerAction::Up
+                                }
+                            };
+                            ed.ui_root.input.process_pointer(
+                                &mut ed.ui_root.tree,
+                                Vec2::new(cx, cy),
+                                action,
+                                self.time_since_start,
+                            );
+                            ed.offscreen_dirty = true;
+                        }
+                        return;
+                    }
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         let window_size = self
                             .window_registry
@@ -2043,7 +2097,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         );
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
-                                if in_panel {
+                                // The mapping popover floats over the
+                                // canvas, so it gets first crack at a
+                                // left-press wherever it lands. If it
+                                // consumes the click (handle/button/dead-
+                                // space), the canvas underneath stays
+                                // untouched; otherwise the popover closes
+                                // and we fall through to the normal path.
+                                if canvas.popover_open()
+                                    && canvas.popover_on_left_press(cx, cy)
+                                {
+                                    // consumed by the popover
+                                } else if in_panel {
                                     if let Some(ed) = self.graph_editor.as_mut() {
                                         ed.ui_root.input.process_pointer(
                                             &mut ed.ui_root.tree,
@@ -2053,10 +2118,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         );
                                     }
                                 } else {
-                                    canvas.on_left_button_down(viewport, cx, cy);
+                                    canvas.on_left_button_down(
+                                        viewport,
+                                        cx,
+                                        cy,
+                                        self.time_since_start,
+                                    );
                                 }
                             }
                             (MouseButton::Left, ElementState::Released) => {
+                                // Commit any popover range drag first.
+                                canvas.popover_on_left_release();
                                 if in_panel {
                                     if let Some(ed) = self.graph_editor.as_mut() {
                                         ed.ui_root.input.process_pointer(
@@ -2068,6 +2140,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     }
                                 } else {
                                     canvas.on_left_button_up(viewport, cx, cy);
+                                }
+                            }
+                            (MouseButton::Right, ElementState::Pressed) => {
+                                // Right-click an expanded param row that's
+                                // exposed as a card binding → open the
+                                // in-place mapping popover anchored on it.
+                                // The canvas resolves the row + anchor; the
+                                // app resolves the binding (needs the
+                                // project + snapshot the canvas can't see).
+                                if !in_panel
+                                    && let Some((node_id, pi)) =
+                                        canvas.on_right_button_down(viewport, cx, cy)
+                                    && let Some(inner_param) = canvas.param_name_at(node_id, pi)
+                                    && let Some((
+                                        binding_id,
+                                        label,
+                                        min,
+                                        max,
+                                        invert,
+                                        curve,
+                                        range,
+                                    )) = crate::app_render::resolve_canvas_binding(
+                                        self.content_state.active_graph_snapshot.as_deref(),
+                                        self.current_editor_target.as_ref(),
+                                        &self.local_project,
+                                        node_id,
+                                        &inner_param,
+                                    )
+                                {
+                                    canvas.open_mapping_popover(
+                                        viewport, node_id, pi, binding_id, label, min, max,
+                                        invert, curve, range,
+                                    );
                                 }
                             }
                             (MouseButton::Middle, ElementState::Pressed) => {
@@ -2459,6 +2564,55 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 ..
             } => {
                 if is_primary && self.perform_handle_key(&logical_key) {
+                    return;
+                }
+                // Editor window: node picker is open → keystrokes drive its
+                // search field. Must run BEFORE the Delete/Backspace node-
+                // delete arm below, or Backspace would delete a node instead
+                // of editing the filter. Escape dismisses; chars/space type;
+                // every transition sets offscreen_dirty so the editor
+                // repaints (it has no per-frame repaint loop when idle).
+                if is_graph_editor
+                    && self
+                        .graph_editor
+                        .as_ref()
+                        .is_some_and(|ed| ed.ui_root.browser_popup.is_open())
+                {
+                    use winit::keyboard::{Key, NamedKey};
+                    let mut filter_changed = false;
+                    match &logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            if let Some(ed) = self.graph_editor.as_mut() {
+                                ed.ui_root.browser_popup.handle_escape();
+                            }
+                            self.text_input.cancel();
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            self.text_input.backspace();
+                            filter_changed = true;
+                        }
+                        Key::Named(NamedKey::Space) => {
+                            self.text_input.insert_char(' ');
+                            filter_changed = true;
+                        }
+                        Key::Character(c) => {
+                            for ch in c.chars() {
+                                self.text_input.insert_char(ch);
+                            }
+                            filter_changed = true;
+                        }
+                        // Suppress every other key while the modal is up.
+                        _ => {}
+                    }
+                    if filter_changed {
+                        let filter = self.text_input.text.trim().to_string();
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.ui_root.browser_popup.set_filter(filter);
+                        }
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
                     return;
                 }
                 // Editor window: Delete/Backspace removes the currently

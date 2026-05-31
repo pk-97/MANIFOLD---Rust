@@ -306,14 +306,69 @@ impl Application {
         // through the same `ui_bridge::dispatch` arms as everything else.
         if let Some(ed) = self.graph_editor.as_mut() {
             let events = ed.ui_root.input.drain_events();
-            for event in events {
-                // Forward every event into the inspector panel — it
-                // wants Click (toggle/cycle) plus DragBegin/Drag/
-                // DragEnd (numeric scrub). The palette only cares
-                // about Click since it just lists clickable atoms.
-                actions.extend(self.graph_editor_panel.handle_event(&event));
-                if let manifold_ui::input::UIEvent::Click { node_id, .. } = event {
-                    actions.extend(self.graph_palette.handle_click(node_id));
+            // When the node picker is open it's a modal — it claims every
+            // click in the editor window (the backdrop spans the whole
+            // surface). Route clicks to the popup and skip the palette +
+            // sidebar handlers entirely so a click on a cell doesn't also
+            // toggle a node behind it.
+            if ed.ui_root.browser_popup.is_open() {
+                use manifold_ui::input::UIEvent;
+                use manifold_ui::panels::browser_popup::BrowserPopupAction;
+                for event in events {
+                    if let UIEvent::Click { node_id, .. } = event {
+                        // Search bar → focus the search field (already
+                        // auto-focused on open, but a click re-focuses).
+                        if ed.ui_root.browser_popup.is_search_bar(node_id) {
+                            let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
+                            self.text_input.begin(
+                                crate::text_input::TextInputField::SearchFilter,
+                                &ed.ui_root.browser_popup.current_filter,
+                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                                11.0,
+                            );
+                            ed.offscreen_dirty = true;
+                        } else if let Some(action) =
+                            ed.ui_root.browser_popup.handle_click(node_id)
+                        {
+                            match action {
+                                BrowserPopupAction::NodeSelected { type_id, graph_pos } => {
+                                    // Hand off to the layer-2 spawn handler.
+                                    // `graph_pos` is the palette-origin
+                                    // canvas position captured at open — pass
+                                    // it straight through, never recompute.
+                                    actions.push(
+                                        manifold_ui::panels::PanelAction::AddGraphNodeAt {
+                                            type_id,
+                                            graph_pos,
+                                        },
+                                    );
+                                    self.text_input.cancel();
+                                }
+                                BrowserPopupAction::Dismissed => {
+                                    self.text_input.cancel();
+                                }
+                                // Effect/Generator/Paste never arise in Node
+                                // mode from the editor popup.
+                                _ => {}
+                            }
+                            ed.offscreen_dirty = true;
+                        } else if ed.ui_root.browser_popup.contains_node(node_id) {
+                            // Internal click (category chip, background) —
+                            // consume so it doesn't leak to the canvas.
+                            ed.offscreen_dirty = true;
+                        }
+                    }
+                }
+            } else {
+                for event in events {
+                    // Forward every event into the inspector panel — it
+                    // wants Click (toggle/cycle) plus DragBegin/Drag/
+                    // DragEnd (numeric scrub). The palette only cares
+                    // about Click since it just lists clickable atoms.
+                    actions.extend(self.graph_editor_panel.handle_event(&event));
+                    if let manifold_ui::input::UIEvent::Click { node_id, .. } = event {
+                        actions.extend(self.graph_palette.handle_click(node_id));
+                    }
                 }
             }
         }
@@ -590,6 +645,123 @@ impl Application {
                     }
                     continue;
                 }
+                // Open the node picker over the editor canvas. This is the
+                // editor window's OWN BrowserPopupPanel (`graph_editor.ui_root
+                // .browser_popup`), not the main window's — same widget, its
+                // own tree and input path. `screen_pos` anchors the popup in
+                // editor-window logical pixels; `graph_pos` (captured against
+                // the palette-origin canvas viewport in graph_canvas) is
+                // stashed on the popup and passed straight back out on
+                // selection so the spawned node lands under the cursor.
+                PanelAction::OpenNodePicker {
+                    screen_pos,
+                    graph_pos,
+                } => {
+                    use manifold_renderer::node_graph::{Category, descriptor_for};
+                    use manifold_ui::panels::browser_popup::*;
+
+                    // Editor-window logical size — drives the popup's
+                    // edge-clamping. Falls back to a sane default if the
+                    // window isn't registered yet (shouldn't happen with
+                    // the editor open, but stay defensive).
+                    let (screen_w, screen_h) = self
+                        .graph_editor_window_id
+                        .and_then(|wid| self.window_registry.get(&wid))
+                        .map(|ws| {
+                            let s = ws.window.scale_factor();
+                            let sz = ws.window.inner_size();
+                            (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
+                        })
+                        .unwrap_or((1280.0, 720.0));
+
+                    let names: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| a.label.clone())
+                        .collect();
+                    let type_ids: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| a.type_id.clone())
+                        .collect();
+                    let categories: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| a.category.clone())
+                        .collect();
+                    // Search haystack per item: the friendly label plus the
+                    // descriptor's aliases (old names, plain-English, the
+                    // TouchDesigner-equivalent operator). Typing "blur top"
+                    // or a legacy name finds the node.
+                    let search: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| {
+                            let aliases = descriptor_for(&a.type_id)
+                                .map(|d| d.aliases.join(" "))
+                                .unwrap_or_default();
+                            if aliases.is_empty() {
+                                a.label.clone()
+                            } else {
+                                format!("{} {}", a.label, aliases)
+                            }
+                        })
+                        .collect();
+                    let cat_names: Vec<String> =
+                        Category::ALL.iter().map(|c| c.label().to_string()).collect();
+
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.ui_root.browser_popup.set_screen_size(screen_w, screen_h);
+                        ed.ui_root.browser_popup.open(BrowserPopupRequest {
+                            mode: BrowserPopupMode::Node,
+                            tab: manifold_ui::panels::InspectorTab::Master,
+                            layer_id: None,
+                            item_names: names,
+                            item_keys: Vec::new(),
+                            item_categories: categories,
+                            category_names: cat_names,
+                            item_type_ids: type_ids,
+                            item_search: Some(search),
+                            spawn_graph_pos: Some(*graph_pos),
+                            paste_count: 0,
+                            screen_anchor: manifold_ui::Vec2::new(screen_pos.0, screen_pos.1),
+                        });
+                        ed.offscreen_dirty = true;
+                    }
+                    // Auto-focus the search field so the user types
+                    // immediately. The popup tree isn't built yet (it builds
+                    // next frame in present_graph_editor_window), so anchor
+                    // the overlay at the click point; the field rect is
+                    // cosmetic for the picker — keystrokes route by the
+                    // active SearchFilter field, not by hit position.
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::SearchFilter,
+                        "",
+                        crate::text_input::AnchorRect::new(
+                            screen_pos.0,
+                            screen_pos.1,
+                            200.0,
+                            24.0,
+                        ),
+                        11.0,
+                    );
+                    continue;
+                }
+                PanelAction::AddGraphNodeAt { type_id, graph_pos } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
+                            eid.clone(),
+                            type_id.clone(),
+                            Some(*graph_pos),
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::ConnectPorts {
                     from_node,
                     from_port,
@@ -714,6 +886,173 @@ impl Application {
                                 *default_value,
                                 *convert,
                                 *is_angle,
+                            );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingRangeSnapshot { binding_id } => {
+                    // Capture the binding's pre-drag (min, max) so the
+                    // commit can record one undo command for the whole
+                    // range drag.
+                    if let Some((target, ei)) = self.current_editor_target.as_ref() {
+                        self.mapping_range_snapshot = manifold_editing::commands::effect_target::with_effects(
+                            &self.local_project,
+                            target,
+                            |effects, _| {
+                                effects.get(*ei).and_then(|fx| {
+                                    fx.user_param_bindings
+                                        .iter()
+                                        .find(|b| &b.id == binding_id)
+                                        .map(|b| (b.min, b.max))
+                                })
+                            },
+                        )
+                        .flatten();
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingRangeChanged {
+                    binding_id,
+                    min,
+                    max,
+                } => {
+                    // Live drag: write the local project AND the content
+                    // thread so the next snapshot sync doesn't clobber
+                    // the in-progress drag. No undo command yet — that's
+                    // the commit's job.
+                    if let Some((target, ei)) = self.current_editor_target.clone() {
+                        let bid = binding_id.clone();
+                        let (mn, mx) = (*min, *max);
+                        manifold_editing::commands::effect_target::with_effects_mut(
+                            &mut self.local_project,
+                            &target,
+                            |effects, _| {
+                                if let Some(fx) = effects.get_mut(ei)
+                                    && let Some(b) = fx
+                                        .user_param_bindings
+                                        .iter_mut()
+                                        .find(|b| b.id == bid)
+                                {
+                                    b.min = mn;
+                                    b.max = mx;
+                                    fx.user_param_bindings_version =
+                                        fx.user_param_bindings_version.wrapping_add(1);
+                                }
+                            },
+                        );
+                        let bid2 = binding_id.clone();
+                        self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
+                            manifold_editing::commands::effect_target::with_effects_mut(
+                                p,
+                                &target,
+                                |effects, _| {
+                                    if let Some(fx) = effects.get_mut(ei)
+                                        && let Some(b) = fx
+                                            .user_param_bindings
+                                            .iter_mut()
+                                            .find(|b| b.id == bid2)
+                                    {
+                                        b.min = mn;
+                                        b.max = mx;
+                                        fx.user_param_bindings_version =
+                                            fx.user_param_bindings_version.wrapping_add(1);
+                                    }
+                                },
+                            );
+                        })));
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingRangeCommit { binding_id } => {
+                    // Drag release: record ONE EditUserParamBindingCommand
+                    // spanning the whole drag, using the snapshotted
+                    // pre-drag (min, max) as the reverse and the binding's
+                    // current (min, max) as the new value.
+                    if let (Some((old_min, old_max)), Some((target, ei))) = (
+                        self.mapping_range_snapshot.take(),
+                        self.current_editor_target.clone(),
+                    ) {
+                        let new = manifold_editing::commands::effect_target::with_effects(
+                            &self.local_project,
+                            &target,
+                            |effects, _| {
+                                effects.get(ei).and_then(|fx| {
+                                    fx.user_param_bindings
+                                        .iter()
+                                        .find(|b| &b.id == binding_id)
+                                        .map(|b| (b.min, b.max))
+                                })
+                            },
+                        )
+                        .flatten();
+                        if let Some((new_min, new_max)) = new
+                            && ((old_min - new_min).abs() > f32::EPSILON
+                                || (old_max - new_max).abs() > f32::EPSILON)
+                        {
+                            let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                                min: Some(new_min),
+                                max: Some(new_max),
+                                ..Default::default()
+                            };
+                            let cmd =
+                                manifold_editing::commands::effects::EditUserParamBindingCommand::new(
+                                    target,
+                                    ei,
+                                    binding_id.clone(),
+                                    edit,
+                                );
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingLabel { binding_id, label } => {
+                    if let Some((target, ei)) = self.current_editor_target.clone() {
+                        let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                            label: Some(label.clone()),
+                            ..Default::default()
+                        };
+                        let cmd =
+                            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
+                                target,
+                                ei,
+                                binding_id.clone(),
+                                edit,
+                            );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingInvert { binding_id, invert } => {
+                    if let Some((target, ei)) = self.current_editor_target.clone() {
+                        let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                            invert: Some(*invert),
+                            ..Default::default()
+                        };
+                        let cmd =
+                            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
+                                target,
+                                ei,
+                                binding_id.clone(),
+                                edit,
+                            );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingCurve { binding_id, curve } => {
+                    if let Some((target, ei)) = self.current_editor_target.clone() {
+                        let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                            curve: Some(*curve),
+                            ..Default::default()
+                        };
+                        let cmd =
+                            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
+                                target,
+                                ei,
+                                binding_id.clone(),
+                                edit,
                             );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
@@ -1614,6 +1953,17 @@ impl Application {
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
 
+        // Node picker overlays the whole editor window when open. Keep its
+        // screen size in lockstep with the editor logical size (drives the
+        // backdrop extent + edge-clamp), then build it last so its nodes
+        // sit on top of palette + sidebar in the additive overlay below.
+        ws.ui_root
+            .browser_popup
+            .set_screen_size(logical_w as f32, logical_h as f32);
+        if ws.ui_root.browser_popup.is_open() {
+            ws.ui_root.browser_popup.build(&mut ws.ui_root.tree);
+        }
+
         // ── Build frame: clear, then draw the canvas + sidebar ──
         let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
         encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
@@ -2218,6 +2568,75 @@ fn build_graph_editor_view(
         title: node.title.clone(),
         parameters,
     })
+}
+
+/// Resolve an on-canvas param row `(node_id, inner_param)` to the
+/// matching card `UserParamBinding` on the watched effect, returning the
+/// data the mapping popover needs to open. `None` when there's no active
+/// snapshot/target, the node has no stable handle, or the inner param
+/// isn't exposed as a user binding (only user-bound rows get the popover;
+/// preset/static routings and plain inner params don't).
+///
+/// Returned tuple: `(binding_id, label, min, max, invert, curve, range)`.
+/// `range` is the binding's declared inner-param bounds, used to span the
+/// popover's trim track.
+///
+/// Free function (not a method) so the editor-window mouse handler can
+/// call it while the `&mut GraphCanvas` borrow is live: it takes the
+/// disjoint `self` fields (snapshot, target, project) by reference rather
+/// than borrowing all of `self`.
+#[allow(clippy::type_complexity)]
+pub(crate) fn resolve_canvas_binding(
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+    target: Option<&(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
+    project: &manifold_core::project::Project,
+    node_id: u32,
+    inner_param: &str,
+) -> Option<(
+    String,
+    String,
+    f32,
+    f32,
+    bool,
+    manifold_core::macro_bank::MacroCurve,
+    Option<(f32, f32)>,
+)> {
+    use manifold_editing::commands::effect_target::EffectTarget;
+    let snap = snapshot?;
+    // node_id → node_handle (anonymous nodes can't carry bindings).
+    let node = snap.nodes.iter().find(|n| n.id == node_id)?;
+    let handle = node.node_handle.as_deref()?;
+    // Declared inner-param range, for the trim track span.
+    let range = node
+        .parameters
+        .iter()
+        .find(|p| p.name == inner_param)
+        .and_then(|p| p.range);
+    let (effect_target, ei) = target?;
+    let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
+        EffectTarget::Master => Some(&project.settings.master_effects),
+        EffectTarget::Layer { layer_id } => project
+            .timeline
+            .find_layer_by_id(layer_id)
+            .and_then(|(_, l)| l.effects.as_deref()),
+    };
+    let fx = effects.and_then(|e| e.get(*ei))?;
+    let b = fx
+        .user_param_bindings
+        .iter()
+        .find(|b| b.node_handle == handle && b.inner_param == inner_param)?;
+    Some((
+        b.id.clone(),
+        b.label.clone(),
+        b.min,
+        b.max,
+        b.invert,
+        b.curve,
+        range,
+    ))
 }
 
 /// Build the unified set of `(node_handle, inner_param)` keys for every

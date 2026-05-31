@@ -374,11 +374,19 @@ pub fn dispatch(
         | PanelAction::OpenGraphEditor(_)
         | PanelAction::OpenGeneratorGraphEditor
         | PanelAction::AddGraphNode { .. }
+        | PanelAction::OpenNodePicker { .. }
+        | PanelAction::AddGraphNodeAt { .. }
         | PanelAction::ConnectPorts { .. }
         | PanelAction::DisconnectPorts { .. }
         | PanelAction::RemoveGraphNode { .. }
         | PanelAction::MoveGraphNode { .. }
         | PanelAction::SetGraphNodeParam { .. }
+        | PanelAction::EffectMappingRangeSnapshot { .. }
+        | PanelAction::EffectMappingRangeChanged { .. }
+        | PanelAction::EffectMappingRangeCommit { .. }
+        | PanelAction::EffectMappingLabel { .. }
+        | PanelAction::EffectMappingInvert { .. }
+        | PanelAction::EffectMappingCurve { .. }
         | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }

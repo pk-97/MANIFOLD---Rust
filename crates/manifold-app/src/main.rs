@@ -19,6 +19,7 @@ mod frame_timer;
 mod graph_canvas;
 mod input_handler;
 mod input_host;
+mod mapping_popover;
 mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]
