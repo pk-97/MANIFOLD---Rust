@@ -1,0 +1,323 @@
+# MANIFOLD — Graph & Parameter UI/UX System Design
+
+Status: **design, pre-build** (2026-05-31). This is the agreed spec for the
+next UI/UX pass on the effect/generator/graph/node surfaces. It is the
+human-facing half of the node "UX backend" initiative
+([project_node_descriptor_ux_backend], `docs/NODE_CATALOG.md`): the descriptor
+backend already exists and feeds the agent catalog; this design surfaces that
+same backend to humans, and adds the structural UI it implies.
+
+Nothing here is built yet. Where a section says "current," that is what ships
+today; "target" is the design.
+
+---
+
+## 1. The one idea: everything is a boundary
+
+The unit of the UI is not "the atom." It is **the boundary**: a thing with a
+simple *face* on the outside and detail hidden *inside*. You see the face; you
+open it when you want the guts. The same primitive appears at three scales:
+
+| Scale | Face | Interior |
+|---|---|---|
+| **Graph** | a node's name + a few ports + macro params | a subgraph (one dispatch, a hand-made group, a saved recipe, or a whole effect) |
+| **Value** | one knob: its name, range, invert, unit | the inner param it actually drives |
+| **Layout** | a panel | the surface it contains; you toggle / dock / snap it |
+
+One sentence holds the whole system:
+
+> **Boundaries nest (graph), boundaries map (params), boundaries dock (layout).**
+
+Learn it once and it pays off everywhere — for a performer reaching for a knob
+mid-show and for an AI agent composing a graph from the catalog. They touch the
+same primitive.
+
+**We already own this primitive — it is the effect card.** "A face of exposed
+macros over an inner graph" describes the card word-for-word. It is the Ableton
+rack: eight macros on the front of a device chain, nestable inside itself. The
+work is to make *the node* and *the effect/card* the **same object** and let it
+nest — not to invent a new concept. (This is the unify-the-model rule, not
+fork-per-kind — see [feedback_graph_editor_unified_surface].)
+
+Three guardrails fall straight out of the model and hold across every section:
+
+1. **Don't fork behaviour on kind.** Atom vs group vs effect, effect vs
+   generator, compiled vs uncompiled — these are *data*, not separate code
+   paths. When behaviour forks, unify the model underneath.
+2. **The compiler stays below the authoring view.** The graph you see and edit
+   (boundaries visible) is not the graph that runs (fused). The UI always shows
+   the authored view.
+3. **One source of truth, two faces.** The node descriptor is the single
+   backend. `node_catalog.json` is the agent's face; the palette/canvas is the
+   human's face. Build the human face off descriptors and the two vocabularies
+   cannot drift.
+
+---
+
+## 2. The backend we are building on
+
+This design consumes infrastructure that already ships. "Full use of the
+backend" means every asset below lands on a surface.
+
+| Backend asset | Where it lives | What it powers in this design |
+|---|---|---|
+| Friendly **label** | `primitive!` / `PrimitiveFactory.picker` | node title, palette row |
+| 19-cat **`Category`** | `node_graph/descriptor.rs` | palette grouping, node header colour |
+| **`Role`** (Source/Map/Filter/Sink/Control) | `descriptor.rs` | node glyph/affordance, agent validator food |
+| **`aliases`** (old name + synonyms + TD operator) | `descriptor.rs` | palette **search** |
+| **`summary`** (hand-written, VJ-facing) | `descriptor.rs` | palette hover, node info-on-select |
+| **`purpose`** (precise technical) | `descriptor.rs` | deep info popover |
+| per-param **`tooltip`** | `node_graph/param_doc.rs` (`tooltip_for`) | on-node knob tooltip |
+| **`ParamType::Angle` / `Frequency`** | `node_graph/parameters.rs` | on-node value units (°, Hz) — already wired to card + sidebar |
+| binding **`min` / `max` / `convert` / `is_angle` / `label`** | `manifold-core` `UserParamBinding` | the param-mapping popover (§5) |
+| Ableton **invert (`ned`) + range** | `manifold-core` `ableton_mapping`, INV button in `param_slider_shared.rs` | the param-mapping popover (§5) |
+| driver/envelope **`range_min` / `range_max`** | `manifold-core` modulation, `ResolvedParam` | the param-mapping popover (§5) |
+
+The descriptor backend is finished. The work is the UI that reads it.
+
+---
+
+## 3. The three surfaces, three verdicts
+
+### 3a. The card (performance face) — already right, don't redesign
+The card is the Ableton rack and the correct abstraction for a live instrument.
+It is the part you touch on stage. Its remaining headroom is *affordance detail*
+(the param-mapping editor, §5), not structure. Leave the model alone.
+
+### 3b. The node palette (authoring discovery) — the weak link
+**Current:** [`node_graph/palette.rs`](../crates/manifold-renderer/src/node_graph/palette.rs)
+groups by `PaletteCategory` — two buckets, Atom / Driver. The panel
+([`graph_palette.rs`](../crates/manifold-ui/src/panels/graph_palette.rs)) is a
+200px flat list of `+ Label` rows. No search, no descriptions, no categories.
+The whole 19-category / alias / summary effort is invisible here.
+
+**Target:** the discovery surface MANIFOLD already ships for *whole effects* —
+[`browser_popup.rs`](../crates/manifold-ui/src/panels/browser_popup.rs), a
+"grid-based browser with search bar, category chips, and a scrollable grid,"
+already wired to the `text_input` system — brought down one level to *atoms*,
+powered by the descriptor:
+- **Search box** matching `aliases` (so "blur", "clouds", "Noise TOP" all land).
+- **Category sections/chips** from the 19-cat `Category`, not the 2-bucket split.
+- **`summary` on hover / select.**
+- Reuse `browser_popup`'s machinery (text_input + chips + grid) rather than
+  inventing a second one.
+
+**The one seam to get right up front (§7):** the browser must consume a single
+merged list of entries that mixes a **static** source (built-in atoms — the
+`&'static` descriptor inventory) and a **dynamic** source (user-saved recipes /
+groups — runtime data). Then adding recipes later is "populate a kind," not
+"rebuild the palette."
+
+### 3c. The canvas (authoring comprehension) — middling, big upside
+**Current:** node tiles ([`graph_canvas.rs`](../crates/manifold-app/src/graph_canvas.rs))
+show header + one summary line + ports. Ports are **already type-coloured**
+(texture / scalar / array / camera / light / material). Params are edited in a
+separate 320px right sidebar ([`graph_editor.rs`](../crates/manifold-ui/src/panels/graph_editor.rs)).
+
+**Target:** see §4 (on-node controls), §6 (previews + animation), plus
+category-coloured node headers (instant Blender/TD-style visual grouping).
+
+---
+
+## 4. On-node controls — no side menu
+
+Each node wears its everyday knobs **on its face**, Blender-style. You read what
+a node does and tune it in the same spot, no eyes darting to a side panel. The
+canvas becomes the whole instrument. There is **no permanent side menu** for
+params.
+
+Rules:
+- **Depth opens in place, not at the edge.** A knob's deep settings — its
+  min/max/invert/unit mapping (§5) — open as a **popover off the knob**, not a
+  side panel. Detail when you ask, gone when you don't. (Keeps the box rule: the
+  knob is a face; opening it reveals its interior.)
+- **Every node collapses.** A disclosure toggle in the header: header-only +
+  ports when quiet, knobs out when active. This is what delivers *focus* — you
+  quiet the nodes you're not on and the one in your hands is the loud one. Ports
+  stay visible when collapsed (you still wire collapsed nodes). Default expanded.
+- **Expose-to-card moves on-node.** A per-param promote control (a dot/button)
+  replaces the sidebar checkbox — you expose a param right where you see it,
+  exactly like mapping a macro on an Ableton rack.
+
+The data is already there: `draw_node` receives every node's full `ParamSnapshot`
+list today (it collapses it to one summary line in `build_summary`). Putting
+controls on the face is mostly "stop throwing the params away."
+
+**Build in passes** (so the look can be tuned before interaction is wired):
+1. Params rendered on the face, **read-only**, with a fill bar for ranged
+   values. (Tune density, sizing, node width.) Note: `set_snapshot` currently
+   early-returns on unchanged topology — once values are on the face it must
+   refresh them in place on param-only changes.
+2. Per-node **collapse** toggle.
+3. **In-place editing** (drag/click on the knob), porting the sidebar's edit
+   logic onto the tile; emits the existing `SetGraphNodeParam`.
+4. **Previews** (§6).
+
+The right sidebar is demoted as the on-node controls land, then retired. Do not
+delete it on day one — build alongside, then remove.
+
+---
+
+## 5. The parameter-mapping editor — unify the fragmentation
+
+The affordances you asked about (min, max, invert, range, card output) are
+**already in the backend but fragmented across three contexts that don't know
+about each other**:
+
+- **Card-expose binding** — `UserParamBinding` carries `label`, `min`, `max`,
+  `default_value`, `convert`, `is_angle`. No UI edits any of it.
+- **Ableton mapping** — `ned` invert flag + a range, with an actual **INV**
+  button wired in `param_slider_shared.rs`.
+- **Driver / envelope modulation** — `range_min` / `range_max`, `ResolvedParam`
+  min/max.
+
+Three range mechanisms, three-or-zero editors, for what is **one idea**: a
+source drives a target through **[min, max, invert, curve, unit]**. That
+fragmentation is why "degrees" cost threading `is_angle` through five crates —
+there is no single param-mapping layer to drop a unit into.
+
+**Target:** one param-mapping model and **one editor surface** — the knob's
+in-place popover (§4) — reused across all binding contexts. Degrees, Hz, invert,
+range, custom name become *fields in that one editor*, not bespoke threading.
+This is the **value-scale boundary**: a face (the knob) over an interior (the
+mapping). It is the same editor pattern as a group's face, one scale down.
+
+This is the live performance instrument
+([feedback_param_values_is_performance_surface]) — min/max/invert/range on a
+macro is how a knob feels right under the fingers mid-show. It is
+instrument-building, not authoring polish.
+
+---
+
+## 6. Previews + data-flow — understand a graph at a glance
+
+The thing that turns a graph from a wiring diagram into something you *read*.
+
+- **Every node shows a tiny live view of its output.** Image nodes → the image.
+  Control nodes (LFO, envelope, math) → a small moving trace/sparkline of their
+  value, so even the "invisible" math nodes become legible.
+- **Wires drift, subtly,** in the signal direction — low, slow, only on live
+  wires. Never a light show; the moment it distracts it is wrong.
+- **Micro-feel.** Wires snap and softly glow on connect; nodes ease open on
+  expand; values glide instead of jumping. Satisfying, subtle, informative —
+  the difference between a form and an instrument.
+
+**Architecture — the authoring tap.** Per-node previews fight the fusion
+compiler: once it fuses N atoms into one pass, the middle outputs don't exist as
+separate images. The fix: **the editor runs an authoring version of the graph**
+— unfused, tapped at every node, refreshed a few times a second — while the
+performance path stays fused and fast. The editor is never the hot path (you
+never patch mid-show), so it can afford to be the slow, fully-honest one. The
+editor being "a bit slower because it previews" is by design and acceptable.
+
+**The compiled/uncompiled seam (a trait, not a UI mode).** The UI must not
+branch on "compiled vs uncompiled." Instead the **graph offers previews as a
+capability**: the UI asks each node *"what's at your output?"* and gets
+`Some(preview)` or `None`. The authoring runtime implements the tap (sees every
+node); the performance compiler does not (only the final image exists). So
+compiled-vs-uncompiled is "the tap is there or it isn't," never an `if` in the
+UI. A new preview kind later (scalar sparkline, histogram) is one more thing the
+tap can return; the fast path simply doesn't provide it. One UI, two backends
+behind the seam — extends without rotting. (A base trait the two runtimes
+implement is the right shape.)
+
+---
+
+## 7. Future boundaries this UI must already fit
+
+The model is chosen *now* so these drop in as data, not rewrites:
+
+- **Node groups** — collapse a selection into one boundary (its face = exposed
+  ports + macros).
+- **Sub-networks** — a named, saved boundary; the canvas gains **navigation
+  across levels**: dive into a group, a **breadcrumb** to find the way back,
+  collapse-into-group and expand-back. (This is the load-bearing future canvas
+  feature — more than thumbnails.)
+- **Recipes** — a boundary you drop from the palette (a saved subgraph). Lives
+  in the **dynamic** half of the palette's merged source (§3b).
+- **Effects / generators** — the outermost boundary; the card is its face.
+- **Graph compiler / fusion** — execution detail *below* the boundary. A group
+  is a UX boundary the compiler is free to fuse straight through, so grouping is
+  **free** — it never costs a render target.
+
+**Floated, not committed:** the node palette and the effect/generator browser
+are two discovery UIs for the *same act* — dropping a thing into a graph (an
+effect *is* a node graph; an atom *is* a node). They could become one browser
+with a kind/scope toggle (atom / recipe / group / effect). A real architectural
+bet; flagged here, not decided.
+
+---
+
+## 8. Layout — one window, panels that toggle / dock / snap
+
+**Current:** the graph editor is a **separate OS window** (winit
+`create_window`, [`app_lifecycle.rs:762`](../crates/manifold-app/src/app_lifecycle.rs#L762),
+opened on Cmd+Shift+G, its own workspace + present path). It loses focus and is
+hard to recover — two top-level windows competing. Other panels sit at fixed
+coordinates (inspector 320px right, palette 200px left, canvas centre): arranged
+*for* the user, not *by* them.
+
+**Target — stop making the editor a window.** Bring it **inside the main
+window** as a toggleable workspace. One window, nothing to lose focus to.
+- **Composed, not blackout.** The in-window editor is the graph canvas + palette
+  with a **mini timeline** strip across the bottom and the **output preview**
+  kept visible — so you patch with the instrument still in front of you
+  (TD-style), not a context blackout.
+- **Reuse the perform-mode swap.** Perform mode
+  ([`perform_mode/`](../crates/manifold-app/src/perform_mode/)) already proves
+  the exact mechanism: a master `active` flag short-circuits the main window's
+  `tick_and_render` to a different layout; enter/exit are deferred through
+  `about_to_wait` (window mutations need `ActiveEventLoop` in scope); input is
+  routed through mode helpers; UI state is quiesced on entry and force-rebuilt on
+  exit; the **content thread and output window are untouched**. The editor
+  in-window is the same swap to a different layout — Cmd+Shift+G flips the flag
+  instead of spawning a window.
+- **The one genuinely new piece** is a small **layout arranger** placing
+  {canvas + palette, mini-timeline, preview} into regions. Panels are already
+  viewport-`Rect`-parameterized, so this is layout math over existing draw code,
+  not new rendering — and it is the first concrete brick of the dock/snap system.
+  (Difference from perform mode: that swap draws a *bespoke* HUD; this one
+  *composes shrunk versions of existing panels*. Same mechanism, more reuse.)
+- **Fuller version:** those regions become dockable / snappable with default
+  homes and keyboard toggles (the TD/Blender workspace); the docked unit is the
+  **same boundary primitive**, not a special "panel" type.
+
+The only thing a separate window buys is a second monitor, which is moot — the
+editor is authoring-only and never used mid-show. In-window wins. (Stopgap if
+ever needed without the refactor: make it an *owned child* of the main window so
+it travels with focus — but that papers over the thing we are replacing.)
+
+---
+
+## 9. Recommended build order
+
+1. **Window → in-window overlay** (§8). The daily friction; foundation of the
+   layout system; unblocks "neat / toggle / snap." On-node controls render into
+   a viewport either way, so they are unaffected.
+2. **On-node controls** (§4), in the four passes. Read-only first to tune the
+   look.
+3. **Search-first, category-grouped palette** (§3b) off the descriptor backend,
+   reusing the `browser_popup` pattern, built on the merged static+dynamic
+   source (§7).
+4. **Param-mapping popover editor** (§5) — unify the three range systems behind
+   one surface.
+5. **Previews + animation** (§6) — the authoring tap + the preview-capability
+   trait.
+6. Later: node groups / sub-networks + canvas level-navigation (§7); dockable
+   layout; the unified atom/effect browser.
+
+---
+
+## 10. Conventions
+
+- Voice for all copy: [feedback_product_copy_voice] — natural, readable,
+  professional; no em-dashes, no semicolons, no AI-speak.
+- The graph editor is **authoring, never performance**
+  ([feedback_graph_editor_is_authoring_not_perform]) — these surfaces speed up
+  building looks; the card is the stage face.
+- Don't fork behaviour on Effect vs Generator
+  ([feedback_graph_editor_unified_surface]); don't propose reverting graph
+  effects to Rust to dodge complexity ([feedback_no_rust_revert_for_graph_effects]).
+- `param_values` + `user_param_bindings` are the live instrument
+  ([feedback_param_values_is_performance_surface]) — never "migrate them into
+  the graph" as cleanup.
