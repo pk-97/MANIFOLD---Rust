@@ -87,7 +87,11 @@ crate::primitive! {
     ],
     composition_notes: "Output capacity follows the input `uv` array (one noise sample per UV). `scale` is the same notion of frequency as in node.simplex_noise_2d: ~1 = one cell across the UV range, ~32 = fine grain. Drive `z` from a time wire to animate the noise; drive `offset_*` from an LFO to pan. Bit-exact with `simplex3d(...)` from noise_common.wgsl — same source file is prepended at pipeline creation.",
     examples: [],
-    picker: { label: "Simplex Per Instance", category: Atom },
+    picker: { label: "Simplex Noise (per copy)", category: Atom },
+    summary: "Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["simplex noise", "per copy", "variation"],
 }
 
 impl Primitive for SimplexPerInstance {

@@ -69,7 +69,11 @@ crate::primitive! {
     ],
     composition_notes: "Aliased in/out — mutates the particle buffer in place. `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus); None is the default toroidal-wrap [0,1]^3 policy (the 3D wrap_particles_torus). `ctr_scale` is port-shadow. Wire downstream of node.euler_step_particles_3d; the soft pre-integration boundary cushion is node.container_repel_force_3d. For alternative policies, swap for a future boundary_death / wall_bounce sibling.",
     examples: ["FluidSimulation3D"],
-    picker: { label: "Container Bounds 3D", category: Atom },
+    picker: { label: "Keep In Box (3D)", category: Atom },
+    summary: "Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["keep in box", "bounds", "contain", "clamp"],
 }
 
 impl Primitive for ContainerBounds3D {

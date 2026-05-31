@@ -69,7 +69,11 @@ crate::primitive! {
     ],
     composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `diffusion` is port-shadow so a control wire drives the kick energy live. The density Texture3D weights the kick by `capped(d) = d/(1+d)` — particles in dense regions get a stronger random push, which spreads clumps. Early-outs when diffusion <= 0. Wire between node.simplex_noise_force_3d_at_particles and node.euler_step_particles_3d so the kick is integrated through speed*dt.",
     examples: ["FluidSimulation3D"],
-    picker: { label: "Diffuse Force 3D at Particles", category: Atom },
+    picker: { label: "Spread Out (3D diffuse)", category: Atom },
+    summary: "Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["spread out 3d", "diffuse 3d", "jitter"],
 }
 
 impl Primitive for DiffuseForce3DAtParticles {

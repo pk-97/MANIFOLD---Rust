@@ -109,7 +109,11 @@ crate::primitive! {
     ],
     composition_notes: "Defaults (5 / 1.5 / 0.8) reproduce the legacy noise_common::fbm exactly. Octaves > 1 stacks 3D simplex samples at scaling frequencies; total energy is normalised by Σ amp so the output range stays within roughly [-1, 1]. octaves / lacunarity / gain are structural and not port-shadowed (changing them mid-frame is rarely the move); scale / z / offset_* are port-shadowed for time- and LFO-driven animation. Output capacity follows the input `uv` array.",
     examples: [],
-    picker: { label: "FBM Per Instance", category: Atom },
+    picker: { label: "Fractal Noise (per copy)", category: Atom },
+    summary: "Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["fractal noise", "fbm", "per copy", "variation"],
 }
 
 impl Primitive for FbmPerInstance {

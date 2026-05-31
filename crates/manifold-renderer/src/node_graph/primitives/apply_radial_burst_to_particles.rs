@@ -108,7 +108,11 @@ crate::primitive! {
     ],
     composition_notes: "Aliased in/out — mutates the particle buffer in place. Typical wiring: `node.inject_burst` produces (active, phase, point_x, point_y); wire point_x/point_y straight in, envelope from `active * envelope_decay(phase)` or compose attack/decay externally. When `amplitude * envelope ≈ 0` the kernel early-outs, cheap when idle. `dt = delta × 60` is baked in (frame-rate-normalised like `euler_step_particles`). Time uses ctx.time.seconds for the per-particle noise perturbation phase.",
     examples: [],
-    picker: { label: "Apply Radial Burst (Particles)", category: Atom },
+    picker: { label: "Add Burst (radial)", category: Atom },
+    summary: "Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["add burst", "explosion", "shockwave", "impulse"],
 }
 
 impl Primitive for ApplyRadialBurstToParticles {

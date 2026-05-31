@@ -59,7 +59,11 @@ crate::primitive! {
     ],
     composition_notes: "Output capacity follows the `instances` input. The amplitude factor matches the legacy DigitalPlants convention: 0.2 yields a [-0.1, 0.1] radians range across each axis. The hash uses idx*3 + {0,1,2} keys so each axis is decorrelated; the sequence is deterministic per index (re-rendering the same chain gives identical jitter). ADD semantics preserve any upstream rotation — emitting a uniform pose from a wrap and then jittering it is the typical composition.",
     examples: [],
-    picker: { label: "Instance Rotation Jitter", category: Atom },
+    picker: { label: "Rotation Jitter", category: Atom },
+    summary: "Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["rotation jitter", "random rotation", "twist"],
 }
 
 impl Primitive for InstanceRotationJitter {

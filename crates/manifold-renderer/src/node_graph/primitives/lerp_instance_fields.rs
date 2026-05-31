@@ -53,7 +53,11 @@ crate::primitive! {
     ],
     composition_notes: "Output capacity follows `a` (and run() truncates dispatch to min(a, b, out) so the shader can't read past either input). `t` is not clamped — values outside [0, 1] produce honest extrapolation, useful for over- or under-shoot effects. Both pos_scale.w (instance scale) and rot_pad get lerped — when both upstream sources write the same scale and zero rotation those fields stay invariant under the lerp, leaving the perceptible effect on pos.xyz alone.",
     examples: [],
-    picker: { label: "Lerp Instance Fields", category: Atom },
+    picker: { label: "Blend Copies", category: Atom },
+    summary: "Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["blend copies", "morph", "lerp", "interpolate"],
 }
 
 impl Primitive for LerpInstanceFields {

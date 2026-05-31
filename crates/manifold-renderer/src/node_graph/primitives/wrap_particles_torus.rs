@@ -45,7 +45,11 @@ crate::primitive! {
     ],
     composition_notes: "Aliased in/out — operates on the particle buffer in place. Typical chain: `sample_texture_at_particles → euler_step_particles → wrap_particles_torus`. For alternative boundary policies, swap this node for a future `boundary_death` (excess particles die when leaving [0,1]²) or `wall_bounce` sibling.",
     examples: [],
-    picker: { label: "Wrap Particles (Torus)", category: Atom },
+    picker: { label: "Wrap Around (torus)", category: Atom },
+    summary: "Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["wrap around", "torus", "loop", "tile"],
 }
 
 impl Primitive for WrapParticlesTorus {

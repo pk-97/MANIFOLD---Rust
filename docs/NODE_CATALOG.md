@@ -45,10 +45,10 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | type_id | label | category | role | summary |
 |---|---|---|---|---|
 | `node.abs_texture` | Absolute Value | Math & Convert | Filter | Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape. |
-| `node.anti_clump_particles` | Anti-Clump Particles | — | — | Modulator-weighted Brownian kick on each live particle's position.xy. |
-| `node.apply_radial_burst_3d_to_particles` | Apply Radial Burst 3D (Particles) | — | — | Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. |
-| `node.apply_radial_burst_to_particles` | Apply Radial Burst (Particles) | — | — | Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV an… |
-| `node.array_diffuse_particles` | Diffuse Particles | — | — | Apply a per-particle hash-based random kick to `Particle.velocity`. |
+| `node.anti_clump_particles` | Anti-Clump Particles | Particles 2D | Filter | Nudges particles apart where they bunch up, keeping the cloud evenly spread instead of collapsing into blobs. |
+| `node.apply_radial_burst_3d_to_particles` | Add Burst (3D, radial) | Particles 3D | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
+| `node.apply_radial_burst_to_particles` | Add Burst (radial) | Particles 2D | Filter | Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit. |
+| `node.array_diffuse_particles` | Spread Out (diffuse) | Particles 2D | Filter | Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter. |
 | `node.array_feedback` | Array Feedback | Math & Convert | Filter | Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle. |
 | `node.array_math` | List Math | Math & Convert | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
 | `node.array_replicate_polyline_rings` | Replicate Polyline Rings | — | — | Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. |
@@ -73,14 +73,14 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.color_ramp` | Gradient Map | Color & Tone | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
 | `node.colorize` | Colorize | Color & Tone | Filter | Tints the image toward a single colour, strongest on the bright neutral areas. Good for duotones and washes. |
 | `node.consecutive_edges` | Consecutive Edges | — | — | Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). |
-| `node.container_bounds_3d` | Container Bounds 3D | — | — | Post-integration hard containment for 3D particles: toroidal wrap (container = None) or SDF reflect + clamp (Cube/Sphere/Torus). |
-| `node.container_repel_force_3d` | Container Repel Force 3D | — | — | Soft container-boundary repulsion added in-place to an Array<[f32; 3]> force buffer. |
+| `node.container_bounds_3d` | Keep In Box (3D) | Particles 3D | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
+| `node.container_repel_force_3d` | Push From Walls (3D) | Particles 3D | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | `node.contrast` | Contrast | Color & Tone | Filter | Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey. |
 | `node.convolution_2d_9tap` | Custom Convolution | — | — | General 3×3 non-separable convolution with a user-supplied kernel (9 float weights k0..k8 in row-major order, k4 = center). |
-| `node.curl_slope_force_3d` | Curl + Slope Force 3D | — | — | Combine a vec3 gradient Texture3D into a force field: cross the gradient with a unit reference axis for curl (tangential orbit around density peaks) and add th… |
+| `node.curl_slope_force_3d` | Swirl Force (3D, curl) | Particles 3D | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | `node.cylinder_wrap_field` | Cylinder Wrap Field | — | — | Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. |
 | `node.depth_estimate_midas` | Depth Map | Detection & Sampling | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
-| `node.diffuse_force_3d_at_particles` | Diffuse Force 3D at Particles | — | — | Per-particle incoherent 3D random kick added in-place to an Array<[f32; 3]> force buffer, weighted by local density. |
+| `node.diffuse_force_3d_at_particles` | Spread Out (3D diffuse) | Particles 3D | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | `node.digital_plants_render` | Digital Plants Render | — | — | Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-… |
 | `node.displace_mesh` | Push Mesh | 3D Geometry | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | `node.distance_to_point` | Distance to Point | — | — | Pure generator. |
@@ -89,10 +89,10 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.downsample` | Downsample | Routing | Filter | Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look. |
 | `node.edges_from_grid_uv` | Edges From Grid UV | — | — | Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. |
 | `node.ellipse_mask` | Circle Mask | Mask | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
-| `node.euler_step_particles` | Euler Step Particles | — | — | Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. |
-| `node.euler_step_particles_3d` | Euler Step Particles 3D | — | — | Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. |
+| `node.euler_step_particles` | Move Particles (Euler step) | Particles 2D | Filter | Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move. |
+| `node.euler_step_particles_3d` | Move Particles (3D, Euler step) | Particles 3D | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
 | `node.fbm_2d` | fBM 2D | — | — | Pure generator. |
-| `node.fbm_per_instance` | FBM Per Instance | — | — | Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. |
+| `node.fbm_per_instance` | Fractal Noise (per copy) | Particles 2D | Filter | Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with. |
 | `node.feedback` | Feedback | Composite | Filter | Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through … |
 | `node.field_combine` | Field Combine | — | — | Per-pixel scalar field: out.rgb = a * in.r + b * in.g + c, alpha = 1. |
 | `node.film_grain` | Film Grain | Stylize | Filter | Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise. |
@@ -120,11 +120,11 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.heightmap_to_normal` | Surface Bumps | Materials & Lighting | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
 | `node.hue_saturation` | Hue / Saturation | Color & Tone | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
 | `node.image_folder` | Image Folder | Generate | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
-| `node.instance_position_jitter` | Instance Position Jitter | — | — | Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. |
-| `node.instance_rotation_jitter` | Instance Rotation Jitter | — | — | Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. |
+| `node.instance_position_jitter` | Position Jitter | Particles 2D | Filter | Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered. |
+| `node.instance_rotation_jitter` | Rotation Jitter | Particles 2D | Filter | Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up. |
 | `node.lambert_directional` | Basic Light (Lambert) | Materials & Lighting | Filter | Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term. |
 | `node.length_vec2` | Length | Math & Convert | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
-| `node.lerp_instance_fields` | Lerp Instance Fields | — | — | Elementwise linear interpolation between two Array<InstanceTransform>s. |
+| `node.lerp_instance_fields` | Blend Copies | Particles 2D | Filter | Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another. |
 | `node.levels` | Levels | Color & Tone | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | `node.lic_integrate` | LIC Integrate | — | — | Line Integral Convolution. |
 | `node.linear_gradient` | Linear Gradient | Generate | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
@@ -153,7 +153,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.power_texture` | Power | Math & Convert | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
 | `node.project_3d` | Flatten 3D → 2D | 3D Geometry | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | `node.project_4d` | Flatten 4D → 3D | 3D Geometry | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
-| `node.radial_burst_force_field` | Radial Burst Force Field | — | — | Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. |
+| `node.radial_burst_force_field` | Explosion Force | Particles 2D | Source | Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion. |
 | `node.radial_fold_uv` | Kaleidoscope | Distort & Warp | Map | Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to … |
 | `node.radial_offset_field` | Radial Offset Field | Distort & Warp | Map | Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node. |
 | `node.reinhard_tone_map` | Reinhard Tone Map | — | — | Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simpl… |
@@ -170,23 +170,23 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.rotate_3d` | Rotate 3D | 3D Geometry | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | `node.rotate_4d` | Rotate 4D | 3D Geometry | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | `node.rotate_vec2_by_angle` | Rotate Vec2 (Angle) | — | — | Rotate the input's RG vec2 field by an arbitrary angle (radians) per pixel. |
-| `node.sample_texture_3d_at_particles` | Sample Texture 3D at Particles | — | — | Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. |
-| `node.sample_texture_at_particles` | Sample Texture at Particles | — | — | Per-particle bilinear sample of a Texture2D at each particle's position.xy. |
+| `node.sample_texture_3d_at_particles` | Sample Volume for Particles (3D) | Particles 3D | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
+| `node.sample_texture_at_particles` | Sample Image for Particles | Particles 2D | Filter | Reads the image colour underneath each particle, so the particles can pick up the look of whatever they fly over. |
 | `node.sample_volume_2d` | Sample Volume 2D | — | — | Sample a Texture3D at a fixed Z slice to produce a Texture2D. |
 | `node.saturation` | Saturation | Color & Tone | Filter | Pulls colours toward grey or pushes them more vivid. |
 | `node.scale_offset_texture` | Scale + Offset (image) | Math & Convert | Filter | Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step. |
 | `node.scanline_jitter_field` | Scanline Jitter Field | — | — | Generator for a per-row random horizontal-offset field (the VHS / horizontal-tearing building block). |
-| `node.scatter_particles` | Scatter Particles | — | — | Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. |
-| `node.scatter_particles_3d` | Scatter Particles 3D | — | — | Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. |
-| `node.scatter_particles_camera` | Scatter Particles Camera | — | — | Fused 3D→2D camera projection + atomic-add scatter. |
-| `node.seed_particles` | Seed Particles | — | — | Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). |
-| `node.seed_particles_from_texture` | Seed Particles From Texture | — | — | Exact-placement particle seeding from a Texture2D density mask. |
+| `node.scatter_particles` | Draw Particles (scatter) | Particles 2D | Filter | Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back. |
+| `node.scatter_particles_3d` | Draw Particles (3D scatter) | Particles 3D | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
+| `node.scatter_particles_camera` | Draw Particles (camera) | Particles 3D | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
+| `node.seed_particles` | Spawn Particles | Particles 2D | Source | Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain. |
+| `node.seed_particles_from_texture` | Spawn From Image | Particles 2D | Source | Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image. |
 | `node.sharpen` | Sharpen | Blur & Sharpen | Filter | Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper. |
 | `node.simplex_field_2d` | Simplex Field 2D | — | — | Pure generator. |
 | `node.simplex_noise_2d` | Simplex Noise 2D | — | — | Pure generator. |
-| `node.simplex_noise_force_3d_at_particles` | Simplex Noise Force 3D at Particles | — | — | Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. |
-| `node.simplex_noise_force_at_particles` | Simplex Noise Force at Particles | — | — | Per-particle 2D simplex noise force added in-place to an Array<vec2<f32>> force buffer. |
-| `node.simplex_per_instance` | Simplex Per Instance | — | — | Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. |
+| `node.simplex_noise_force_3d_at_particles` | Turbulence (3D, simplex) | Particles 3D | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
+| `node.simplex_noise_force_at_particles` | Turbulence (simplex) | Particles 2D | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
+| `node.simplex_per_instance` | Simplex Noise (per copy) | Particles 2D | Filter | Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field. |
 | `node.sin_term` | Projected Sin Term | — | — | Fused linear-projection + sin term: out = sin((a*field.r + b*field.g + c) * freq * freq_scale + time * time_scale). |
 | `node.slope_displace` | Slope Displace | — | — | Emboss-style displacement: soft-light-blend `base` over `image`, take the luminance Sobel gradient of the blend at a `step`-pixel offset, and displace `image` … |
 | `node.smoothstep_texture` | Smoothstep | Math & Convert | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
@@ -205,7 +205,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.voronoi_2d` | Voronoi 2D | Noise | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 | `node.wet_dry` | Wet/Dry | Composite | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 | `node.wgsl_compute` | WGSL Compute | Routing | Filter | A blank compute node you write your own WGSL shader into. The escape hatch for effects the built-in nodes don't cover, where the shader defines its own inputs … |
-| `node.wrap_particles_torus` | Wrap Particles (Torus) | — | — | Per-particle toroidal wrap: position.xy = fract(position.xy + 1). |
+| `node.wrap_particles_torus` | Wrap Around (torus) | Particles 2D | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
 ### Drivers (28)
 

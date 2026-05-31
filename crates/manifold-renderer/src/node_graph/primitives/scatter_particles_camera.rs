@@ -123,7 +123,11 @@ crate::primitive! {
     ],
     composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h. Downstream node.resolve_accumulator self-clears the accumulator after reading it — no scatter-side pre-clear needed.",
     examples: [],
-    picker: { label: "Scatter Particles Camera", category: Atom },
+    picker: { label: "Draw Particles (camera)", category: Atom },
+    summary: "Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["draw particles camera", "project scatter", "3d to 2d"],
 }
 
 // Legacy type-ID alias — projects authored before the rename from

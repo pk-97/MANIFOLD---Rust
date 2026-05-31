@@ -108,7 +108,11 @@ crate::primitive! {
     ],
     composition_notes: "output_width / output_height set how the mask maps to particle UV space: mask centered at (0.5, 0.5), sized (tex_width/output_width, tex_height/output_height) of the unit square. Full-frame masks → set output_w/h equal to mask dims. Text or sub-region rasters → match the upstream render box. Bright threshold is hardcoded at 0.1. active_count / output_width / output_height / frame_seed are port-shadows-param — wire from system.generator_input or a math chain to drive them live; fall back to the inline value when unwired. Internal bright_list scratch sized to `mask.width × mask.height` (vec2<f32> per texel); reallocs on mask-dim change.",
     examples: [],
-    picker: { label: "Seed Particles From Texture", category: Atom },
+    picker: { label: "Spawn From Image", category: Atom },
+    summary: "Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image.",
+    category: Particles2D,
+    role: Source,
+    aliases: ["spawn from image", "seed from texture", "image particles"],
     extra_fields: {
         // place_main pipeline. The macro-allocated `pipeline` field
         // holds the compact_main pipeline.

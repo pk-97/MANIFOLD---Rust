@@ -80,7 +80,11 @@ crate::primitive! {
     ],
     composition_notes: "Output accumulator buffer is u32 fixed-point sized to the host canvas (width × height u32s) — re-allocated on `Generator::resize` so the splat coords always span the full output texture. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam. Downstream node.resolve_accumulator self-clears the buffer after reading it — no scatter-side clear needed.",
     examples: [],
-    picker: { label: "Scatter Particles", category: Atom },
+    picker: { label: "Draw Particles (scatter)", category: Atom },
+    summary: "Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["draw particles", "scatter", "splat", "points"],
 }
 
 impl Primitive for ScatterParticles {

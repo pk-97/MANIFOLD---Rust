@@ -61,7 +61,11 @@ crate::primitive! {
     ],
     composition_notes: "Aliased in/out — the dispatch mutates particles in place and the chain build resolves `in` and `out` to one physical buffer. `speed` is port-shadow so a control wire (LFO, audio band, manual slider) drives the advection energy. Typical chain: `sample_texture_at_particles → euler_step_particles → wrap_particles_torus`.",
     examples: [],
-    picker: { label: "Euler Step Particles", category: Atom },
+    picker: { label: "Move Particles (Euler step)", category: Atom },
+    summary: "Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["move particles", "integrate", "step", "euler"],
 }
 
 impl Primitive for EulerStepParticles {

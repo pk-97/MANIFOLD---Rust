@@ -112,7 +112,11 @@ crate::primitive! {
     ],
     composition_notes: "Aliased Array<vec2> in/out (one buffer, in-place add). `amplitude` is port-shadow so a control wire (LFO / clip-trigger envelope / outer-card slider) drives noise energy live; `z` is port-shadow so a `time × scalar` math chain animates the noise field through Z. Wire any scalar Texture2D into `amplitude_modulator` to localize the noise (canonical FluidSim use wires the density texture); leave unwired for spatially-coherent noise at uniform amplitude everywhere. Replaces ~9 canvas-sized nodes in FluidSim2D's per-pixel noise advection.",
     examples: ["FluidSimulation"],
-    picker: { label: "Simplex Noise Force at Particles", category: Atom },
+    picker: { label: "Turbulence (simplex)", category: Atom },
+    summary: "Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["turbulence", "noise force", "flow", "simplex"],
     extra_fields: {
         dummy_modulator: Option<GpuTexture> = None,
     },

@@ -109,7 +109,11 @@ crate::primitive! {
     ],
     composition_notes: "All six inputs are port-shadow-param. Typical wiring: `node.inject_burst` produces (active, phase, point_x, point_y); wire point_x/point_y straight in, derive envelope from `active * envelope_decay(phase)` (or compose attack/decay externally), wire amplitude from an outer-card slider. When amplitude * envelope ≈ 0 the kernel early-outs to a zero texture — cheap when idle. Bit-exact noise perturbation via `noise_common.wgsl`'s simplex3d (same as `node.simplex_per_instance` / `node.simplex_field_2d`).",
     examples: [],
-    picker: { label: "Radial Burst Force Field", category: Atom },
+    picker: { label: "Explosion Force", category: Atom },
+    summary: "Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion.",
+    category: Particles2D,
+    role: Source,
+    aliases: ["explosion force", "radial burst", "blast", "force field"],
 }
 
 impl Primitive for RadialBurstForceField {

@@ -52,7 +52,11 @@ crate::primitive! {
     ],
     composition_notes: "Output capacity follows the input `particles` array. Samples are trilinear via the default clamp-edge sampler (matches the legacy fluid_simulate_3d field read). Writes the RGB at position.xyz directly — the force buffer is seeded here and accumulated by downstream force atoms (simplex_noise_force_3d, diffuse_force_3d, container_repel_force_3d) before node.euler_step_particles_3d integrates it. Output entries for indices >= active_count are uninitialised.",
     examples: ["FluidSimulation3D"],
-    picker: { label: "Sample Texture 3D at Particles", category: Atom },
+    picker: { label: "Sample Volume for Particles (3D)", category: Atom },
+    summary: "Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["sample volume", "read 3d texture", "trilinear"],
 }
 
 impl Primitive for SampleTexture3DAtParticles {

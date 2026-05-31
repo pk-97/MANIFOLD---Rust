@@ -63,7 +63,11 @@ crate::primitive! {
     ],
     composition_notes: "Wire after the integrator's primary state update. `diffusion` accepts a control wire (LFO / audio band / driver) for live-modulated jitter. The hash seed combines particle id with frame_count so adjacent frames produce independent kicks (not a slow drift). Diffusion = 0 still dispatches but the shader early-outs after the count check — cheap when unused. Aliased in/out: single physical buffer, in-place mutation, downstream consumers see the diffused state on the same frame.",
     examples: [],
-    picker: { label: "Diffuse Particles", category: Atom },
+    picker: { label: "Spread Out (diffuse)", category: Atom },
+    summary: "Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["spread out", "diffuse", "jitter", "random kick"],
 }
 
 impl Primitive for ArrayDiffuseParticles {

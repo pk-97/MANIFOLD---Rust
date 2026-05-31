@@ -102,7 +102,11 @@ crate::primitive! {
     ],
     composition_notes: "Output capacity follows the `instances` input. Drive `time_uvx_drift` and `z_coord` from time wires (typically `time * 0.2` and `time * 0.15` for slow drift) to animate the noise field. `axis_seed` decorrelates the three axis samples — pick any value large enough to land in a different noise cell (100 / 50 are the legacy DigitalPlants values for the detail and micro passes respectively). Pair upstream with node.grid_uv_field for the UV input. The original instance rotations are preserved verbatim — pair with node.instance_rotation_jitter downstream if rotation jitter is also wanted.",
     examples: [],
-    picker: { label: "Instance Position Jitter", category: Atom },
+    picker: { label: "Position Jitter", category: Atom },
+    summary: "Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered.",
+    category: Particles2D,
+    role: Filter,
+    aliases: ["position jitter", "offset", "scatter", "noise"],
 }
 
 impl Primitive for InstancePositionJitter {
