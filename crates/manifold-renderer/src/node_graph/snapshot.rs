@@ -323,7 +323,13 @@ impl GraphSnapshot {
                 let type_id = inst.node.type_id().as_str().to_string();
                 let title = match inst.node.display_title() {
                     Some(custom) => format!("{custom} (WGSL)"),
-                    None => title_from_type_id(&type_id),
+                    // Prefer the friendly palette label ("Scale + Offset
+                    // (value)") over the raw prettified type id
+                    // ("Affine_scalar"); fall back to the type id for nodes
+                    // with no picker (boundary / internal building blocks).
+                    None => super::palette::friendly_label_for(&type_id)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| title_from_type_id(&type_id)),
                 };
                 let inputs = inst
                     .node

@@ -121,6 +121,20 @@ pub fn palette_atoms() -> Vec<PaletteAtom> {
     atoms
 }
 
+/// Friendly display label for a node `type_id` — the same name the palette
+/// shows (e.g. "Scale + Offset (value)" for `node.affine_scalar`). Sourced
+/// from the primitive's `picker` label so canvas node titles match the
+/// palette instead of showing the raw prettified type id. `None` for nodes
+/// with no picker (boundary nodes, internal building blocks); callers fall
+/// back to a prettified type id.
+pub fn friendly_label_for(type_id: &str) -> Option<&'static str> {
+    inventory::iter::<PrimitiveFactory>
+        .into_iter()
+        .find(|f| f.type_id == type_id)
+        .and_then(|f| f.picker)
+        .map(|p| p.label)
+}
+
 /// Build the catalog-default [`EffectGraphDef`] for `effect_type`.
 /// Editing commands clone this into `EffectInstance.graph` on first
 /// edit so subsequent mutations have a topology to manipulate.
