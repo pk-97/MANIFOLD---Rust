@@ -29,6 +29,7 @@ mod metal_backend;
 mod palette;
 mod param_binding;
 pub mod param_doc;
+mod param_tooltips_table;
 mod parameters;
 mod persistence;
 pub mod ports;

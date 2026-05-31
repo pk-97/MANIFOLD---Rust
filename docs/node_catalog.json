@@ -2579,6 +2579,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The lowest value any colour is allowed to reach. Nothing goes darker than this.",
           "type": "float"
         },
         {
@@ -2589,6 +2590,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The highest value any colour is allowed to reach. Nothing goes brighter than this.",
           "type": "float"
         }
       ],
@@ -2893,6 +2895,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How strongly to tint the image toward the chosen colour.",
           "type": "float"
         },
         {
@@ -2903,6 +2906,7 @@
             "0",
             "360"
           ],
+          "tooltip": "The colour to tint toward, as a position on the colour wheel in degrees.",
           "type": "float"
         },
         {
@@ -2913,6 +2917,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How saturated the tint colour is.",
           "type": "float"
         },
         {
@@ -2923,6 +2928,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How tightly the tint sticks to the bright neutral areas rather than spreading everywhere.",
           "type": "float"
         }
       ],
@@ -3261,6 +3267,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How hard to push the lights and darks apart. 1 leaves it unchanged, higher is punchier, lower is flatter.",
           "type": "float"
         }
       ],
@@ -5563,6 +5570,7 @@
             "0",
             "4"
           ],
+          "tooltip": "Multiplies the brightness. Above 1 brightens, below 1 darkens, and 0 is black.",
           "type": "float"
         }
       ],
@@ -6738,6 +6746,7 @@
             "-180",
             "180"
           ],
+          "tooltip": "Rotates every colour around the colour wheel, measured in degrees.",
           "type": "float"
         },
         {
@@ -6748,6 +6757,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How vivid the colours are. 0 is grey, 1 is unchanged, higher is more saturated.",
           "type": "float"
         },
         {
@@ -6758,6 +6768,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Overall brightness. 1 leaves it unchanged.",
           "type": "float"
         }
       ],
@@ -7346,6 +7357,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Multiplies the brightness before everything else. The main contrast control.",
           "type": "float"
         },
         {
@@ -7356,6 +7368,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Adds or subtracts brightness, lifting or lowering the whole image.",
           "type": "float"
         },
         {
@@ -7366,6 +7379,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The black point. Anything below this is clipped to black.",
           "type": "float"
         },
         {
@@ -7376,6 +7390,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The white point. Anything above this is clipped to white.",
           "type": "float"
         },
         {
@@ -7386,6 +7401,7 @@
             "0.01",
             "16"
           ],
+          "tooltip": "Bends the midtones. Below 1 brightens them, above 1 darkens them.",
           "type": "float"
         }
       ],
