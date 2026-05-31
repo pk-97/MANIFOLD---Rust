@@ -82,6 +82,10 @@ const RESET_BUTTON_RIGHT_GAP: f32 = 96.0;
 struct PortView {
     name: String,
     color: [f32; 4],
+    /// True for scalar (control/value) ports. Wires out of these are the
+    /// "set once" driver bindings that dominate the spaghetti, so they get
+    /// dimmed unless their node is focused.
+    is_control: bool,
 }
 
 impl PortView {
@@ -104,7 +108,12 @@ impl PortView {
             PortKindSnapshot::Light => PORT_LIGHT_COLOR,
             PortKindSnapshot::Material => PORT_MATERIAL_COLOR,
         };
-        Self { name, color }
+        let is_control = matches!(kind, PortKindSnapshot::Scalar);
+        Self {
+            name,
+            color,
+            is_control,
+        }
     }
 }
 
@@ -1080,8 +1089,17 @@ impl GraphCanvas {
 
         self.draw_grid(ui, canvas);
 
+        // Wires in two passes so the focused node's connections read clearly
+        // over the rest: dim/normal wires first, then focus wires on top.
         for wire in &self.wires {
-            self.draw_wire(ui, viewport, wire);
+            if !self.wire_touches_focus(wire) {
+                self.draw_wire(ui, viewport, wire);
+            }
+        }
+        for wire in &self.wires {
+            if self.wire_touches_focus(wire) {
+                self.draw_wire(ui, viewport, wire);
+            }
         }
 
         // Ghost wire while the user is dragging from an output port.
@@ -1095,7 +1113,23 @@ impl GraphCanvas {
             self.draw_ghost_wire(ui, viewport, *from_node, from_port);
         }
 
+        // Nodes: everything else first, then the hovered node, then the
+        // selected node last, so the node you're working on is never buried
+        // under its neighbours in a dense graph.
         for node in &self.nodes {
+            if Some(node.id) != self.selected && Some(node.id) != self.hovered {
+                self.draw_node(ui, viewport, canvas, node);
+            }
+        }
+        if let Some(h) = self.hovered
+            && Some(h) != self.selected
+            && let Some(node) = self.find_node(h)
+        {
+            self.draw_node(ui, viewport, canvas, node);
+        }
+        if let Some(s) = self.selected
+            && let Some(node) = self.find_node(s)
+        {
             self.draw_node(ui, viewport, canvas, node);
         }
     }
@@ -1359,6 +1393,14 @@ impl GraphCanvas {
         }
     }
 
+    /// Whether a wire connects to the focused node (selected or hovered).
+    /// Such wires draw last and at full strength so the focused node's
+    /// connections stand out from the rest of the graph.
+    fn wire_touches_focus(&self, wire: &WireView) -> bool {
+        let focus = [self.selected, self.hovered];
+        focus.contains(&Some(wire.from_node)) || focus.contains(&Some(wire.to_node))
+    }
+
     fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: &WireView) {
         let (Some(from), Some(to)) = (self.find_node(wire.from_node), self.find_node(wire.to_node))
         else {
@@ -1397,18 +1439,28 @@ impl GraphCanvas {
         let cx1 = sx1 - dx;
         let cy1 = sy1 + skip_bump;
 
-        // Wire takes its colour from the from-port's kind (matching
-        // the port circles) so scalar wires read warm-orange and
-        // texture wires read sky-blue at a glance. 0.85 alpha keeps
-        // wires distinct without competing with the node chrome.
+        // Wire takes its colour from the from-port's kind (matching the
+        // port circles). Control/value wires (scalar, orange) fan out from
+        // driver nodes and dominate the spaghetti, so they fade to a faint
+        // baseline unless their node is focused; data wires stay readable;
+        // and any wire touching the focused node lights up over the rest.
         let port_color = from.outputs[from_idx].color;
-        let wire_color = [port_color[0], port_color[1], port_color[2], 0.85];
+        let focused = self.wire_touches_focus(wire);
+        let is_control = from.outputs[from_idx].is_control;
+        let alpha = if focused {
+            0.95
+        } else if is_control {
+            0.16
+        } else {
+            0.7
+        };
+        let wire_color = [port_color[0], port_color[1], port_color[2], alpha];
 
         // Sample the bezier into ~30 short line segments. Step count
         // scales with screen-space length so close-up curves stay smooth.
         let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
         let steps = (approx_len / 12.0).clamp(16.0, 64.0) as i32;
-        let thickness = (1.6 * self.zoom).clamp(1.2, 2.4);
+        let thickness = (1.6 * self.zoom).clamp(1.2, 2.4) * if focused { 1.5 } else { 1.0 };
         let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
