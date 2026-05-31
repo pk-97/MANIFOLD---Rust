@@ -88,6 +88,30 @@ pub enum Category {
 }
 
 impl Category {
+    /// Display order for the generated catalog, grouped most-used first.
+    /// `Uncategorized` lands last (nothing should be left there once the
+    /// naming pass is complete).
+    pub const ALL: &'static [Category] = &[
+        Self::ColorAndTone,
+        Self::BlurAndSharpen,
+        Self::DistortAndWarp,
+        Self::Stylize,
+        Self::Generate,
+        Self::Noise,
+        Self::Mask,
+        Self::Composite,
+        Self::Geometry3D,
+        Self::MaterialsAndLighting,
+        Self::Particles2D,
+        Self::Particles3D,
+        Self::Control,
+        Self::DetectionAndSampling,
+        Self::MathAndConvert,
+        Self::Routing,
+        Self::FieldsAndCoordinates,
+        Self::Uncategorized,
+    ];
+
     /// Stable, human-facing label. Used as the section heading in the
     /// generated catalog and the `category` string in the JSON artifact.
     pub fn label(self) -> &'static str {

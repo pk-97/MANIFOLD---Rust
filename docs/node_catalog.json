@@ -3271,8 +3271,13 @@
       "type_id": "node.contrast"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "custom convolution",
+        "kernel",
+        "convolve",
+        "filter matrix"
+      ],
+      "category": "Blur & Sharpen",
       "examples": [],
       "inputs": [
         {
@@ -3397,9 +3402,9 @@
         }
       ],
       "purpose": "General 3×3 non-separable convolution with a user-supplied kernel (9 float weights k0..k8 in row-major order, k4 = center). Optional bias and sum-normalisation. Useful for Sobel, Laplacian, emboss, sharpen, diffusion, custom edge detectors. The kernel is data — composable, modulatable, and discoverable for AI agents (vs hardcoded-weight specific primitives).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't do quite what you want.",
       "type_id": "node.convolution_2d_9tap"
     },
     {
@@ -5101,8 +5106,13 @@
       "type_id": "node.flash"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "flatten to camera",
+        "squash",
+        "billboard",
+        "flatten"
+      ],
+      "category": "Particles 3D",
       "examples": [
         "FluidSimulation3D"
       ],
@@ -5158,9 +5168,9 @@
         }
       ],
       "purpose": "Compress particles toward the camera viewing plane. For each live particle: depth = dot(position - 0.5, cam.fwd); position -= cam.fwd * depth * flatten * 0.1. Collapses a 3D particle volume toward a flat sheet facing the camera (FluidSim3D's flatten control). Takes a Camera input and reads cam.fwd. Decomposed from the flatten step of the fused node.fluid_simulate_3d.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen.",
       "type_id": "node.flatten_to_camera_plane"
     },
     {

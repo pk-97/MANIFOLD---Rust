@@ -70,6 +70,10 @@ crate::primitive! {
     composition_notes: "Aliased in/out — mutates the particle buffer in place. `flatten` is port-shadow so a slider / LFO drives the depth-collapse live; flatten <= 0 is a no-op (inert at the default). Wire a Camera (node.camera_orbit) into `camera` so the compression direction tracks the live view — the same camera should feed the display projector (node.scatter_particles_camera). Place last in the per-particle position chain (after node.container_bounds_3d), matching the legacy order.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Flatten to Camera Plane", category: Atom },
+    summary: "Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["flatten to camera", "squash", "billboard", "flatten"],
 }
 
 impl Primitive for FlattenToCameraPlane {

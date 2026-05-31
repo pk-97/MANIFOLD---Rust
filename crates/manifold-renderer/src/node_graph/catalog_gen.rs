@@ -58,16 +58,6 @@ impl Stratum {
             None => Self::Unlisted,
         }
     }
-
-    fn heading(self) -> &'static str {
-        match self {
-            Self::Atom => "Atoms",
-            Self::Driver => "Drivers",
-            Self::Unlisted => "Unlisted (registered, not in palette)",
-        }
-    }
-
-    const ORDER: [Stratum; 3] = [Stratum::Atom, Stratum::Driver, Stratum::Unlisted];
 }
 
 /// One node, joined from registry + descriptor + a live instance.
@@ -405,22 +395,22 @@ pub fn generated_block() -> String {
     out.push('\n');
     let _ = writeln!(
         out,
-        "_Generated from the node registry — do not hand-edit. \
-         {} nodes registered. `category` / `role` are filled incrementally \
-         by the naming pass; blank shows as `—`._",
+        "_Generated from the node registry. Do not hand-edit. \
+         {} nodes registered, grouped by category. Full ports, params, \
+         tooltips and search aliases live in [node_catalog.json](node_catalog.json)._",
         rows.len()
     );
 
-    for stratum in Stratum::ORDER {
-        let group: Vec<&NodeRow> = rows.iter().filter(|r| r.stratum == stratum).collect();
+    for &cat in Category::ALL {
+        let group: Vec<&NodeRow> = rows.iter().filter(|r| r.category == cat).collect();
         if group.is_empty() {
             continue;
         }
         out.push('\n');
-        let _ = writeln!(out, "### {} ({})", stratum.heading(), group.len());
+        let _ = writeln!(out, "### {} ({})", cat.label(), group.len());
         out.push('\n');
-        let _ = writeln!(out, "| type_id | label | category | role | summary |");
-        let _ = writeln!(out, "|---|---|---|---|---|");
+        let _ = writeln!(out, "| Node | type_id | role | summary |");
+        let _ = writeln!(out, "|---|---|---|---|");
         for r in group {
             // Prefer the friendly summary when one is filled, falling back to
             // the first sentence of the technical purpose.
@@ -431,10 +421,9 @@ pub fn generated_block() -> String {
             };
             let _ = writeln!(
                 out,
-                "| `{}` | {} | {} | {} | {} |",
-                r.type_id,
+                "| {} | `{}` | {} | {} |",
                 opt_cell(r.label),
-                cat_cell(r.category),
+                r.type_id,
                 role_cell(r.role),
                 md_cell(blurb),
             );
@@ -511,13 +500,6 @@ fn opt_cell(s: Option<&str>) -> String {
     match s {
         Some(s) => md_cell(s),
         None => "—".into(),
-    }
-}
-
-fn cat_cell(c: Category) -> &'static str {
-    match c {
-        Category::Uncategorized => "—",
-        other => other.label(),
     }
 }
 
