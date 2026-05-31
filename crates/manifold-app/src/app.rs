@@ -468,14 +468,41 @@ impl Application {
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
             graph_palette: manifold_ui::panels::graph_palette::GraphPalette::new(),
-            palette_atoms_cache: manifold_renderer::node_graph::palette_atoms()
-                .into_iter()
-                .map(|a| manifold_ui::panels::graph_palette::GraphPaletteAtom {
-                    label: a.label,
-                    type_id: a.type_id,
-                    category: a.category.label().to_string(),
-                })
-                .collect(),
+            palette_atoms_cache: {
+                use manifold_renderer::node_graph::{Category, descriptor_for};
+                let cat_of = |type_id: &str| {
+                    descriptor_for(type_id)
+                        .map(|d| d.category)
+                        .unwrap_or(Category::Uncategorized)
+                };
+                let order = |c: Category| {
+                    Category::ALL
+                        .iter()
+                        .position(|&x| x == c)
+                        .unwrap_or(usize::MAX)
+                };
+                let mut atoms: Vec<_> = manifold_renderer::node_graph::palette_atoms()
+                    .into_iter()
+                    .map(|a| {
+                        let category = cat_of(&a.type_id).label().to_string();
+                        manifold_ui::panels::graph_palette::GraphPaletteAtom {
+                            label: a.label,
+                            type_id: a.type_id,
+                            category,
+                        }
+                    })
+                    .collect();
+                // Group by the 19-category taxonomy (Color & Tone, Noise,
+                // Distort & Warp, ...) in display order, then alphabetically,
+                // instead of the coarse Atom / Driver split. graph_palette
+                // renders one header per contiguous category run.
+                atoms.sort_by(|a, b| {
+                    order(cat_of(&a.type_id))
+                        .cmp(&order(cat_of(&b.type_id)))
+                        .then_with(|| a.label.cmp(&b.label))
+                });
+                atoms
+            },
             current_editor_target: None,
             watched_graph_target: None,
             watched_catalog_default: None,
