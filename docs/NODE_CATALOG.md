@@ -155,7 +155,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.project_4d` | Project 4D | — | — | Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_… |
 | `node.radial_burst_force_field` | Radial Burst Force Field | — | — | Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. |
 | `node.radial_fold_uv` | Kaleidoscope | — | — | Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_… |
-| `node.radial_offset_field` | Radial Offset Field | Distort | Map | Directional displacement field generator. |
+| `node.radial_offset_field` | Radial Offset Field | Distort & Warp | Map | Directional displacement field generator. |
 | `node.reinhard_tone_map` | Reinhard Tone Map | — | — | Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simpl… |
 | `node.remap` | Remap | — | — | Resample `source` at the per-pixel UV coordinates in `uv_field`'s R/G channels (TouchDesigner's Remap TOP). |
 | `node.render_3d_mesh` | Render 3D Mesh | — | — | Bundled 3D mesh renderer (TouchDesigner / Blender shape). |
@@ -173,7 +173,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.sample_texture_3d_at_particles` | Sample Texture 3D at Particles | — | — | Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. |
 | `node.sample_texture_at_particles` | Sample Texture at Particles | — | — | Per-particle bilinear sample of a Texture2D at each particle's position.xy. |
 | `node.sample_volume_2d` | Sample Volume 2D | — | — | Sample a Texture3D at a fixed Z slice to produce a Texture2D. |
-| `node.saturation` | Saturation | Color | Filter | Luma-based saturation: out = mix(vec3(rec709_luma), c, saturation). |
+| `node.saturation` | Saturation | Color & Tone | Filter | Luma-based saturation: out = mix(vec3(rec709_luma), c, saturation). |
 | `node.scale_offset_texture` | Scale + Offset | — | — | Per-pixel affine remap `a * x + b` on RGB. |
 | `node.scanline_jitter_field` | Scanline Jitter Field | — | — | Generator for a per-row random horizontal-offset field (the VHS / horizontal-tearing building block). |
 | `node.scatter_particles` | Scatter Particles | — | — | Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. |
@@ -225,7 +225,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.envelope_follower_ar` | Envelope Follower (A/R) | — | — | Asymmetric attack/release envelope follower on a scalar — switches time constant on rising (`attack`) vs falling (`release`) input. |
 | `node.frequency_ratio` | Frequency Ratio | — | — | Emit two scalars from a curated table of small-integer harmonic ratios. |
 | `node.inject_burst` | Inject Burst | — | — | Fixed-duration burst state machine — on each new `trigger` (when enabled) runs a burst for `duration` seconds emitting active=1, a 0→1 phase ramp, and a stable… |
-| `node.lfo` | LFO | — | Control | Low-frequency oscillator. |
+| `node.lfo` | LFO | Control | Control | Low-frequency oscillator. |
 | `node.light` | Light | — | — | Single light source for 3D lighting pipelines. |
 | `node.luminance` | Luminance | — | — | Average Rec. |
 | `node.math` | Math | — | — | Scalar arithmetic. |

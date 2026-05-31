@@ -48,8 +48,8 @@ crate::primitive! {
     composition_notes: "Rec. 709 weights (0.2126, 0.7152, 0.0722) — same as node.luminance. Wire wins over param. HDR-safe (no clamp). Pair with node.gain (exposure) + node.contrast + node.hue_saturation to rebuild a full colour-grade chain from atoms.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Saturation", category: Atom },
-    summary: "Pull colours toward grey or push them more vivid.",
-    category: Color,
+    summary: "Pulls colours toward grey or pushes them more vivid.",
+    category: ColorAndTone,
     role: Filter,
 }
 

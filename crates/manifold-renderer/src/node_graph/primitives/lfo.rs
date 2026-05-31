@@ -115,6 +115,7 @@ crate::primitive! {
     examples: [],
     picker: { label: "LFO", category: Driver },
     summary: "A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free.",
+    category: Control,
     role: Control,
     aliases: ["oscillator", "modulator", "LFO CHOP"],
 }

@@ -46,50 +46,70 @@
 pub enum Category {
     /// Not yet classified. Default until the naming pass assigns one.
     Uncategorized,
-    /// Brightness / saturation / hue / tone — anything that remaps
-    /// colour without moving pixels (gain, saturation, contrast, levels).
-    Color,
-    /// Moves pixels in space — warps, mirrors, displacements, the
-    /// coordinate → remap family.
-    Distort,
-    /// Spatial blur / sharpen / convolution kernels.
-    Blur,
-    /// Produces an image from nothing — patterns, gradients, shapes.
+    /// Brightness, saturation, hue, levels, tone mapping. Remaps colour
+    /// without moving pixels.
+    ColorAndTone,
+    /// Spatial blur, sharpen, convolution kernels.
+    BlurAndSharpen,
+    /// Moves pixels in space. Warps, mirrors, kaleidoscope, RGB split.
+    DistortAndWarp,
+    /// Film looks and texture overlays (grain, dither, vignette, flash).
+    Stylize,
+    /// Produces an image from nothing. Shapes, patterns, gradients, text.
     Generate,
-    /// Procedural noise sources (perlin / simplex / fbm / hash / voronoi).
+    /// Procedural noise sources (perlin, simplex, fbm, hash, voronoi).
     Noise,
-    /// Produces a mask / falloff field used to gate other effects.
+    /// Produces a mask or falloff used to gate other effects.
     Mask,
-    /// 3D / 4D geometry, meshes, projection, lighting/shading materials.
-    Geometry3D,
-    /// Particle and instance simulation.
-    Particles,
-    /// Audio-reactive control plumbing (envelopes, peak, beat gates).
-    Audio,
-    /// Combines two or more inputs into one (mix, compose, field combine).
+    /// Combines two or more inputs into one (mix, wet/dry, multi blend).
     Composite,
-    /// Structural / numeric plumbing with no visual identity of its own
-    /// (math, remap-of-scalars, channel pack/unpack, routing).
-    Utility,
+    /// Meshes, projection, rotation, polytopes. The 3D and 4D pipeline.
+    Geometry3D,
+    /// Surface materials, lighting and shading atoms.
+    MaterialsAndLighting,
+    /// 2D particle and instance simulation.
+    Particles2D,
+    /// 3D particle and instance simulation.
+    Particles3D,
+    /// Control-rate sources and shapers: LFO, math, envelopes, triggers,
+    /// beat-synced gates.
+    Control,
+    /// Reads information out of the image or the real world: depth, person,
+    /// blobs, optical flow, luminance, peak, colour sampling.
+    DetectionAndSampling,
+    /// Numeric and structural plumbing (math ops, pack/unpack, scalar
+    /// rescale, accumulators).
+    MathAndConvert,
+    /// Selects or routes signals (switch, downsample, wgsl compute).
+    Routing,
+    /// Coordinate and displacement maps with no look of their own. These
+    /// carry a description rather than a friendly name.
+    FieldsAndCoordinates,
 }
 
 impl Category {
-    /// Stable, human-facing label — used as the section heading in the
+    /// Stable, human-facing label. Used as the section heading in the
     /// generated catalog and the `category` string in the JSON artifact.
     pub fn label(self) -> &'static str {
         match self {
             Self::Uncategorized => "Uncategorized",
-            Self::Color => "Color",
-            Self::Distort => "Distort",
-            Self::Blur => "Blur",
+            Self::ColorAndTone => "Color & Tone",
+            Self::BlurAndSharpen => "Blur & Sharpen",
+            Self::DistortAndWarp => "Distort & Warp",
+            Self::Stylize => "Stylize",
             Self::Generate => "Generate",
             Self::Noise => "Noise",
             Self::Mask => "Mask",
-            Self::Geometry3D => "3D Geometry",
-            Self::Particles => "Particles",
-            Self::Audio => "Audio",
             Self::Composite => "Composite",
-            Self::Utility => "Utility",
+            Self::Geometry3D => "3D Geometry",
+            Self::MaterialsAndLighting => "Materials & Lighting",
+            Self::Particles2D => "Particles 2D",
+            Self::Particles3D => "Particles 3D",
+            Self::Control => "Control",
+            Self::DetectionAndSampling => "Detection & Sampling",
+            Self::MathAndConvert => "Math & Convert",
+            Self::Routing => "Routing",
+            Self::FieldsAndCoordinates => "Fields & Coordinates",
         }
     }
 }

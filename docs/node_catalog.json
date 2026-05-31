@@ -6928,7 +6928,7 @@
         "modulator",
         "LFO CHOP"
       ],
-      "category": "Uncategorized",
+      "category": "Control",
       "examples": [],
       "inputs": [],
       "label": "LFO",
@@ -9527,7 +9527,7 @@
     },
     {
       "aliases": [],
-      "category": "Distort",
+      "category": "Distort & Warp",
       "examples": [
         "preset.effect.chromatic_aberration"
       ],
@@ -9589,7 +9589,7 @@
       "purpose": "Directional displacement field generator. Radial mode: per-pixel direction points outward from the center, scaled by a center→edge falloff mask. Linear mode: a uniform direction at `angle` degrees. Output R = dir.x, G = dir.y (signed), B = 0, A = 1; |dir| ≤ 1. The reusable direction field behind the radial-warp family — feed it as the velocity field to node.chromatic_displace (chromatic aberration), node.uv_displace_by_flow (lens / zoom warp), node.texture_advect. The displacement magnitude and ± sign are applied by the consumer.",
       "role": "Map",
       "stratum": "atom",
-      "summary": "Makes pixels push out from (or in toward) a centre — a displacement map you wire into a displace / remap node, not a finished look.",
+      "summary": "Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node.",
       "type_id": "node.radial_offset_field"
     },
     {
@@ -10876,7 +10876,7 @@
     },
     {
       "aliases": [],
-      "category": "Color",
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.color_grade"
       ],
@@ -10914,7 +10914,7 @@
       "purpose": "Luma-based saturation: out = mix(vec3(rec709_luma), c, saturation). 0 = grayscale, 1 = unchanged, >1 = oversaturated. Alpha passes through. The `saturation` input port shadows the param — wire any scalar source (LFO, audio bridge) to pump saturation live. Distinct from node.hue_saturation (HSV-space saturation); this pulls toward perceptual grey, the look Color Grade uses.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Pull colours toward grey or push them more vivid.",
+      "summary": "Pulls colours toward grey or pushes them more vivid.",
       "type_id": "node.saturation"
     },
     {
@@ -13363,7 +13363,7 @@
       "purpose": "Pure generator. 2D Worley / Voronoi cellular noise. `out` packs F1 in R (distance to nearest feature point), F2 in G (second-nearest), F2-F1 in B (cell-edge factor — high at boundaries), and a per-cell stable random hash in A (same value across every pixel inside a cell, uncorrelated between cells — drives per-cell variation: density threshold, twinkle frequency, per-cell colour, per-cell size). `cell_id` carries the F1-winning cell's integer coordinate in RG (constant within a Voronoi region) — feed RG + a seed into node.hash_field_by_seed for beat-reseeded per-cell composites (Voronoi Prism). Both outputs are independently optional: read only what you need and the other slot isn't allocated. Foundation for cellular patterns, cracked-glass, stained-glass, stars (sparse jitter + per-star twinkle), foam, fire embers, procedural tiles.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Cellular (Voronoi) noise — per-cell distance and a stable per-cell hash, for tiles, foam, cracked glass and starfields.",
+      "summary": "Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields.",
       "type_id": "node.voronoi_2d"
     },
     {
