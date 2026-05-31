@@ -62,6 +62,10 @@ const CAT_SURVEILLANCE: Color32 = Color32::new(180, 100, 100, 255);
 pub enum BrowserPopupMode {
     Effect,
     Generator,
+    /// Picking a graph node to spawn in the node editor. Items carry node
+    /// `type_id`s in `item_type_ids` (not the i32 `item_keys`) and selection
+    /// returns `NodeSelected`.
+    Node,
 }
 
 /// Result of an interaction.
@@ -77,6 +81,12 @@ pub enum BrowserPopupAction {
     },
     Paste,
     Dismissed,
+    /// A node `type_id` was chosen in Node mode, to spawn at `graph_pos` (the
+    /// graph-space cursor position captured when the picker opened).
+    NodeSelected {
+        type_id: String,
+        graph_pos: (f32, f32),
+    },
 }
 
 /// Request to open the popup.
@@ -89,6 +99,15 @@ pub struct BrowserPopupRequest {
     pub item_keys: Vec<i32>,
     pub item_categories: Vec<String>,
     pub category_names: Vec<String>,
+    /// Node mode: the node `type_id` per item (parallel to `item_names`).
+    /// Empty for Effect/Generator mode, which select via `item_keys`.
+    pub item_type_ids: Vec<String>,
+    /// Optional per-item search text (e.g. label plus descriptor aliases) the
+    /// filter matches against instead of `item_names`. `None` keeps the
+    /// name-only filter (Effect/Generator).
+    pub item_search: Option<Vec<String>>,
+    /// Node mode: graph-space position to spawn the chosen node at.
+    pub spawn_graph_pos: Option<(f32, f32)>,
     pub paste_count: usize,
     pub screen_anchor: Vec2,
 }
@@ -106,6 +125,14 @@ pub struct BrowserPopupPanel {
     item_keys: Vec<i32>,
     item_categories: Vec<String>,
     category_names: Vec<String>,
+    /// Node mode: parallel `type_id` per item; selection returns these.
+    item_type_ids: Vec<String>,
+    /// Optional search text per item (label + aliases) the filter uses when
+    /// present, so typing "gaussian" or "Blur TOP" finds node.blur.
+    item_search: Option<Vec<String>>,
+    /// Node mode: graph-space spawn position, stashed across the per-frame
+    /// tree rebuild so it survives from open to selection.
+    pending_spawn_graph_pos: Option<(f32, f32)>,
     paste_count: usize,
 
     // Filter state
@@ -155,6 +182,9 @@ impl BrowserPopupPanel {
             item_keys: Vec::new(),
             item_categories: Vec::new(),
             category_names: Vec::new(),
+            item_type_ids: Vec::new(),
+            item_search: None,
+            pending_spawn_graph_pos: None,
             paste_count: 0,
             active_category: None,
             current_filter: String::new(),
@@ -208,6 +238,9 @@ impl BrowserPopupPanel {
         self.item_keys = req.item_keys;
         self.item_categories = req.item_categories;
         self.category_names = req.category_names;
+        self.item_type_ids = req.item_type_ids;
+        self.item_search = req.item_search;
+        self.pending_spawn_graph_pos = req.spawn_graph_pos;
         self.paste_count = req.paste_count;
         self.active_category = None;
         self.current_filter.clear();
@@ -223,6 +256,9 @@ impl BrowserPopupPanel {
         self.item_keys.clear();
         self.item_categories.clear();
         self.category_names.clear();
+        self.item_type_ids.clear();
+        self.item_search = None;
+        self.pending_spawn_graph_pos = None;
         self.filtered_indices.clear();
         self.cell_ids.clear();
         self.chip_ids.clear();
@@ -249,7 +285,7 @@ impl BrowserPopupPanel {
     fn rebuild_filtered_list(&mut self) {
         self.filtered_indices.clear();
         let filter_lower = self.current_filter.to_lowercase();
-        for (i, name) in self.item_names.iter().enumerate() {
+        for i in 0..self.item_names.len() {
             // Category filter
             if let Some(ref cat) = self.active_category
                 && i < self.item_categories.len()
@@ -257,9 +293,17 @@ impl BrowserPopupPanel {
             {
                 continue;
             }
-            // Search filter — case-insensitive substring
-            if !filter_lower.is_empty() && !name.to_lowercase().contains(&filter_lower) {
-                continue;
+            // Search filter — case-insensitive substring against the search
+            // text (label + aliases) when provided, else the display name.
+            if !filter_lower.is_empty() {
+                let haystack = self
+                    .item_search
+                    .as_ref()
+                    .and_then(|s| s.get(i))
+                    .unwrap_or(&self.item_names[i]);
+                if !haystack.to_lowercase().contains(&filter_lower) {
+                    continue;
+                }
             }
             self.filtered_indices.push(i);
         }
@@ -626,13 +670,21 @@ impl BrowserPopupPanel {
         // Grid cells
         for &(cell_id, src_idx) in &self.cell_ids {
             if id == cell_id {
-                let key = self.item_keys[src_idx];
-                // Capture context BEFORE close() clears it
-                let action = BrowserPopupAction::Selected {
-                    key,
-                    mode: self.mode,
-                    tab: self.tab,
-                    layer_id: self.layer_id.clone(),
+                // Capture context BEFORE close() clears it. Node mode returns
+                // the type_id + stashed spawn position; the effect/generator
+                // path is unchanged.
+                let action = if self.mode == BrowserPopupMode::Node {
+                    BrowserPopupAction::NodeSelected {
+                        type_id: self.item_type_ids.get(src_idx).cloned().unwrap_or_default(),
+                        graph_pos: self.pending_spawn_graph_pos.unwrap_or((0.0, 0.0)),
+                    }
+                } else {
+                    BrowserPopupAction::Selected {
+                        key: self.item_keys[src_idx],
+                        mode: self.mode,
+                        tab: self.tab,
+                        layer_id: self.layer_id.clone(),
+                    }
                 };
                 self.close();
                 return Some(action);

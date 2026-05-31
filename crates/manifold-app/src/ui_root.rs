@@ -775,11 +775,16 @@ impl UIRoot {
                                         actions
                                             .push(PanelAction::SetGenType(layer_id, key as usize));
                                     }
+                                    // Node mode is editor-window only; the
+                                    // main-window popup never opens it.
+                                    BrowserPopupMode::Node => {}
                                 },
                                 BrowserPopupAction::Paste => {
                                     actions.push(PanelAction::PasteEffects);
                                 }
                                 BrowserPopupAction::Dismissed => {}
+                                // Editor-window only; never reached here.
+                                BrowserPopupAction::NodeSelected { .. } => {}
                             }
                             self.overlay_dirty = true;
                             consumed = true;
@@ -1071,6 +1076,9 @@ impl UIRoot {
                     item_keys: keys,
                     item_categories: categories,
                     category_names: cat_names,
+                    item_type_ids: Vec::new(),
+                    item_search: None,
+                    spawn_graph_pos: None,
                     paste_count: self.effect_clipboard_count,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
                 });
@@ -1100,6 +1108,9 @@ impl UIRoot {
                     item_keys: keys,
                     item_categories: Vec::new(),
                     category_names: Vec::new(),
+                    item_type_ids: Vec::new(),
+                    item_search: None,
+                    spawn_graph_pos: None,
                     paste_count: 0,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
                 });
