@@ -112,6 +112,10 @@ struct NodeView {
     /// hidden). Mirrors `GraphCanvas::collapsed` for this node so layout
     /// and drawing don't have to consult the map.
     collapsed: bool,
+    /// Header tint for this node's `Category` (Color & Tone, Noise, Distort,
+    /// ...), so the graph reads by family at a glance. `NODE_HEADER_BG` for
+    /// nodes with no descriptor / `Uncategorized`.
+    header_color: [f32; 4],
     /// Top-left corner in graph-space (logical pixels, pre pan/zoom).
     pos_graph: (f32, f32),
     inputs: Vec<PortView>,
@@ -217,6 +221,35 @@ fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> Pa
         label: p.label.clone(),
         value,
         fill,
+    }
+}
+
+/// Muted header tint per node `Category`, so the graph reads at a glance by
+/// family (Color & Tone warm, Noise teal, Distort purple, ...). Kept low in
+/// saturation and brightness so headers stay subtle on the dark canvas; an
+/// exhaustive match means a new `Category` variant forces a colour choice
+/// here rather than silently defaulting.
+fn category_header_color(cat: manifold_renderer::node_graph::Category) -> [f32; 4] {
+    use manifold_renderer::node_graph::Category as C;
+    match cat {
+        C::ColorAndTone => [0.40, 0.30, 0.22, 1.0],
+        C::BlurAndSharpen => [0.22, 0.30, 0.40, 1.0],
+        C::DistortAndWarp => [0.34, 0.24, 0.40, 1.0],
+        C::Stylize => [0.40, 0.24, 0.34, 1.0],
+        C::Generate => [0.24, 0.36, 0.28, 1.0],
+        C::Noise => [0.22, 0.36, 0.36, 1.0],
+        C::Mask => [0.30, 0.30, 0.34, 1.0],
+        C::Composite => [0.26, 0.28, 0.42, 1.0],
+        C::Geometry3D => [0.30, 0.26, 0.42, 1.0],
+        C::MaterialsAndLighting => [0.38, 0.32, 0.22, 1.0],
+        C::Particles2D => [0.24, 0.34, 0.40, 1.0],
+        C::Particles3D => [0.22, 0.32, 0.42, 1.0],
+        C::Control => [0.36, 0.34, 0.22, 1.0],
+        C::DetectionAndSampling => [0.40, 0.26, 0.26, 1.0],
+        C::MathAndConvert => [0.30, 0.30, 0.30, 1.0],
+        C::Routing => [0.26, 0.30, 0.38, 1.0],
+        C::FieldsAndCoordinates => [0.24, 0.34, 0.34, 1.0],
+        C::Uncategorized => NODE_HEADER_BG,
     }
 }
 
@@ -380,6 +413,11 @@ impl GraphCanvas {
                 title: n.title.clone(),
                 params: n.parameters.iter().map(format_param_for_node).collect(),
                 collapsed: self.collapsed.get(&n.id).copied().unwrap_or(false),
+                header_color: category_header_color(
+                    manifold_renderer::node_graph::descriptor_for(&n.type_id)
+                        .map(|d| d.category)
+                        .unwrap_or(manifold_renderer::node_graph::Category::Uncategorized),
+                ),
                 pos_graph: prev_positions
                     .get(&n.id)
                     .copied()
@@ -1002,7 +1040,7 @@ impl GraphCanvas {
             sy,
             sw,
             header_h,
-            NODE_HEADER_BG,
+            node.header_color,
             NODE_CORNER * self.zoom,
         );
 
