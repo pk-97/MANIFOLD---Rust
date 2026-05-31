@@ -44,7 +44,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 
 | type_id | label | category | role | summary |
 |---|---|---|---|---|
-| `node.abs_texture` | Abs Texture | — | — | Per-pixel abs(input.rgb). |
+| `node.abs_texture` | Absolute Value | Math & Convert | Filter | Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape. |
 | `node.anti_clump_particles` | Anti-Clump Particles | — | — | Modulator-weighted Brownian kick on each live particle's position.xy. |
 | `node.apply_radial_burst_3d_to_particles` | Apply Radial Burst 3D (Particles) | — | — | Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. |
 | `node.apply_radial_burst_to_particles` | Apply Radial Burst (Particles) | — | — | Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV an… |
@@ -99,7 +99,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.flash` | Flash | Stylize | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
 | `node.flatten_to_camera_plane` | Flatten to Camera Plane | — | — | Compress particles toward the camera viewing plane. |
 | `node.flow_field_noise` | Flow Field Noise | — | — | Generate a 2D flow vector field from domain-warped fBM Perlin noise. |
-| `node.fract_texture` | Fract Texture | — | — | Per-pixel fract(input.rgb * scale). |
+| `node.fract_texture` | Wrap | Math & Convert | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 | `node.fresnel_rim` | Fresnel Rim | — | — | Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. |
 | `node.gain` | Exposure | Color & Tone | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
 | `node.gaussian_blur` | Gaussian Blur | — | — | Single-axis Gaussian blur. |
@@ -108,7 +108,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.generate_grid_mesh` | Generate Grid Mesh | — | — | Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. |
 | `node.generate_grid_uv` | Generate Grid UV | — | — | Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_s… |
 | `node.generate_instance_transforms` | Generate Instance Transforms | — | — | Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). |
-| `node.generate_range` | Generate Range | — | — | Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. |
+| `node.generate_range` | Range | Math & Convert | Source | Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps. |
 | `node.generate_tesseract_vertices` | Generate Tesseract Vertices | — | — | Emit the 16 corner vertices of a 4D hypercube (tesseract) scaled to magnitude 0.25 plus its 32-edge wireframe topology as paired Array<Vec4Vertex> + Array<Edge… |
 | `node.gradient_central_diff` | Gradient (Central Diff) | — | — | Per-pixel central-difference gradient of a single input channel. |
 | `node.gradient_central_diff_3d` | Gradient (Central Diff 3D) | — | — | 6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. |
@@ -123,7 +123,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.instance_position_jitter` | Instance Position Jitter | — | — | Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. |
 | `node.instance_rotation_jitter` | Instance Rotation Jitter | — | — | Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. |
 | `node.lambert_directional` | Lambert (Directional) | — | — | Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multip… |
-| `node.length_vec2` | Length (vec2) | — | — | Per-pixel `length(in.rg)` as a scalar field in the R channel (GBA = 0, 0, 1). |
+| `node.length_vec2` | Length | Math & Convert | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
 | `node.lerp_instance_fields` | Lerp Instance Fields | — | — | Elementwise linear interpolation between two Array<InstanceTransform>s. |
 | `node.levels` | Levels | Color & Tone | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | `node.lic_integrate` | LIC Integrate | — | — | Line Integral Convolution. |
@@ -137,7 +137,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.mux_texture` | Mux (texture) | — | — | Dynamic N-way Texture2D selector — `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. |
 | `node.neighbor_smooth` | Neighbor Smooth | — | — | 5-point cross-neighborhood smoothing of an Array<InstanceTransform> arranged as an NxN grid. |
 | `node.nested_cubes_geometry` | Nested Cubes Geometry | — | — | Render a 5-instance gap-face cube field with EMA-smoothed per-instance Y rotation, per-face scatter, and a per-face envelope-driven kick on each trigger. |
-| `node.normalize_vec2` | Normalize Vec2 | — | — | Per-pixel safe-normalize of the input's RG channels treated as a vec2. |
+| `node.normalize_vec2` | Normalize | Math & Convert | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | `node.optical_flow_estimate` | Optical Flow | — | — | Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. |
 | `node.pack_channels` | Pack RGBA | — | — | Pack four single-channel textures into one RGBA output by reading the R channel of each input into the matching output channel. |
 | `node.pack_curve_xy` | Pack Curve XY | — | — | Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. |
@@ -150,7 +150,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.polytope_edges` | Polytope Edges | — | — | Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. |
 | `node.polytope_vertices` | Polytope Vertices | — | — | Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. |
 | `node.posterize` | Posterize | Color & Tone | Filter | Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result. |
-| `node.power_texture` | Power Texture | — | — | Per-pixel pow(max(input.rgb, 0), exponent). |
+| `node.power_texture` | Power | Math & Convert | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
 | `node.project_3d` | Project 3D | — | — | Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. |
 | `node.project_4d` | Project 4D | — | — | Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_… |
 | `node.radial_burst_force_field` | Radial Burst Force Field | — | — | Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. |
@@ -174,7 +174,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.sample_texture_at_particles` | Sample Texture at Particles | — | — | Per-particle bilinear sample of a Texture2D at each particle's position.xy. |
 | `node.sample_volume_2d` | Sample Volume 2D | — | — | Sample a Texture3D at a fixed Z slice to produce a Texture2D. |
 | `node.saturation` | Saturation | Color & Tone | Filter | Pulls colours toward grey or pushes them more vivid. |
-| `node.scale_offset_texture` | Scale + Offset | — | — | Per-pixel affine remap `a * x + b` on RGB. |
+| `node.scale_offset_texture` | Scale + Offset (image) | Math & Convert | Filter | Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step. |
 | `node.scanline_jitter_field` | Scanline Jitter Field | — | — | Generator for a per-row random horizontal-offset field (the VHS / horizontal-tearing building block). |
 | `node.scatter_particles` | Scatter Particles | — | — | Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. |
 | `node.scatter_particles_3d` | Scatter Particles 3D | — | — | Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. |
@@ -189,14 +189,14 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.simplex_per_instance` | Simplex Per Instance | — | — | Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. |
 | `node.sin_term` | Projected Sin Term | — | — | Fused linear-projection + sin term: out = sin((a*field.r + b*field.g + c) * freq * freq_scale + time * time_scale). |
 | `node.slope_displace` | Slope Displace | — | — | Emboss-style displacement: soft-light-blend `base` over `image`, take the luminance Sobel gradient of the blend at a `step`-pixel offset, and displace `image` … |
-| `node.smoothstep_texture` | Smoothstep | — | — | Per-pixel smoothstep contrast curve on RGB, alpha pass-through. |
+| `node.smoothstep_texture` | Smoothstep | Math & Convert | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
 | `node.texture_advect` | Texture Advect | — | — | Backward (semi-Lagrangian) advection of a texture by a 2D velocity field. |
 | `node.texture_sum_5` | Texture Sum 5 | — | — | Per-pixel weighted-sum of five textures: out = (a+b+c+d+e) / divisor. |
 | `node.threshold` | Threshold | — | — | Pixel-local luma threshold with a smoothstep falloff of width `softness` — isolates bright regions for bloom / highlight masks. |
 | `node.tone_map` | Tone Map | Color & Tone | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 | `node.torus_wrap_field` | Torus Wrap Field | — | — | Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. |
 | `node.triangulate_grid` | Triangulate Grid | — | — | Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. |
-| `node.trig_texture` | Trig Texture | — | — | Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). |
+| `node.trig_texture` | Sine / Cosine | Math & Convert | Filter | Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient. |
 | `node.unlit_material` | Unlit Material | — | — | Flat-colour material — no lighting math, no shadow term. |
 | `node.uv_displace_by_flow` | UV Displace by Flow | — | — | Sample a source texture at UVs displaced by a 2D flow vector field. |
 | `node.uv_field` | UV Field | — | — | Pure generator. |
@@ -234,7 +234,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.sample_and_hold` | Sample & Hold | — | — | Capture an input scalar on each trigger-edge and hold it until the next edge — freezes the trigger-time value so mid-decay slider moves don't leak through. |
 | `node.scalar_array_accumulator` | Scalar Array Accumulator | — | — | Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. |
 | `node.smoothing` | Smoothing | — | — | Exponential one-pole smoothing on a scalar wire — response time ≈ `time_constant` seconds, frame-rate-independent. |
-| `node.texture_dimensions` | Texture Dimensions | — | — | Read the input texture's pixel dimensions. |
+| `node.texture_dimensions` | Texture Size | Math & Convert | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
 | `node.track_persist` | Track Persist | — | — | Greedy nearest-neighbour identity tracking with grace-period retention. |
 | `node.trigger_ease_to` | Trigger Ease To | — | — | Beat-clocked snap-and-glide — on each trigger edge eases from the current value to the incoming `target` along a cubic ease-out over `window_beats` beats, then… |
 | `node.trigger_gate` | Trigger Gate | — | — | Gate a trigger_count scalar stream. |

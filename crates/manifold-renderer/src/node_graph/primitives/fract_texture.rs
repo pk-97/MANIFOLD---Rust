@@ -38,7 +38,11 @@ crate::primitive! {
     ],
     composition_notes: "Output range is [0, 1). Chain with node.uv_field for stripes, with node.distance_to_point for concentric rings (different aesthetic than sin_texture: sharp ramps instead of smooth oscillation). With node.voronoi_2d this turns F1 distances into per-cell intensity ramps.",
     examples: [],
-    picker: { label: "Fract Texture", category: Atom },
+    picker: { label: "Wrap", category: Atom },
+    summary: "Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["wrap", "fract", "repeat", "tile"],
 }
 
 impl Primitive for FractTexture {

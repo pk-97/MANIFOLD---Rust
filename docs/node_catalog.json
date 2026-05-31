@@ -3,8 +3,12 @@
   "node_count": 203,
   "nodes": [
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "absolute value",
+        "abs",
+        "magnitude"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -13,7 +17,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Abs Texture",
+      "label": "Absolute Value",
       "outputs": [
         {
           "name": "out",
@@ -22,9 +26,9 @@
       ],
       "params": [],
       "purpose": "Per-pixel abs(input.rgb). Alpha passes through. Useful after node.sin_texture (abs(sin(x)) is a humped positive-only pattern with twice the spatial frequency) or after scale_offset_texture to fold a signed field into a 'V' curve.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape.",
       "type_id": "node.abs_texture"
     },
     {
@@ -5086,8 +5090,13 @@
       "type_id": "node.fluid_project_scatter_2d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "wrap",
+        "fract",
+        "repeat",
+        "tile"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -5096,7 +5105,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Fract Texture",
+      "label": "Wrap",
       "outputs": [
         {
           "name": "out",
@@ -5116,9 +5125,9 @@
         }
       ],
       "purpose": "Per-pixel fract(input.rgb * scale). Returns x - floor(x). Multiplying before fract is the classic 'tile a smooth field into N repeating stripes' trick — e.g. fract(uv.x * 10) → 10 vertical stripes from 0 to 1.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient.",
       "type_id": "node.fract_texture"
     },
     {
@@ -5815,8 +5824,13 @@
       "type_id": "node.generate_instance_transforms"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "range",
+        "linspace",
+        "series",
+        "Pattern CHOP"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -5835,7 +5849,7 @@
           "type": "f32"
         }
       ],
-      "label": "Generate Range",
+      "label": "Range",
       "outputs": [
         {
           "name": "out",
@@ -5881,9 +5895,9 @@
         }
       ],
       "purpose": "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`. CPU-only — the curve-math atom family runs on the content thread so downstream CPU readers (replicators, polyline stackers) see same-frame writes without a GPU→CPU fence.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps.",
       "type_id": "node.generate_range"
     },
     {
@@ -6852,8 +6866,12 @@
       "type_id": "node.lambert_directional"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "length",
+        "magnitude",
+        "vector length"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -6862,7 +6880,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Length (vec2)",
+      "label": "Length",
       "outputs": [
         {
           "name": "out",
@@ -6871,9 +6889,9 @@
       ],
       "params": [],
       "purpose": "Per-pixel `length(in.rg)` as a scalar field in the R channel (GBA = 0, 0, 1). The vec2 magnitude atom — converts signed flow / displacement / gradient textures into positive scalar fields. Standard upstream step for heightmap-style ops that need a derived height from a vec2 source.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field.",
       "type_id": "node.length_vec2"
     },
     {
@@ -8330,8 +8348,12 @@
       "type_id": "node.nested_cubes_geometry"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "normalize",
+        "unit vector",
+        "direction"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -8340,7 +8362,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Normalize Vec2",
+      "label": "Normalize",
       "outputs": [
         {
           "name": "out",
@@ -8349,9 +8371,9 @@
       ],
       "params": [],
       "purpose": "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.gain`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude.",
       "type_id": "node.normalize_vec2"
     },
     {
@@ -9336,8 +9358,13 @@
       "type_id": "node.posterize"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "power",
+        "pow",
+        "exponent",
+        "gamma"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -9351,7 +9378,7 @@
           "type": "f32"
         }
       ],
-      "label": "Power Texture",
+      "label": "Power",
       "outputs": [
         {
           "name": "out",
@@ -9371,9 +9398,9 @@
         }
       ],
       "purpose": "Per-pixel pow(max(input.rgb, 0), exponent). Alpha passes through. Sharpens or softens a [0, 1] field: exponent > 1 pushes mid-grays toward 0 (great for spiking voronoi F1 into star-points), exponent < 1 lifts darks (gamma-like brightening).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones.",
       "type_id": "node.power_texture"
     },
     {
@@ -11137,8 +11164,13 @@
       "type_id": "node.scalar_array_accumulator"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "scale offset",
+        "remap",
+        "multiply add",
+        "re-range"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -11157,7 +11189,7 @@
           "type": "f32"
         }
       ],
-      "label": "Scale + Offset",
+      "label": "Scale + Offset (image)",
       "outputs": [
         {
           "name": "out",
@@ -11187,9 +11219,9 @@
         }
       ],
       "purpose": "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.gain + node.brightness fused.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step.",
       "type_id": "node.scale_offset_texture"
     },
     {
@@ -12381,8 +12413,13 @@
       "type_id": "node.smoothing"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "smoothstep",
+        "ease",
+        "s-curve",
+        "soft threshold"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -12431,9 +12468,9 @@
         }
       ],
       "purpose": "Per-pixel smoothstep contrast curve on RGB, alpha pass-through. Maps the input through `smoothstep(low, high, x)` per channel — anything below `low` clamps to 0, anything above `high` clamps to 1, and the Hermite polynomial smoothes the transition between them. Both edges are always live; for a symmetric-around-zero curve, wire `node.math(operation=Negate) → low` to mirror `high` into the low edge.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp.",
       "type_id": "node.smoothstep_texture"
     },
     {
@@ -12493,8 +12530,13 @@
       "type_id": "node.texture_advect"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "texture size",
+        "dimensions",
+        "resolution",
+        "aspect"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -12503,7 +12545,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Texture Dimensions",
+      "label": "Texture Size",
       "outputs": [
         {
           "name": "width",
@@ -12520,9 +12562,9 @@
       ],
       "params": [],
       "purpose": "Read the input texture's pixel dimensions. Outputs `width`, `height`, and `aspect` (= width / height) as scalars. No GPU dispatch — values are CPU-accessible from the bound texture, so the read is zero-latency. Use to feed aspect-correction into a downstream effect-graph chain (e.g. wire `aspect` into `distance_to_point.scale_x` to make a radial mask circular on a non-square canvas).",
-      "role": "Unknown",
+      "role": "Control",
       "stratum": "driver",
-      "summary": "",
+      "summary": "Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas.",
       "type_id": "node.texture_dimensions"
     },
     {
@@ -12902,8 +12944,14 @@
       "type_id": "node.triangulate_grid"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "sine",
+        "cosine",
+        "sin",
+        "cos",
+        "wave"
+      ],
+      "category": "Math & Convert",
       "examples": [],
       "inputs": [
         {
@@ -12932,7 +12980,7 @@
           "type": "Texture2D"
         }
       ],
-      "label": "Trig Texture",
+      "label": "Sine / Cosine",
       "outputs": [
         {
           "name": "out",
@@ -12977,9 +13025,9 @@
         }
       ],
       "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mix`.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
       "type_id": "node.trig_texture"
     },
     {

@@ -56,7 +56,11 @@ crate::primitive! {
     ],
     composition_notes: "Output = input * scale + offset, per RGB channel. Standard re-range recipes: (a=2, b=-1) maps [0, 1] → [-1, 1]; (a=0.5, b=0.5) maps [-1, 1] → [0, 1]; (a=-1, b=1) inverts; (a=1, b=0) is identity. Pair with node.sin_texture to compose ConcentricTunnel-style patterns.",
     examples: [],
-    picker: { label: "Scale + Offset", category: Atom },
+    picker: { label: "Scale + Offset (image)", category: Atom },
+    summary: "Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["scale offset", "remap", "multiply add", "re-range"],
 }
 
 impl Primitive for ScaleOffsetTexture {

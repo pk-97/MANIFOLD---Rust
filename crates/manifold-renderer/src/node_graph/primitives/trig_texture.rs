@@ -71,7 +71,11 @@ crate::primitive! {
     ],
     composition_notes: "Default freq = 2π so a [0, 1] input completes one full cycle. Sin and Cos output range is [-1, 1]; Tan is clamped to ±32. For Lissajous-style XY compositions, pair two trig_texture nodes (one Sin, one Cos) driven from the same field. For per-cell unique twinkle / flicker patterns, wire `freq_tex` (per-pixel freq from a per-cell-stable source like voronoi A→R) and `phase_tex` from the same chain — each cell pulses at its own frequency and phase.",
     examples: [],
-    picker: { label: "Trig Texture", category: Atom },
+    picker: { label: "Sine / Cosine", category: Atom },
+    summary: "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["sine", "cosine", "sin", "cos", "wave"],
 }
 
 impl Primitive for TrigTexture {

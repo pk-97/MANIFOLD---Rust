@@ -19,7 +19,11 @@ crate::primitive! {
     params: [],
     composition_notes: "Maps [-a, a] → [0, a]. Common downstream of node.scale_offset_texture (which recovers signed noise from [0, 1] generators) and node.sin_texture / cos_texture.",
     examples: [],
-    picker: { label: "Abs Texture", category: Atom },
+    picker: { label: "Absolute Value", category: Atom },
+    summary: "Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape.",
+    category: MathAndConvert,
+    role: Filter,
+    aliases: ["absolute value", "abs", "magnitude"],
 }
 
 impl Primitive for AbsTexture {

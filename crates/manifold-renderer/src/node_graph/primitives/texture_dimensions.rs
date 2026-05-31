@@ -32,7 +32,11 @@ crate::primitive! {
     params: [],
     composition_notes: "Pure metadata read — no shader, no dispatch. Outputs are zero-latency this frame. `aspect = width / height`; for a 1920×1080 canvas the value is 16/9 ≈ 1.778. If the input texture isn't bound yet (e.g. first frame during graph rebuild) the outputs fall back to 1920 / 1080 / 1.778 so downstream divisions don't see zero. Generators should still use `system.generator_input.aspect` directly; this atom is for effects, which lack the boundary-node scalar exposures.",
     examples: [],
-    picker: { label: "Texture Dimensions", category: Driver },
+    picker: { label: "Texture Size", category: Driver },
+    summary: "Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas.",
+    category: MathAndConvert,
+    role: Control,
+    aliases: ["texture size", "dimensions", "resolution", "aspect"],
 }
 
 impl Primitive for TextureDimensions {
