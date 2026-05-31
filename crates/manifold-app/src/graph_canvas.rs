@@ -22,9 +22,13 @@ use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::PanelAction;
 
 const HEADER_HEIGHT: f32 = 28.0;
-const NODE_WIDTH: f32 = 140.0;
+const NODE_WIDTH: f32 = 168.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
-const SUMMARY_ROW_HEIGHT: f32 = 16.0;
+/// Height of one on-node parameter row: label + value on one line, with a
+/// thin fill bar underneath for ranged values. Nodes carry their params on
+/// their face so you read (and, in a later pass, tune) them where you are,
+/// instead of darting to a side panel.
+const PARAM_ROW_H: f32 = 18.0;
 const PORT_ROW_HEIGHT: f32 = 18.0;
 const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
@@ -50,6 +54,10 @@ const PORT_ARRAY_COLOR: [f32; 4] = [0.50, 1.00, 0.62, 1.0];
 const PORT_CAMERA_COLOR: [f32; 4] = [1.00, 0.55, 0.55, 1.0];
 const PORT_LIGHT_COLOR: [f32; 4] = [1.00, 0.95, 0.55, 1.0];
 const PORT_MATERIAL_COLOR: [f32; 4] = [0.95, 0.65, 0.40, 1.0];
+/// On-node param fill bar: a faint track plus a brighter fill showing where
+/// a ranged value sits between its declared min and max.
+const PARAM_FILL_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
+const PARAM_FILL_FG: [f32; 4] = [0.50, 0.78, 1.00, 0.55];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
@@ -96,11 +104,10 @@ impl PortView {
 struct NodeView {
     id: u32,
     title: String,
-    /// Compact one-line summary of the node's most informative
-    /// parameter — e.g. "Mode: FoldX" for Mirror's Transform. Lets the
-    /// user read what a node is *doing* from the canvas without
-    /// opening the inspector. `None` if the node has no parameters.
-    summary: Option<String>,
+    /// The node's parameters, shown as compact rows on the node face so you
+    /// can read what each node is doing — and, in a later pass, tune it —
+    /// without opening a side panel. Empty if the node has no params.
+    params: Vec<ParamView>,
     /// Top-left corner in graph-space (logical pixels, pre pan/zoom).
     pos_graph: (f32, f32),
     inputs: Vec<PortView>,
@@ -114,23 +121,18 @@ struct NodeView {
 impl NodeView {
     fn height(&self) -> f32 {
         let port_rows = self.inputs.len().max(self.outputs.len()) as f32;
-        let summary_h = if self.summary.is_some() {
-            SUMMARY_ROW_HEIGHT
-        } else {
-            0.0
-        };
-        NODE_HEADER_HEIGHT + summary_h + port_rows * PORT_ROW_HEIGHT + 6.0
+        NODE_HEADER_HEIGHT + self.params_h() + port_rows * PORT_ROW_HEIGHT + 6.0
     }
 
-    /// Y offset where port rows start, accounting for an optional
-    /// inline summary line below the header.
+    /// Total height of the on-node parameter block drawn below the header.
+    fn params_h(&self) -> f32 {
+        self.params.len() as f32 * PARAM_ROW_H
+    }
+
+    /// Y offset where port rows start, below the header and the on-node
+    /// parameter block.
     fn ports_y_offset(&self) -> f32 {
-        let summary_h = if self.summary.is_some() {
-            SUMMARY_ROW_HEIGHT
-        } else {
-            0.0
-        };
-        NODE_HEADER_HEIGHT + summary_h
+        NODE_HEADER_HEIGHT + self.params_h()
     }
 
     fn input_port_pos_graph(&self, idx: usize) -> (f32, f32) {
@@ -150,54 +152,64 @@ impl NodeView {
     }
 }
 
-/// Pick the most informative parameter to surface in the inline node
-/// summary. Heuristic: prefer enum params (whose label is descriptive,
-/// e.g. "FoldX"), then floats, then anything else. Returns `None` if
-/// the node has no parameters.
-fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) -> Option<String> {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
-    let pick = parameters
-        .iter()
-        .find(|p| p.kind == ParamSnapshotKind::Enum)
-        .or_else(|| {
-            parameters
-                .iter()
-                .find(|p| {
-                    matches!(
-                        p.kind,
-                        ParamSnapshotKind::Float
-                            | ParamSnapshotKind::Angle
-                            | ParamSnapshotKind::Frequency
-                            | ParamSnapshotKind::Int
-                    )
-                })
-        })
-        .or_else(|| parameters.first())?;
+/// One parameter as shown on the node face: its label, the formatted
+/// current value, and an optional 0..1 fill fraction for ranged values
+/// (drives the thin bar under the row). Owned so it survives the
+/// content/UI snapshot boundary.
+#[derive(Debug, Clone)]
+struct ParamView {
+    label: String,
+    value: String,
+    /// `Some(0..1)` position of the current value within its declared
+    /// range, for the fill bar. `None` for params with no numeric range
+    /// (enums, bools, triggers, or floats whose ParamDef declared none).
+    fill: Option<f32>,
+}
 
-    let value_str = match pick.kind {
-        ParamSnapshotKind::Enum => pick
+/// Format one parameter snapshot for on-node display: a short value string
+/// plus, when the param has a numeric range, the 0..1 position of the
+/// current value within it. Value formatting mirrors the inspector
+/// (degrees for angles, Hz for frequencies, enum labels, On/Off).
+fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> ParamView {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    let value = match p.kind {
+        ParamSnapshotKind::Enum => p
             .enum_labels
             .as_ref()
-            .and_then(|labels| labels.get(pick.current_value as usize).cloned())
-            .unwrap_or_else(|| format!("{}", pick.current_value as i64)),
+            .and_then(|labels| labels.get(p.current_value as usize).cloned())
+            .unwrap_or_else(|| format!("{}", p.current_value as i64)),
         ParamSnapshotKind::Bool => {
-            if pick.current_value >= 0.5 {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
+            if p.current_value >= 0.5 { "On" } else { "Off" }.to_string()
         }
-        ParamSnapshotKind::Int => format!("{}", pick.current_value as i64),
-        ParamSnapshotKind::Float => format!("{:.2}", pick.current_value),
+        ParamSnapshotKind::Int => format!("{}", p.current_value as i64),
+        ParamSnapshotKind::Float => format!("{:.2}", p.current_value),
         // Stored radians, shown as degrees (see ParamType::Angle).
-        ParamSnapshotKind::Angle => format!("{:.0}°", pick.current_value.to_degrees()),
+        ParamSnapshotKind::Angle => format!("{:.0}°", p.current_value.to_degrees()),
+        // Stored rad/s, shown as Hz (see ParamType::Frequency).
         ParamSnapshotKind::Frequency => {
-            format!("{:.2} Hz", pick.current_value / std::f32::consts::TAU)
+            format!("{:.2} Hz", p.current_value / std::f32::consts::TAU)
         }
-        ParamSnapshotKind::Trigger => format!("{}", pick.current_value as i64),
-        ParamSnapshotKind::Other => "—".to_string(),
+        ParamSnapshotKind::Trigger => format!("{}", p.current_value as i64),
+        ParamSnapshotKind::Other => p.summary.clone().unwrap_or_else(|| "—".to_string()),
     };
-    Some(format!("{}: {}", pick.label, value_str))
+    let fill = match p.kind {
+        ParamSnapshotKind::Float
+        | ParamSnapshotKind::Angle
+        | ParamSnapshotKind::Frequency
+        | ParamSnapshotKind::Int => p.range.map(|(lo, hi)| {
+            if hi > lo {
+                ((p.current_value - lo) / (hi - lo)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        }),
+        _ => None,
+    };
+    ParamView {
+        label: p.label.clone(),
+        value,
+        fill,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -321,9 +333,16 @@ impl GraphCanvas {
     pub fn set_snapshot(&mut self, snap: &GraphSnapshot) {
         let new_hash = hash_topology(snap);
         if new_hash == self.topology_hash && !self.nodes.is_empty() {
-            // Topology unchanged — keep existing layout. Nothing else
-            // in the snapshot affects rendering today (params would, but
-            // we don't display values yet).
+            // Topology unchanged — keep the existing layout, but refresh
+            // each node's on-face param values in place. They show live
+            // values now, so a param-only change (a driver moving a knob,
+            // an inspector edit) must update them without re-running
+            // auto-layout.
+            for node in &mut self.nodes {
+                if let Some(sn) = snap.nodes.iter().find(|s| s.id == node.id) {
+                    node.params = sn.parameters.iter().map(format_param_for_node).collect();
+                }
+            }
             return;
         }
         self.topology_hash = new_hash;
@@ -345,7 +364,7 @@ impl GraphCanvas {
             .map(|n| NodeView {
                 id: n.id,
                 title: n.title.clone(),
-                summary: build_summary(&n.parameters),
+                params: n.parameters.iter().map(format_param_for_node).collect(),
                 pos_graph: prev_positions
                     .get(&n.id)
                     .copied()
@@ -951,29 +970,54 @@ impl GraphCanvas {
             TEXT_HEADER,
         );
 
-        // Inline summary line (e.g., "Mode: FoldX") so users can tell
-        // what each node is doing without opening the inspector.
-        // Truncate gracefully if it'd overflow the node width.
-        if let Some(summary) = node.summary.as_deref() {
-            let summary_size = (9.0 * self.zoom).max(7.0);
-            let summary_y = sy + header_h + (SUMMARY_ROW_HEIGHT * self.zoom - summary_size) * 0.5;
-            let max_chars =
-                ((NODE_WIDTH * self.zoom - 16.0 * self.zoom) / (summary_size * 0.55)) as usize;
-            let char_count = summary.chars().count();
-            let display: std::borrow::Cow<'_, str> = if char_count > max_chars && max_chars > 1 {
-                let take = max_chars.saturating_sub(1);
-                let truncated: String = summary.chars().take(take).collect();
-                std::borrow::Cow::Owned(format!("{truncated}…"))
-            } else {
-                std::borrow::Cow::Borrowed(summary)
-            };
+        // On-node parameter rows: label + value on one line, with a thin
+        // fill bar under ranged values, so you can read what each node is
+        // doing straight from the canvas without opening a side panel.
+        let row_h = PARAM_ROW_H * self.zoom;
+        let text_size = (9.0 * self.zoom).max(7.0);
+        let pad_x = 8.0 * self.zoom;
+        let inner_w = sw - 2.0 * pad_x;
+        for (i, p) in node.params.iter().enumerate() {
+            let row_y = sy + header_h + i as f32 * row_h;
+            let text_y = row_y + 2.0 * self.zoom;
+
+            // Value, right-aligned. Measured first so the label can be
+            // truncated against the space the value leaves.
+            let value_w = p.value.chars().count() as f32 * text_size * 0.55;
             ui.draw_text(
-                sx + 8.0 * self.zoom,
-                summary_y,
-                &display,
-                summary_size,
-                TEXT_SECONDARY,
+                sx + sw - pad_x - value_w,
+                text_y,
+                &p.value,
+                text_size,
+                TEXT_PRIMARY,
             );
+
+            // Label, left, truncated so it can't collide with the value.
+            let label_budget = (inner_w - value_w - 6.0 * self.zoom).max(0.0);
+            let max_chars = (label_budget / (text_size * 0.55)) as usize;
+            let label: std::borrow::Cow<'_, str> = if p.label.chars().count() > max_chars
+                && max_chars > 1
+            {
+                let take = max_chars.saturating_sub(1);
+                std::borrow::Cow::Owned(format!(
+                    "{}…",
+                    p.label.chars().take(take).collect::<String>()
+                ))
+            } else {
+                std::borrow::Cow::Borrowed(p.label.as_str())
+            };
+            ui.draw_text(sx + pad_x, text_y, &label, text_size, TEXT_SECONDARY);
+
+            // Fill bar under the row for ranged values.
+            if let Some(frac) = p.fill {
+                let bar_h = 2.0 * self.zoom;
+                let bar_y = row_y + row_h - bar_h - 2.0 * self.zoom;
+                ui.draw_rounded_rect(sx + pad_x, bar_y, inner_w, bar_h, PARAM_FILL_BG, bar_h * 0.5);
+                let fill_w = inner_w * frac;
+                if fill_w > 0.0 {
+                    ui.draw_rounded_rect(sx + pad_x, bar_y, fill_w, bar_h, PARAM_FILL_FG, bar_h * 0.5);
+                }
+            }
         }
 
         let port_label_size = (10.0 * self.zoom).max(7.0);
