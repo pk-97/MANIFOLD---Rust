@@ -150,6 +150,11 @@ pub struct NodeDescriptor {
     pub category: Category,
     /// Data-role. [`Role::Unknown`] until filled.
     pub role: Role,
+    /// Search synonyms: the node's old name, plain-English aliases, and the
+    /// TouchDesigner-equivalent operator. Lets someone (or an AI) who knows
+    /// another tool's vocabulary find the right node. Not shown on the node,
+    /// only matched against in search. Empty until filled.
+    pub aliases: &'static [&'static str],
     /// Names of preset graphs that use this node — discoverable examples.
     pub examples: &'static [&'static str],
 }
@@ -183,6 +188,9 @@ pub fn descriptor_for(type_id: &str) -> Option<&'static NodeDescriptor> {
 
 macro_rules! hand_descriptor {
     ($type_id:literal, $purpose:literal) => {
+        hand_descriptor!($type_id, $purpose, aliases: []);
+    };
+    ($type_id:literal, $purpose:literal, aliases: [ $($alias:literal),* $(,)? ]) => {
         inventory::submit! {
             NodeDescriptor {
                 type_id: $type_id,
@@ -190,6 +198,7 @@ macro_rules! hand_descriptor {
                 summary: "",
                 category: Category::Uncategorized,
                 role: Role::Unknown,
+                aliases: &[ $($alias),* ],
                 examples: &[],
             }
         }

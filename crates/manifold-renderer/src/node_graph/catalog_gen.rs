@@ -29,6 +29,7 @@ use crate::generators::bundled_generator_presets::loaded_generator_presets_from_
 use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
 use crate::node_graph::descriptor::{Category, NodeDescriptor, Role, descriptor_for};
 use crate::node_graph::palette::PaletteCategory;
+use crate::node_graph::param_doc::tooltip_for;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::persistence::PrimitiveFactory;
 use crate::node_graph::ports::{PortType, ScalarType};
@@ -78,6 +79,7 @@ struct NodeRow {
     summary: &'static str,
     category: Category,
     role: Role,
+    aliases: &'static [&'static str],
     examples: &'static [&'static str],
     inputs: Vec<PortRow>,
     outputs: Vec<PortRow>,
@@ -123,6 +125,7 @@ fn collect_rows() -> Vec<NodeRow> {
                 summary: desc.map(|d| d.summary).unwrap_or(""),
                 category: desc.map(|d| d.category).unwrap_or(Category::Uncategorized),
                 role: desc.map(|d| d.role).unwrap_or(Role::Unknown),
+                aliases: desc.map(|d| d.aliases).unwrap_or(&[]),
                 examples: desc.map(|d| d.examples).unwrap_or(&[]),
                 inputs: node.inputs().iter().map(port_row).collect(),
                 outputs: node.outputs().iter().map(port_row).collect(),
@@ -272,6 +275,9 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
             if !p.enum_values.is_empty() {
                 o["enum_values"] = serde_json::json!(p.enum_values);
             }
+            if let Some(tip) = tooltip_for(r.type_id, p.name) {
+                o["tooltip"] = serde_json::json!(tip);
+            }
             o
         })
         .collect();
@@ -288,6 +294,7 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
         "role": r.role.label(),
         "summary": r.summary,
         "purpose": r.purpose,
+        "aliases": r.aliases,
         "examples": r.examples,
         "inputs": inputs,
         "outputs": outputs,

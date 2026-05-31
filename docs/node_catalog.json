@@ -3,6 +3,7 @@
   "node_count": 203,
   "nodes": [
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -27,6 +28,7 @@
       "type_id": "node.abs_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -92,6 +94,7 @@
       "type_id": "node.affine_scalar"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.transform"
@@ -179,6 +182,7 @@
       "type_id": "node.affine_transform"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -239,6 +243,7 @@
       "type_id": "node.anti_clump_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -326,6 +331,7 @@
       "type_id": "node.apply_radial_burst_3d_to_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -441,6 +447,7 @@
       "type_id": "node.apply_radial_burst_to_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -491,6 +498,7 @@
       "type_id": "node.array_connect_nearest"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -546,6 +554,7 @@
       "type_id": "node.array_diffuse_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -580,6 +589,7 @@
       "type_id": "node.array_feedback"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -696,6 +706,7 @@
       "type_id": "node.array_math"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -745,6 +756,7 @@
       "type_id": "node.array_replicate_polyline_rings"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -773,6 +785,7 @@
       "type_id": "node.array_unpack_vec2"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -832,6 +845,7 @@
       "type_id": "node.bake_equirect_envmap"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -942,6 +956,7 @@
       "type_id": "node.basic_shape"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -1013,6 +1028,7 @@
       "type_id": "node.beat_gate"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.voronoi_prism"
@@ -1060,6 +1076,7 @@
       "type_id": "node.beat_ramp"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1201,6 +1218,7 @@
       "type_id": "node.blinn_specular"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1276,6 +1294,7 @@
       "type_id": "node.blob_detect_ffi"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1342,6 +1361,7 @@
       "type_id": "node.blob_overlay_render"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.glitch"
@@ -1413,6 +1433,7 @@
       "type_id": "node.block_displace_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1459,6 +1480,7 @@
       "type_id": "node.blur"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1530,6 +1552,7 @@
       "type_id": "node.blur_3d_separable"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1640,6 +1663,7 @@
       "type_id": "node.box_mask"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1671,6 +1695,7 @@
       "type_id": "node.brightness"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1813,6 +1838,7 @@
       "type_id": "node.camera_orbit"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -1893,6 +1919,7 @@
       "type_id": "node.canvas_area_scale"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2073,6 +2100,7 @@
       "type_id": "node.cel_material"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2153,6 +2181,7 @@
       "type_id": "node.centered_uv"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2202,6 +2231,7 @@
       "type_id": "node.channel_mix"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -2251,6 +2281,7 @@
       "type_id": "node.checkerboard"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2316,6 +2347,7 @@
       "type_id": "node.chroma_key"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2361,6 +2393,7 @@
       "type_id": "node.chromatic_displace"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2416,6 +2449,7 @@
       "type_id": "node.clamp_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2456,6 +2490,7 @@
       "type_id": "node.clip_trigger_cycle"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2496,6 +2531,7 @@
       "type_id": "node.clip_trigger_index"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.infrared"
@@ -2548,6 +2584,7 @@
       "type_id": "node.color_lut"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2585,6 +2622,7 @@
       "type_id": "node.color_ramp"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2630,6 +2668,7 @@
       "type_id": "node.color_sample"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.color_grade"
@@ -2717,6 +2756,7 @@
       "type_id": "node.colorize"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2792,6 +2832,7 @@
       "type_id": "node.compressor_envelope"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -2843,6 +2884,7 @@
       "type_id": "node.consecutive_edges"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -2912,6 +2954,7 @@
       "type_id": "node.container_bounds_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -2986,6 +3029,7 @@
       "type_id": "node.container_repel_force_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.color_grade"
@@ -3028,6 +3072,7 @@
       "type_id": "node.contrast"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3159,6 +3204,7 @@
       "type_id": "node.convolution_2d_9tap"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -3281,6 +3327,7 @@
       "type_id": "node.curl_slope_force_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3312,6 +3359,7 @@
       "type_id": "node.cycle_table_row"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3402,6 +3450,7 @@
       "type_id": "node.cylinder_wrap_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3447,6 +3496,7 @@
       "type_id": "node.depth_estimate_midas"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -3514,6 +3564,7 @@
       "type_id": "node.diffuse_force_3d_at_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3619,6 +3670,7 @@
       "type_id": "node.digital_plants_render"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3689,6 +3741,7 @@
       "type_id": "node.displace_mesh"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3784,6 +3837,7 @@
       "type_id": "node.distance_to_point"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.dither"
@@ -3826,6 +3880,7 @@
       "type_id": "node.dither"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.dither"
@@ -3865,6 +3920,7 @@
       "type_id": "node.dither_pattern"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.generator.oily_fluid"
@@ -3907,6 +3963,7 @@
       "type_id": "node.downsample"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.edge_detect"
@@ -3954,6 +4011,7 @@
       "type_id": "node.edge_detect"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -3989,6 +4047,7 @@
       "type_id": "node.edges_from_grid_uv"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4099,6 +4158,7 @@
       "type_id": "node.ellipse_mask"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4139,6 +4199,7 @@
       "type_id": "node.envelope_decay"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4199,6 +4260,7 @@
       "type_id": "node.envelope_follower_ar"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4259,6 +4321,7 @@
       "type_id": "node.euler_step_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -4321,6 +4384,7 @@
       "type_id": "node.euler_step_particles_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -4400,6 +4464,7 @@
       "type_id": "node.fbm_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4515,6 +4580,7 @@
       "type_id": "node.fbm_per_instance"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.stylized_feedback"
@@ -4551,6 +4617,7 @@
       "type_id": "node.feedback"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4621,6 +4688,7 @@
       "type_id": "node.field_combine"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.watercolor"
@@ -4663,6 +4731,7 @@
       "type_id": "node.film_grain"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.strobe"
@@ -4720,6 +4789,7 @@
       "type_id": "node.flash"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -4782,6 +4852,7 @@
       "type_id": "node.flatten_to_camera_plane"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -4836,6 +4907,7 @@
       "type_id": "node.flow_field_noise"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4941,6 +5013,7 @@
       "type_id": "node.fluid_project_scatter_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -4976,6 +5049,7 @@
       "type_id": "node.fract_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5015,6 +5089,7 @@
       "type_id": "node.frequency_ratio"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5106,6 +5181,7 @@
       "type_id": "node.fresnel_rim"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.strobe"
@@ -5148,6 +5224,7 @@
       "type_id": "node.gain"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "composite.bloom",
@@ -5265,6 +5342,7 @@
       "type_id": "node.gaussian_blur"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5336,6 +5414,7 @@
       "type_id": "node.gaussian_blur_variable_width"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -5375,6 +5454,7 @@
       "type_id": "node.generate_cube_mesh"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5455,6 +5535,7 @@
       "type_id": "node.generate_grid_mesh"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5519,6 +5600,7 @@
       "type_id": "node.generate_grid_uv"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -5650,6 +5732,7 @@
       "type_id": "node.generate_instance_transforms"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5721,6 +5804,7 @@
       "type_id": "node.generate_range"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -5743,6 +5827,7 @@
       "type_id": "node.generate_tesseract_vertices"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -5800,6 +5885,7 @@
       "type_id": "node.gradient_central_diff"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -5847,6 +5933,7 @@
       "type_id": "node.gradient_central_diff_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.infrared"
@@ -5890,6 +5977,7 @@
       "type_id": "node.gradient_ramp"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -5919,6 +6007,7 @@
       "type_id": "node.grid_uv_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.voronoi_prism"
@@ -5995,6 +6084,7 @@
       "type_id": "node.hash_field_by_seed"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6060,6 +6150,7 @@
       "type_id": "node.hash_noise_field_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.auto_gain"
@@ -6107,6 +6198,7 @@
       "type_id": "node.hdr_retention_mix"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6172,6 +6264,7 @@
       "type_id": "node.heightmap_to_normal"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.color_grade"
@@ -6244,6 +6337,7 @@
       "type_id": "node.hue_saturation"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6326,6 +6420,7 @@
       "type_id": "node.image_folder"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6378,6 +6473,7 @@
       "type_id": "node.inject_burst"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6483,6 +6579,7 @@
       "type_id": "node.instance_position_jitter"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6523,6 +6620,7 @@
       "type_id": "node.instance_rotation_jitter"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.invert"
@@ -6560,6 +6658,7 @@
       "type_id": "node.invert"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6650,6 +6749,7 @@
       "type_id": "node.lambert_directional"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6674,6 +6774,7 @@
       "type_id": "node.length_vec2"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6719,6 +6820,7 @@
       "type_id": "node.lerp_instance_fields"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.generator.metallic_glass"
@@ -6821,6 +6923,11 @@
       "type_id": "node.levels"
     },
     {
+      "aliases": [
+        "oscillator",
+        "modulator",
+        "LFO CHOP"
+      ],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -6844,6 +6951,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Locks the cycle to the song tempo, or lets it run free in Hz.",
           "type": "enum"
         },
         {
@@ -6866,6 +6974,7 @@
             "0",
             "9"
           ],
+          "tooltip": "How fast it cycles. When synced you pick a note value like 1/4 or 1/8, otherwise it is measured in cycles per second.",
           "type": "enum"
         },
         {
@@ -6876,6 +6985,7 @@
             "0",
             "100"
           ],
+          "tooltip": "The free-running speed in Hz, used only when Sync is off.",
           "type": "float"
         },
         {
@@ -6892,6 +7002,7 @@
             "0",
             "3"
           ],
+          "tooltip": "The waveform, anything from a smooth sine to a hard square or a random sample and hold.",
           "type": "enum"
         },
         {
@@ -6902,6 +7013,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Shifts the starting point of the cycle. Range 0 to 1.",
           "type": "float"
         },
         {
@@ -6912,6 +7024,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The value at the bottom of the cycle. Set Min above Max to flip the output upside down.",
           "type": "float"
         },
         {
@@ -6922,16 +7035,18 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The value at the top of the cycle.",
           "type": "float"
         }
       ],
       "purpose": "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous angular frequency `angular_rate` (rad/s) — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention. Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
       "role": "Control",
       "stratum": "driver",
-      "summary": "A low-frequency oscillator — a smoothly cycling value (sine / saw / …) to drive any knob, beat-locked or free-running.",
+      "summary": "A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free.",
       "type_id": "node.lfo"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -6992,6 +7107,7 @@
       "type_id": "node.lic_integrate"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7246,6 +7362,7 @@
       "type_id": "node.light"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7326,6 +7443,7 @@
       "type_id": "node.linear_gradient"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7350,6 +7468,7 @@
       "type_id": "node.luminance"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.glitch"
@@ -7397,6 +7516,7 @@
       "type_id": "node.masked_mix"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7446,6 +7566,7 @@
       "type_id": "node.matcap_two_tone"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7522,6 +7643,7 @@
       "type_id": "node.math"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7562,6 +7684,7 @@
       "type_id": "node.mirror_axis"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.mirror"
@@ -7600,6 +7723,7 @@
       "type_id": "node.mirror_fold_uv"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "composite.bloom",
@@ -7668,6 +7792,7 @@
       "type_id": "node.mix"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7743,6 +7868,7 @@
       "type_id": "node.mux_array"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7866,6 +7992,7 @@
       "type_id": "node.mux_scalar"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7951,6 +8078,7 @@
       "type_id": "node.mux_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -7996,6 +8124,7 @@
       "type_id": "node.neighbor_smooth"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "NestedCubes"
@@ -8073,6 +8202,7 @@
       "type_id": "node.nested_cubes_geometry"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8097,6 +8227,7 @@
       "type_id": "node.normalize_vec2"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8162,6 +8293,7 @@
       "type_id": "node.one_euro_filter"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8211,6 +8343,7 @@
       "type_id": "node.optical_flow_estimate"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8291,6 +8424,7 @@
       "type_id": "node.pack_channels"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8336,6 +8470,7 @@
       "type_id": "node.pack_curve_xy"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8375,6 +8510,7 @@
       "type_id": "node.pack_vec4"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8560,6 +8696,7 @@
       "type_id": "node.pbr_material"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8584,6 +8721,7 @@
       "type_id": "node.peak"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -8633,6 +8771,7 @@
       "type_id": "node.perlin_noise_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8688,6 +8827,7 @@
       "type_id": "node.person_segment"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8903,6 +9043,7 @@
       "type_id": "node.phong_material"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -8942,6 +9083,7 @@
       "type_id": "node.polar_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -8980,6 +9122,7 @@
       "type_id": "node.polytope_edges"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9018,6 +9161,7 @@
       "type_id": "node.polytope_vertices"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.dither"
@@ -9060,6 +9204,7 @@
       "type_id": "node.posterize"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9100,6 +9245,7 @@
       "type_id": "node.power_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9165,6 +9311,7 @@
       "type_id": "node.project_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9210,6 +9357,7 @@
       "type_id": "node.project_4d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9320,6 +9468,7 @@
       "type_id": "node.radial_burst_force_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.kaleidoscope"
@@ -9377,6 +9526,7 @@
       "type_id": "node.radial_fold_uv"
     },
     {
+      "aliases": [],
       "category": "Distort",
       "examples": [
         "preset.effect.chromatic_aberration"
@@ -9443,6 +9593,7 @@
       "type_id": "node.radial_offset_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9508,6 +9659,7 @@
       "type_id": "node.reinhard_tone_map"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.kaleidoscope"
@@ -9561,6 +9713,7 @@
       "type_id": "node.remap"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9623,6 +9776,7 @@
       "type_id": "node.render_3d_mesh"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9679,6 +9833,7 @@
       "type_id": "node.render_filled_rects"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9749,6 +9904,7 @@
       "type_id": "node.render_instanced_3d_mesh"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -9887,6 +10043,7 @@
       "type_id": "node.render_lines"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "assets/generator-presets/Text.json"
@@ -10051,6 +10208,7 @@
       "type_id": "node.render_text"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10180,6 +10338,7 @@
       "type_id": "node.render_value_overlay"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10225,6 +10384,7 @@
       "type_id": "node.resolve_3d_accumulator"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10260,6 +10420,7 @@
       "type_id": "node.resolve_accumulator"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10300,6 +10461,7 @@
       "type_id": "node.rotate_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10370,6 +10532,7 @@
       "type_id": "node.rotate_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10440,6 +10603,7 @@
       "type_id": "node.rotate_4d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10480,6 +10644,7 @@
       "type_id": "node.rotate_vec2_90"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10520,6 +10685,7 @@
       "type_id": "node.rotate_vec2_by_angle"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10549,6 +10715,7 @@
       "type_id": "node.sample_and_hold"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -10596,6 +10763,7 @@
       "type_id": "node.sample_texture_3d_at_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10641,6 +10809,7 @@
       "type_id": "node.sample_texture_at_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10706,6 +10875,7 @@
       "type_id": "node.sample_volume_2d"
     },
     {
+      "aliases": [],
       "category": "Color",
       "examples": [
         "preset.effect.color_grade"
@@ -10748,6 +10918,7 @@
       "type_id": "node.saturation"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10804,6 +10975,7 @@
       "type_id": "node.scalar_array_accumulator"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -10859,6 +11031,7 @@
       "type_id": "node.scale_offset_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.glitch"
@@ -10926,6 +11099,7 @@
       "type_id": "node.scanline_jitter_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11001,6 +11175,7 @@
       "type_id": "node.scatter_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11076,6 +11251,7 @@
       "type_id": "node.scatter_particles_3d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11181,6 +11357,7 @@
       "type_id": "node.scatter_particles_camera"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11246,6 +11423,7 @@
       "type_id": "node.seed_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11341,6 +11519,7 @@
       "type_id": "node.seed_particles_from_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11381,6 +11560,7 @@
       "type_id": "node.sharpen"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11488,6 +11668,7 @@
       "type_id": "node.simplex_field_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -11537,6 +11718,7 @@
       "type_id": "node.simplex_noise_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation3D"
@@ -11619,6 +11801,7 @@
       "type_id": "node.simplex_noise_force_3d_at_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "FluidSimulation"
@@ -11731,6 +11914,7 @@
       "type_id": "node.simplex_noise_force_at_particles"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11816,6 +12000,7 @@
       "type_id": "node.simplex_per_instance"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -11921,6 +12106,7 @@
       "type_id": "node.sin_term"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.watercolor"
@@ -11983,6 +12169,7 @@
       "type_id": "node.slope_displace"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12028,6 +12215,7 @@
       "type_id": "node.smoothing"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12083,6 +12271,7 @@
       "type_id": "node.smoothstep_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12138,6 +12327,7 @@
       "type_id": "node.texture_advect"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12170,6 +12360,7 @@
       "type_id": "node.texture_dimensions"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12225,6 +12416,7 @@
       "type_id": "node.texture_sum_5"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12270,6 +12462,7 @@
       "type_id": "node.threshold"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12349,6 +12542,7 @@
       "type_id": "node.tone_map"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12439,6 +12633,7 @@
       "type_id": "node.torus_wrap_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12489,6 +12684,7 @@
       "type_id": "node.track_persist"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12534,6 +12730,7 @@
       "type_id": "node.triangulate_grid"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12614,6 +12811,7 @@
       "type_id": "node.trig_texture"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12659,6 +12857,7 @@
       "type_id": "node.trigger_ease_to"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "NestedCubes"
@@ -12697,6 +12896,7 @@
       "type_id": "node.trigger_gate"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12837,6 +13037,7 @@
       "type_id": "node.unlit_material"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -12887,6 +13088,7 @@
       "type_id": "node.uv_displace_by_flow"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -12905,6 +13107,7 @@
       "type_id": "node.uv_field"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.edge_stretch"
@@ -12953,6 +13156,7 @@
       "type_id": "node.uv_strip_clamp"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -12978,6 +13182,7 @@
       "type_id": "node.value"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "preset.effect.stylized_feedback",
@@ -13062,6 +13267,7 @@
       "type_id": "node.vignette"
     },
     {
+      "aliases": [],
       "category": "Noise",
       "examples": [],
       "inputs": [
@@ -13161,6 +13367,7 @@
       "type_id": "node.voronoi_2d"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -13241,6 +13448,7 @@
       "type_id": "node.watercolor"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [
         "composite.bloom",
@@ -13290,6 +13498,7 @@
       "type_id": "node.wet_dry"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -13321,6 +13530,7 @@
       "type_id": "node.wgsl_compute"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -13489,6 +13699,7 @@
       "type_id": "node.wireframe_depth"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -13529,6 +13740,7 @@
       "type_id": "node.wrap_particles_torus"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [
@@ -13548,6 +13760,7 @@
       "type_id": "system.final_output"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],
@@ -13633,6 +13846,7 @@
       "type_id": "system.generator_input"
     },
     {
+      "aliases": [],
       "category": "Uncategorized",
       "examples": [],
       "inputs": [],

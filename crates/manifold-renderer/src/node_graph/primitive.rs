@@ -525,6 +525,7 @@ macro_rules! primitive {
         $( summary: $summary:literal, )?
         $( category: $cat:ident, )?
         $( role: $role:ident, )?
+        $( aliases: [ $($alias:literal),* $(,)? ], )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -603,6 +604,7 @@ macro_rules! primitive {
                 summary: $crate::__primitive_desc_summary!($( $summary )?),
                 category: $crate::__primitive_desc_category!($( $cat )?),
                 role: $crate::__primitive_desc_role!($( $role )?),
+                aliases: &[ $( $( $alias ),* )? ],
                 examples: &[ $( $( $ex ),* )? ],
             }
         }
