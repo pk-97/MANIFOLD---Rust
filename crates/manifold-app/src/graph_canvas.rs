@@ -29,6 +29,10 @@ const NODE_HEADER_HEIGHT: f32 = 22.0;
 /// their face so you read (and, in a later pass, tune) them where you are,
 /// instead of darting to a side panel.
 const PARAM_ROW_H: f32 = 18.0;
+/// Pixels of horizontal drag that scrub a value across its full min..max
+/// range when editing a param on the node face. Matches the inspector
+/// sidebar's feel (`DRAG_FULL_RANGE_PX`).
+const PARAM_SCRUB_FULL_RANGE_PX: f32 = 240.0;
 const PORT_ROW_HEIGHT: f32 = 18.0;
 const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
@@ -170,12 +174,29 @@ impl NodeView {
 /// content/UI snapshot boundary.
 #[derive(Debug, Clone)]
 struct ParamView {
+    /// Inner-param name, used as `param_name` when a scrub emits
+    /// `SetGraphNodeParam`.
+    name: String,
     label: String,
     value: String,
     /// `Some(0..1)` position of the current value within its declared
     /// range, for the fill bar. `None` for params with no numeric range
     /// (enums, bools, triggers, or floats whose ParamDef declared none).
     fill: Option<f32>,
+    /// Scrub metadata for in-place editing. `Some` only for numeric params
+    /// (Float/Angle/Frequency/Int) that declared a range — those can be
+    /// dragged on the node face. `None` params stay read-only on the canvas
+    /// (still editable via the inspector sidebar).
+    scrub: Option<ScrubInfo>,
+}
+
+/// What a draggable on-node param needs to turn a horizontal drag into a
+/// new value: its range, the value at press time, and whether to round.
+#[derive(Debug, Clone, Copy)]
+struct ScrubInfo {
+    range: (f32, f32),
+    current_value: f32,
+    is_int: bool,
 }
 
 /// Format one parameter snapshot for on-node display: a short value string
@@ -217,10 +238,23 @@ fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> Pa
         }),
         _ => None,
     };
+    let scrub = match p.kind {
+        ParamSnapshotKind::Float
+        | ParamSnapshotKind::Angle
+        | ParamSnapshotKind::Frequency
+        | ParamSnapshotKind::Int => p.range.map(|(lo, hi)| ScrubInfo {
+            range: (lo, hi),
+            current_value: p.current_value,
+            is_int: matches!(p.kind, ParamSnapshotKind::Int),
+        }),
+        _ => None,
+    };
     ParamView {
+        name: p.name.clone(),
         label: p.label.clone(),
         value,
         fill,
+        scrub,
     }
 }
 
@@ -282,6 +316,19 @@ enum DragMode {
         anchor_offset: (f32, f32),
         #[allow(dead_code)]
         start_pos: (f32, f32),
+    },
+    /// Scrubbing a numeric param on a node's face. Cumulative pixel delta
+    /// from `press_origin_x` maps to a value delta over
+    /// `PARAM_SCRUB_FULL_RANGE_PX`, anchored on `start_value` so a long
+    /// drag doesn't accumulate float error. Emits `SetGraphNodeParam` each
+    /// pointer move, matching the inspector sidebar.
+    ParamScrub {
+        node_id: u32,
+        param_name: String,
+        range: (f32, f32),
+        start_value: f32,
+        is_int: bool,
+        press_origin_x: f32,
     },
 }
 
@@ -603,6 +650,32 @@ impl GraphCanvas {
         None
     }
 
+    /// Hit-test which on-node param row (if any) is under the cursor,
+    /// returning `(node_id, param_index)`. Works in screen space to match
+    /// `draw_node`'s row layout exactly. Skips collapsed and param-less
+    /// nodes, and walks topmost-first so overlapping nodes resolve like the
+    /// draw order.
+    fn param_row_under(&self, viewport: Rect, sx: f32, sy: f32) -> Option<(u32, usize)> {
+        let header_h = NODE_HEADER_HEIGHT * self.zoom;
+        let row_h = PARAM_ROW_H * self.zoom;
+        let sw = NODE_WIDTH * self.zoom;
+        for node in self.nodes.iter().rev() {
+            if node.collapsed || node.params.is_empty() {
+                continue;
+            }
+            let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+            let block_top = ny + header_h;
+            let block_bottom = block_top + node.params.len() as f32 * row_h;
+            if sx >= nx && sx <= nx + sw && sy >= block_top && sy < block_bottom {
+                let idx = ((sy - block_top) / row_h) as usize;
+                if idx < node.params.len() {
+                    return Some((node.id, idx));
+                }
+            }
+        }
+        None
+    }
+
     /// Hit-test ports near the cursor. Searches all output then input
     /// ports of every node, returning the first within `PORT_HIT_RADIUS`
     /// graph-space units of the cursor. Outputs take priority over
@@ -664,6 +737,35 @@ impl GraphCanvas {
             }
             DragMode::WireFrom { .. } => {
                 // Cursor position is enough — render reads `self.cursor`.
+            }
+            DragMode::ParamScrub {
+                node_id,
+                param_name,
+                range,
+                start_value,
+                is_int,
+                press_origin_x,
+            } => {
+                let node_id = *node_id;
+                let param_name = param_name.clone();
+                let (min, max) = *range;
+                let start_value = *start_value;
+                let is_int = *is_int;
+                let press_origin_x = *press_origin_x;
+                let span = (max - min).max(f32::EPSILON);
+                let delta_px = sx - press_origin_x;
+                let mut v =
+                    (start_value + delta_px * (span / PARAM_SCRUB_FULL_RANGE_PX)).clamp(min, max);
+                if is_int {
+                    v = v.round();
+                }
+                self.pending_actions.push(PanelAction::SetGraphNodeParam {
+                    node_id,
+                    param_name,
+                    new_value: manifold_core::effect_graph_def::SerializedParamValue::Float {
+                        value: v,
+                    },
+                });
             }
             DragMode::None => {
                 self.hovered = self.node_under(viewport, sx, sy);
@@ -751,6 +853,30 @@ impl GraphCanvas {
             }
             return;
         }
+        // Param row on the node face → start a value scrub for numeric
+        // params with a range; for non-scrubbable params just select the
+        // node so the inspector sidebar can edit them.
+        if let Some((node_id, pi)) = self.param_row_under(viewport, sx, sy) {
+            let info = self
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .and_then(|n| n.params.get(pi).map(|p| (p.name.clone(), p.scrub)));
+            if let Some((param_name, scrub)) = info {
+                self.selected = Some(node_id);
+                if let Some(s) = scrub {
+                    self.drag_mode = DragMode::ParamScrub {
+                        node_id,
+                        param_name,
+                        range: s.range,
+                        start_value: s.current_value,
+                        is_int: s.is_int,
+                        press_origin_x: sx,
+                    };
+                }
+                return;
+            }
+        }
         if let Some(node_id) = self.header_under(viewport, sx, sy) {
             self.selected = Some(node_id);
             let (gx, gy) = self.to_graph(viewport, sx, sy);
@@ -807,6 +933,9 @@ impl GraphCanvas {
                     });
                 }
             }
+            // The scrub emitted its value on each pointer move; nothing to
+            // finalize on release.
+            DragMode::ParamScrub { .. } => {}
         }
     }
 
