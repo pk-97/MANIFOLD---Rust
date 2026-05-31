@@ -73,6 +73,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The value coming in to rescale.",
           "type": "float"
         },
         {
@@ -83,6 +84,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Multiplies the value. Set it negative to flip the signal.",
           "type": "float"
         },
         {
@@ -93,6 +95,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Adds to the value after scaling, shifting its range.",
           "type": "float"
         }
       ],
@@ -1056,6 +1059,7 @@
             "0",
             "9"
           ],
+          "tooltip": "How often the gate fires, as a note division of the beat.",
           "type": "enum"
         },
         {
@@ -1066,6 +1070,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The value output while the gate is on. Off is always 0.",
           "type": "float"
         },
         {
@@ -1076,6 +1081,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much of each cycle the gate stays on, from a short blip to nearly always on.",
           "type": "float"
         },
         {
@@ -1086,6 +1092,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Shifts where in the beat the gate fires.",
           "type": "float"
         }
       ],
@@ -1129,6 +1136,7 @@
             "0.0625",
             "16"
           ],
+          "tooltip": "How many times the ramp rises and resets per beat.",
           "type": "float"
         },
         {
@@ -1139,6 +1147,7 @@
             "0.001",
             "1"
           ],
+          "tooltip": "How quickly the ramp climbs at the start of each cycle. Lower is a sharper snap up.",
           "type": "float"
         }
       ],
@@ -2997,6 +3006,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How hard to duck the gain when the input is loud. Higher squeezes more.",
           "type": "float"
         },
         {
@@ -3007,6 +3017,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How quickly the envelope reacts to changes in the input level.",
           "type": "float"
         },
         {
@@ -3017,6 +3028,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The level the compressor aims to hold the signal at.",
           "type": "float"
         }
       ],
@@ -4477,6 +4489,7 @@
             "0",
             "60"
           ],
+          "tooltip": "How fast the envelope fades after each trigger. Higher decays quicker.",
           "type": "float"
         }
       ],
@@ -4533,6 +4546,7 @@
             "0",
             "5"
           ],
+          "tooltip": "How fast the envelope rises when the input gets louder, in seconds.",
           "type": "float"
         },
         {
@@ -4543,6 +4557,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How fast it falls when the input gets quieter, in seconds.",
           "type": "float"
         }
       ],
@@ -5436,6 +5451,7 @@
             "0",
             "9"
           ],
+          "tooltip": "Picks a ratio from the table of musical intervals. Each step is a different X-to-Y relationship.",
           "type": "int"
         }
       ],
@@ -8134,6 +8150,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The first value in.",
           "type": "float"
         },
         {
@@ -8144,6 +8161,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The second value in.",
           "type": "float"
         },
         {
@@ -8170,6 +8188,7 @@
             "0",
             "13"
           ],
+          "tooltip": "What to do with the two values, like add, multiply, min, or max.",
           "type": "enum"
         }
       ],
@@ -8849,6 +8868,7 @@
             "0.01",
             "10"
           ],
+          "tooltip": "How much to smooth when the signal is still. Lower is smoother but laggier at rest.",
           "type": "float"
         },
         {
@@ -8859,6 +8879,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How much to ease off the smoothing as the signal moves faster. Higher keeps fast moves crisp.",
           "type": "float"
         },
         {
@@ -8869,6 +8890,7 @@
             "0.1",
             "10"
           ],
+          "tooltip": "Smoothing on the speed estimate itself. Usually left alone.",
           "type": "float"
         }
       ],
@@ -13041,6 +13063,7 @@
             "0.001",
             "2"
           ],
+          "tooltip": "How long the smoothing takes to settle, in seconds. Higher is smoother and slower to react.",
           "type": "float"
         }
       ],
@@ -14091,6 +14114,7 @@
           "default": "0",
           "label": "Value",
           "name": "value",
+          "tooltip": "The constant number this outputs. Set it by hand or expose it to drive from outside.",
           "type": "float"
         }
       ],

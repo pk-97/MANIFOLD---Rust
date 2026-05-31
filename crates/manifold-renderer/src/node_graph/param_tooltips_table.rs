@@ -133,3 +133,62 @@ crate::param_tooltips!("node.voronoi_2d", {
     "jitter" => "How irregular the cells are. At 0 you get a perfect grid, at 1 they scatter into random shapes.",
     "out_scale" => "Brightens or dims the result, handy for pushing the pattern into a usable range.",
 });
+
+// ─── Control ─────────────────────────────────────────────────────────
+
+crate::param_tooltips!("node.math", {
+    "a" => "The first value in.",
+    "b" => "The second value in.",
+    "op" => "What to do with the two values, like add, multiply, min, or max.",
+});
+
+crate::param_tooltips!("node.value", {
+    "value" => "The constant number this outputs. Set it by hand or expose it to drive from outside.",
+});
+
+crate::param_tooltips!("node.beat_gate", {
+    "rate" => "How often the gate fires, as a note division of the beat.",
+    "amount" => "The value output while the gate is on. Off is always 0.",
+    "duty" => "How much of each cycle the gate stays on, from a short blip to nearly always on.",
+    "phase" => "Shifts where in the beat the gate fires.",
+});
+
+crate::param_tooltips!("node.beat_ramp", {
+    "rate" => "How many times the ramp rises and resets per beat.",
+    "attack" => "How quickly the ramp climbs at the start of each cycle. Lower is a sharper snap up.",
+});
+
+crate::param_tooltips!("node.frequency_ratio", {
+    "index" => "Picks a ratio from the table of musical intervals. Each step is a different X-to-Y relationship.",
+});
+
+crate::param_tooltips!("node.one_euro_filter", {
+    "min_cutoff" => "How much to smooth when the signal is still. Lower is smoother but laggier at rest.",
+    "beta" => "How much to ease off the smoothing as the signal moves faster. Higher keeps fast moves crisp.",
+    "d_cutoff" => "Smoothing on the speed estimate itself. Usually left alone.",
+});
+
+crate::param_tooltips!("node.affine_scalar", {
+    "a" => "The value coming in to rescale.",
+    "scale" => "Multiplies the value. Set it negative to flip the signal.",
+    "offset" => "Adds to the value after scaling, shifting its range.",
+});
+
+crate::param_tooltips!("node.smoothing", {
+    "time_constant" => "How long the smoothing takes to settle, in seconds. Higher is smoother and slower to react.",
+});
+
+crate::param_tooltips!("node.envelope_decay", {
+    "decay_rate" => "How fast the envelope fades after each trigger. Higher decays quicker.",
+});
+
+crate::param_tooltips!("node.envelope_follower_ar", {
+    "attack" => "How fast the envelope rises when the input gets louder, in seconds.",
+    "release" => "How fast it falls when the input gets quieter, in seconds.",
+});
+
+crate::param_tooltips!("node.compressor_envelope", {
+    "ratio" => "How hard to duck the gain when the input is loud. Higher squeezes more.",
+    "sensitivity" => "How quickly the envelope reacts to changes in the input level.",
+    "target" => "The level the compressor aims to hold the signal at.",
+});
