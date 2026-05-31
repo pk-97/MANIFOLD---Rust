@@ -49,6 +49,11 @@ pub struct ParamInfo {
     pub max: f32,
     pub default: f32,
     pub whole_numbers: bool,
+    /// Angle presentation hint. Storage stays radians (drivers / Ableton /
+    /// envelopes write radians every frame, unchanged); the slider value cell
+    /// displays and reads back DEGREES, converting only at the text boundary.
+    /// Mirrors `whole_numbers` as a display-only flag. See `ParamType::Angle`.
+    pub is_angle: bool,
     /// Whether this slot is exposed as a slider on the card. `false` hides the
     /// slider widget while preserving slot-index semantics (drivers / Ableton
     /// mappings keep working — just no visible slider). Defaults to `true`.
@@ -1471,6 +1476,7 @@ impl ParamCardPanel {
                         val,
                         info.min,
                         info.whole_numbers,
+                        info.is_angle,
                         info.value_labels.as_deref(),
                     );
                     BitmapSlider::update_value(tree, ids, norm, &text);
@@ -1529,6 +1535,7 @@ impl ParamCardPanel {
                         val,
                         info.min,
                         info.whole_numbers,
+                        info.is_angle,
                         info.value_labels.as_deref(),
                     );
                     BitmapSlider::update_value(tree, ids, norm, &text);
@@ -2483,6 +2490,7 @@ impl ParamCardPanel {
                     val,
                     info.min,
                     info.whole_numbers,
+                    info.is_angle,
                     info.value_labels.as_deref(),
                 );
                 BitmapSlider::update_value(tree, ids, display_norm, &text);
@@ -2656,6 +2664,7 @@ mod tests {
                     max: 100.0,
                     default: 10.0,
                     whole_numbers: true,
+                    is_angle: false,
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
@@ -2671,6 +2680,7 @@ mod tests {
                     max: 1.0,
                     default: 0.5,
                     whole_numbers: false,
+                    is_angle: false,
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
@@ -2843,6 +2853,7 @@ mod tests {
                     max: 10.0,
                     default: 1.0,
                     whole_numbers: false,
+                    is_angle: false,
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
@@ -2858,6 +2869,7 @@ mod tests {
                     max: 1.0,
                     default: 0.0,
                     whole_numbers: false,
+                    is_angle: false,
                     exposed: true,
                     is_toggle: true,
                     is_trigger: false,
@@ -2873,6 +2885,7 @@ mod tests {
                     max: 5.0,
                     default: 1.0,
                     whole_numbers: false,
+                    is_angle: false,
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,

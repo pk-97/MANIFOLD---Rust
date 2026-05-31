@@ -49,6 +49,7 @@ fn meta_for_uv_translate() -> InnerParamMeta {
         max: 1.0,
         default_value: 0.0,
         convert: ParamConvert::Float,
+        is_angle: false,
     }
 }
 

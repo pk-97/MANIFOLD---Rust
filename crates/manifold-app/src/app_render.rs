@@ -695,6 +695,7 @@ impl Application {
                     max,
                     default_value,
                     convert,
+                    is_angle,
                 } => {
                     if let (Some(target), Some(default)) = (
                         self.watched_graph_target.as_ref(),
@@ -712,6 +713,7 @@ impl Application {
                                 *max,
                                 *default_value,
                                 *convert,
+                                *is_angle,
                             );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }

@@ -234,6 +234,10 @@ pub enum PanelAction {
         max: f32,
         default_value: f32,
         convert: manifold_core::effects::ParamConvert,
+        /// Angle presentation hint, from the inner param's
+        /// `GraphEditorParamKind::Angle`. Carried onto the appended
+        /// `UserParamBinding` so the card slider shows degrees.
+        is_angle: bool,
     },
 
     // ── Graph editor mutations (Phase 4) ──────────────────────────────

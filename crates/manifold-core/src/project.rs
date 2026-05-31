@@ -1149,6 +1149,7 @@ mod tests {
             max: 1.0,
             default_value: 0.0,
             convert: crate::effects::ParamConvert::Float,
+            is_angle: false,
         }
     }
 

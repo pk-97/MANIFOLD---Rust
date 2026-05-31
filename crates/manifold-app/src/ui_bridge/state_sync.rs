@@ -1232,6 +1232,11 @@ fn effects_to_configs(
                         max: pd.max,
                         default: pd.default_value,
                         whole_numbers: pd.whole_numbers,
+                        // Static-tier params don't carry an angle hint today
+                        // (no shipped preset exposes a raw angle at the top
+                        // level). Angle degree display rides the user-tier
+                        // binding below.
+                        is_angle: false,
                         // Hide the slider when the slot has been
                         // unchecked in the editor sidebar. Slot index
                         // `pi` aligns 1:1 with `fx.param_values[pi]`.
@@ -1279,6 +1284,10 @@ fn effects_to_configs(
                         manifold_core::effects::ParamConvert::IntRound
                             | manifold_core::effects::ParamConvert::EnumRound
                     ),
+                    // Angle hint captured at expose time from the inner
+                    // param's ParamType::Angle. Card slider shows degrees;
+                    // stored value stays radians.
+                    is_angle: ub.is_angle,
                     // User-tail bindings are exposed by definition — they
                     // exist on `user_param_bindings` because the user
                     // ticked their checkbox. Unchecking removes the
@@ -1532,6 +1541,10 @@ fn gen_params_to_config(
                             max: pd.max,
                             default: pd.default_value,
                             whole_numbers: pd.whole_numbers,
+                            // Generator-tier angle degree display is a
+                            // follow-up: the graph-metadata param has no
+                            // angle hint yet, so radians would show here.
+                            is_angle: false,
                             // Generators carry `exposed` since the ParamSlot
                             // storage unification; the graph-metadata params
                             // are all visible sliders today.
@@ -1587,6 +1600,10 @@ fn gen_params_to_config(
                             max: pd.max,
                             default: pd.default_value,
                             whole_numbers: pd.whole_numbers,
+                            // Generator-tier angle degree display is a
+                            // follow-up: the graph-metadata param has no
+                            // angle hint yet, so radians would show here.
+                            is_angle: false,
                             exposed: true,
                             is_toggle: pd.is_toggle,
                             is_trigger: pd.is_trigger,

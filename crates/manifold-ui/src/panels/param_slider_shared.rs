@@ -258,13 +258,17 @@ pub(crate) fn format_param_value(
     val: f32,
     min: f32,
     whole_numbers: bool,
+    is_angle: bool,
     value_labels: Option<&[String]>,
 ) -> String {
     if let Some(labels) = value_labels {
         let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
         return labels[idx].clone();
     }
-    if whole_numbers {
+    if is_angle {
+        // `val` is radians; the user always sees and edits degrees.
+        format!("{:.0}°", val.to_degrees())
+    } else if whole_numbers {
         format!("{}", val.round() as i32)
     } else {
         format!("{:.2}", val)
@@ -1178,6 +1182,7 @@ pub(crate) fn build_param_row(
         info.default,
         info.min,
         info.whole_numbers,
+        info.is_angle,
         info.value_labels.as_deref(),
     );
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);

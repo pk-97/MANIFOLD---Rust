@@ -248,6 +248,16 @@ pub struct UserParamBinding {
     /// StylizedFeedback).
     #[serde(default)]
     pub convert: ParamConvert,
+    /// Angle presentation hint, captured from the inner param's
+    /// `ParamType::Angle` at expose time. Display-only: the stored value
+    /// stays RADIANS (drivers / Ableton / envelopes write radians every
+    /// frame, unchanged), and the card slider converts to DEGREES only at
+    /// the text boundary. `ParamConvert::Float` cannot carry this because
+    /// angle and plain-float share it, so it rides its own flag.
+    /// `serde(default)` keeps pre-existing projects loading; the post-load
+    /// alignment pass backfills it from the registry.
+    #[serde(default)]
+    pub is_angle: bool,
 }
 
 // ─── Param Value (per-slot state) ───
@@ -2734,6 +2744,7 @@ mod tests {
             max: 1.0,
             default_value: 0.25,
             convert: ParamConvert::Float,
+            is_angle: false,
         }
     }
 
@@ -2973,6 +2984,7 @@ mod tests {
             max: 2.0,
             default_value: 0.0,
             convert: ParamConvert::Float,
+            is_angle: false,
         });
         let pd = ParamSource::get_param_def(&fx, 1);
         assert_eq!(pd.id, "user.uv.translate.1");

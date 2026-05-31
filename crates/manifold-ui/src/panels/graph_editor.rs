@@ -780,6 +780,7 @@ impl GraphEditorPanel {
                             max: *max,
                             default_value: *default_value,
                             convert: *convert,
+                            is_angle: matches!(*kind, GraphEditorParamKind::Angle),
                         }];
                     }
                     if value_cell_node_id.map(|v| v == node_id).unwrap_or(false) {
@@ -1161,6 +1162,7 @@ mod tests {
                 max,
                 default_value,
                 convert,
+                is_angle,
             } => {
                 assert_eq!(node_handle, "uv_transform");
                 assert_eq!(inner_param, "translate");
@@ -1170,6 +1172,7 @@ mod tests {
                 assert!((*max - 1.0).abs() < f32::EPSILON);
                 assert!((*default_value - 0.0).abs() < f32::EPSILON);
                 assert!(matches!(convert, ParamConvert::Float));
+                assert!(!*is_angle);
             }
             other => panic!("unexpected action: {other:?}"),
         }

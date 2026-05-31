@@ -791,6 +791,7 @@ mod tests {
             max: 1.1,
             default_value: 0.95,
             convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: false,
         };
         let rb = ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0)
             .expect("user binding hydrates");
@@ -817,6 +818,7 @@ mod tests {
             max: 1.0,
             default_value: 0.5,
             convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: false,
         };
         let handles: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_user(&core, &g, &handles, 0).is_none());
@@ -835,6 +837,7 @@ mod tests {
             max: 1.0,
             default_value: 0.5,
             convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: false,
         };
         assert!(ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0).is_none());
     }
@@ -998,6 +1001,7 @@ mod tests {
             max: 1.1,
             default_value: 0.95,
             convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: false,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1029,6 +1033,7 @@ mod tests {
             max: 1.1,
             default_value: 0.97,
             convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: false,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1060,6 +1065,7 @@ mod tests {
             max: 1.1,
             default_value: 0.95,
             convert: manifold_core::effects::ParamConvert::Float,
+            is_angle: false,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];

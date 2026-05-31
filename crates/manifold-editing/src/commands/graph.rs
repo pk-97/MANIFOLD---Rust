@@ -715,6 +715,11 @@ pub struct ToggleNodeParamExposeCommand {
     /// `UserParamBinding` — the binding needs label/min/max/default/
     /// convert to be well-formed. Generators ignore this.
     inner_meta: Option<manifold_core::effects::ParamConvert>,
+    /// Angle presentation hint for the inner param, captured at panel-build
+    /// time from `ParamType::Angle`. Flows onto the appended
+    /// `UserParamBinding` so the card slider shows degrees. Display-only —
+    /// storage stays radians.
+    inner_is_angle: bool,
     /// Display label for the user binding (effect-side only).
     inner_label: String,
     inner_min: f32,
@@ -904,6 +909,7 @@ impl ToggleNodeParamExposeCommand {
         inner_max: f32,
         inner_default: f32,
         inner_convert: manifold_core::effects::ParamConvert,
+        inner_is_angle: bool,
     ) -> Self {
         Self {
             target,
@@ -912,6 +918,7 @@ impl ToggleNodeParamExposeCommand {
             expose,
             catalog_default,
             inner_meta: Some(inner_convert),
+            inner_is_angle,
             inner_label,
             inner_min,
             inner_max,
@@ -1044,6 +1051,7 @@ impl Command for ToggleNodeParamExposeCommand {
         let inner_max = self.inner_max;
         let inner_default = self.inner_default;
         let inner_convert = self.inner_meta.unwrap_or(manifold_core::effects::ParamConvert::Float);
+        let inner_is_angle = self.inner_is_angle;
 
         // Graph-side write — for Effect targets, capture the
         // static-block slot so the effect-side mirror knows whether
@@ -1111,6 +1119,7 @@ impl Command for ToggleNodeParamExposeCommand {
                     inner_max,
                     inner_default,
                     inner_convert,
+                    inner_is_angle,
                 );
 
                 // Envelope orphan cleanup. Only matters when the
@@ -1286,6 +1295,7 @@ fn mirror_effect_side(
     inner_max: f32,
     inner_default: f32,
     inner_convert: manifold_core::effects::ParamConvert,
+    inner_is_angle: bool,
 ) -> EffectMirrorReverse {
     use manifold_core::effects::{ParamSlot, UserParamBinding};
 
@@ -1326,6 +1336,7 @@ fn mirror_effect_side(
             max: inner_max,
             default_value: inner_default,
             convert: inner_convert,
+            is_angle: inner_is_angle,
         };
         effect.append_user_binding(binding);
         EffectMirrorReverse::AppendedUserBinding {
@@ -2432,6 +2443,7 @@ mod tests {
             180.0,
             0.0,
             manifold_core::effects::ParamConvert::Float,
+            false,
         );
 
         cmd.execute(&mut project);
@@ -2600,6 +2612,7 @@ mod tests {
             1.0,
             0.0,
             ParamConvert::BoolThreshold,
+            false,
         );
         expose.execute(&mut project);
 
@@ -2858,6 +2871,7 @@ mod tests {
             1.0,
             0.0,
             ParamConvert::BoolThreshold,
+            false,
         );
         unexpose.execute(&mut project);
 
@@ -2943,6 +2957,7 @@ mod tests {
             180.0,
             0.0,
             ParamConvert::Float,
+            false,
         );
         expose.execute(&mut project);
 
@@ -3002,6 +3017,7 @@ mod tests {
             180.0,
             0.0,
             ParamConvert::Float,
+            false,
         );
         unexpose.execute(&mut project);
 
@@ -3071,6 +3087,7 @@ mod tests {
             180.0,
             0.0,
             ParamConvert::Float,
+            false,
         );
         expose.execute(&mut project);
 
@@ -3105,6 +3122,7 @@ mod tests {
             180.0,
             0.0,
             ParamConvert::Float,
+            false,
         );
         unexpose.execute(&mut project);
 
@@ -3223,6 +3241,7 @@ mod tests {
             7.0,
             0.0,
             ParamConvert::EnumRound,
+            false,
         );
         cmd.execute(&mut project);
 
@@ -3279,6 +3298,7 @@ mod tests {
             180.0,
             0.0,
             manifold_core::effects::ParamConvert::Float,
+            false,
         );
 
         cmd.execute(&mut project);

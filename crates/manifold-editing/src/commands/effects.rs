@@ -318,6 +318,9 @@ pub struct InnerParamMeta {
     pub max: f32,
     pub default_value: f32,
     pub convert: ParamConvert,
+    /// Angle presentation hint (from `ParamType::Angle`). Display-only;
+    /// flows onto the appended `UserParamBinding` so the card shows degrees.
+    pub is_angle: bool,
 }
 
 /// Generate the canonical user-binding id for a given inner-node
@@ -481,6 +484,7 @@ impl Command for ToggleEffectParamExposeCommand {
                     max: meta.max,
                     default_value: meta.default_value,
                     convert: meta.convert,
+                    is_angle: meta.is_angle,
                 };
                 effect.append_user_binding(binding);
                 ReverseState::Exposed { user_param_id: id }
