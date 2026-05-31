@@ -77,6 +77,10 @@ crate::primitive! {
     ],
     composition_notes: "Output mask is written to all RGB channels so it's visible as grayscale in the editor; downstream `masked_mix` reads only `.r`. Tolerance is the RGB Euclidean distance threshold — values above ~0.5 already select most of typical imagery.",
     examples: [],
+    summary: "Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background.",
+    category: Mask,
+    role: Filter,
+    aliases: ["chroma key", "green screen", "keying", "Chroma Key TOP"],
 }
 
 #[repr(C)]

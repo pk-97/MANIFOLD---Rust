@@ -81,7 +81,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.cylinder_wrap_field` | Cylinder Wrap Field | 3D Geometry | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | `node.depth_estimate_midas` | Depth Map | Detection & Sampling | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
 | `node.diffuse_force_3d_at_particles` | Spread Out (3D diffuse) | Particles 3D | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
-| `node.digital_plants_render` | Digital Plants Render | — | — | Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-… |
+| `node.digital_plants_render` | Digital Plants Render | 3D Geometry | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
 | `node.displace_mesh` | Push Mesh | 3D Geometry | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | `node.distance_to_point` | Distance to Point | Fields & Coordinates | Source | Outputs how far each pixel is from a chosen point, bright far away and dark near it. A radial gradient you build circle masks and ripples from. |
 | `node.dither` | Dither | Color & Tone | Filter | Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look. |
@@ -136,7 +136,7 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 | `node.mux_scalar` | Switch (value) | Routing | Filter | Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live. |
 | `node.mux_texture` | Switch (texture) | Routing | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
 | `node.neighbor_smooth` | Smooth (neighbors) | Fields & Coordinates | Filter | Averages each point with its neighbours on a grid, smoothing out a bumpy field of values or positions. |
-| `node.nested_cubes_geometry` | Nested Cubes Geometry | — | — | Render a 5-instance gap-face cube field with EMA-smoothed per-instance Y rotation, per-face scatter, and a per-face envelope-driven kick on each trigger. |
+| `node.nested_cubes_geometry` | Nested Cubes Geometry | 3D Geometry | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | `node.normalize_vec2` | Normalize | Math & Convert | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | `node.optical_flow_estimate` | Optical Flow | Detection & Sampling | Filter | Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion. |
 | `node.pack_channels` | Pack RGBA | Math & Convert | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
@@ -244,16 +244,16 @@ _Generated from the node registry — do not hand-edit. 203 nodes registered. `c
 
 | type_id | label | category | role | summary |
 |---|---|---|---|---|
-| `node.affine_transform` | — | — | — | 2D UV affine: translate, scale, rotate around the center. |
-| `node.chroma_key` | — | — | — | Produce a per-pixel mask describing how close each pixel is to a target colour (RGB Euclidean distance, soft falloff at the tolerance edge). |
-| `node.color_lut` | — | — | — | 1D LUT remap: sample a W×1 LUT texture indexed by BT.601 luminance (with contrast adjust), then crossfade against the source. |
-| `node.edge_detect` | — | — | — | Sobel 3×3 edge detection with smoothstep threshold, crossfaded against the source by amount. |
-| `node.fluid_project_scatter_2d` | — | — | — | Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path); retained so older projects load. |
-| `node.invert` | — | — | — | Inverts RGB channels and blends against the source by intensity. |
-| `node.masked_mix` | — | — | — | Per-pixel blend of two textures, weighted by a third texture's red channel. |
-| `node.rotate_vec2_90` | — | — | — | Rotate the RG vec2 field by 90°. |
-| `node.watercolor` | — | — | — | Pixel-exact wrap of the legacy WatercolorFX composite — seven sequential passes (grain+max → flow → displacement → diffusion blur → slope displace → luma blur … |
-| `node.wireframe_depth` | — | — | — | Wraps the legacy WireframeDepthFX 15-pass pipeline (MiDaS depth DNN + optional optical flow + mesh pyramid) as a monolithic primitive — too tightly state-coupl… |
+| `node.affine_transform` | — | Distort & Warp | Filter | Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer. |
+| `node.chroma_key` | — | Mask | Filter | Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background. |
+| `node.color_lut` | — | Color & Tone | Filter | Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes. |
+| `node.edge_detect` | — | Stylize | Filter | Finds the edges in the image and draws them as bright lines on dark, a Sobel outline. Crossfade it back over the source for a sketch look. |
+| `node.fluid_project_scatter_2d` | — | Particles 3D | Filter | Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera). |
+| `node.invert` | — | Color & Tone | Filter | Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert. |
+| `node.masked_mix` | — | Composite | Filter | Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node. |
+| `node.rotate_vec2_90` | — | Fields & Coordinates | Map | Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector. |
+| `node.watercolor` | — | Stylize | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
+| `node.wireframe_depth` | — | Stylize | Filter | A wireframe overlay driven by AI depth, drawing a mesh that follows the shape of whatever is in frame. A legacy bundle still being decomposed. |
 | `system.final_output` | — | — | — | Output boundary for both effect chains and generators — the host pre-binds the final output texture here. |
 | `system.generator_input` | — | — | — | Generator graph entry boundary — emits the per-frame scalar context: time, beat, aspect, trigger_count, anim_progress. |
 | `system.source` | — | — | — | Effect-chain input boundary — the host pre-binds the upstream texture here. |

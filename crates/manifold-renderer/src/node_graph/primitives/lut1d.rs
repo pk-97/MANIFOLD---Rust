@@ -51,6 +51,10 @@ crate::primitive! {
     ],
     composition_notes: "1:1 building block for the legacy Infrared effect. The lut input is a W×1 Rgba16Float texture covering luminance [0, 2.0]; the Infrared preset graph supplies pre-baked palette textures.",
     examples: ["preset.effect.infrared"],
+    summary: "Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["lut", "lookup", "palette", "Lookup TOP"],
 }
 
 #[repr(C)]

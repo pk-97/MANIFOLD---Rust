@@ -53,6 +53,10 @@ crate::primitive! {
     ],
     composition_notes: "Fused composite primitive — Sobel + smoothstep-threshold in one pass. Will split into atomic Sobel3 + Threshold when the fusion compiler can preserve bit-exact parity. 1:1 replacement for legacy EdgeDetect; the legacy mode param (Laplacian/Frei-Chen) was never wired to the shader and is dropped.",
     examples: ["preset.effect.edge_detect"],
+    summary: "Finds the edges in the image and draws them as bright lines on dark, a Sobel outline. Crossfade it back over the source for a sketch look.",
+    category: Stylize,
+    role: Filter,
+    aliases: ["edge detect", "sobel", "outline", "Edge TOP"],
 }
 
 #[repr(C)]

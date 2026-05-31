@@ -103,8 +103,12 @@
       "type_id": "node.affine_scalar"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "transform",
+        "move scale rotate",
+        "Transform TOP"
+      ],
+      "category": "Distort & Warp",
       "examples": [
         "preset.effect.transform"
       ],
@@ -185,9 +189,9 @@
         }
       ],
       "purpose": "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. Every affine param has a same-named scalar input port (port-shadows-param) — wire `translate_x`, `translate_y`, or `rotation` to drive the transform from a control producer (LFO, Color Compass, Math, …).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer.",
       "type_id": "node.affine_transform"
     },
     {
@@ -2408,8 +2412,13 @@
       "type_id": "node.checkerboard"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "chroma key",
+        "green screen",
+        "keying",
+        "Chroma Key TOP"
+      ],
+      "category": "Mask",
       "examples": [],
       "inputs": [
         {
@@ -2468,9 +2477,9 @@
         }
       ],
       "purpose": "Produce a per-pixel mask describing how close each pixel is to a target colour (RGB Euclidean distance, soft falloff at the tolerance edge). Pairs with `masked_mix` to make any effect operate selectively on a chosen colour range.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background.",
       "type_id": "node.chroma_key"
     },
     {
@@ -2675,8 +2684,13 @@
       "type_id": "node.clip_trigger_index"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "lut",
+        "lookup",
+        "palette",
+        "Lookup TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.infrared"
       ],
@@ -2722,9 +2736,9 @@
         }
       ],
       "purpose": "1D LUT remap: sample a W×1 LUT texture indexed by BT.601 luminance (with contrast adjust), then crossfade against the source. The Infrared preset graph supplies the LUT.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes.",
       "type_id": "node.color_lut"
     },
     {
@@ -3766,8 +3780,13 @@
       "type_id": "node.diffuse_force_3d_at_particles"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "digital plants",
+        "cubes",
+        "shadows",
+        "render"
+      ],
+      "category": "3D Geometry",
       "examples": [],
       "inputs": [
         {
@@ -3866,9 +3885,9 @@
         }
       ],
       "purpose": "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.generate_instance_transforms (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed.",
       "type_id": "node.digital_plants_render"
     },
     {
@@ -4188,8 +4207,13 @@
       "type_id": "node.downsample"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "edge detect",
+        "sobel",
+        "outline",
+        "Edge TOP"
+      ],
+      "category": "Stylize",
       "examples": [
         "preset.effect.edge_detect"
       ],
@@ -4230,9 +4254,9 @@
         }
       ],
       "purpose": "Sobel 3×3 edge detection with smoothstep threshold, crossfaded against the source by amount. Brightness-based; no glow — chain with Bloom or Halation for glow.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Finds the edges in the image and draws them as bright lines on dark, a Sobel outline. Crossfade it back over the source for a sketch look.",
       "type_id": "node.edge_detect"
     },
     {
@@ -5185,8 +5209,11 @@
       "type_id": "node.flow_field_noise"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "draw particles camera",
+        "project scatter"
+      ],
+      "category": "Particles 3D",
       "examples": [],
       "inputs": [
         {
@@ -5284,10 +5311,10 @@
           "type": "int"
         }
       ],
-      "purpose": "Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path); retained so older projects load.",
-      "role": "Unknown",
+      "purpose": "Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera).",
       "type_id": "node.fluid_project_scatter_2d"
     },
     {
@@ -7008,8 +7035,12 @@
       "type_id": "node.instance_rotation_jitter"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "invert",
+        "negative",
+        "Invert TOP"
+      ],
+      "category": "Color & Tone",
       "examples": [
         "preset.effect.invert"
       ],
@@ -7040,9 +7071,9 @@
         }
       ],
       "purpose": "Inverts RGB channels and blends against the source by intensity. Alpha is preserved.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert.",
       "type_id": "node.invert"
     },
     {
@@ -7895,8 +7926,12 @@
       "type_id": "node.luminance"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "masked mix",
+        "mask blend",
+        "composite"
+      ],
+      "category": "Composite",
       "examples": [
         "preset.effect.glitch"
       ],
@@ -7937,9 +7972,9 @@
         }
       ],
       "purpose": "Per-pixel blend of two textures, weighted by a third texture's red channel. The 'apply X only where Y' compositor: any threshold-style mask wired into `mask` selects where `b` overrides `a`. With no mask wired this behaves like `mix`.",
-      "role": "Unknown",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node.",
       "type_id": "node.masked_mix"
     },
     {
@@ -8593,8 +8628,12 @@
       "type_id": "node.neighbor_smooth"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "nested cubes",
+        "cubes",
+        "geometry"
+      ],
+      "category": "3D Geometry",
       "examples": [
         "NestedCubes"
       ],
@@ -8665,9 +8704,9 @@
         }
       ],
       "purpose": "Render a 5-instance gap-face cube field with EMA-smoothed per-instance Y rotation, per-face scatter, and a per-face envelope-driven kick on each trigger. Isometric orthographic camera. Target angles arrive on a port (Array<f32> length 5) so an upstream cycler or accumulator chooses the rotation behaviour; the kick envelope is internal state.",
-      "role": "Unknown",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "",
+      "summary": "Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms.",
       "type_id": "node.nested_cubes_geometry"
     },
     {
@@ -11215,8 +11254,12 @@
       "type_id": "node.rotate_4d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "rotate vector",
+        "90 degrees",
+        "turn"
+      ],
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
@@ -11249,10 +11292,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Rotate the RG vec2 field by 90°. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle); retained so older presets load.",
-      "role": "Unknown",
+      "purpose": "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle), retained so older presets load.",
+      "role": "Map",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector.",
       "type_id": "node.rotate_vec2_90"
     },
     {
@@ -14146,8 +14189,13 @@
       "type_id": "node.voronoi_2d"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "watercolor",
+        "paint",
+        "bleed",
+        "wet"
+      ],
+      "category": "Stylize",
       "examples": [],
       "inputs": [
         {
@@ -14220,10 +14268,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Pixel-exact wrap of the legacy WatercolorFX composite — seven sequential passes (grain+max → flow → displacement → diffusion blur → slope displace → luma blur with persistent feedback → wet/dry). Legacy bundle pending decomposition.",
-      "role": "Unknown",
+      "purpose": "Pixel-exact wrap of the legacy WatercolorFX composite. Seven sequential passes: grain+max, flow, displacement, diffusion blur, slope displace, luma blur with persistent feedback, wet/dry. Legacy bundle pending decomposition.",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomposed.",
       "type_id": "node.watercolor"
     },
     {
@@ -14319,8 +14367,12 @@
       "type_id": "node.wgsl_compute"
     },
     {
-      "aliases": [],
-      "category": "Uncategorized",
+      "aliases": [
+        "wireframe depth",
+        "depth wireframe",
+        "mesh overlay"
+      ],
+      "category": "Stylize",
       "examples": [],
       "inputs": [
         {
@@ -14481,10 +14533,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Wraps the legacy WireframeDepthFX 15-pass pipeline (MiDaS depth DNN + optional optical flow + mesh pyramid) as a monolithic primitive — too tightly state-coupled to decompose yet. WireframeDepthGraph decomposition in flight.",
-      "role": "Unknown",
+      "purpose": "Wraps the legacy WireframeDepthFX 15-pass pipeline (MiDaS depth DNN + optional optical flow + mesh pyramid) as a monolithic primitive, too tightly state-coupled to decompose yet. WireframeDepthGraph decomposition in flight.",
+      "role": "Filter",
       "stratum": "unlisted",
-      "summary": "",
+      "summary": "A wireframe overlay driven by AI depth, drawing a mesh that follows the shape of whatever is in frame. A legacy bundle still being decomposed.",
       "type_id": "node.wireframe_depth"
     },
     {

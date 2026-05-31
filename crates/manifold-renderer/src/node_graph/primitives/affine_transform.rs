@@ -72,6 +72,10 @@ crate::primitive! {
     ],
     composition_notes: "1:1 building block for the legacy Transform effect. Rotation is in DEGREES, screen-CW (e.g. +90 rotates clockwise on screen) — the math conversion to radians + Y-down sign flip happens inside the primitive. Distinct from Transform (fold modes for Mirror); use this for affine, that for fold.",
     examples: ["preset.effect.transform"],
+    summary: "Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer.",
+    category: DistortAndWarp,
+    role: Filter,
+    aliases: ["transform", "move scale rotate", "Transform TOP"],
 }
 
 #[repr(C)]

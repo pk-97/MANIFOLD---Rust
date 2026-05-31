@@ -94,6 +94,10 @@ crate::primitive! {
     composition_notes: "target_angles is required — drive it from node.cycle_table_row (pose mode) or node.scalar_array_accumulator (envelope mode). Trigger source is conventional `system.generator_input.trigger_count`; on each new trigger the kick envelope snaps to 1.0 and decays exponentially at `decay_rate` per second, multiplied into each face's random-axis 45° rotation. State is fresh on rebuild (per the graph-editor-is-authoring-not-perform rule).",
     examples: ["NestedCubes"],
     picker: { label: "Nested Cubes Geometry", category: Atom },
+    summary: "Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["nested cubes", "cubes", "geometry"],
     extra_fields: {
         fill_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         edge_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,

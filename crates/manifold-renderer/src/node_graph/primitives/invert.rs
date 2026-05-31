@@ -40,6 +40,10 @@ crate::primitive! {
     ],
     composition_notes: "1:1 replacement for legacy InvertColors. Use Invert alone for a single-pass invert; chain with ColorGradeHSV or Threshold for analog-style processing pipelines.",
     examples: ["preset.effect.invert"],
+    summary: "Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["invert", "negative", "Invert TOP"],
 }
 
 /// Uniform shape mirrored from the legacy shader. 16-byte aligned via

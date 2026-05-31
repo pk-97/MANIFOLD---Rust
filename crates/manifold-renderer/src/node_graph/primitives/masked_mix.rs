@@ -50,6 +50,10 @@ crate::primitive! {
     ],
     composition_notes: "Mask sampled from `.r`. Pair with `luma_key`, `chroma_key`, or `threshold` upstream of the mask input. The global `amount` scales the mask uniformly so the whole effect can be crossfaded in/out from one knob; at amount=0 the output is always `a`.",
     examples: ["preset.effect.glitch"],
+    summary: "Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node.",
+    category: Composite,
+    role: Filter,
+    aliases: ["masked mix", "mask blend", "composite"],
 }
 
 #[repr(C)]

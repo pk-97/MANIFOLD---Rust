@@ -353,23 +353,39 @@ hand_descriptor!(
 // Vector field (rotate_vec2_by_angle.rs — legacy alias)
 hand_descriptor!(
     "node.rotate_vec2_90",
-    "Rotate the RG vec2 field by 90°. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle); retained so older presets load."
+    "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle), retained so older presets load.",
+    summary: "Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector.",
+    category: FieldsAndCoordinates,
+    role: Map,
+    aliases: ["rotate vector", "90 degrees", "turn"],
 );
 
 // Particle simulation (scatter_particles_camera.rs — legacy alias)
 hand_descriptor!(
     "node.fluid_project_scatter_2d",
-    "Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path); retained so older projects load."
+    "Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
+    summary: "Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera).",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["draw particles camera", "project scatter"],
 );
 
 // Legacy fused wrappers (pending decomposition)
 hand_descriptor!(
     "node.watercolor",
-    "Pixel-exact wrap of the legacy WatercolorFX composite — seven sequential passes (grain+max → flow → displacement → diffusion blur → slope displace → luma blur with persistent feedback → wet/dry). Legacy bundle pending decomposition."
+    "Pixel-exact wrap of the legacy WatercolorFX composite. Seven sequential passes: grain+max, flow, displacement, diffusion blur, slope displace, luma blur with persistent feedback, wet/dry. Legacy bundle pending decomposition.",
+    summary: "A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomposed.",
+    category: Stylize,
+    role: Filter,
+    aliases: ["watercolor", "paint", "bleed", "wet"],
 );
 hand_descriptor!(
     "node.wireframe_depth",
-    "Wraps the legacy WireframeDepthFX 15-pass pipeline (MiDaS depth DNN + optional optical flow + mesh pyramid) as a monolithic primitive — too tightly state-coupled to decompose yet. WireframeDepthGraph decomposition in flight."
+    "Wraps the legacy WireframeDepthFX 15-pass pipeline (MiDaS depth DNN + optional optical flow + mesh pyramid) as a monolithic primitive, too tightly state-coupled to decompose yet. WireframeDepthGraph decomposition in flight.",
+    summary: "A wireframe overlay driven by AI depth, drawing a mesh that follows the shape of whatever is in frame. A legacy bundle still being decomposed.",
+    category: Stylize,
+    role: Filter,
+    aliases: ["wireframe depth", "depth wireframe", "mesh overlay"],
 );
 
 // Boundary nodes (boundary_nodes.rs)
