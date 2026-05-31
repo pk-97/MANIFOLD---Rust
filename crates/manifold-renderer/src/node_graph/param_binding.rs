@@ -60,7 +60,7 @@ use manifold_core::effects::ParamSlot;
 use crate::node_graph::composites::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::validation::GraphError;
 
 // ParamId now lives in `manifold_core::effects` so the data-model layer
@@ -239,6 +239,16 @@ pub struct ResolvedBinding {
     /// (invert or a non-Linear curve); `None` for static bindings and
     /// identity User bindings, which then pay nothing and stay 1:1.
     pub(crate) reshape: Option<Reshape>,
+    /// `true` when the target param is a [`ParamType::Angle`] knob, so the
+    /// applied value loops onto `[0, TAU)` via `rem_euclid` at the write
+    /// boundary (Peter's "angles loop 0..360"). Derived from the param type
+    /// at resolve time — no per-param tagging — and cached here to keep the
+    /// per-frame apply path off a parameter lookup. Only ever `true` for User
+    /// bindings; static / generator bindings stay `false` (their angle values
+    /// are author-set and already in range). Safe because every angle consumer
+    /// feeds cos/sin (2π-periodic), so the wrap is a no-op on the rendered
+    /// result for in-range values and only tames a driver that climbs past 2π.
+    pub(crate) wraps_angle: bool,
 }
 
 /// Non-identity card-slider reshape applied to a User binding's value at the
@@ -313,6 +323,7 @@ impl ResolvedBinding {
             source: BindingSource::Static,
             source_index,
             reshape: None,
+            wraps_angle: false,
         })
     }
 
@@ -342,13 +353,15 @@ impl ResolvedBinding {
         // Pull the `&'static str` off the inner node's `ParamDef`
         // list so the resolved target carries a stable, allocation-free
         // param name (instead of leaking the user binding's owned
-        // string).
-        let target_param = inst
+        // string). Capture the param type in the same pass so the write
+        // boundary knows whether to loop the value (Angle knobs only).
+        let target_def = inst
             .node
             .parameters()
             .iter()
-            .map(|p| p.name)
-            .find(|name| *name == core.inner_param.as_str())?;
+            .find(|p| p.name == core.inner_param.as_str())?;
+        let target_param = target_def.name;
+        let wraps_angle = matches!(target_def.ty, ParamType::Angle);
         let convert = match core.convert {
             manifold_core::effects::ParamConvert::Float => ParamConvert::Float,
             manifold_core::effects::ParamConvert::IntRound => ParamConvert::IntRound,
@@ -377,6 +390,7 @@ impl ResolvedBinding {
                     invert: core.invert,
                     curve: core.curve,
                 }),
+            wraps_angle,
         })
     }
 
@@ -396,6 +410,15 @@ impl ResolvedBinding {
         let value = match &self.reshape {
             Some(r) => r.apply(value),
             None => value,
+        };
+        // Loop angle knobs onto [0, TAU). No-op for in-range values (so it
+        // stays byte-identical for normal slider use); only bites when a
+        // driver sweeps a rotation past a full turn. rem_euclid (not %) so a
+        // negative input maps to the geometrically-correct positive angle.
+        let value = if self.wraps_angle {
+            value.rem_euclid(std::f32::consts::TAU)
+        } else {
+            value
         };
         let pv = convert_param_value(self.convert, value);
         match &self.target {
@@ -837,6 +860,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            wraps_angle: false,
         }
     }
 
@@ -975,6 +999,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            wraps_angle: false,
         };
         let err = binding.apply(&mut g, None, 0.5).unwrap_err();
         assert!(matches!(err, GraphError::ParamNotFound { .. }));
@@ -999,6 +1024,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            wraps_angle: false,
         };
         binding.apply(&mut g, None, 0.0).unwrap();
         assert_eq!(
@@ -1032,6 +1058,7 @@ mod tests {
             source: BindingSource::Static,
             source_index: 0,
             reshape: None,
+            wraps_angle: false,
         };
         binding.apply(&mut g, None, 0.42).unwrap();
         assert_eq!(
@@ -1045,6 +1072,55 @@ mod tests {
                 .get("blend_strength")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn wraps_angle_loops_applied_value_onto_tau() {
+        use std::f32::consts::TAU;
+        let mut g = Graph::new();
+        let node = g.add_node(Box::new(AffineTransform::new()));
+        // A binding flagged as an angle knob loops the applied value onto
+        // [0, TAU) at the write boundary. The target slot is a plain float;
+        // the test pins the wrap arithmetic itself, independent of whether
+        // the slot is semantically an angle.
+        let binding = ResolvedBinding {
+            id: Cow::Borrowed("rot"),
+            label: Cow::Borrowed("Rotation"),
+            default_value: 0.0,
+            target: ResolvedTarget::Node {
+                node,
+                param: "scale",
+            },
+            convert: ParamConvert::Float,
+            source: BindingSource::User,
+            source_index: 0,
+            reshape: None,
+            wraps_angle: true,
+        };
+        // 2.5 turns in -> 0.5 turn out.
+        binding.apply(&mut g, None, TAU * 2.5).unwrap();
+        let got = match g.get_node(node).unwrap().params.get("scale") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+        assert!((got - TAU * 0.5).abs() < 1e-4, "wrap 2.5 turns: got {got}");
+        // A negative angle maps into the positive range: -0.1 -> TAU - 0.1.
+        binding.apply(&mut g, None, -0.1).unwrap();
+        let got2 = match g.get_node(node).unwrap().params.get("scale") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+        assert!(
+            (got2 - (TAU - 0.1)).abs() < 1e-4,
+            "wrap negative: got {got2}"
+        );
+        // In-range value is untouched (byte-identical for normal slider use).
+        binding.apply(&mut g, None, 1.0).unwrap();
+        let got3 = match g.get_node(node).unwrap().params.get("scale") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+        assert_eq!(got3, 1.0, "in-range value must pass through untouched");
     }
 
     // ---- apply_bindings + cache tests ----
@@ -1067,6 +1143,7 @@ mod tests {
                 source: BindingSource::Static,
                 source_index: 1,
                 reshape: None,
+                wraps_angle: false,
             },
         ];
 
@@ -1211,6 +1288,7 @@ mod tests {
                 source: BindingSource::Static,
                 source_index: 0,
                 reshape: None,
+                wraps_angle: false,
             },
             ResolvedBinding {
                 id: Cow::Borrowed("zoom"),
@@ -1224,6 +1302,7 @@ mod tests {
                 source: BindingSource::Static,
                 source_index: 0, // same outer slot as `amount`
                 reshape: None,
+                wraps_angle: false,
             },
         ];
         // ONE outer value, applied to BOTH inner targets.

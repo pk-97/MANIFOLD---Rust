@@ -430,8 +430,12 @@ impl JsonGraphGenerator {
                             BindingSource::Static
                         },
                         source_index,
-                        // Generator bindings don't carry a card reshape yet.
+                        // Generator bindings don't carry a card reshape or
+                        // angle-loop yet (matches the effect-side default for
+                        // non-Angle params; generator-side angle wrap is a
+                        // future follow-up if a looping generator knob needs it).
                         reshape: None,
+                        wraps_angle: false,
                     })
                 }
                 BindingTarget::Composite { .. } => None,
