@@ -1708,6 +1708,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Horizontal center of the rectangle. 0 is the left edge, 1 is the right.",
           "type": "float"
         },
         {
@@ -1718,6 +1719,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Vertical center. 0 is the top, 1 is the bottom.",
           "type": "float"
         },
         {
@@ -1728,6 +1730,7 @@
             "0",
             "4"
           ],
+          "tooltip": "How far the rectangle reaches from its center to the left and right. At 0.5 it fills the frame.",
           "type": "float"
         },
         {
@@ -1738,6 +1741,7 @@
             "0",
             "4"
           ],
+          "tooltip": "How far it reaches up and down from the center.",
           "type": "float"
         },
         {
@@ -1748,6 +1752,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Spins the rectangle around its center. Wire a knob or LFO to turn it over time.",
           "type": "float"
         },
         {
@@ -1758,6 +1763,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Fades the edge of the mask. 0 gives a clean hard edge, higher values blur it out.",
           "type": "float"
         }
       ],
@@ -2529,6 +2535,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "How far the red and blue channels pull apart, in pixels. Negative values swap which way they shift.",
           "type": "float"
         }
       ],
@@ -4121,6 +4128,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How few brightness levels to crush the image into. Lower gives a harder, more banded look.",
           "type": "float"
         }
       ],
@@ -5040,6 +5048,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How heavy the grain is. Low adds subtle texture, high adds strong noise.",
           "type": "float"
         }
       ],
@@ -5088,6 +5097,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How strong the flash is. Wire a beat gate or envelope here for strobes and hits.",
           "type": "float"
         },
         {
@@ -5103,6 +5113,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Which way it flashes, toward black, toward white, or a brightness boost.",
           "type": "enum"
         }
       ],
@@ -5631,6 +5642,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How many samples the blur uses. More is smoother but slower.",
           "type": "enum"
         },
         {
@@ -5645,6 +5657,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Which direction this pass blurs, horizontal or vertical. Pair the two for a full blur.",
           "type": "enum"
         },
         {
@@ -5679,6 +5692,7 @@
             "0",
             "256"
           ],
+          "tooltip": "How far the blur reaches, in pixels.",
           "type": "float"
         },
         {
@@ -5694,6 +5708,7 @@
             "0",
             "2"
           ],
+          "tooltip": "What the blur does at the edges of the frame, clamp or repeat.",
           "type": "enum"
         }
       ],
@@ -8201,6 +8216,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Rotates the mirror line. Set it for a horizontal, vertical, or diagonal flip.",
           "type": "float"
         }
       ],
@@ -8299,6 +8315,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much to crossfade from the first image to the second.",
           "type": "float"
         },
         {
@@ -8319,6 +8336,7 @@
             "0",
             "7"
           ],
+          "tooltip": "How the two images combine, like Add, Screen, Multiply, or Overlay.",
           "type": "enum"
         }
       ],
@@ -9821,6 +9839,7 @@
             "2",
             "32"
           ],
+          "tooltip": "How many brightness steps each colour gets crushed into. Fewer levels give a chunkier look.",
           "type": "float"
         }
       ],
@@ -10147,6 +10166,7 @@
             "2",
             "16"
           ],
+          "tooltip": "How many mirrored wedges to fold the image into. More wedges give a finer pattern.",
           "type": "float"
         },
         {
@@ -10157,6 +10177,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Horizontal center of the fold. 0 is the left edge, 1 is the right.",
           "type": "float"
         },
         {
@@ -10167,6 +10188,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Vertical center of the fold. 0 is the top, 1 is the bottom.",
           "type": "float"
         }
       ],
@@ -12327,6 +12349,7 @@
             "0",
             "3"
           ],
+          "tooltip": "How much to sharpen. 0 passes through untouched, higher makes edges crisper.",
           "type": "float"
         }
       ],
@@ -14127,6 +14150,7 @@
           ],
           "label": "Shape",
           "name": "shape",
+          "tooltip": "The shape of the darkened border, circle, oval, or rectangle.",
           "type": "enum"
         },
         {
@@ -14137,6 +14161,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far in from the edges the darkening starts.",
           "type": "float"
         },
         {
@@ -14147,6 +14172,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How gradually the darkening fades in.",
           "type": "float"
         },
         {
@@ -14157,6 +14183,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How dark the border gets.",
           "type": "float"
         }
       ],
@@ -14217,6 +14244,7 @@
             "0",
             "64"
           ],
+          "tooltip": "How many cells fill the frame. Higher values pack in more, smaller cells.",
           "type": "float"
         },
         {
@@ -14227,6 +14255,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the whole cell pattern sideways. Wire an LFO here and the cells drift.",
           "type": "float"
         },
         {
@@ -14237,6 +14266,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the cell pattern up and down.",
           "type": "float"
         },
         {
@@ -14247,6 +14277,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How irregular the cells are. At 0 you get a perfect grid, at 1 they scatter into random shapes.",
           "type": "float"
         },
         {
@@ -14257,6 +14288,7 @@
             "0",
             "16"
           ],
+          "tooltip": "Brightens or dims the result, handy for pushing the pattern into a usable range.",
           "type": "float"
         }
       ],
@@ -14398,6 +14430,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much of the processed image to show over the original. 0 is dry, 1 is fully wet.",
           "type": "float"
         }
       ],
