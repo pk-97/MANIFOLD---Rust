@@ -131,10 +131,16 @@ Rules:
   min/max/invert/unit mapping (§5) — open as a **popover off the knob**, not a
   side panel. Detail when you ask, gone when you don't. (Keeps the box rule: the
   knob is a face; opening it reveals its interior.)
-- **Every node collapses.** A disclosure toggle in the header: header-only +
-  ports when quiet, knobs out when active. This is what delivers *focus* — you
-  quiet the nodes you're not on and the one in your hands is the loud one. Ports
-  stay visible when collapsed (you still wire collapsed nodes). Default expanded.
+- **Progressive disclosure — clean by default (decided 2026-05-31, shipped).**
+  Dumping every param on every node turned a real 20-node graph into an
+  unreadable wall (tall towers force a 25% zoom where text is sub-pixel mush).
+  So the dose is: **default collapsed** = header + category tint + one summary
+  line (the key param, e.g. "Mode: FoldX") + ports; **expand** (header chevron)
+  = every param row, draggable; **zoom LOD** = below ~0.5 zoom, drop all body
+  text so the node reads as a clean colour-coded box. Ports stay visible in
+  every state (you still wire collapsed nodes). Body height tracks the
+  collapsed/expanded state only, not zoom, so ports never jump. This is what
+  delivers *focus*: quiet the nodes you're not on, expand the one in your hands.
 - **Expose-to-card moves on-node.** A per-param promote control (a dot/button)
   replaces the sidebar checkbox — you expose a param right where you see it,
   exactly like mapping a macro on an Ableton rack.

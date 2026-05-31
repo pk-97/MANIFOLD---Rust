@@ -33,6 +33,10 @@ const PARAM_ROW_H: f32 = 18.0;
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).
 const PARAM_SCRUB_FULL_RANGE_PX: f32 = 240.0;
+/// Below this zoom, nodes render header + ports only (no param/summary
+/// text): the text would be sub-pixel mush, so the zoomed-out graph reads as
+/// clean colour-coded boxes instead of an unreadable wall.
+const PARAM_LOD_ZOOM: f32 = 0.5;
 const PORT_ROW_HEIGHT: f32 = 18.0;
 const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
@@ -108,13 +112,18 @@ impl PortView {
 struct NodeView {
     id: u32,
     title: String,
-    /// The node's parameters, shown as compact rows on the node face so you
-    /// can read what each node is doing — and, in a later pass, tune it —
-    /// without opening a side panel. Empty if the node has no params.
+    /// The node's parameters, drawn as compact rows on the node face when
+    /// the node is expanded, so you can read and tune each one in place.
+    /// Empty if the node has no params.
     params: Vec<ParamView>,
-    /// Whether this node is collapsed to its header + ports (param rows
-    /// hidden). Mirrors `GraphCanvas::collapsed` for this node so layout
-    /// and drawing don't have to consult the map.
+    /// One-line summary of the node's key param (e.g. "Mode: FoldX"), shown
+    /// when the node is collapsed so a folded node still tells you its most
+    /// important value at a glance. `None` if the node has no params.
+    summary: Option<String>,
+    /// Whether this node is collapsed (header + one summary line) rather than
+    /// expanded (every param row). Nodes default to collapsed so a complex
+    /// graph reads cleanly; expand the one you're tuning. Mirrors
+    /// `GraphCanvas::collapsed` for this node so layout/drawing skip the map.
     collapsed: bool,
     /// Header tint for this node's `Category` (Color & Tone, Noise, Distort,
     /// ...), so the graph reads by family at a glance. `NODE_HEADER_BG` for
@@ -133,22 +142,27 @@ struct NodeView {
 impl NodeView {
     fn height(&self) -> f32 {
         let port_rows = self.inputs.len().max(self.outputs.len()) as f32;
-        NODE_HEADER_HEIGHT + self.params_h() + port_rows * PORT_ROW_HEIGHT + 6.0
+        NODE_HEADER_HEIGHT + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
     }
 
-    /// Total height of the on-node parameter block drawn below the header.
-    fn params_h(&self) -> f32 {
+    /// Height of the body block below the header: collapsed shows the single
+    /// summary line (if any), expanded shows every param row. Zoom-independent
+    /// so port positions stay put as you zoom (the LOD cull is draw-only).
+    fn body_h(&self) -> f32 {
         if self.collapsed {
-            0.0
+            if self.summary.is_some() {
+                PARAM_ROW_H
+            } else {
+                0.0
+            }
         } else {
             self.params.len() as f32 * PARAM_ROW_H
         }
     }
 
-    /// Y offset where port rows start, below the header and the on-node
-    /// parameter block.
+    /// Y offset where port rows start, below the header and the body block.
     fn ports_y_offset(&self) -> f32 {
-        NODE_HEADER_HEIGHT + self.params_h()
+        NODE_HEADER_HEIGHT + self.body_h()
     }
 
     fn input_port_pos_graph(&self, idx: usize) -> (f32, f32) {
@@ -256,6 +270,31 @@ fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> Pa
         fill,
         scrub,
     }
+}
+
+/// Pick the node's most informative param and format it as a one-line
+/// summary ("Mode: FoldX", "Scale: 0.02") shown on the collapsed node face.
+/// Prefers an enum (its label is descriptive), then a numeric, else the
+/// first param. `None` for param-less nodes.
+fn node_summary(params: &[manifold_renderer::node_graph::ParamSnapshot]) -> Option<String> {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    let pick = params
+        .iter()
+        .find(|p| p.kind == ParamSnapshotKind::Enum)
+        .or_else(|| {
+            params.iter().find(|p| {
+                matches!(
+                    p.kind,
+                    ParamSnapshotKind::Float
+                        | ParamSnapshotKind::Angle
+                        | ParamSnapshotKind::Frequency
+                        | ParamSnapshotKind::Int
+                )
+            })
+        })
+        .or_else(|| params.first())?;
+    let pv = format_param_for_node(pick);
+    Some(format!("{}: {}", pv.label, pv.value))
 }
 
 /// Muted header tint per node `Category`, so the graph reads at a glance by
@@ -435,6 +474,7 @@ impl GraphCanvas {
             for node in &mut self.nodes {
                 if let Some(sn) = snap.nodes.iter().find(|s| s.id == node.id) {
                     node.params = sn.parameters.iter().map(format_param_for_node).collect();
+                    node.summary = node_summary(&sn.parameters);
                 }
             }
             return;
@@ -459,7 +499,8 @@ impl GraphCanvas {
                 id: n.id,
                 title: n.title.clone(),
                 params: n.parameters.iter().map(format_param_for_node).collect(),
-                collapsed: self.collapsed.get(&n.id).copied().unwrap_or(false),
+                summary: node_summary(&n.parameters),
+                collapsed: self.collapsed.get(&n.id).copied().unwrap_or(true),
                 header_color: category_header_color(
                     manifold_renderer::node_graph::descriptor_for(&n.type_id)
                         .map(|d| d.category)
@@ -828,7 +869,7 @@ impl GraphCanvas {
         // Collapse chevron in a node header toggles that node's param rows.
         // Checked before ports/header so it doesn't start a wire or a move.
         if let Some(node_id) = self.chevron_under(viewport, sx, sy) {
-            let now = !self.collapsed.get(&node_id).copied().unwrap_or(false);
+            let now = !self.collapsed.get(&node_id).copied().unwrap_or(true);
             self.collapsed.insert(node_id, now);
             if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                 node.collapsed = now;
@@ -1182,10 +1223,13 @@ impl GraphCanvas {
             TEXT_HEADER,
         );
 
-        // Collapse chevron at the header's right edge, only for nodes that
-        // actually have params to hide. "+" when collapsed (click to
-        // expand), "-" when expanded — the familiar disclosure glyphs.
-        if !node.params.is_empty() {
+        // Below the LOD zoom, draw nothing in the body or header-right: the
+        // node reads as a clean colour-coded box (text would be mush).
+        let show_text = self.zoom >= PARAM_LOD_ZOOM;
+
+        // Collapse chevron at the header's right edge, for nodes that have
+        // params to fold. "+" collapsed (click to expand), "-" expanded.
+        if show_text && !node.params.is_empty() {
             let chev_size = (11.0 * self.zoom).max(8.0);
             ui.draw_text(
                 sx + sw - 14.0 * self.zoom,
@@ -1196,16 +1240,40 @@ impl GraphCanvas {
             );
         }
 
-        // On-node parameter rows: label + value on one line, with a thin
-        // fill bar under ranged values, so you can read what each node is
-        // doing straight from the canvas without opening a side panel.
         let row_h = PARAM_ROW_H * self.zoom;
         let text_size = (9.0 * self.zoom).max(7.0);
         let pad_x = 8.0 * self.zoom;
         let inner_w = sw - 2.0 * pad_x;
-        // Collapsed nodes hide their param rows (header + ports stay).
-        let visible_params: &[ParamView] = if node.collapsed { &[] } else { &node.params };
-        for (i, p) in visible_params.iter().enumerate() {
+
+        // Collapsed: one summary line ("Mode: FoldX"), so a folded node still
+        // shows its key value without the full param wall.
+        if show_text
+            && node.collapsed
+            && let Some(summary) = node.summary.as_deref()
+        {
+            let text_y = sy + header_h + 2.0 * self.zoom;
+            let max_chars = (inner_w / (text_size * 0.55)) as usize;
+            let line: std::borrow::Cow<'_, str> =
+                if summary.chars().count() > max_chars && max_chars > 1 {
+                    let take = max_chars.saturating_sub(1);
+                    std::borrow::Cow::Owned(format!(
+                        "{}…",
+                        summary.chars().take(take).collect::<String>()
+                    ))
+                } else {
+                    std::borrow::Cow::Borrowed(summary)
+                };
+            ui.draw_text(sx + pad_x, text_y, &line, text_size, TEXT_SECONDARY);
+        }
+
+        // Expanded: every param row — label + value with a fill bar under
+        // ranged values, each draggable in place (see ParamScrub).
+        let expanded_params: &[ParamView] = if show_text && !node.collapsed {
+            &node.params
+        } else {
+            &[]
+        };
+        for (i, p) in expanded_params.iter().enumerate() {
             let row_y = sy + header_h + i as f32 * row_h;
             let text_y = row_y + 2.0 * self.zoom;
 
