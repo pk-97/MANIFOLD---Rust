@@ -296,3 +296,31 @@ clip guard + the `Effect*/Gen*` action fork. Full spec + grep-able done-criteria
 in `docs/CARD_TARGET_UNIFICATION.md`; fork sites carry `CARD-TARGET-UNIFICATION`.
 This is the workflow-shaped one (broad sweep + adversarial verify on the perform
 path).
+
+## Step 3 — status (2026-06-01): foundation built + stashed, app dispatch pending
+
+Grounding the command layer corrected the design (the spec's "delete `EffectTarget`
+entirely" was wrong) and split it into stages — see the rewritten
+`docs/CARD_TARGET_UNIFICATION.md` (§ "Correction", "The migration (step 3)").
+
+- **Stage A — editing layer: DONE, in `git stash@{0}`** (`git stash show -p
+  stash@{0}` to restore). Compiles as a lib. Single-effect commands
+  (`ToggleEffect`, `ChangeEffectParam`, both `Toggle*Expose`, `EditUserParamBinding`)
+  + `DriverTarget::Effect` now take `EffectId` and resolve via
+  `find_effect_by_id_mut` (reaches master/layer/clip); list commands keep
+  `EffectTarget`; `Project::layer_id_for_effect` added for the envelope-cleanup
+  reach. NOT committed — it can't build the workspace until Stage B converts the
+  app call sites, and the editing-layer change forces them all in one atomic
+  landing.
+- **Stage B — app dispatch: NOT done.** ~25 `Effect*`/`Gen*` arms in
+  `inspector.rs` + the `app_render` `EffectMapping*` arms convert to id-based
+  commands; `editor_override{tab,active_layer}` → `editor_target: GraphTarget`
+  (dispatch by identity, not ambient shadow); `current_editor_target` dropped for
+  `watched_graph_target`; clip guard removed; `input_host.rs` + two test files
+  fixed. Must land atomically and pass the adversarial perform-byte-identical gate
+  before commit (the live mutation gateway — verify, don't YOLO).
+- **Stage C — `Effect*`/`Gen*` enum collapse: optional final purity.**
+
+Checkpointed here on purpose: the foundation is proven, the design is corrected +
+precise, and the app-dispatch rewrite is a focused atomic block best done with a
+full runway rather than half-landed under budget pressure.
