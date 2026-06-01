@@ -58,7 +58,8 @@
         "convert": { "type": "Float" } },
 
       { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "particle_count_calc", "param": "a" },
+        "target": { "kind": "handleNode", "handle": "active_count_calc", "param": "a" },
+        "scale": 1000000.0,
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
@@ -199,9 +200,6 @@
         "scale":       { "type": "Float", "value": 1.0 },
         "rotation":    { "type": "Float", "value": 0.0 }
       } },
-
-    { "id": 20, "typeId": "node.affine_scalar", "handle": "particle_count_calc",
-      "params": { "a": { "type": "Float", "value": 2.0 }, "scale": { "type": "Float", "value": 1000000.0 }, "offset": { "type": "Float", "value": 0.0 } } },
 
     { "id": 21, "typeId": "node.math", "handle": "active_count_calc",
       "params": { "a": { "type": "Float", "value": 2000000.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
@@ -369,8 +367,6 @@
     { "fromNode": 21, "fromPort": "out",     "toNode": 91, "toPort": "active_count" },
 
     { "fromNode": 0,   "fromPort": "time", "toNode": 110, "toPort": "a" },
-
-    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
 
     { "fromNode": 21, "fromPort": "out", "toNode": 23, "toPort": "a" },
 
