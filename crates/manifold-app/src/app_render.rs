@@ -2917,6 +2917,11 @@ fn build_card_entries(
     };
 
     let mut covered: std::collections::HashSet<(String, String)> = Default::default();
+    // One mirror row per card param id. A fan-out binding (one card slider
+    // driving several inner targets — Feather → two blur nodes, Clip Trigger
+    // → three gates) shares one `outer_param_id`, so collapse it to a single
+    // row. All its targets still register in `covered` so pass 2 skips them.
+    let mut seen_card_ids: std::collections::HashSet<String> = Default::default();
     let mut entries: Vec<GraphEditorCardEntry> = Vec::new();
 
     // Pass 1: preset-bound exposures. Walk outer_routings so the
@@ -2939,6 +2944,11 @@ fn build_card_entries(
             continue;
         }
         covered.insert((r.node_handle.clone(), r.inner_param.clone()));
+        // Fan-out: same card param, already has a row. Mark the target
+        // covered (above) but don't add a duplicate row.
+        if !seen_card_ids.insert(r.outer_param_id.clone()) {
+            continue;
+        }
         entries.push(GraphEditorCardEntry {
             label: r.outer_label.clone(),
             target_handle: r.node_handle.clone(),
