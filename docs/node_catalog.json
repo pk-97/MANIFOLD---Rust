@@ -158,6 +158,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Slides the image sideways. Negative moves it left, positive moves it right, and the range runs from -1 to 1 across the frame.",
           "type": "float"
         },
         {
@@ -168,6 +169,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Slides the image up and down. The range runs from -1 to 1 across the frame and 0 leaves it centred.",
           "type": "float"
         },
         {
@@ -178,6 +180,7 @@
             "0.1",
             "5"
           ],
+          "tooltip": "Zooms the image around its centre. 1 is original size, below 1 shrinks it, above 1 enlarges it.",
           "type": "float"
         },
         {
@@ -188,6 +191,7 @@
             "-180",
             "180"
           ],
+          "tooltip": "Spins the image around its centre in degrees. Positive turns it clockwise on screen and 0 leaves it level.",
           "type": "float"
         }
       ],
@@ -244,6 +248,7 @@
             "0",
             "0.1"
           ],
+          "tooltip": "How hard each particle gets nudged off its spot every frame. 0 leaves the cloud alone, and higher values spread it out faster. The useful range is small, so keep it low for a gentle drift.",
           "type": "float"
         },
         {
@@ -254,6 +259,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles in the buffer get the kick. It is clamped to whatever the buffer can actually hold.",
           "type": "int"
         }
       ],
@@ -316,6 +322,7 @@
             "-1",
             "3"
           ],
+          "tooltip": "Picks which of the four fixed burst zones to fire into, numbered 0 to 3. Set it to -1 to switch the burst off entirely.",
           "type": "int"
         },
         {
@@ -326,6 +333,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How hard the burst pushes new material in, from 0 for nothing up to 1 for a full puff. Wire a trigger envelope here to fire it on a hit.",
           "type": "float"
         },
         {
@@ -336,6 +344,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Where the burst sits in its attack and decay envelope, from 0 to 1. Drive it from the same trigger that fires the burst so the push fades in and out.",
           "type": "float"
         },
         {
@@ -346,6 +355,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles the burst is allowed to touch. Keep it matched to the particle count feeding the sim so the whole field reacts.",
           "type": "int"
         }
       ],
@@ -417,6 +427,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Horizontal centre of the burst across the canvas, from 0 at the left to 1 at the right. Wire it from a hit position to fire the shockwave wherever the action is.",
           "type": "float"
         },
         {
@@ -427,6 +438,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Vertical centre of the burst, from 0 at the bottom to 1 at the top.",
           "type": "float"
         },
         {
@@ -437,6 +449,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How hard the push is. 0 means no burst at all, and higher values throw particles further out from the centre.",
           "type": "float"
         },
         {
@@ -447,6 +460,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Fades the burst in and out over the hit. Wire it from a decay envelope so the kick lands and settles instead of pushing forever.",
           "type": "float"
         },
         {
@@ -457,6 +471,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far from the centre the push reaches, as a fraction of the canvas. Particles past this radius barely feel it.",
           "type": "float"
         },
         {
@@ -467,6 +482,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to push, counted from the start of the buffer. Keep it matched to your live particle count so dead slots stay still.",
           "type": "int"
         }
       ],
@@ -512,6 +528,7 @@
             "0.01",
             "2"
           ],
+          "tooltip": "How close two items must be before a line connects them, in the input's own coordinate space which is 0 to 1 for blob detections. Lower values only link items that are nearly touching.",
           "type": "float"
         },
         {
@@ -522,6 +539,7 @@
             "1",
             "256"
           ],
+          "tooltip": "Caps how many connecting lines can be drawn. Once this many edges exist the rest are skipped, which keeps a busy scene from filling with lines.",
           "type": "int"
         }
       ],
@@ -573,6 +591,7 @@
             "0",
             "0.05"
           ],
+          "tooltip": "How hard the random kick hits each particle every frame. 0 leaves the cloud exactly as it is, and the useful range tops out around 0.05 before things scatter wildly.",
           "type": "float"
         },
         {
@@ -583,6 +602,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles in the buffer actually get kicked, counted from the front. It is capped to the real buffer size so a value above the particle count just affects all of them.",
           "type": "int"
         }
       ],
@@ -703,6 +723,7 @@
             "0",
             "13"
           ],
+          "tooltip": "The operation run over every number in the list. Binary ops like Add, Multiply, Min and Mix read both inputs, while unary ops like Sine, Abs and Clamp01 read only the first.",
           "type": "enum"
         },
         {
@@ -713,6 +734,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The multiplier used by ScaleOffset and ShapePowClip, and the blend amount for Mix. Other operations ignore it.",
           "type": "float"
         },
         {
@@ -723,6 +745,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Added after scaling in ScaleOffset. Only that operation reads it.",
           "type": "float"
         },
         {
@@ -733,6 +756,7 @@
             "0.01",
             "16"
           ],
+          "tooltip": "The power applied in ShapePowClip, where 1 is linear and higher bends the response into a steeper curve. Only that operation reads it.",
           "type": "float"
         },
         {
@@ -743,6 +767,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Shifts the input before the power in ShapePowClip. Only that operation reads it.",
           "type": "float"
         }
       ],
@@ -798,6 +823,7 @@
             "1",
             "32"
           ],
+          "tooltip": "The most copies this node will stack, from 1 up to 32. The actual count is whatever is smaller, this ceiling or the number of scales fed in.",
           "type": "int"
         }
       ],
@@ -866,6 +892,7 @@
             "64",
             "4096"
           ],
+          "tooltip": "Width of the baked panorama in pixels. Keep it at twice the height for a correct equirect ratio, so 512 wide pairs with 256 tall.",
           "type": "int"
         },
         {
@@ -876,6 +903,7 @@
             "32",
             "2048"
           ],
+          "tooltip": "Height of the baked panorama in pixels. Keep it at half the width so the longitude and latitude mapping stays undistorted.",
           "type": "int"
         },
         {
@@ -886,6 +914,7 @@
             "0",
             "4"
           ],
+          "tooltip": "How bright the horizon band glows. 1 matches the default studio look, higher pushes a stronger rim of light into reflections.",
           "type": "float"
         },
         {
@@ -896,6 +925,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much the lighting changes as you turn around the horizon. 0 is perfectly even, higher breaks up the ring so reflections shift with angle.",
           "type": "float"
         }
       ],
@@ -1235,6 +1265,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The X part of the light direction, from -1 to 1. Wiring a Light into the light port overrides this and the other two direction knobs.",
           "type": "float"
         },
         {
@@ -1245,6 +1276,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Y part of the light direction, from -1 to 1. The direction is normalised in the shader so only the ratio between X, Y, and Z matters.",
           "type": "float"
         },
         {
@@ -1255,6 +1287,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Z part of the light direction, from -1 to 1. Default 0.75 points the light mostly toward the camera for a forward-facing highlight.",
           "type": "float"
         },
         {
@@ -1265,6 +1298,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The X part of the viewing direction, from -1 to 1. This is where the camera sits relative to the surface.",
           "type": "float"
         },
         {
@@ -1275,6 +1309,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Y part of the viewing direction, from -1 to 1.",
           "type": "float"
         },
         {
@@ -1285,6 +1320,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Z part of the viewing direction, from -1 to 1. Default 1 looks straight on, which puts the highlight where the light reflects back at the camera.",
           "type": "float"
         },
         {
@@ -1295,12 +1331,14 @@
             "1",
             "256"
           ],
+          "tooltip": "How tight the highlight is. Higher values give a small pinpoint glint while lower values spread it into a broad sheen.",
           "type": "float"
         },
         {
           "default": "[1, 0.95, 1, 1]",
           "label": "Color",
           "name": "color",
+          "tooltip": "The colour of the highlight. Alpha is ignored, and a wired light tints this further by multiplying its own colour in.",
           "type": "color"
         }
       ],
@@ -1342,6 +1380,7 @@
             "1",
             "8"
           ],
+          "tooltip": "The most blobs this can track at once, up to 8. It is read once when the effect is built, so changing it live has no effect.",
           "type": "int"
         },
         {
@@ -1352,6 +1391,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The brightness cutoff for what counts as a blob. Lower picks up dimmer regions, higher only catches the brightest spots.",
           "type": "float"
         },
         {
@@ -1362,6 +1402,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How eagerly nearby bright regions get merged into one blob. Higher pulls neighbours together into bigger blobs, lower keeps them as separate smaller ones.",
           "type": "float"
         },
         {
@@ -1372,6 +1413,7 @@
             "64",
             "1024"
           ],
+          "tooltip": "The longest side the image is shrunk to before detection runs, in pixels. Smaller is faster but loses small blobs, larger is slower but more precise.",
           "type": "int"
         },
         {
@@ -1382,6 +1424,7 @@
             "1",
             "30"
           ],
+          "tooltip": "How many frames to wait between detection passes. 1 runs every frame for the snappiest tracking, higher values save work but lag behind motion.",
           "type": "int"
         }
       ],
@@ -1423,6 +1466,7 @@
           "default": "[0, 1, 0.5, 1]",
           "label": "Color",
           "name": "color",
+          "tooltip": "The colour of the boxes drawn around each blob.",
           "type": "color"
         },
         {
@@ -1433,6 +1477,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How opaque the boxes are over the image. 0 is invisible and 1 is solid.",
           "type": "float"
         },
         {
@@ -1443,6 +1488,7 @@
             "0.0005",
             "0.05"
           ],
+          "tooltip": "Thickness of the box outline, in UV units where 0.003 is roughly 2 pixels at 720p. Push it past the blob size to get solid filled boxes instead of outlines.",
           "type": "float"
         },
         {
@@ -1453,6 +1499,7 @@
             "0",
             "32"
           ],
+          "tooltip": "The most blobs to draw boxes for, up to 32. It is safe to leave at 32 since entries with no size are skipped.",
           "type": "int"
         }
       ],
@@ -1509,6 +1556,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far blocks slide and how many of them move. At 0 nothing shifts, and as you raise it the displacement grows from sparse to dense.",
           "type": "float"
         },
         {
@@ -1519,6 +1567,7 @@
             "4",
             "64"
           ],
+          "tooltip": "The size of each block in pixels. Smaller blocks give a fine grain and larger blocks give chunky datamosh tearing.",
           "type": "float"
         },
         {
@@ -1529,6 +1578,7 @@
             "0.1",
             "10"
           ],
+          "tooltip": "How fast the random pattern reshuffles over time. Higher values churn the blocks more often.",
           "type": "float"
         }
       ],
@@ -1570,6 +1620,7 @@
             "0",
             "64"
           ],
+          "tooltip": "How far the blur reaches, in pixels. 0 leaves the image sharp and higher values soften it more.",
           "type": "float"
         },
         {
@@ -1581,6 +1632,7 @@
           ],
           "label": "Mode",
           "name": "mode",
+          "tooltip": "The blur shape. Gaussian gives a smooth falloff, Box is a flat even spread, and Radial smears outward from the centre.",
           "type": "enum"
         }
       ],
@@ -1626,6 +1678,7 @@
           ],
           "label": "Mode",
           "name": "mode",
+          "tooltip": "What kind of volume to blur. Scalar handles a density field that lives in one channel, Vector handles a force field across all four.",
           "type": "enum"
         },
         {
@@ -1637,6 +1690,7 @@
           ],
           "label": "Axis",
           "name": "axis",
+          "tooltip": "Which direction this pass blurs along, X, Y, or Z. Chain three instances, one per axis, for an even blur in all directions.",
           "type": "enum"
         },
         {
@@ -1647,6 +1701,7 @@
             "16",
             "512"
           ],
+          "tooltip": "The grid size of the volume, default 128. It has to match the actual dimensions of the input and output volume or the blur reads the wrong cells.",
           "type": "int"
         },
         {
@@ -1657,6 +1712,7 @@
             "0.5",
             "16"
           ],
+          "tooltip": "How wide the blur reaches, in voxels. Higher values soften more and cost more. Wire it from a scalar to drive the width live.",
           "type": "float"
         }
       ],
@@ -1814,6 +1870,7 @@
           "default": "[0.2126, 0.7152, 0.0722]",
           "label": "RGB Weights",
           "name": "weights",
+          "tooltip": "How much each of red, green, and blue counts toward the grey value. The defaults are the Rec.709 luma weights, which match how the eye sees brightness.",
           "type": "vec3"
         }
       ],
@@ -1892,6 +1949,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Swings the camera left and right around the target, in degrees. This is the horizontal angle of the orbit.",
           "type": "angle"
         },
         {
@@ -1902,6 +1960,7 @@
             "-1.5",
             "1.5"
           ],
+          "tooltip": "Raises and lowers the camera over the target, in degrees. Positive looks down from above, negative looks up from below.",
           "type": "angle"
         },
         {
@@ -1912,6 +1971,7 @@
             "0.01",
             "100"
           ],
+          "tooltip": "How far the camera sits from the target. Larger values pull back for a wider view, smaller values move in close.",
           "type": "float"
         },
         {
@@ -1922,6 +1982,7 @@
             "0.05",
             "2.5"
           ],
+          "tooltip": "The vertical field of view in degrees. Wider angles take in more of the scene and exaggerate perspective, narrower angles flatten it.",
           "type": "angle"
         },
         {
@@ -1932,6 +1993,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "Raises or lowers the point the camera looks at, shifting the whole framing up or down in the scene.",
           "type": "float"
         },
         {
@@ -1942,6 +2004,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Tilts the camera sideways around its own view direction, in degrees, so the horizon leans. 0 keeps it level.",
           "type": "angle"
         },
         {
@@ -1952,6 +2015,7 @@
             "0.001",
             "10"
           ],
+          "tooltip": "Closest distance the camera can see. Anything nearer is clipped away. Leave it small unless the scene has extreme depth.",
           "type": "float"
         },
         {
@@ -1962,6 +2026,7 @@
             "1",
             "10000"
           ],
+          "tooltip": "Furthest distance the camera can see. Anything beyond is clipped away. Leave the default unless the scene is very deep.",
           "type": "float"
         }
       ],
@@ -2007,6 +2072,7 @@
             "1",
             "16384"
           ],
+          "tooltip": "The canvas width in pixels. Wire this from the generator's output width so it tracks the real resolution.",
           "type": "float"
         },
         {
@@ -2017,6 +2083,7 @@
             "1",
             "16384"
           ],
+          "tooltip": "The canvas height in pixels. Wire this from the generator's output height so it tracks the real resolution.",
           "type": "float"
         },
         {
@@ -2027,6 +2094,7 @@
             "1",
             "1000000000"
           ],
+          "tooltip": "The baseline pixel count the ratio is measured against. Default is 1920 by 1080. The output reads 1 at that size and rises as the canvas gets bigger. Set to 0 and it falls back to 1 so nothing breaks.",
           "type": "float"
         },
         {
@@ -2037,6 +2105,7 @@
             "0",
             "16384"
           ],
+          "tooltip": "Floors the input width before the area is worked out, so a tiny window does not dim the output below something usable. 0 means no floor. Set to 640 for FluidSim2D behaviour.",
           "type": "float"
         },
         {
@@ -2047,6 +2116,7 @@
             "0",
             "16384"
           ],
+          "tooltip": "Floors the input height before the area is worked out, so a tiny window does not dim the output below something usable. 0 means no floor. Set to 360 for FluidSim2D behaviour.",
           "type": "float"
         }
       ],
@@ -2133,6 +2203,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red amount of the base colour, from 0 to 1. This is the colour the bands are tinted before lighting snaps them into steps.",
           "type": "float"
         },
         {
@@ -2143,6 +2214,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green amount of the base colour, from 0 to 1.",
           "type": "float"
         },
         {
@@ -2153,6 +2225,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue amount of the base colour, from 0 to 1.",
           "type": "float"
         },
         {
@@ -2163,6 +2236,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How opaque the material is, from 0 for see-through up to 1 for solid.",
           "type": "float"
         },
         {
@@ -2173,6 +2247,7 @@
             "2",
             "16"
           ],
+          "tooltip": "How many flat lighting steps the surface snaps into. 2 gives a stark lit and shadow split, and higher counts toward 16 ease back into smooth shading.",
           "type": "int"
         },
         {
@@ -2183,6 +2258,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How dark the shadow side gets, as a fraction of full brightness. 0.08 leaves the shadows nearly black, higher lifts them.",
           "type": "float"
         },
         {
@@ -2193,6 +2269,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How bright the lit side gets, as a fraction of full brightness. 1 is full brightness on the lit face.",
           "type": "float"
         },
         {
@@ -2203,6 +2280,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red amount of light the surface gives off on its own, from 0 to 1, independent of any scene light.",
           "type": "float"
         },
         {
@@ -2213,6 +2291,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green amount of light the surface gives off on its own, from 0 to 1.",
           "type": "float"
         },
         {
@@ -2223,6 +2302,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue amount of light the surface gives off on its own, from 0 to 1.",
           "type": "float"
         },
         {
@@ -2233,6 +2313,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How strongly the emission colour glows, from 0 for off up to 10. Leave it at 0 unless you want the material to light itself.",
           "type": "float"
         }
       ],
@@ -2288,6 +2369,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Horizontal point the coordinates measure from, where 0.5 is the middle of the canvas. Move it to slide a radial or zoom effect off centre.",
           "type": "float"
         },
         {
@@ -2298,6 +2380,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Vertical point the coordinates measure from, where 0.5 is the middle of the canvas.",
           "type": "float"
         },
         {
@@ -2308,6 +2391,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "Stretches the horizontal coordinates. 1 leaves them as is, higher spreads the pattern wider, and a negative value flips it left to right.",
           "type": "float"
         },
         {
@@ -2318,6 +2402,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "Stretches the vertical coordinates. 1 leaves them as is, and a negative value flips it top to bottom.",
           "type": "float"
         }
       ],
@@ -2355,24 +2440,28 @@
           "default": "[1, 0, 0, 0]",
           "label": "Row 0 (R)",
           "name": "row0",
+          "tooltip": "How much red, green, blue, and alpha each feed into the new red channel. The default takes red straight through.",
           "type": "vec4"
         },
         {
           "default": "[0, 1, 0, 0]",
           "label": "Row 1 (G)",
           "name": "row1",
+          "tooltip": "How much red, green, blue, and alpha each feed into the new green channel. The default takes green straight through.",
           "type": "vec4"
         },
         {
           "default": "[0, 0, 1, 0]",
           "label": "Row 2 (B)",
           "name": "row2",
+          "tooltip": "How much red, green, blue, and alpha each feed into the new blue channel. The default takes blue straight through.",
           "type": "vec4"
         },
         {
           "default": "[0, 0, 0, 1]",
           "label": "Row 3 (A)",
           "name": "row3",
+          "tooltip": "How much red, green, blue, and alpha each feed into the new alpha channel. The default takes alpha straight through.",
           "type": "vec4"
         }
       ],
@@ -2472,6 +2561,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The colour to key on. Pixels close to this become the mask, the classic move is the green or blue of a screen behind your subject.",
           "type": "vec3"
         },
         {
@@ -2482,6 +2572,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far a pixel's colour can sit from the key and still count as a match. Higher pulls in a wider range, and above about 0.5 it starts grabbing most of the image.",
           "type": "float"
         },
         {
@@ -2492,6 +2583,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Fades the edge of the mask. 0 gives a clean hard edge, higher values blur the transition between keyed and untouched.",
           "type": "float"
         },
         {
@@ -2502,6 +2594,7 @@
           ],
           "label": "Mode",
           "name": "mode",
+          "tooltip": "Select outputs white where the colour matches, good for applying an effect to that colour. Reject flips it for a traditional green screen knockout.",
           "type": "enum"
         }
       ],
@@ -2661,6 +2754,7 @@
             "1",
             "64"
           ],
+          "tooltip": "How many values to cycle through, so the output lands in 0 up to this minus 1. Default 7 matches the fluid seed patterns. Set it to your own row count.",
           "type": "int"
         }
       ],
@@ -2706,6 +2800,7 @@
             "1",
             "64"
           ],
+          "tooltip": "How many slots to cycle through before wrapping back to the start. Set it to 3 for a three-way swap or 8 for an eight-step bank.",
           "type": "int"
         }
       ],
@@ -2754,6 +2849,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Crossfades between the original image and the palette-mapped version. 0 leaves the source untouched and 1 is the full lookup.",
           "type": "float"
         },
         {
@@ -2764,6 +2860,7 @@
             "0.5",
             "3"
           ],
+          "tooltip": "Pushes brightness around the midpoint before the lookup, which spreads the image across more of the palette. 1 leaves it unchanged, higher is punchier.",
           "type": "float"
         }
       ],
@@ -2801,12 +2898,14 @@
           "default": "[0, 0, 0, 1]",
           "label": "Color A",
           "name": "color_a",
+          "tooltip": "The colour mapped to the dark end of the image. Black areas pick up this colour.",
           "type": "color"
         },
         {
           "default": "[1, 1, 1, 1]",
           "label": "Color B",
           "name": "color_b",
+          "tooltip": "The colour mapped to the bright end of the image. White areas pick up this colour.",
           "type": "color"
         }
       ],
@@ -2848,6 +2947,7 @@
           "default": "[0.5, 0.5]",
           "label": "UV",
           "name": "uv",
+          "tooltip": "Where in the image to read the colour, as a point from 0 to 1 across width and height. The centre is 0.5, 0.5.",
           "type": "vec2"
         },
         {
@@ -2858,6 +2958,7 @@
             "0",
             "64"
           ],
+          "tooltip": "Averages a square window of this many pixels around the sample point. 0 reads a single pixel, higher values smooth out noise so the reading reflects the region.",
           "type": "int"
         }
       ],
@@ -3078,12 +3179,14 @@
             "2",
             "64"
           ],
+          "tooltip": "How many points to connect in order. Wire it from a variable point source to grow or shrink the shape live.",
           "type": "int"
         },
         {
           "default": "true",
           "label": "Closed",
           "name": "closed",
+          "tooltip": "When on, joins the last point back to the first to close the loop, giving a full polygon. Turn it off for an open line that leaves the ends apart.",
           "type": "bool"
         },
         {
@@ -3094,6 +3197,7 @@
             "2",
             "64"
           ],
+          "tooltip": "The most points this can ever connect, which sizes the buffer. Set it once to cover your largest shape and leave it alone.",
           "type": "int"
         }
       ],
@@ -3149,6 +3253,7 @@
           ],
           "label": "Container",
           "name": "container",
+          "tooltip": "The shape that holds the particles in. None wraps them around the edges, while Cube, Sphere, and Torus bounce them back inside the surface.",
           "type": "enum"
         },
         {
@@ -3159,6 +3264,7 @@
             "0.2",
             "1"
           ],
+          "tooltip": "How big the container is inside the unit cube, from 0.2 to 1. Smaller values pull the walls in tighter. This has no effect when the container is set to None.",
           "type": "float"
         },
         {
@@ -3169,6 +3275,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles from the front of the buffer to contain. Set this to match the live particle count so idle slots are left alone.",
           "type": "int"
         }
       ],
@@ -3229,6 +3336,7 @@
           ],
           "label": "Container",
           "name": "container",
+          "tooltip": "The shape of the wall particles get pushed away from. None turns the push off entirely, the rest pick a Cube, Sphere, or Torus boundary.",
           "type": "enum"
         },
         {
@@ -3239,6 +3347,7 @@
             "0.2",
             "1"
           ],
+          "tooltip": "How big the container is. Smaller packs the particles into a tighter volume, larger gives them more room before the walls start pushing back.",
           "type": "float"
         },
         {
@@ -3249,6 +3358,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles in the buffer feel the wall push, counted from the front. It is capped to the real particle count.",
           "type": "int"
         }
       ],
@@ -3337,6 +3447,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The top-left weight of the 3x3 kernel. The nine weights read in reading order, top row first.",
           "type": "float"
         },
         {
@@ -3347,6 +3458,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The top-centre weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3357,6 +3469,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The top-right weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3367,6 +3480,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The middle-left weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3377,6 +3491,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The centre weight of the 3x3 kernel, applied to the pixel itself. Defaults to 1 so an untouched node passes the image straight through.",
           "type": "float"
         },
         {
@@ -3387,6 +3502,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The middle-right weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3397,6 +3513,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The bottom-left weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3407,6 +3524,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The bottom-centre weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3417,6 +3535,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "The bottom-right weight of the 3x3 kernel.",
           "type": "float"
         },
         {
@@ -3427,12 +3546,14 @@
             "-1",
             "1"
           ],
+          "tooltip": "A constant added to every pixel after the kernel runs. Useful for lifting emboss and edge-detect results out of black.",
           "type": "float"
         },
         {
           "default": "false",
           "label": "Normalise",
           "name": "normalise",
+          "tooltip": "Divides the result by the sum of the weights so brightness is preserved. Turn it on for blurs and off for sharpen or edge-detect kernels.",
           "type": "bool"
         }
       ],
@@ -3501,6 +3622,7 @@
             "16",
             "512"
           ],
+          "tooltip": "The width and height of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
           "type": "int"
         },
         {
@@ -3511,6 +3633,7 @@
             "16",
             "512"
           ],
+          "tooltip": "The depth of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
           "type": "int"
         },
         {
@@ -3521,6 +3644,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "How hard the swirl pulls particles into orbiting eddies. 0 is no swirl, higher spins them up. This is the dial that makes the flow read as smoke.",
           "type": "float"
         },
         {
@@ -3531,6 +3655,7 @@
             "-5000",
             "5000"
           ],
+          "tooltip": "How hard particles push along the gradient. Negative pulls them toward dense spots, positive pushes them away, default -500.",
           "type": "float"
         },
         {
@@ -3541,6 +3666,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The X part of the axis the swirl rotates around. The three axis values get normalised together, so feed raw sine and cosine without worrying about length.",
           "type": "float"
         },
         {
@@ -3551,6 +3677,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Y part of the axis the swirl rotates around, default 1. The three axis values get normalised together before the swirl is built.",
           "type": "float"
         },
         {
@@ -3561,6 +3688,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Z part of the axis the swirl rotates around. The three axis values get normalised together, so a length of zero falls back to straight up.",
           "type": "float"
         }
       ],
@@ -3597,6 +3725,7 @@
           "default": "0",
           "label": "Table",
           "name": "table",
+          "tooltip": "The built-in table of number rows it steps through. Each clip trigger advances to the next row and emits it.",
           "type": "table"
         }
       ],
@@ -3662,6 +3791,7 @@
             "0",
             "100"
           ],
+          "tooltip": "How wide the cylinder is at its base. Larger values push the copies further out from the centre axis.",
           "type": "float"
         },
         {
@@ -3672,6 +3802,7 @@
             "0",
             "100"
           ],
+          "tooltip": "How tall the wrapped shape stands. Larger values stretch the copies further up and down the axis.",
           "type": "float"
         },
         {
@@ -3682,6 +3813,7 @@
             "0",
             "16"
           ],
+          "tooltip": "How sharply the radius narrows toward the top, giving cone and conifer shapes. 0 is a straight cylinder, higher makes a pointier top.",
           "type": "float"
         },
         {
@@ -3692,6 +3824,7 @@
             "0",
             "100"
           ],
+          "tooltip": "Scales every copy placed on the surface. Feed the same value into a paired torus wrap so copies stay the same size across a morph.",
           "type": "float"
         }
       ],
@@ -3733,6 +3866,7 @@
             "64",
             "1024"
           ],
+          "tooltip": "The longest side, in pixels, the frame is shrunk to before the AI looks at it. Lower runs faster but reads depth coarsely, higher is sharper but slower.",
           "type": "int"
         },
         {
@@ -3743,6 +3877,7 @@
             "1",
             "30"
           ],
+          "tooltip": "How many frames to wait between depth estimates. 1 runs every frame for the freshest result, higher values ease the CPU load but the depth lags the picture a little.",
           "type": "int"
         }
       ],
@@ -3805,6 +3940,7 @@
             "0",
             "0.5"
           ],
+          "tooltip": "How strong a random kick each particle gets, from 0 for none up to 0.5. Higher spreads tight clumps apart faster, and the push is stronger where particles are densest.",
           "type": "float"
         },
         {
@@ -3815,6 +3951,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles get the random kick. Keep it matched to the particle count feeding the sim.",
           "type": "int"
         }
       ],
@@ -3886,6 +4023,7 @@
             "1",
             "1000000"
           ],
+          "tooltip": "How many cubes to draw, counted from the start of the field. Drop it to thin out the look or lighten the load.",
           "type": "int"
         },
         {
@@ -3896,6 +4034,7 @@
             "-50",
             "50"
           ],
+          "tooltip": "Horizontal position of the light in the scene. Move it to swing the shadows side to side.",
           "type": "float"
         },
         {
@@ -3906,6 +4045,7 @@
             "-50",
             "50"
           ],
+          "tooltip": "Height of the light above the scene. Higher places it overhead for short shadows, lower for long raking ones.",
           "type": "float"
         },
         {
@@ -3916,6 +4056,7 @@
             "-50",
             "50"
           ],
+          "tooltip": "Depth position of the light, toward or away from the camera.",
           "type": "float"
         },
         {
@@ -3926,6 +4067,7 @@
             "0",
             "10"
           ],
+          "tooltip": "Brightness of the light. 0 leaves the cubes in shadow, and higher values blow out the lit faces.",
           "type": "float"
         }
       ],
@@ -3972,6 +4114,7 @@
             "2",
             "4096"
           ],
+          "tooltip": "How many columns are in the source grid. This must match the grid the mesh came from or the height image will sample at the wrong spots.",
           "type": "int"
         },
         {
@@ -3982,6 +4125,7 @@
             "2",
             "4096"
           ],
+          "tooltip": "How many rows are in the source grid. This must match the grid the mesh came from.",
           "type": "int"
         },
         {
@@ -3992,6 +4136,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "How far the height image pushes each point up or down. 0 leaves the mesh flat, and negative values push the other way.",
           "type": "float"
         },
         {
@@ -4002,6 +4147,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The grey level that counts as no movement, from 0 to 1. At the default 0.5, mid grey stays put while brighter pixels rise and darker ones sink.",
           "type": "float"
         }
       ],
@@ -4200,6 +4346,7 @@
             "0",
             "5"
           ],
+          "tooltip": "The threshold pattern used to decide where pixels flip. Choose from Bayer, Halftone, Lines, X-Hatch, Noise and Diamond.",
           "type": "enum"
         }
       ],
@@ -4292,6 +4439,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Crossfades the outline back over the source. 0 leaves the image untouched and 1 shows the bare edges on black.",
           "type": "float"
         },
         {
@@ -4302,6 +4450,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How strong an edge has to be before it draws. Raise it to keep only the boldest outlines and drop the fine texture.",
           "type": "float"
         }
       ],
@@ -4342,6 +4491,7 @@
             "2",
             "64"
           ],
+          "tooltip": "How many points across each side of the grid. Drive this from the same value as the matching grid points node so the layout and the edges agree.",
           "type": "int"
         }
       ],
@@ -4408,6 +4558,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Horizontal centre of the circle across the frame, where 0 is the left edge and 1 is the right.",
           "type": "float"
         },
         {
@@ -4418,6 +4569,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "Vertical centre of the circle up the frame, where 0 is the bottom edge and 1 is the top.",
           "type": "float"
         },
         {
@@ -4428,6 +4580,7 @@
             "0",
             "4"
           ],
+          "tooltip": "Half the width of the shape. Make it different from Radius Y to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",
           "type": "float"
         },
         {
@@ -4438,6 +4591,7 @@
             "0",
             "4"
           ],
+          "tooltip": "Half the height of the shape. Make it different from Radius X to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",
           "type": "float"
         },
         {
@@ -4448,6 +4602,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Turns the oval around its centre, measured in degrees. Has no visible effect on a perfect circle.",
           "type": "angle"
         },
         {
@@ -4458,6 +4613,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Feathers the edge of the mask. 0 gives a clean hard edge, and higher values fade it out, measured in radius units so 1 spreads the falloff a full radius past the edge.",
           "type": "float"
         }
       ],
@@ -4699,6 +4855,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to move each frame, counted from the start of the buffer. Match it to your live particle count so dead slots stay put.",
           "type": "int"
         },
         {
@@ -4709,6 +4866,7 @@
             "0",
             "10"
           ],
+          "tooltip": "Scales how far every particle travels per step. 1 moves them at the force's natural pace, higher is faster. Wire an LFO or audio band in to drive the energy live.",
           "type": "float"
         }
       ],
@@ -4881,6 +5039,7 @@
             "0",
             "64"
           ],
+          "tooltip": "How zoomed in the noise is. Higher values pack more detail into the same space so neighbouring copies vary more.",
           "type": "float"
         },
         {
@@ -4891,6 +5050,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Slides through the noise along a third axis. Animate this from time to make the value on each copy drift smoothly.",
           "type": "float"
         },
         {
@@ -4901,6 +5061,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Shifts the noise sideways. Move it to pan the whole field or to reach a fresh patch of randomness.",
           "type": "float"
         },
         {
@@ -4911,6 +5072,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Shifts the noise vertically. Move it to pan the field or sample a different part of the pattern.",
           "type": "float"
         },
         {
@@ -4921,6 +5083,7 @@
             "1",
             "12"
           ],
+          "tooltip": "How many layers of detail to stack. More octaves add finer grain at the cost of more work, and 5 matches the classic fractal noise.",
           "type": "int"
         },
         {
@@ -4931,6 +5094,7 @@
             "1",
             "4"
           ],
+          "tooltip": "How much finer each stacked layer gets. Larger values open the cells up and spread the detail apart.",
           "type": "float"
         },
         {
@@ -4941,6 +5105,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much each finer layer adds, from 0 to 1. Lower values keep the result smooth while higher values make it rougher and busier.",
           "type": "float"
         }
       ],
@@ -5038,6 +5203,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "How much of the input's red channel feeds the output value. At 1 the red passes through, 0 ignores it, negative flips its sign.",
           "type": "float"
         },
         {
@@ -5048,6 +5214,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "How much of the input's green channel feeds the output value. At 0 the green is ignored, higher mixes more of it in.",
           "type": "float"
         },
         {
@@ -5058,6 +5225,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "A constant added to the result, useful for shifting the whole field up or down to centre it where you want.",
           "type": "float"
         }
       ],
@@ -5230,6 +5398,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far to squash the particle cloud flat toward the camera. 0 leaves the full volume, 1 presses it into a sheet facing the screen.",
           "type": "float"
         },
         {
@@ -5240,6 +5409,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to process, capped at the buffer size. Match it to the live particle count from the rest of the chain.",
           "type": "int"
         }
       ],
@@ -5275,6 +5445,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How fast the flow evolves over time. The default 0.01 drifts slowly, raise it for quicker swirling motion.",
           "type": "float"
         },
         {
@@ -5285,6 +5456,7 @@
             "0",
             "4"
           ],
+          "tooltip": "How much the field folds back on itself for swirlier flow. 0 gives a plain direct field and higher values get more turbulent.",
           "type": "float"
         },
         {
@@ -5300,6 +5472,7 @@
             "0",
             "2"
           ],
+          "tooltip": "What size to generate the field at. Full is sharpest, while half and quarter are 4x and 16x cheaper and upscale cleanly since the flow is low detail.",
           "type": "enum"
         }
       ],
@@ -5450,6 +5623,7 @@
             "0",
             "256"
           ],
+          "tooltip": "Multiplies the input before keeping only the fractional part, which sets how many times the gradient repeats. 10 gives ten tiled stripes from 0 to 1.",
           "type": "float"
         }
       ],
@@ -5556,6 +5730,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The X part of the viewing direction the rim is measured against, from -1 to 1. The default looks straight down the Z axis at the surface.",
           "type": "float"
         },
         {
@@ -5566,6 +5741,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Y part of the viewing direction the rim is measured against, from -1 to 1.",
           "type": "float"
         },
         {
@@ -5576,6 +5752,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The Z part of the viewing direction the rim is measured against, from -1 to 1. Default of 1 points the camera straight at the surface.",
           "type": "float"
         },
         {
@@ -5586,12 +5763,14 @@
             "0.5",
             "16"
           ],
+          "tooltip": "How tight the glowing edge is, from 0.5 for a wide soft rim up to 16 for a thin sharp line right at the silhouette.",
           "type": "float"
         },
         {
           "default": "[0.55, 0.3, 0.85, 1]",
           "label": "Color",
           "name": "color",
+          "tooltip": "The colour of the rim glow. This output is additive, so wire it onto your base shading with a Mix in Add mode.",
           "type": "color"
         }
       ],
@@ -5814,6 +5993,7 @@
           ],
           "label": "Axis",
           "name": "axis",
+          "tooltip": "Which direction this pass blurs, Horizontal or Vertical. Run one of each in sequence for a full blur in both directions.",
           "type": "enum"
         },
         {
@@ -5824,6 +6004,7 @@
             "1",
             "64"
           ],
+          "tooltip": "The widest the blur can reach at full strength, in pixels. The control image scales each pixel between sharp and this maximum.",
           "type": "float"
         },
         {
@@ -5835,6 +6016,7 @@
           ],
           "label": "Quality",
           "name": "quality",
+          "tooltip": "How many samples the blur takes, Low, Medium, or High. Higher is smoother but slower, and Medium matches the original.",
           "type": "enum"
         },
         {
@@ -5845,6 +6027,7 @@
           ],
           "label": "Weighting Mode",
           "name": "weighting_mode",
+          "tooltip": "None is a plain blur. ScatterAsGatherByCoC stops sharp areas from bleeding into blurry ones, which is what depth of field needs.",
           "type": "enum"
         }
       ],
@@ -5880,6 +6063,7 @@
             "36",
             "4096"
           ],
+          "tooltip": "How much room to reserve in the vertex buffer, set when the effect is built. 36 holds exactly one cube, and larger values only help if a downstream node expects a bigger buffer.",
           "type": "int"
         },
         {
@@ -5890,6 +6074,7 @@
             "0.01",
             "100"
           ],
+          "tooltip": "Scales the cube. 1 is the default unit cube, smaller shrinks it, larger grows it.",
           "type": "float"
         }
       ],
@@ -5936,6 +6121,7 @@
             "1024",
             "16000000"
           ],
+          "tooltip": "The most vertices the grid can ever hold. Set it once when building the effect since changing it rebuilds the graph, and keep it at or above resolution X times resolution Y.",
           "type": "int"
         },
         {
@@ -5946,6 +6132,7 @@
             "2",
             "4096"
           ],
+          "tooltip": "How many points across the grid. More points give finer detail at the cost of memory.",
           "type": "int"
         },
         {
@@ -5956,6 +6143,7 @@
             "2",
             "4096"
           ],
+          "tooltip": "How many points down the grid. More points give finer detail at the cost of memory.",
           "type": "int"
         },
         {
@@ -5966,6 +6154,7 @@
             "0.01",
             "100"
           ],
+          "tooltip": "The width of the grid in world units.",
           "type": "float"
         },
         {
@@ -5976,6 +6165,7 @@
             "0.01",
             "100"
           ],
+          "tooltip": "The depth of the grid in world units.",
           "type": "float"
         }
       ],
@@ -6025,6 +6215,7 @@
             "2",
             "64"
           ],
+          "tooltip": "How many steps to sample along each axis, giving you that many points squared. Changing it rebuilds the chain, so set it while authoring rather than driving it live.",
           "type": "int"
         },
         {
@@ -6035,6 +6226,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The end of the U range that gets sampled. Defaults to a full turn, which is the right shape for closed surfaces like a torus, or set it to 1 for flat UV meshes.",
           "type": "float"
         },
         {
@@ -6045,6 +6237,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The end of the V range that gets sampled. Defaults to a full turn, or set it to 1 for flat UV meshes.",
           "type": "float"
         }
       ],
@@ -6080,6 +6273,7 @@
             "1",
             "1000000"
           ],
+          "tooltip": "The largest number of copies this node can ever hold. It sets the memory allocation, so size it for your worst case and leave it.",
           "type": "int"
         },
         {
@@ -6090,6 +6284,7 @@
             "0",
             "1000000"
           ],
+          "tooltip": "How many copies to actually place this frame, default 64. Slide it freely up to the max capacity to thin out or fill the field.",
           "type": "int"
         },
         {
@@ -6102,6 +6297,7 @@
           ],
           "label": "Layout",
           "name": "layout",
+          "tooltip": "The pattern the copies fall into, Grid, Ring, Spiral, or Random.",
           "type": "enum"
         },
         {
@@ -6112,6 +6308,7 @@
             "0",
             "1000000"
           ],
+          "tooltip": "Changes the random layout. Move it to get a different spread. Only matters when the layout is set to Random.",
           "type": "int"
         },
         {
@@ -6122,6 +6319,7 @@
             "0",
             "100"
           ],
+          "tooltip": "How far the layout reaches along X, default 4. Larger values spread the copies wider apart.",
           "type": "float"
         },
         {
@@ -6132,6 +6330,7 @@
             "0",
             "100"
           ],
+          "tooltip": "How far the layout reaches along Y, default 4. Larger values spread the copies wider apart.",
           "type": "float"
         },
         {
@@ -6142,6 +6341,7 @@
             "0",
             "100"
           ],
+          "tooltip": "How far the layout reaches along Z, default 4. Larger values spread the copies wider apart.",
           "type": "float"
         },
         {
@@ -6152,6 +6352,7 @@
             "0",
             "10"
           ],
+          "tooltip": "The size every copy starts at. 1 leaves the base mesh at its native size, higher grows them all together.",
           "type": "float"
         },
         {
@@ -6162,6 +6363,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Tilts every copy around the X axis by the same amount, in degrees.",
           "type": "angle"
         },
         {
@@ -6172,6 +6374,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Spins every copy around the Y axis by the same amount, in degrees.",
           "type": "angle"
         },
         {
@@ -6182,6 +6385,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Rolls every copy around the Z axis by the same amount, in degrees.",
           "type": "angle"
         }
       ],
@@ -6233,6 +6437,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The first number in the list.",
           "type": "float"
         },
         {
@@ -6243,6 +6448,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The last number in the list, or just short of it when End Inclusive is off.",
           "type": "float"
         },
         {
@@ -6253,12 +6459,14 @@
             "2",
             "4096"
           ],
+          "tooltip": "How many evenly spaced numbers to produce between the start and end.",
           "type": "int"
         },
         {
           "default": "true",
           "label": "End Inclusive",
           "name": "end_inclusive",
+          "tooltip": "Whether the last value lands exactly on the end. On is right for closed curves that loop back, off is right for spacing points evenly around a circle.",
           "type": "bool"
         }
       ],
@@ -6330,6 +6538,7 @@
           ],
           "label": "Channel",
           "name": "channel",
+          "tooltip": "Which colour channel the slope is measured from, R, G, B, or A. Use R for a greyscale height field.",
           "type": "enum"
         },
         {
@@ -6340,6 +6549,7 @@
           ],
           "label": "Scale Mode",
           "name": "scale_mode",
+          "tooltip": "How the slope is scaled. Texel measures the raw pixel-to-pixel difference and suits normal maps and heightfields. UV scales by the image size so the result is in per-UV-unit space, which fluid-sim flow needs.",
           "type": "enum"
         },
         {
@@ -6350,6 +6560,7 @@
           ],
           "label": "Wrap Mode",
           "name": "wrap_mode",
+          "tooltip": "How edge pixels read their neighbours. Clamp holds the edge for normal images. Repeat wraps around to the far side, which you want for a tiling or cyclic fluid field.",
           "type": "enum"
         }
       ],
@@ -6392,6 +6603,7 @@
             "16",
             "512"
           ],
+          "tooltip": "The width and height of the volume in voxels, from 16 to 512. Match it to the density volume you are feeding in.",
           "type": "int"
         },
         {
@@ -6402,6 +6614,7 @@
             "16",
             "512"
           ],
+          "tooltip": "How many slices deep the volume is, from 16 to 512. Match it to the density volume you are feeding in.",
           "type": "int"
         }
       ],
@@ -6441,6 +6654,7 @@
           "default": "0",
           "label": "Stops",
           "name": "stops",
+          "tooltip": "The list of colour stops that make up the gradient, each set at a position along the strip. Add as many as you need up to 16.",
           "type": "table"
         },
         {
@@ -6451,6 +6665,7 @@
             "0",
             "8"
           ],
+          "tooltip": "How far along the value range the strip covers. 1 is the normal range, and 2 reaches past the last stop to catch bright overshoots for a thermal look.",
           "type": "float"
         }
       ],
@@ -6485,6 +6700,7 @@
             "2",
             "4096"
           ],
+          "tooltip": "How many sample points across and down, so the total is this number squared. Changing it rebuilds the chain since it sets the buffer size.",
           "type": "int"
         }
       ],
@@ -6533,6 +6749,7 @@
             "0",
             "1000000000"
           ],
+          "tooltip": "Picks which random layout you get. The same seed always gives the same result, so wire a beat or trigger here to reshuffle the pattern on cue.",
           "type": "float"
         },
         {
@@ -6543,6 +6760,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "How strongly the seed shifts the field along its first axis before hashing. Changing it gives a different family of random offsets.",
           "type": "float"
         },
         {
@@ -6553,6 +6771,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "How strongly the seed shifts the field along its second axis before hashing. Changing it gives a different family of random offsets.",
           "type": "float"
         },
         {
@@ -6567,6 +6786,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Hash2 returns a random pair in the red and green channels, good for 2D offsets. Hash1 returns a single random value across red, green, and blue.",
           "type": "enum"
         }
       ],
@@ -6730,6 +6950,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much of the reference image's above-white highlights to keep. At 1 the bright detail stays anchored to the reference, and at 0 the compressed image passes through untouched.",
           "type": "float"
         }
       ],
@@ -6781,6 +7002,7 @@
             "0.001",
             "4"
           ],
+          "tooltip": "How pronounced the surface detail reads. Larger values flatten the bumps out, smaller values make them steeper and more dramatic.",
           "type": "float"
         },
         {
@@ -6791,6 +7013,7 @@
             "0.1",
             "10"
           ],
+          "tooltip": "Scales the vertical slope so non-square frames keep the right shape. Leave it at 1 unless your canvas is stretched, then wire the frame aspect in.",
           "type": "float"
         },
         {
@@ -6801,6 +7024,7 @@
           ],
           "label": "Coord Space",
           "name": "coord_space",
+          "tooltip": "Which normal convention to output. TangentZ suits flat screen-space shading, while WorldYUp suits a 3D mesh lying flat with Y pointing up.",
           "type": "enum"
         }
       ],
@@ -6939,6 +7163,7 @@
           "default": "0",
           "label": "Folder",
           "name": "folder",
+          "tooltip": "The folder of images to play through. Files are sorted alphabetically and laid out as a strip you scrub with the position knob.",
           "type": "string"
         },
         {
@@ -6949,6 +7174,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Where you are in the folder, from the first image at 0 to the last at 1. Drive it with an LFO to sweep through the sequence.",
           "type": "float"
         },
         {
@@ -6959,18 +7185,21 @@
             "0.1",
             "10"
           ],
+          "tooltip": "Zooms into the current image. 1 fits it to frame and higher values crop in closer.",
           "type": "float"
         },
         {
           "default": "0",
           "label": "Next",
           "name": "next",
+          "tooltip": "Steps forward one image each time it fires. Wire a MIDI button or clip retrigger to it.",
           "type": "trigger"
         },
         {
           "default": "0",
           "label": "Prev",
           "name": "prev",
+          "tooltip": "Steps back one image each time it fires. Wire a MIDI button or clip retrigger to it.",
           "type": "trigger"
         }
       ],
@@ -7100,6 +7329,7 @@
             "0",
             "256"
           ],
+          "tooltip": "How tightly the noise varies across the copies. Higher values make neighbouring copies wander in different directions, lower values move whole regions together.",
           "type": "float"
         },
         {
@@ -7110,6 +7340,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How far each copy is pushed off its spot. 0 leaves the grid perfect, higher values scatter the copies further.",
           "type": "float"
         },
         {
@@ -7120,6 +7351,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Slides the noise pattern along over time so the scatter animates. Drive it from a time wire for slow drift.",
           "type": "float"
         },
         {
@@ -7130,6 +7362,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Picks which slice of the noise field to sample. Animate it from time to make the whole pattern evolve in place rather than slide.",
           "type": "float"
         },
         {
@@ -7140,6 +7373,7 @@
             "0",
             "10000"
           ],
+          "tooltip": "Separates the noise used for each axis so the three directions wobble independently. Move it to land in a different part of the noise.",
           "type": "float"
         }
       ],
@@ -7185,6 +7419,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How much random twist to add to each copy. 0 leaves every copy aligned, and higher values scatter their angles more. The twist is added on top of any rotation the copies already had.",
           "type": "float"
         }
       ],
@@ -7227,6 +7462,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far to blend toward the inverted image, from 0 for the original up to 1 for the full negative. Values in between give a partial invert.",
           "type": "float"
         }
       ],
@@ -7293,6 +7529,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Horizontal direction the light comes from. Positive lights the surface from the right, negative from the left.",
           "type": "float"
         },
         {
@@ -7303,6 +7540,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Vertical direction the light comes from. Positive lights from above, negative from below.",
           "type": "float"
         },
         {
@@ -7313,6 +7551,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "How much the light points straight out of the screen toward the surface. The direction is normalised so only the balance between the three axes matters.",
           "type": "float"
         },
         {
@@ -7323,6 +7562,7 @@
             "0",
             "1"
           ],
+          "tooltip": "A flat fill that keeps the unlit side from going fully black. 0 gives hard shadows, higher values lift the whole surface toward flat.",
           "type": "float"
         }
       ],
@@ -7403,6 +7643,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far to blend from the first arrangement toward the second. 0 is all the first, 1 is all the second, and 0.5 is the midway morph. Values outside that range overshoot.",
           "type": "float"
         }
       ],
@@ -7695,6 +7936,7 @@
             "1",
             "64"
           ],
+          "tooltip": "How many samples to walk along the flow in each direction. More steps draw longer smears, up to a limit of 64.",
           "type": "int"
         },
         {
@@ -7705,6 +7947,7 @@
             "0.1",
             "16"
           ],
+          "tooltip": "How far each step travels, in pixels. Steps times this sets the total streak length.",
           "type": "float"
         }
       ],
@@ -7810,6 +8053,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The kind of light. Sun throws parallel rays from far away like daylight, Point glows outward from a single spot in the scene.",
           "type": "enum"
         },
         {
@@ -7820,6 +8064,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Where the light sits along X, in world units. For a Sun this anchors the shadow frame rather than the brightness direction.",
           "type": "float"
         },
         {
@@ -7830,6 +8075,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Where the light sits along Y, in world units, default 30 so it starts overhead.",
           "type": "float"
         },
         {
@@ -7840,6 +8086,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Where the light sits along Z, in world units.",
           "type": "float"
         },
         {
@@ -7850,6 +8097,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "The X of the point the light looks at. For a Sun this sets the direction the rays travel, for a Point it aims the shadow.",
           "type": "float"
         },
         {
@@ -7860,6 +8108,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "The Y of the point the light looks at, setting which way it shines.",
           "type": "float"
         },
         {
@@ -7870,6 +8119,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "The Z of the point the light looks at, setting which way it shines.",
           "type": "float"
         },
         {
@@ -7880,6 +8130,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red part of the light colour, from 0 to 1. The colour is multiplied by intensity before it reaches the surface.",
           "type": "float"
         },
         {
@@ -7890,6 +8141,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green part of the light colour, from 0 to 1. The colour is multiplied by intensity before it reaches the surface.",
           "type": "float"
         },
         {
@@ -7900,6 +8152,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue part of the light colour, from 0 to 1. The colour is multiplied by intensity before it reaches the surface.",
           "type": "float"
         },
         {
@@ -7910,6 +8163,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How bright the light is, default 1. 0 turns it off, higher pushes more light onto the scene.",
           "type": "float"
         },
         {
@@ -7920,6 +8174,7 @@
             "0.01",
             "200"
           ],
+          "tooltip": "How far the light reaches, default 30. For a Sun it sizes the shadow area, for a Point it is the distance where brightness halves. Set it to your scene scale.",
           "type": "float"
         },
         {
@@ -7930,6 +8185,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Whether this light drops shadows. Above 0.5 turns them on, below skips the shadow pass entirely for speed.",
           "type": "float"
         },
         {
@@ -7945,6 +8201,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How fuzzy the shadow edges are, Hard, Soft, or VerySoft. Softer edges look nicer but cost more to render.",
           "type": "enum"
         },
         {
@@ -7955,6 +8212,7 @@
             "0",
             "0.1"
           ],
+          "tooltip": "Nudges the shadow off the surface to stop a surface shadowing itself, default 0.003. Raise it if you see speckled self-shadowing, lower it if shadows float away from contact points.",
           "type": "float"
         },
         {
@@ -7965,6 +8223,7 @@
             "128",
             "8192"
           ],
+          "tooltip": "The detail of the shadow map, default 2048. Higher gives sharper shadows on big scenes, lower runs faster. Rarely needs changing during a show.",
           "type": "int"
         }
       ],
@@ -8137,6 +8396,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Scales the whole mask up or down so you can crossfade the effect in and out from one knob. At 0 the output is always A regardless of the mask.",
           "type": "float"
         }
       ],
@@ -8174,24 +8434,28 @@
           "default": "[0.08, 0.05, 0.22, 1]",
           "label": "Y Low (shadow)",
           "name": "color_y_low",
+          "tooltip": "The shadow colour along the vertical axis, used where the surface faces down.",
           "type": "color"
         },
         {
           "default": "[0.55, 0.75, 0.95, 1]",
           "label": "Y High (highlight)",
           "name": "color_y_high",
+          "tooltip": "The highlight colour along the vertical axis, used where the surface faces up.",
           "type": "color"
         },
         {
           "default": "[0.25, 0.1, 0.45, 1]",
           "label": "X Low (left)",
           "name": "color_x_low",
+          "tooltip": "The colour along the left side of the surface. Set it equal to the right colour to drop the horizontal tint.",
           "type": "color"
         },
         {
           "default": "[0.15, 0.55, 0.6, 1]",
           "label": "X High (right)",
           "name": "color_x_high",
+          "tooltip": "The colour along the right side of the surface.",
           "type": "color"
         }
       ],
@@ -8367,6 +8631,7 @@
           ],
           "label": "Mode",
           "name": "mode",
+          "tooltip": "Which fold to apply, from a simple Mirror or FlipY to a four-way QuadMirror or a FoldBoth kaleidoscope. This node outputs the folded coordinates, so send it into Remap to fold a picture.",
           "type": "enum"
         }
       ],
@@ -8853,6 +9118,7 @@
             "2",
             "4096"
           ],
+          "tooltip": "The width of the square grid the points are laid out on. This has to match the producer feeding it, since that is how each point finds its four neighbours.",
           "type": "int"
         },
         {
@@ -8863,6 +9129,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much each point keeps its own value versus averaging in its neighbours. 1 leaves it untouched and lower values smooth harder, with 0.2 being heavy smoothing.",
           "type": "float"
         }
       ],
@@ -8915,6 +9182,7 @@
             "0.1",
             "20"
           ],
+          "tooltip": "How quickly the cubes ease toward their target rotation. Higher values snap faster, lower values glide more slowly.",
           "type": "float"
         },
         {
@@ -8925,6 +9193,7 @@
             "0.1",
             "5"
           ],
+          "tooltip": "Overall size of the cube field. 1 is the default framing, higher fills more of the frame.",
           "type": "float"
         },
         {
@@ -8935,6 +9204,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far the faces break apart from each cube. 0 keeps the cubes solid, higher pulls the faces outward.",
           "type": "float"
         },
         {
@@ -8945,6 +9215,7 @@
             "0.1",
             "50"
           ],
+          "tooltip": "How fast the rotation kick fades after each trigger, per second. Higher values make a quick snap, lower values let the kick linger.",
           "type": "float"
         }
       ],
@@ -9009,6 +9280,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Which kind of noise. Perlin and Simplex are both smooth and organic, with Simplex showing fewer grid-aligned streaks. Random is uncorrelated per-pixel grain for film and dither.",
           "type": "enum"
         },
         {
@@ -9019,6 +9291,7 @@
             "0",
             "64"
           ],
+          "tooltip": "How zoomed in the noise pattern is. Low values give big soft blobs, higher values pack in finer detail.",
           "type": "float"
         },
         {
@@ -9029,6 +9302,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the noise field sideways. Wire an LFO in to drift or animate the pattern over time.",
           "type": "float"
         },
         {
@@ -9039,6 +9313,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the noise field up and down. Wire an LFO in to drift or animate the pattern over time.",
           "type": "float"
         },
         {
@@ -9049,6 +9324,7 @@
             "1",
             "8"
           ],
+          "tooltip": "How many layers of finer noise stack on top of each other for fractal detail. 1 is a single smooth layer, raise it toward 8 for richer texture. Ignored when Type is Random.",
           "type": "int"
         },
         {
@@ -9059,6 +9335,7 @@
             "1",
             "4"
           ],
+          "tooltip": "How much smaller each stacked layer gets than the one before. 2 is the classic setting. Only matters when Detail is above 1.",
           "type": "float"
         },
         {
@@ -9069,6 +9346,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much quieter each stacked layer is than the one before. 0.5 gives the familiar natural look, lower makes the fine detail fainter. Only matters when Detail is above 1.",
           "type": "float"
         }
       ],
@@ -9217,6 +9495,7 @@
             "64",
             "1024"
           ],
+          "tooltip": "The longest side the image is shrunk to before flow is measured, in pixels. Smaller is faster and softer while larger catches finer motion at more cost.",
           "type": "int"
         },
         {
@@ -9227,6 +9506,7 @@
             "1",
             "30"
           ],
+          "tooltip": "How many frames between each flow measurement. Higher values save work but the motion lags further behind the picture.",
           "type": "int"
         }
       ],
@@ -9282,6 +9562,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The value the red channel falls back to when nothing is wired into the red input.",
           "type": "float"
         },
         {
@@ -9292,6 +9573,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The value the green channel falls back to when nothing is wired into the green input.",
           "type": "float"
         },
         {
@@ -9302,6 +9584,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The value the blue channel falls back to when nothing is wired into the blue input.",
           "type": "float"
         },
         {
@@ -9312,6 +9595,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "The value the alpha channel falls back to when nothing is wired into the alpha input. Defaults to 1 so the result stays fully opaque.",
           "type": "float"
         }
       ],
@@ -9362,6 +9646,7 @@
             "0",
             "4"
           ],
+          "tooltip": "Rescales the whole curve. At 1 it fills the inner half of the screen, and 4 cancels the built-in screen-fit so the X and Y values land at their raw screen-fractional size.",
           "type": "float"
         }
       ],
@@ -9497,6 +9782,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red part of the base colour, from 0 to 1. On metal this also tints the reflections.",
           "type": "float"
         },
         {
@@ -9507,6 +9793,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green part of the base colour, from 0 to 1. On metal this also tints the reflections.",
           "type": "float"
         },
         {
@@ -9517,6 +9804,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue part of the base colour, from 0 to 1. On metal this also tints the reflections.",
           "type": "float"
         },
         {
@@ -9527,6 +9815,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How opaque the surface is, from fully see-through at 0 to solid at 1.",
           "type": "float"
         },
         {
@@ -9537,6 +9826,7 @@
             "0",
             "1"
           ],
+          "tooltip": "A flat fill light so shadowed faces are not pure black, default 0.05. Raise it to lift the darks, drop it for more contrast.",
           "type": "float"
         },
         {
@@ -9547,6 +9837,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How metal the surface reads. 0 is a dielectric like plastic or wood, 1 is bare metal like chrome or gold.",
           "type": "float"
         },
         {
@@ -9557,6 +9848,7 @@
             "0.01",
             "1"
           ],
+          "tooltip": "How rough the surface is, default 0.5. Near 0 gives a sharp mirror finish, 1 is fully matte. It never reaches true zero to keep the highlight stable.",
           "type": "float"
         },
         {
@@ -9567,6 +9859,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red part of the colour the surface glows on its own, before intensity scales it.",
           "type": "float"
         },
         {
@@ -9577,6 +9870,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green part of the colour the surface glows on its own, before intensity scales it.",
           "type": "float"
         },
         {
@@ -9587,6 +9881,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue part of the colour the surface glows on its own, before intensity scales it.",
           "type": "float"
         },
         {
@@ -9597,6 +9892,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How strongly the surface glows on its own, default 0 for no glow. Raise it to make the material light up regardless of the scene lights.",
           "type": "float"
         }
       ],
@@ -9902,6 +10198,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Red component of the surface colour, from 0 to 1.",
           "type": "float"
         },
         {
@@ -9912,6 +10209,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Green component of the surface colour, from 0 to 1.",
           "type": "float"
         },
         {
@@ -9922,6 +10220,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Blue component of the surface colour, from 0 to 1.",
           "type": "float"
         },
         {
@@ -9932,6 +10231,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How opaque the surface is. 1 is solid, lower values let what is behind show through.",
           "type": "float"
         },
         {
@@ -9942,6 +10242,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How lit the shadowed side stays. 0 leaves unlit faces fully dark for hard contrast, and higher values raise the floor so the whole object reads. Around 0.3 gives a half-lit look.",
           "type": "float"
         },
         {
@@ -9952,6 +10253,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Red component of the highlight colour, from 0 to 1. Tint it to colour the shine.",
           "type": "float"
         },
         {
@@ -9962,6 +10264,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Green component of the highlight colour, from 0 to 1. Tint it to colour the shine.",
           "type": "float"
         },
         {
@@ -9972,6 +10275,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Blue component of the highlight colour, from 0 to 1. Tint it to colour the shine.",
           "type": "float"
         },
         {
@@ -9982,6 +10286,7 @@
             "1",
             "256"
           ],
+          "tooltip": "How tight the shiny highlight is. Around 1 is very soft and almost matte, 32 is a normal glossy spot, and 256 is a tiny pinpoint glint.",
           "type": "float"
         },
         {
@@ -9992,6 +10297,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Red component of the glow colour the surface gives off on its own, from 0 to 1. Needs Emission Intensity above 0 to show.",
           "type": "float"
         },
         {
@@ -10002,6 +10308,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Green component of the glow colour the surface gives off on its own, from 0 to 1. Needs Emission Intensity above 0 to show.",
           "type": "float"
         },
         {
@@ -10012,6 +10319,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Blue component of the glow colour the surface gives off on its own, from 0 to 1. Needs Emission Intensity above 0 to show.",
           "type": "float"
         },
         {
@@ -10022,6 +10330,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How brightly the surface glows on its own, independent of any light. 0 means no glow, and higher values make it self-lit.",
           "type": "float"
         }
       ],
@@ -10056,6 +10365,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "The horizontal centre that angle and distance are measured from, where 0.5 is the middle of the frame.",
           "type": "float"
         },
         {
@@ -10066,6 +10376,7 @@
             "-1",
             "2"
           ],
+          "tooltip": "The vertical centre that angle and distance are measured from, where 0.5 is the middle of the frame.",
           "type": "float"
         }
       ],
@@ -10110,6 +10421,7 @@
           ],
           "label": "Shape",
           "name": "shape",
+          "tooltip": "Which of the five Platonic solids to outline, from Tetra and Cube through to Icosa and Dodeca. Drive the matching points node from the same value so corners and edges agree.",
           "type": "enum"
         }
       ],
@@ -10154,6 +10466,7 @@
           ],
           "label": "Shape",
           "name": "shape",
+          "tooltip": "Which of the five Platonic solids to build, from Tetrahedron through Cube, Octahedron, Icosahedron, to Dodecahedron. Drive the same choice into the matching edges node so corners and lines agree.",
           "type": "enum"
         }
       ],
@@ -10248,6 +10561,7 @@
             "0.01",
             "32"
           ],
+          "tooltip": "Raises each value to this power. Above 1 pushes the midtones toward black for sharper points, and below 1 lifts the darks like a gamma brighten. Negative input is clamped to 0 first.",
           "type": "float"
         }
       ],
@@ -10299,6 +10613,7 @@
           ],
           "label": "Projection",
           "name": "mode",
+          "tooltip": "How the 3D points flatten to 2D. Orthographic keeps a flat scale and ignores depth, while Perspective shrinks far points toward a vanishing point.",
           "type": "enum"
         },
         {
@@ -10309,6 +10624,7 @@
             "0",
             "4"
           ],
+          "tooltip": "How much the flattened shape is zoomed. Higher values fill more of the frame.",
           "type": "float"
         },
         {
@@ -10319,6 +10635,7 @@
             "0.5",
             "100"
           ],
+          "tooltip": "The camera distance in Perspective mode. Closer distances exaggerate the depth foreshortening, farther ones flatten it out. Orthographic mode ignores it.",
           "type": "float"
         }
       ],
@@ -10359,6 +10676,7 @@
             "0",
             "4"
           ],
+          "tooltip": "How large the flattened shape comes out, default 0.25. Higher fills more of the frame.",
           "type": "float"
         },
         {
@@ -10369,6 +10687,7 @@
             "0.5",
             "100"
           ],
+          "tooltip": "How far the 4D camera sits from the shape, default 3. Small values exaggerate the four-dimensional warp, large values flatten it out.",
           "type": "float"
         }
       ],
@@ -10435,6 +10754,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Horizontal centre of the blast, from 0 at the left edge to 1 at the right.",
           "type": "float"
         },
         {
@@ -10445,6 +10765,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Vertical centre of the blast, from 0 at the top to 1 at the bottom.",
           "type": "float"
         },
         {
@@ -10455,6 +10776,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How hard the burst pushes. At 0 the field is empty and the node costs nothing, raise it to throw particles harder.",
           "type": "float"
         },
         {
@@ -10465,6 +10787,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The current strength of the burst from 0 to 1, usually driven by a decay so the impulse fades after it fires. At 0 the field is empty.",
           "type": "float"
         },
         {
@@ -10475,6 +10798,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far the push reaches from the centre point, in fractions of the frame. The force falls off smoothly to nothing at the edge of this radius.",
           "type": "float"
         },
         {
@@ -10485,6 +10809,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Feeds the noise that breaks up the push so it looks organic rather than perfectly radial. Wire your time source in to keep it animating.",
           "type": "float"
         }
       ],
@@ -10598,6 +10923,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Which way the push points. Radial fans outward from the centre and fades toward the edge. Linear pushes everything the same way along the Angle you set.",
           "type": "enum"
         },
         {
@@ -10608,6 +10934,7 @@
             "0",
             "360"
           ],
+          "tooltip": "The push direction for Linear mode, measured in degrees. Ignored in Radial mode.",
           "type": "float"
         },
         {
@@ -10618,6 +10945,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How much the radial push fades from centre to edge. 1 keeps the full centre-to-edge ramp, and 0 makes the push the same strength everywhere. Only matters in Radial mode.",
           "type": "float"
         }
       ],
@@ -10668,6 +10996,7 @@
             "0",
             "16"
           ],
+          "tooltip": "Brightens the image before the curve is applied, from 0 up to 16. 1 leaves it as is, higher pushes more of the picture toward the highlights.",
           "type": "float"
         },
         {
@@ -10678,6 +11007,7 @@
             "0",
             "8"
           ],
+          "tooltip": "A second multiplier on the signal before tone mapping, from 0 to 8. 1 leaves it unchanged.",
           "type": "float"
         },
         {
@@ -10688,6 +11018,7 @@
           ],
           "label": "Curve",
           "name": "curve",
+          "tooltip": "Which Reinhard curve to use. Extended keeps more detail in bright highlights, while Simple is the textbook version that crushes them harder.",
           "type": "enum"
         }
       ],
@@ -10737,6 +11068,7 @@
           ],
           "label": "Wrap",
           "name": "wrap",
+          "tooltip": "What happens when the map points outside the image. Clamp holds the edge pixel, Repeat tiles the image, and Mirror bounces it back.",
           "type": "enum"
         },
         {
@@ -10747,6 +11079,7 @@
           ],
           "label": "Field Mode",
           "name": "mode",
+          "tooltip": "How to read the coordinate map. Absolute treats it as the exact spot to sample, while Relative treats it as an offset added to each pixel's own position so displacement fields stack cleanly.",
           "type": "enum"
         }
       ],
@@ -10857,6 +11190,7 @@
           "default": "[0.85, 0.92, 1, 1]",
           "label": "Color",
           "name": "color",
+          "tooltip": "The colour of every rectangle drawn on top of the image.",
           "type": "color"
         },
         {
@@ -10867,6 +11201,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How opaque the rectangles are. The blend is additive so even at full alpha the rectangles add their colour to whatever is underneath rather than fully covering it.",
           "type": "float"
         },
         {
@@ -10877,6 +11212,7 @@
             "0",
             "256"
           ],
+          "tooltip": "How many rectangles from the list to draw. It is safe to leave high since empty zero size entries are skipped automatically.",
           "type": "int"
         }
       ],
@@ -10953,6 +11289,7 @@
             "1",
             "1000000"
           ],
+          "tooltip": "How many copies of the mesh to draw. It is capped to the size of the transform list you wire in.",
           "type": "int"
         }
       ],
@@ -10999,18 +11336,21 @@
             "0.0001",
             "0.1"
           ],
+          "tooltip": "How thick each line is drawn, as a fraction of the frame height. Around 0.002 is roughly one pixel at 1080p.",
           "type": "float"
         },
         {
           "default": "true",
           "label": "Closed Loop",
           "name": "closed_loop",
+          "tooltip": "Joins the last point back to the first so the path closes into a loop. Turn it off to leave an open strip.",
           "type": "bool"
         },
         {
           "default": "false",
           "label": "Show Vertices",
           "name": "show_verts",
+          "tooltip": "Draws a dot at each point as well as the connecting lines.",
           "type": "bool"
         },
         {
@@ -11021,12 +11361,14 @@
             "0",
             "4"
           ],
+          "tooltip": "How large the vertex dots are drawn, where 1 matches the classic generator size.",
           "type": "float"
         },
         {
           "default": "false",
           "label": "Animate",
           "name": "animate",
+          "tooltip": "Reveals the lines as a scrolling window that travels along the path rather than drawing them all at once.",
           "type": "bool"
         },
         {
@@ -11037,6 +11379,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How fast the reveal window scrolls when Animate is on.",
           "type": "float"
         },
         {
@@ -11047,6 +11390,7 @@
             "0.001",
             "1"
           ],
+          "tooltip": "The fraction of the path shown at once when Animate is on. Small values draw a short travelling segment, larger values show more of the line.",
           "type": "float"
         },
         {
@@ -11057,6 +11401,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How hard the lines pulse brighter on each beat. Set it to 0 to hold a steady brightness.",
           "type": "float"
         },
         {
@@ -11067,6 +11412,7 @@
             "0",
             "4"
           ],
+          "tooltip": "The red amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
           "type": "float"
         },
         {
@@ -11077,6 +11423,7 @@
             "0",
             "4"
           ],
+          "tooltip": "The green amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
           "type": "float"
         },
         {
@@ -11087,6 +11434,7 @@
             "0",
             "4"
           ],
+          "tooltip": "The blue amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
           "type": "float"
         },
         {
@@ -11097,6 +11445,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The opacity of the lines, from invisible at 0 to fully solid at 1.",
           "type": "float"
         }
       ],
@@ -11175,6 +11524,7 @@
             "0.02",
             "1"
           ],
+          "tooltip": "The text height as a fraction of the frame, default 0.25 for about a quarter of the screen.",
           "type": "float"
         },
         {
@@ -11185,6 +11535,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Moves the text left and right across the frame, from -1 at the left edge to 1 at the right, 0 is centred.",
           "type": "float"
         },
         {
@@ -11195,6 +11546,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Moves the text up and down the frame, from -1 to 1, 0 is centred.",
           "type": "float"
         },
         {
@@ -11205,6 +11557,7 @@
             "0.1",
             "5"
           ],
+          "tooltip": "An extra size multiplier on top of the size setting. 1 leaves it as is, higher enlarges the text.",
           "type": "float"
         },
         {
@@ -11220,6 +11573,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How the lines line up sideways, Left, Center, or Right.",
           "type": "float"
         },
         {
@@ -11235,6 +11589,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How the block anchors vertically, Top, Center, or Bottom.",
           "type": "float"
         },
         {
@@ -11245,6 +11600,7 @@
             "-0.5",
             "2"
           ],
+          "tooltip": "Extra gap between letters. 0 is the font's normal spacing, higher spreads them apart and negative packs them tighter.",
           "type": "float"
         },
         {
@@ -11255,18 +11611,21 @@
             "0.5",
             "3"
           ],
+          "tooltip": "The gap between lines, default 1.2. Lower tightens the lines, higher opens them up.",
           "type": "float"
         },
         {
           "default": "0",
           "label": "Text",
           "name": "text",
+          "tooltip": "The words to draw. Wire this through the card so you can change the message live during a show.",
           "type": "string"
         },
         {
           "default": "0",
           "label": "Font",
           "name": "fontFamily",
+          "tooltip": "The font to use by name. Leave it blank to fall back to the built-in default.",
           "type": "string"
         }
       ],
@@ -11329,12 +11688,14 @@
             "0",
             "3"
           ],
+          "tooltip": "What the labels show. Index is the array number, Hex is a hex ID, Coord prints the X and Y position, and Float3 shows a wired value.",
           "type": "enum"
         },
         {
           "default": "[0.85, 0.92, 1, 1]",
           "label": "Color",
           "name": "color",
+          "tooltip": "The colour of the printed text.",
           "type": "color"
         },
         {
@@ -11345,6 +11706,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Overall opacity of the labels. 1 is solid and lower values fade them into the image.",
           "type": "float"
         },
         {
@@ -11355,6 +11717,7 @@
             "0.25",
             "4"
           ],
+          "tooltip": "Size of the text. 1 is the base size, raise it for bigger labels.",
           "type": "float"
         },
         {
@@ -11365,6 +11728,7 @@
             "0",
             "256"
           ],
+          "tooltip": "The most labels to draw. Lower it to thin out a crowded readout.",
           "type": "int"
         },
         {
@@ -11375,6 +11739,7 @@
             "-0.5",
             "0.5"
           ],
+          "tooltip": "Nudges every label sideways from its anchor point, in fractions of the frame width.",
           "type": "float"
         },
         {
@@ -11385,6 +11750,7 @@
             "-0.5",
             "0.5"
           ],
+          "tooltip": "Nudges every label up or down from its anchor point, in fractions of the frame height.",
           "type": "float"
         },
         {
@@ -11402,6 +11768,7 @@
             "0",
             "4"
           ],
+          "tooltip": "Which corner or centre of each region the label sits on, from Top Left through to Center.",
           "type": "enum"
         }
       ],
@@ -11442,6 +11809,7 @@
             "16",
             "512"
           ],
+          "tooltip": "Width and height of the volume in cells. This must match the particle scatter that filled the buffer.",
           "type": "int"
         },
         {
@@ -11452,6 +11820,7 @@
             "16",
             "512"
           ],
+          "tooltip": "Depth of the volume in cells. This must match the particle scatter that filled the buffer.",
           "type": "int"
         }
       ],
@@ -11492,6 +11861,7 @@
             "1",
             "65536"
           ],
+          "tooltip": "The divisor that turns the raw counter values back into density. It must match the scale the scatter step wrote with, default 4096, or the brightness comes out wrong.",
           "type": "float"
         }
       ],
@@ -11537,6 +11907,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "How far to spin the coordinate field around the centre, in degrees. A positive angle turns the +X direction toward +Y. This rotates the coordinates used for a warp, not the picture itself.",
           "type": "angle"
         }
       ],
@@ -11593,6 +11964,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Spin around the horizontal axis, in degrees. Wire an LFO or a beat in to keep it tumbling.",
           "type": "angle"
         },
         {
@@ -11603,6 +11975,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Spin around the vertical axis, in degrees.",
           "type": "angle"
         },
         {
@@ -11613,6 +11986,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Spin around the axis facing the camera, in degrees, which rolls the mesh in the plane of the screen.",
           "type": "angle"
         }
       ],
@@ -11668,6 +12042,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Rotation in the XY plane, in degrees. Wire it through time for a continuous tumble.",
           "type": "angle"
         },
         {
@@ -11678,6 +12053,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Rotation in the ZW plane, in degrees. This plane reaches into the fourth dimension and is what makes a tesseract turn inside out.",
           "type": "angle"
         },
         {
@@ -11688,6 +12064,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Rotation in the XW plane, in degrees. Combine it with the other two planes for a full 4D tumble.",
           "type": "angle"
         }
       ],
@@ -11778,6 +12155,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Turns every vector in the field by this amount, in degrees. The default 90 gives the perpendicular curl flow used for fluid sims.",
           "type": "angle"
         }
       ],
@@ -11865,6 +12243,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles read the volume this frame, capped to the size of the particle list. Entries beyond this count are left untouched.",
           "type": "int"
         }
       ],
@@ -11915,6 +12294,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to sample for, counted from the start of the list. Keep it matched to the particle count feeding the rest of the chain.",
           "type": "int"
         }
       ],
@@ -11955,6 +12335,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How deep into the volume to cut the slice, from the front at 0 to the back at 1. Sweep it smoothly to animate through the volume.",
           "type": "float"
         },
         {
@@ -11965,6 +12346,7 @@
             "0.05",
             "10"
           ],
+          "tooltip": "Zooms the slice into the output frame. 1 fills it normally, higher crops in tighter, lower pulls back.",
           "type": "float"
         },
         {
@@ -11975,6 +12357,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Shifts which part of the slice you see along X, from -1 to 1. Use it to pan across the volume when zoomed in.",
           "type": "float"
         },
         {
@@ -11985,6 +12368,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "Shifts which part of the slice you see along Y, from -1 to 1. Use it to pan across the volume when zoomed in.",
           "type": "float"
         }
       ],
@@ -12028,6 +12412,7 @@
             "0",
             "2"
           ],
+          "tooltip": "How vivid the colours are. 0 is full greyscale, 1 leaves it unchanged, and above 1 oversaturates.",
           "type": "float"
         }
       ],
@@ -12073,6 +12458,7 @@
             "-360",
             "360"
           ],
+          "tooltip": "How much is added to every slot on each trigger. Use 90 to step every value by a quarter turn per hit, negative to count down.",
           "type": "float"
         },
         {
@@ -12083,12 +12469,14 @@
             "1",
             "64"
           ],
+          "tooltip": "How many slots the running list holds. Set it to match the number of values the downstream node expects.",
           "type": "int"
         },
         {
           "default": "0",
           "label": "Initial",
           "name": "initial",
+          "tooltip": "The starting values for the slots, taken from the first row of a table. Left unset, every slot starts at zero.",
           "type": "table"
         }
       ],
@@ -12140,6 +12528,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "Multiplies every colour before the offset is added. 1 leaves it unchanged, and a negative value inverts. Use 2 with offset -1 to turn a 0 to 1 field back into a signed -1 to 1 one.",
           "type": "float"
         },
         {
@@ -12150,6 +12539,7 @@
             "-16",
             "16"
           ],
+          "tooltip": "Added to every colour after the scale. 0 leaves it unchanged. Use 0.5 with scale 0.5 to fit a signed -1 to 1 field into the 0 to 1 range.",
           "type": "float"
         }
       ],
@@ -12203,6 +12593,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How far the torn rows slide sideways and how many of them tear, from 0 for none up to 1. Feed the output into a Remap in Relative mode.",
           "type": "float"
         },
         {
@@ -12213,6 +12604,7 @@
             "0",
             "1"
           ],
+          "tooltip": "How many rows tear at once, from 0 for a clean image up to 1 for heavy tearing across the frame.",
           "type": "float"
         },
         {
@@ -12223,6 +12615,7 @@
             "0.1",
             "10"
           ],
+          "tooltip": "How fast the tearing pattern reshuffles over time, from 0.1 for a slow drift up to 10 for a fast jitter.",
           "type": "float"
         }
       ],
@@ -12284,6 +12677,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to splat, counted from the start of the buffer. Match it to your live particle count so empty slots add nothing.",
           "type": "int"
         },
         {
@@ -12294,6 +12688,7 @@
             "1",
             "65536"
           ],
+          "tooltip": "How much brightness each particle deposits where it lands. Higher values build the image up faster, so dense clouds bloom sooner.",
           "type": "int"
         },
         {
@@ -12304,6 +12699,7 @@
           ],
           "label": "Boundary",
           "name": "boundary",
+          "tooltip": "What happens to particles that land outside the canvas. Wrap tiles them back around so fluids flow without a seam, Discard drops them to avoid a hard edge when projecting from 3D.",
           "type": "enum"
         }
       ],
@@ -12355,6 +12751,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles from the front of the buffer to splat into the volume. Set this to match the live particle count.",
           "type": "int"
         },
         {
@@ -12365,6 +12762,7 @@
             "16",
             "512"
           ],
+          "tooltip": "The width and height of the volume grid in cells. Higher gives a finer density field at the cost of memory and speed.",
           "type": "int"
         },
         {
@@ -12375,6 +12773,7 @@
             "16",
             "512"
           ],
+          "tooltip": "How many cells deep the volume grid is. Together with the resolution this sets how much detail the density field holds.",
           "type": "int"
         },
         {
@@ -12385,6 +12784,7 @@
             "1",
             "65536"
           ],
+          "tooltip": "How much density each particle adds to its cell. The default 4096 reads back as roughly 1.0 in float density downstream.",
           "type": "int"
         }
       ],
@@ -12455,6 +12855,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles get drawn, counted from the front of the buffer. It is capped to the real particle count.",
           "type": "int"
         },
         {
@@ -12465,6 +12866,7 @@
             "16",
             "8192"
           ],
+          "tooltip": "Width of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
           "type": "int"
         },
         {
@@ -12475,6 +12877,7 @@
             "16",
             "8192"
           ],
+          "tooltip": "Height of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
           "type": "int"
         },
         {
@@ -12485,6 +12888,7 @@
           ],
           "label": "Projection",
           "name": "mode",
+          "tooltip": "Perspective gives true depth and hides particles behind the camera. Orthographic keeps everything flat and wraps the edges so the field tiles without a visible seam.",
           "type": "enum"
         },
         {
@@ -12495,6 +12899,7 @@
             "1",
             "65536"
           ],
+          "tooltip": "How much brightness each particle deposits where it lands. Higher makes a denser, more glowing splat.",
           "type": "int"
         }
       ],
@@ -12630,6 +13035,7 @@
             "1024",
             "16000000"
           ],
+          "tooltip": "The most particles this node will ever hold, which sets the buffer size. Raise it only if you need more than the active count.",
           "type": "int"
         },
         {
@@ -12640,6 +13046,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles to spawn this frame. Every one lands on a bright part of the image, wrapping round if there are more particles than bright pixels.",
           "type": "int"
         },
         {
@@ -12650,6 +13057,7 @@
             "64",
             "8192"
           ],
+          "tooltip": "The width of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
           "type": "float"
         },
         {
@@ -12660,6 +13068,7 @@
             "64",
             "8192"
           ],
+          "tooltip": "The height of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
           "type": "float"
         },
         {
@@ -12670,6 +13079,7 @@
             "0",
             "1000000"
           ],
+          "tooltip": "Changes the random sub-pixel jitter on placement. Move it to reshuffle how particles sit within each bright pixel.",
           "type": "int"
         }
       ],
@@ -12776,6 +13186,7 @@
             "0",
             "64"
           ],
+          "tooltip": "How many noise features fit across the width. Higher values make finer, busier horizontal detail.",
           "type": "float"
         },
         {
@@ -12786,6 +13197,7 @@
             "0",
             "64"
           ],
+          "tooltip": "How many noise features fit down the height. Higher values make finer, busier vertical detail.",
           "type": "float"
         },
         {
@@ -12796,6 +13208,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Pans the noise sideways through the frozen field. Animate it for directional horizontal flow.",
           "type": "float"
         },
         {
@@ -12806,6 +13219,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Pans the noise up and down through the frozen field. Animate it for directional vertical flow.",
           "type": "float"
         },
         {
@@ -12816,6 +13230,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Picks which slice of the noise to sample. Animate it over time for shimmer in place, and use a large gap between nodes for uncorrelated fields.",
           "type": "float"
         },
         {
@@ -12828,6 +13243,7 @@
           ],
           "label": "Output Channel",
           "name": "output_channel",
+          "tooltip": "Which channel the noise is written to, with options R, G, B, and A. The signed value lands here and the other channels stay flat.",
           "type": "enum"
         }
       ],
@@ -13007,6 +13423,7 @@
             "0",
             "0.05"
           ],
+          "tooltip": "How strongly the 3D noise pushes the particles around. 0 leaves them on their existing path, and higher values stir up more swirl. The useful range is small, so keep it low.",
           "type": "float"
         },
         {
@@ -13017,6 +13434,7 @@
             "0",
             "60"
           ],
+          "tooltip": "How much extra push the noise adds where particles are already crowded, which spreads dense clumps apart. 0 turns the boost off, and higher values separate clusters more aggressively.",
           "type": "float"
         },
         {
@@ -13027,6 +13445,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles the noise force is applied to. It is clamped to whatever the particle and force buffers can hold.",
           "type": "int"
         }
       ],
@@ -13105,6 +13524,7 @@
             "0",
             "0.05"
           ],
+          "tooltip": "How hard the noise field pushes each particle, from 0 for still up to 0.05. Small values already give plenty of swirl, so keep it low.",
           "type": "float"
         },
         {
@@ -13115,6 +13535,7 @@
             "0",
             "20"
           ],
+          "tooltip": "How much a wired modulator texture boosts the noise where it is bright, from 0 to 20. Only does anything when something is wired into the modulator input.",
           "type": "float"
         },
         {
@@ -13125,6 +13546,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Slides the noise field through its third dimension, which animates the flow. Wire time times a rate here to keep the turbulence moving.",
           "type": "float"
         },
         {
@@ -13135,6 +13557,7 @@
             "0",
             "16"
           ],
+          "tooltip": "How zoomed in the noise pattern is, from 0 for huge soft swells up to 16 for fine busy detail.",
           "type": "float"
         },
         {
@@ -13145,6 +13568,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles the noise force is applied to. Keep it matched to the particle count feeding the sim.",
           "type": "int"
         }
       ],
@@ -13205,6 +13629,7 @@
             "0",
             "64"
           ],
+          "tooltip": "Frequency of the noise. Around 1 gives one broad swell across the field, higher values pack in fine grain.",
           "type": "float"
         },
         {
@@ -13215,6 +13640,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "Slices through the noise at a different depth. Wire a time value in to make the field drift and animate.",
           "type": "float"
         },
         {
@@ -13225,6 +13651,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the noise field sideways. Wire an LFO in to scroll it across the copies.",
           "type": "float"
         },
         {
@@ -13235,6 +13662,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Slides the noise field up and down.",
           "type": "float"
         }
       ],
@@ -13286,6 +13714,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "How much the field's red channel feeds the wave, usually the X coordinate. Set a and b together to aim the wave along X, Y, or a diagonal.",
           "type": "float"
         },
         {
@@ -13296,6 +13725,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "How much the field's green channel feeds the wave, usually the Y coordinate. Leave it at 0 to read only the red channel from a scalar field.",
           "type": "float"
         },
         {
@@ -13306,6 +13736,7 @@
             "-32",
             "32"
           ],
+          "tooltip": "A constant added to the projection before the wave, which shifts its phase.",
           "type": "float"
         },
         {
@@ -13316,6 +13747,7 @@
             "0",
             "100"
           ],
+          "tooltip": "The base frequency of the wave, so higher values pack more cycles into the same space. Wire one shared value into every term to keep them in phase.",
           "type": "float"
         },
         {
@@ -13326,6 +13758,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "A per-term multiplier on the base frequency. Give each term a different scale to layer waves at related rates.",
           "type": "float"
         },
         {
@@ -13336,6 +13769,7 @@
             "-1000",
             "1000"
           ],
+          "tooltip": "The base time that moves the wave along. Wire the generator time in so every term advances together.",
           "type": "float"
         },
         {
@@ -13346,6 +13780,7 @@
             "-10",
             "10"
           ],
+          "tooltip": "A per-term multiplier on time, which sets how fast this wave drifts. Negative values send it the other way.",
           "type": "float"
         }
       ],
@@ -13393,6 +13828,7 @@
             "0",
             "20"
           ],
+          "tooltip": "How much the embossed base layer drives the displacement. Higher pushes pixels further along the contrast contours for a more liquid pull.",
           "type": "float"
         },
         {
@@ -13403,6 +13839,7 @@
             "1",
             "16"
           ],
+          "tooltip": "How far apart the gradient is sampled, in pixels. Larger reads a broader slope for a softer, wider warp.",
           "type": "float"
         },
         {
@@ -13413,6 +13850,7 @@
             "0",
             "0.02"
           ],
+          "tooltip": "Scales the final pixel shift, measured in UV units. The default is tiny on purpose since even small values move pixels noticeably.",
           "type": "float"
         }
       ],
@@ -13579,6 +14017,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "How far the flow drags the image each frame, in pixels, default 1. Negative runs the flow backwards for trail-erase tricks. Wire it to an LFO to pulse the motion.",
           "type": "float"
         },
         {
@@ -13589,6 +14028,7 @@
           ],
           "label": "Boundary",
           "name": "boundary",
+          "tooltip": "What happens at the edges, Repeat for looping fluid sims or Clamp to fade off-frame samples into the edge colour.",
           "type": "enum"
         }
       ],
@@ -13688,6 +14128,7 @@
             "0",
             "100"
           ],
+          "tooltip": "Divides the summed result. 1 keeps it a plain sum, 5 turns the five inputs into an average. A divisor of 0 falls back to black.",
           "type": "float"
         }
       ],
@@ -13729,6 +14170,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The brightness cutoff. Pixels brighter than this are kept and darker ones are dropped.",
           "type": "float"
         },
         {
@@ -13739,6 +14181,7 @@
             "0",
             "1"
           ],
+          "tooltip": "Fades the edge of the cutoff. 0 gives a hard line and higher values blend the keep and drop regions together.",
           "type": "float"
         }
       ],
@@ -13781,6 +14224,7 @@
             "0",
             "16"
           ],
+          "tooltip": "Brightens or dims the image before the curve is applied. 1 leaves it unchanged, above 1 brightens, below 1 darkens.",
           "type": "float"
         },
         {
@@ -13793,6 +14237,7 @@
           ],
           "label": "Curve",
           "name": "curve",
+          "tooltip": "How the bright highlights roll off. Narkowicz and Hill ACES are the filmic standards, AgX gives a more natural look, and Khronos PBR Neutral holds onto saturation in very bright colours.",
           "type": "enum"
         },
         {
@@ -13805,6 +14250,7 @@
           ],
           "label": "Output Mode",
           "name": "mode",
+          "tooltip": "What kind of display you are mapping to. SDR for a normal screen or export, PQ for HDR10 export, EDR for a macOS HDR display, and EDR Passthrough to skip the curve.",
           "type": "enum"
         },
         {
@@ -13815,6 +14261,7 @@
             "50",
             "1000"
           ],
+          "tooltip": "The brightness in nits that plain white should hit on an HDR display. Only used in the HDR output modes.",
           "type": "float"
         },
         {
@@ -13825,6 +14272,7 @@
             "100",
             "10000"
           ],
+          "tooltip": "The peak brightness in nits your HDR display can reach, used to set where the brightest highlights land. Only used in the HDR output modes.",
           "type": "float"
         }
       ],
@@ -13890,6 +14338,7 @@
             "0",
             "100"
           ],
+          "tooltip": "The thickness of the tube, the fatness of the donut. Larger values make a chunkier ring.",
           "type": "float"
         },
         {
@@ -13900,6 +14349,7 @@
             "0",
             "100"
           ],
+          "tooltip": "The overall radius of the ring from its centre to the middle of the tube. Larger values make a wider donut.",
           "type": "float"
         },
         {
@@ -13910,6 +14360,7 @@
             "-100",
             "100"
           ],
+          "tooltip": "Rotates the whole ring around its X axis, in degrees. Wire a time source here to keep it folding continuously.",
           "type": "float"
         },
         {
@@ -13920,6 +14371,7 @@
             "0",
             "100"
           ],
+          "tooltip": "Scales every copy placed on the torus surface. When morphing between shapes, feed the same scale into the matching wrap node so the size stays continuous.",
           "type": "float"
         }
       ],
@@ -13966,6 +14418,7 @@
             "0.01",
             "1"
           ],
+          "tooltip": "How far a blob can move between frames and still count as the same one, in normalised canvas units. Raise it for fast movers, lower it for crowded scenes where IDs swap.",
           "type": "float"
         },
         {
@@ -13976,6 +14429,7 @@
             "0",
             "30"
           ],
+          "tooltip": "How many frames to keep holding a blob after it drops out, measured in frames. Raise it to ride through flickery detections, lower it to clear stale blobs fast.",
           "type": "int"
         }
       ],
@@ -14089,6 +14543,7 @@
             "0",
             "100"
           ],
+          "tooltip": "Scales the input before the wave is applied, setting how many cycles fit across the range. The default of about 6.28 fits one full cycle across a 0 to 1 input.",
           "type": "float"
         },
         {
@@ -14099,6 +14554,7 @@
             "-6.2831855",
             "6.2831855"
           ],
+          "tooltip": "Shifts the wave along, in degrees, so you can slide the ripples or animate them by sweeping this value.",
           "type": "angle"
         },
         {
@@ -14114,6 +14570,7 @@
             "0",
             "2"
           ],
+          "tooltip": "Picks the wave shape from Sin, Cos, or Tan. Sin and Cos stay in the minus one to one range, Tan is clamped to keep the output stable.",
           "type": "enum"
         }
       ],
@@ -14208,6 +14665,7 @@
           "default": "true",
           "label": "Enable",
           "name": "enable",
+          "tooltip": "Lets the trigger stream pass through while on. Triggers that arrive while it is off are dropped, so turning it back on does not replay the ones you missed.",
           "type": "bool"
         }
       ],
@@ -14284,6 +14742,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red amount of the flat base colour.",
           "type": "float"
         },
         {
@@ -14294,6 +14753,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green amount of the flat base colour.",
           "type": "float"
         },
         {
@@ -14304,6 +14764,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue amount of the flat base colour.",
           "type": "float"
         },
         {
@@ -14314,6 +14775,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The opacity of the material, from clear at 0 to solid at 1. Note that v1 renders opaque only, so this is informational for now.",
           "type": "float"
         },
         {
@@ -14324,6 +14786,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The red amount of the glow added on top of the base colour.",
           "type": "float"
         },
         {
@@ -14334,6 +14797,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The green amount of the glow added on top of the base colour.",
           "type": "float"
         },
         {
@@ -14344,6 +14808,7 @@
             "0",
             "1"
           ],
+          "tooltip": "The blue amount of the glow added on top of the base colour.",
           "type": "float"
         },
         {
@@ -14354,6 +14819,7 @@
             "0",
             "10"
           ],
+          "tooltip": "How strongly the surface glows. At 0 there is no glow, and higher values push the emission colour brighter.",
           "type": "float"
         }
       ],
@@ -14399,6 +14865,7 @@
             "-0.1",
             "0.1"
           ],
+          "tooltip": "How far the flow field pushes the image, default 0.001 which is about one pixel at 1080p. Higher smears it more, negative pushes the other way.",
           "type": "float"
         },
         {
@@ -14409,6 +14876,7 @@
             "-1",
             "1"
           ],
+          "tooltip": "The neutral midpoint of the flow channels, default 0.5 for standard 0 to 1 flow. Set it to 0 when the flow data is already signed around zero.",
           "type": "float"
         }
       ],
@@ -14476,6 +14944,7 @@
             "0.1",
             "0.9"
           ],
+          "tooltip": "How wide the centre strip is before it gets smeared to the edges. Smaller values pin a thinner strip and stretch it further.",
           "type": "float"
         },
         {
@@ -14487,6 +14956,7 @@
           ],
           "label": "Direction",
           "name": "direction",
+          "tooltip": "Which way to smear, with Horiz stretching the middle row outward, Vert the middle column, and Both at once.",
           "type": "enum"
         }
       ],
@@ -15114,6 +15584,7 @@
             "0",
             "16000000"
           ],
+          "tooltip": "How many particles get wrapped, counted from the front of the buffer. It is capped to the real particle count.",
           "type": "int"
         }
       ],
