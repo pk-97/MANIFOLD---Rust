@@ -185,8 +185,41 @@ Launch the editor: open an effect → cog icon (`OpenGraphEditor`).
   merges, multi-blend dynamic N-input, scale+offset label splits. NOTE: a merge
   reworks the just-shipped tooltips for the folded nodes (e.g. `reinhard_tone_map`
   → `tone_map`); update the bulk tooltip file when folding.
-- **DEFERRED — needs Peter's per-preset eyes, do NOT do blind:** degrees-everywhere
-  and the WS3 affine fold. Both are coupled to the live instrument (exposed/wired
-  params change meaning) and to each other (FluidSim's Curl already converts
-  deg→rad via an affine — folding + a degrees param would double-convert). Gate
-  tests prove execute, not look. Hold for an eyes-on per-preset pass.
+- **DEFERRED — degrees-everywhere.** Changing node param UNITS (radians→degrees on
+  the node) re-means wired params and would double-convert with a fold (FluidSim's
+  Curl already does deg→rad via an affine). Separate from the fold below; hold.
+
+## The affine fold — scoped + exemplar validated (2026-06-01)
+
+Peter's goal: replace the in-graph `affine_scalar` "user-mapping" nodes with the
+card binding's `scale`/`offset`. **Infrastructure SHIPPED this session:**
+runtime `UserParamBinding.scale/offset` (byte-identical), `BindingMappingEdit`
+scale/offset + `EffectMappingAffine{Snapshot,Changed,Commit}` + dispatch, and the
+`MappingPopover` Scale/Offset controls (usable now: right-click an exposed param
+row on the canvas). The binding can now hold + edit the affine.
+
+**What the fold still needs (the preset-load path must carry scale/offset, or a
+folded preset feeds the consumer the UNSCALED value → broken look):**
+1. `BindingDef` (`effect_graph_def.rs`) — add `scale` (serde default 1.0) / `offset`
+   (default 0.0). Additive, every shipped preset stays byte-identical.
+2. `binding_def_to_runtime` (`node_graph/loaded_preset_view.rs`) — carry scale/offset
+   into the runtime `ParamBinding`, and confirm the `ParamBinding → ResolvedBinding`
+   reshape applies them (the runtime path is distinct from `from_user`, which already
+   does). This is the load-bearing correctness step — verify with a one-frame execute.
+
+**Per-affine analysis (FluidSimulation.json):** an affine folds iff its `.a` is a
+card binding target AND it has one consumer AND no other wired inputs.
+- **FOLDABLE:** `rotation_rad_base` (id 24) — Curl binding → `.a`, scale `0.017453293`
+  (deg→rad), single consumer `rotation_final.a` (node 47, `node.math`). Fold = retarget
+  Curl binding to `rotation_final.a` + `scale: 0.017453293`, delete node 24, delete
+  wire 24→47.a. Byte-identical (binding writes 85, reshape ×0.0174 = 1.4835 rad, same
+  value the affine produced). `particle_count_calc` (×1e6) is the same shape.
+- **KEEP (derived, not card→consumer):** `scaled_energy_calc` (a = computed 2e6),
+  `intensity_calc` (a = computed). Their `.a` is NOT a binding target.
+- Check blur radius + others case-by-case against the criterion before folding.
+
+**Why surfaced, not auto-applied:** FluidSimulation is the load-bearing show fixture
+(Liveschool). The fold is byte-identical BY CONSTRUCTION, but the GPU gates prove
+execute, not look, and a wrong retarget/rewire breaks the show silently. Do the
+loader change (safe), then exemplar-fold `rotation_rad_base`, verify (check-presets +
+`bundled_presets` + Liveschool load), show Peter, then fold the rest.
