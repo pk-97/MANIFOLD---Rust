@@ -167,25 +167,36 @@ Launch the editor: open an effect → cog icon (`OpenGraphEditor`).
 
 ### Remaining (sequence after the layout pass-over)
 
-- **WS2a editable mirror — DECIDED: reuse the effect card, not a popover.**
-  Peter's call after seeing the read-only mirror + right-click popover: the rows
-  should draw exactly like the effect card (slider, live value, trim inline), and
-  there's reusable infra for it. The popover is the wrong surface for a panel.
-  - **Plan:** render the edited effect's real `ParamCardPanel` in the left lane.
-    `ParamCardPanel` handles both effects and generators (`ParamCardKind`), so it's
-    one path. Build its `ParamCardConfig` from the edited effect by reusing the
-    main-window builder in `ui_bridge/state_sync.rs` (keyed on the editor's
-    `current_editor_target` ei). Route its press/drag/release through the panel's
-    own handlers — slider drag already emits `EffectParamSnapshot`/`EffectParamChanged(ei, ParamId)`,
-    the correct card write path (NOT the inner-node `SetGraphNodeParam`, which the
-    binding would overwrite each frame). `build_param_row` + the trim/driver/envelope
-    builders in `param_slider_shared.rs` are all `pub(crate)` — usable directly since
-    the mirror is in `manifold-ui` — if a lighter row build is preferred over the
-    whole panel.
-  - Scale/offset (the affine fields) live in an expandable mapping drawer on the
-    row, same pattern as the existing driver/envelope config drawers
-    (`build_driver_config` etc.). `EffectMappingAffine*` + `MappingPopover` scale/offset
-    already exist; reuse the emit, not the popover surface.
+- **WS2a — DECIDED: the editor card IS the card, with a sideways mapping drawer.**
+  Peter's call after seeing the read-only mirror + right-click popover. Two
+  settled decisions:
+  - **(1) Not a mirror — the actual card.** Render the edited effect's real
+    `ParamCardPanel` in the left lane, configured from the same `EffectInstance` as
+    the timeline card. There is no separate "mirror" data and no sync to keep — both
+    cards read the one `EffectInstance`, so they ARE the same card by construction.
+    This is also what dissolves the "3000-line panel" reuse worry: we don't extract
+    or reimplement anything, we *instantiate the whole working panel in a second
+    spot*, and its event routing comes along because it's the same panel handling
+    its own events. `ParamCardPanel` already draws both effects and generators
+    (`ParamCardKind`). Build its `ParamCardConfig` from the edited effect by reusing
+    the main-window builder in `ui_bridge/state_sync.rs` (keyed on the editor's
+    `current_editor_target` ei). Slider drag already emits
+    `EffectParamSnapshot`/`EffectParamChanged(ei, ParamId)` — the correct card write
+    path (NOT inner-node `SetGraphNodeParam`, which the binding overwrites each
+    frame). Suppress / swap the card-header chrome that makes no sense inside the
+    editor (drag-reorder, the "open graph editor" cog).
+  - **(2) Drawer direction split — settled.** *Drivers and modulators* (how the
+    param MOVES — LFO, envelope, beat-sync) keep opening **DOWN** (the existing
+    `build_driver_config` / `build_envelope_config` vertical drawers, unchanged).
+    *Control params* (how the value MAPS — range, scale, offset, invert, curve) open
+    **SIDEWAYS** (horizontal), so peeking at a param's mapping never reflows the
+    vertical slider stack. Two axes of metadata on two axes of the UI. Reuse the
+    `EffectMappingAffine*` emit + the `MappingPopover` scale/offset controls already
+    built, but as a side-anchored drawer off the row, not a detached right-click
+    popover. Open affordance: a subtle chevron at the row's right edge (NOT
+    right-click — Peter flagged it). Suppress the affordance in perform mode so a
+    show can't fat-finger it open. Prototype in the editor first (the canvas gives
+    room to open right); the timeline (card at screen edge) is a later call.
   - **Done already:** fan-out dedup (one row per `outer_param_id`).
   - The right-click `MappingPopover` stays only for the on-canvas node rows (a
     different, immediate-mode surface), or is dropped there later.
