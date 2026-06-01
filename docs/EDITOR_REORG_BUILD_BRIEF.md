@@ -140,3 +140,53 @@ gotcha that matters. See `feedback_product_copy_voice`.
 - The single human checkpoint is the final UI pass-over. Because the UI is built
   without seeing pixels, that pass may surface real layout/feel changes, not just
   polish — expected.
+
+## Progress — 2026-06-01 (the layout shape is built; pass-over due here)
+
+Shipped and pushed on `node-graph-system`:
+
+- **WS1** (`38f65ed2`): canvas scissor clip — wires/nodes/labels sit under panels.
+- **Binding scale/offset infra** (`027c8dd6`): `UserParamBinding.scale/offset`,
+  folded into `Reshape`, byte-identical. The WS3-fold enabler.
+- **Tooltips coverage** (`9161fcdd`): 131 nodes / 471 knobs, house-voiced, in
+  `param_tooltips_bulk.rs`; catalog regenerated, drift guard green. (Not part of
+  the reorg proper, but the same UX push.)
+- **WS2 step 1 — card mirror in the left lane** (`c42ec6f5`): new
+  `GraphCardMirrorPanel`. The node palette left the left lane (it lives in the
+  spawn popup now, double-click); the lane shows the effect card's exposed params
+  with live values, kind-formatted (deg / Hz / enum). Lane keeps the palette width
+  so the canvas origin and coordinate mapping are untouched. **Read-only.**
+- **WS2 step 2 — sidebar is the inspector only** (`aba85762`): dropped the
+  duplicated card list from `GraphEditorPanel`'s top. Right = clicked-node
+  inspector, left = card mirror, center = clipped canvas, palette = popup.
+
+**Pass-over is due now.** The target three-lane shape is built and committable;
+get Peter's reaction to the layout/feel *before* building the editable knobs on
+top (building them first risks rework if the lane sizing / placement changes).
+Launch the editor: open an effect → cog icon (`OpenGraphEditor`).
+
+### Remaining (sequence after the layout pass-over)
+
+- **WS2a editable mirror.** Make each left-lane row editable: value scrub +
+  per-row mapping flyout (range / invert / curve) reusing `MappingPopover`
+  (already surface-agnostic, emits `EffectMapping*`). **Value edits route through
+  `EffectParamSnapshot`/`EffectParamChanged(effect_index, ParamId)`** — the card's
+  own write path, NOT the inner-node `SetGraphNodeParam` the inspector uses,
+  because the binding maps the card value into the inner param every frame
+  (setting the inner param directly would be overwritten). So the card entry needs
+  its `ParamId` resolved (the static-block-vs-user-binding distinction lives in
+  `build_static_block_targets` / the binding list). Add `scale`/`offset` to the
+  flyout once the editable surface lands.
+- **WS2c Tab shortcut.** Palette is already popup-only via double-click; add Tab to
+  open it. The open block to replicate on a keypress is in `app_render.rs` ~660-748
+  (`browser_popup.open(BrowserPopupRequest { mode: Node, … })` with item
+  names/categories/type_ids from `palette_atoms_cache` + a center `graph_pos`).
+- **Structural builds** (gate-verifiable, parity-tested): noise/blur/tone-map
+  merges, multi-blend dynamic N-input, scale+offset label splits. NOTE: a merge
+  reworks the just-shipped tooltips for the folded nodes (e.g. `reinhard_tone_map`
+  → `tone_map`); update the bulk tooltip file when folding.
+- **DEFERRED — needs Peter's per-preset eyes, do NOT do blind:** degrees-everywhere
+  and the WS3 affine fold. Both are coupled to the live instrument (exposed/wired
+  params change meaning) and to each other (FluidSim's Curl already converts
+  deg→rad via an affine — folding + a degrees param would double-convert). Gate
+  tests prove execute, not look. Hold for an eyes-on per-preset pass.
