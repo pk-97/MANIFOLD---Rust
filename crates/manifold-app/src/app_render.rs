@@ -2709,6 +2709,8 @@ pub(crate) fn resolve_canvas_binding(
     f32,
     bool,
     manifold_core::macro_bank::MacroCurve,
+    f32,
+    f32,
     Option<(f32, f32)>,
 )> {
     use manifold_editing::commands::effect_target::EffectTarget;
@@ -2742,6 +2744,8 @@ pub(crate) fn resolve_canvas_binding(
         b.max,
         b.invert,
         b.curve,
+        b.scale,
+        b.offset,
         range,
     ))
 }

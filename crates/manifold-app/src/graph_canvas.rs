@@ -806,6 +806,7 @@ impl GraphCanvas {
     /// as a `UserParamBinding` (passing its current mapping in here). The
     /// canvas owns the anchor geometry; the app owns the binding lookup.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn open_mapping_popover(
         &mut self,
         viewport: Rect,
@@ -817,6 +818,8 @@ impl GraphCanvas {
         max: f32,
         invert: bool,
         curve: manifold_core::macro_bank::MacroCurve,
+        scale: f32,
+        offset: f32,
         range: Option<(f32, f32)>,
     ) {
         let Some(anchor) = self.param_row_rect(viewport, node_id, pi) else {
@@ -829,8 +832,9 @@ impl GraphCanvas {
             viewport.w,
             (viewport.h - HEADER_HEIGHT).max(0.0),
         );
-        self.mapping_popover
-            .open(binding_id, label, min, max, invert, curve, range, anchor, clip);
+        self.mapping_popover.open(
+            binding_id, label, min, max, invert, curve, scale, offset, range, anchor, clip,
+        );
     }
 
     /// Forward a left-button press to the open popover. Returns `true`

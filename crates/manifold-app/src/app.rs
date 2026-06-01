@@ -2167,6 +2167,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         max,
                                         invert,
                                         curve,
+                                        scale,
+                                        offset,
                                         range,
                                     )) = crate::app_render::resolve_canvas_binding(
                                         self.content_state.active_graph_snapshot.as_deref(),
@@ -2178,7 +2180,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 {
                                     canvas.open_mapping_popover(
                                         viewport, node_id, pi, binding_id, label, min, max,
-                                        invert, curve, range,
+                                        invert, curve, scale, offset, range,
                                     );
                                 }
                             }
