@@ -167,16 +167,28 @@ Launch the editor: open an effect → cog icon (`OpenGraphEditor`).
 
 ### Remaining (sequence after the layout pass-over)
 
-- **WS2a editable mirror.** Make each left-lane row editable: value scrub +
-  per-row mapping flyout (range / invert / curve) reusing `MappingPopover`
-  (already surface-agnostic, emits `EffectMapping*`). **Value edits route through
-  `EffectParamSnapshot`/`EffectParamChanged(effect_index, ParamId)`** — the card's
-  own write path, NOT the inner-node `SetGraphNodeParam` the inspector uses,
-  because the binding maps the card value into the inner param every frame
-  (setting the inner param directly would be overwritten). So the card entry needs
-  its `ParamId` resolved (the static-block-vs-user-binding distinction lives in
-  `build_static_block_targets` / the binding list). Add `scale`/`offset` to the
-  flyout once the editable surface lands.
+- **WS2a editable mirror — DECIDED: reuse the effect card, not a popover.**
+  Peter's call after seeing the read-only mirror + right-click popover: the rows
+  should draw exactly like the effect card (slider, live value, trim inline), and
+  there's reusable infra for it. The popover is the wrong surface for a panel.
+  - **Plan:** render the edited effect's real `ParamCardPanel` in the left lane.
+    `ParamCardPanel` handles both effects and generators (`ParamCardKind`), so it's
+    one path. Build its `ParamCardConfig` from the edited effect by reusing the
+    main-window builder in `ui_bridge/state_sync.rs` (keyed on the editor's
+    `current_editor_target` ei). Route its press/drag/release through the panel's
+    own handlers — slider drag already emits `EffectParamSnapshot`/`EffectParamChanged(ei, ParamId)`,
+    the correct card write path (NOT the inner-node `SetGraphNodeParam`, which the
+    binding would overwrite each frame). `build_param_row` + the trim/driver/envelope
+    builders in `param_slider_shared.rs` are all `pub(crate)` — usable directly since
+    the mirror is in `manifold-ui` — if a lighter row build is preferred over the
+    whole panel.
+  - Scale/offset (the affine fields) live in an expandable mapping drawer on the
+    row, same pattern as the existing driver/envelope config drawers
+    (`build_driver_config` etc.). `EffectMappingAffine*` + `MappingPopover` scale/offset
+    already exist; reuse the emit, not the popover surface.
+  - **Done already:** fan-out dedup (one row per `outer_param_id`).
+  - The right-click `MappingPopover` stays only for the on-canvas node rows (a
+    different, immediate-mode surface), or is dropped there later.
 - **WS2c Tab shortcut.** Palette is already popup-only via double-click; add Tab to
   open it. The open block to replicate on a keypress is in `app_render.rs` ~660-748
   (`browser_popup.open(BrowserPopupRequest { mode: Node, … })` with item
