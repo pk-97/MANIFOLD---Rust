@@ -1210,6 +1210,10 @@ impl GraphCanvas {
     // ── Render ──────────────────────────────────────────────────────
 
     pub fn render(&self, ui: &mut UIRenderer, viewport: Rect) {
+        // Clip every node, wire, and label this canvas draws to its own lane so
+        // nothing bleeds under the left palette or right sidebar. The panels
+        // build their own scissored batches on top in `render_overlay_additive`.
+        ui.set_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
         ui.draw_rect(viewport.x, viewport.y, viewport.w, viewport.h, BG_COLOR);
 
         ui.draw_rect(viewport.x, viewport.y, viewport.w, HEADER_HEIGHT, HEADER_BG);

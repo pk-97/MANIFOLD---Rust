@@ -187,6 +187,12 @@ pub struct UIRenderer {
 
     // Clip stack for render_tree — used for text clip_bounds and scissor batching.
     clip_stack: Vec<Rect>,
+    // Clip applied to immediate-mode draws (the caller's `draw_rect`/`draw_line`
+    // queued before an overlay). The graph canvas sets this to its lane so its
+    // nodes AND wires stay scissored under the side panels instead of bleeding
+    // over them. `None` (the default, reset every `begin_frame`) keeps the legacy
+    // full-viewport behaviour for every other caller.
+    immediate_clip: Option<Rect>,
     // Scissor batches accumulated during tree traversal.
     scissor_batches: Vec<ScissorBatch>,
     // Index into rect_commands where the current batch started.
@@ -269,6 +275,7 @@ impl UIRenderer {
             prepared_index_count: 0,
             prepared_globals: [0.0; 4],
             clip_stack: Vec::with_capacity(8),
+            immediate_clip: None,
             scissor_batches: Vec::with_capacity(8),
             current_batch_start: 0,
             prepared_batches: Vec::with_capacity(8),
@@ -278,6 +285,19 @@ impl UIRenderer {
     }
 
     // ── Immediate-mode draw API ─────────────────────────────────────
+
+    /// Clip every immediate-mode draw queued this frame (rects AND lines) to
+    /// `(x, y, w, h)` in logical coordinates. Set by the graph canvas to its
+    /// lane so nodes and wires can't bleed under the side panels. Reset to
+    /// unclipped on the next `begin_frame`.
+    pub fn set_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.immediate_clip = Some(Rect::new(x, y, w, h));
+    }
+
+    /// Drop any immediate-mode clip set this frame (back to full viewport).
+    pub fn clear_immediate_clip(&mut self) {
+        self.immediate_clip = None;
+    }
 
     /// Queue a filled rectangle.
     pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
@@ -365,8 +385,15 @@ impl UIRenderer {
     /// Queue text at a position.
     pub fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]) {
         #[cfg(target_os = "macos")]
-        self.text_renderer
-            .draw_text(x, y, text, font_size, color, FontWeight::Medium, None);
+        {
+            // Honour the immediate-mode clip so canvas labels stay in their lane
+            // alongside the clipped nodes/wires (None = unclipped, as before).
+            let clip = self
+                .immediate_clip
+                .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height]);
+            self.text_renderer
+                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip);
+        }
     }
 
     // ── Scissor batch helpers ───────────────────────────────────────
@@ -484,13 +511,14 @@ impl UIRenderer {
     pub fn render_overlay_additive(&mut self, tree: &UITree, start_node: usize) {
         let pre_existing = self.rect_commands.len();
 
-        // Cover the caller's immediate-mode rects with a no-scissor
-        // batch. Without this they'd be present in the index buffer
-        // but missing from `prepared_batches`, and `prepare`'s loop
-        // would skip them entirely.
+        // Cover the caller's immediate-mode rects with a batch. Without this
+        // they'd be present in the index buffer but missing from
+        // `prepared_batches`, and `prepare`'s loop would skip them entirely.
+        // Carries `immediate_clip` so the graph canvas's nodes stay scissored
+        // to its lane (None = full viewport for every other caller).
         if pre_existing > 0 {
             self.scissor_batches.push(ScissorBatch {
-                scissor: None,
+                scissor: self.immediate_clip,
                 rect_start: 0,
                 rect_count: pre_existing,
             });
@@ -731,6 +759,9 @@ impl UIRenderer {
 
     /// Advance text renderer frame counter (call once per frame).
     pub fn begin_frame(&mut self) {
+        // Each frame starts unclipped; a caller (the graph canvas) re-arms its
+        // lane clip after this, before queuing draws.
+        self.immediate_clip = None;
         #[cfg(target_os = "macos")]
         self.text_renderer.begin_frame();
     }
@@ -908,13 +939,26 @@ impl UIRenderer {
                     index_count: idx_count as u32,
                 });
             }
-            // Lines are appended to a final no-scissor batch so they
-            // don't get clipped to the last rect's scissor. Lines and
-            // panel scissor batches don't currently coexist in the same
-            // frame, so this is a future-proofing safety rail.
+            // Lines are appended to a final batch so they don't inherit the
+            // last rect's scissor. They DO honour `immediate_clip` when set,
+            // so the graph canvas's wires stay clipped to its lane instead of
+            // bleeding over the side panels (the case the old `None` missed —
+            // canvas lines and panel scissor batches now coexist every frame).
             if line_index_count > 0 {
+                let line_scissor = self.immediate_clip.map(|r| {
+                    let x0 = ((r.x - offset_x) * sf).floor().max(0.0) as u32;
+                    let y0 = ((r.y - offset_y) * sf).floor().max(0.0) as u32;
+                    let x1 = ((r.x + r.width - offset_x) * sf).ceil() as u32;
+                    let y1 = ((r.y + r.height - offset_y) * sf).ceil() as u32;
+                    [
+                        x0.min(pw),
+                        y0.min(ph),
+                        (x1 - x0).min(pw - x0.min(pw)),
+                        (y1 - y0).min(ph - y0.min(ph)),
+                    ]
+                });
                 self.prepared_batches.push(PreparedBatch {
-                    scissor: None,
+                    scissor: line_scissor,
                     index_offset: (line_idx_offset_after_rects * std::mem::size_of::<u32>()) as u64,
                     index_count: line_index_count as u32,
                 });
