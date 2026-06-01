@@ -69,6 +69,37 @@ multiple consumers, or is one leg of a one-card-param-to-many-targets fan-out
 question, not this pass). When in doubt, KEEP — a surviving node is harmless; a
 wrong fold breaks a shipped look.
 
+## WS3 finding (2026-06-01) — STOPPED at audit, NOT auto-applied
+
+Grounding the actual presets before firing the migration changed the picture.
+The `affine_scalar` nodes in the generators are **not** redundant card-mapping
+passthroughs — they are real in-graph computation. In `FluidSimulation.json`:
+
+- `rotation_rad_base`: scale `0.017453293` = π/180 — a **degrees→radians**
+  conversion. Card `Curl` (85) wires to its `.a`.
+- `particle_count_calc`: scale `1_000_000` — card `Particle Count` (2.0) → 2M.
+- `blur_h/v_radius_final`: scale `1/1280` — pixel-radius normalization.
+- `scaled_energy_calc`, `intensity_calc`: derived scaling.
+
+Two blockers, both fatal to a blind fold:
+1. By the fold criteria above these are **KEEP** (real graph math), not fold.
+2. **`UserParamBinding` has no affine (scale/offset) transform** — only range
+   (value passes through), invert, and curve. It literally cannot reproduce
+   `out = a*scale + offset`, so even a "pure mapping" affine can't fold into the
+   current binding model. Folding `rotation_rad_base` would either feed the
+   consumer un-converted degrees (broken) or force the card to store radians and
+   lose the friendly degree value, and would ripple to any driver/Ableton mapping
+   on that card param.
+
+**Decision needed from Peter (surface at pass-over):** WS3 is blocked on a design
+call — either (a) extend `UserParamBinding` with an optional `scale`/`offset`
+(default 1/0 = identity = byte-identical) so the card slider absorbs the affine
+map, then fold only the genuine card→inner remaps; or (b) accept these affines as
+legitimate graph computation and leave them (the "tower" is the generator's real
+math, not mapping cruft). Did NOT fire the migration workflow and did NOT mutate
+any preset. The effect presets (BlobTracking/QuadMirror/VoronoiPrism/DepthOfField,
+2 affines each) still want the same per-node audit under whichever option wins.
+
 ## Verify bar
 
 - `cargo clippy -p <crate> --all-targets -- -D warnings` before each commit.
