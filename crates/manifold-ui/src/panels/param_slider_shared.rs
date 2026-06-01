@@ -1160,6 +1160,10 @@ pub(crate) fn build_param_row(
     slider_colors: &SliderColors,
     config_font: u16,
     build_env_button: bool,
+    // Width of the right-aligned label cell at the row's left edge. The
+    // inspector passes the default; the graph editor's wide lane passes a
+    // larger value so friendly names ("Particle Count") don't clip.
+    label_width: f32,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
         slider: None,
@@ -1195,7 +1199,7 @@ pub(crate) fn build_param_row(
         &val_text,
         slider_colors,
         FONT_SIZE,
-        crate::slider::DEFAULT_LABEL_WIDTH,
+        label_width,
     );
 
     // Make label interactive for click-to-copy OSC address + Ableton mapping.

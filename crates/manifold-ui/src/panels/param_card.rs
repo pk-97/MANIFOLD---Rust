@@ -201,6 +201,10 @@ const COG_W: f32 = 18.0;
 /// that show it shrink their slider by this much so the chevron sits past the
 /// D/E buttons at the row's right edge.
 const MAP_CHEVRON_W: f32 = 14.0;
+/// Label-cell width in the graph editor's wide (Author) lane. Friendly names
+/// ("Particle Count", "Tint Saturation") clip at the inspector's terse 60px,
+/// so the editor lane — which has the room — gives them more.
+const AUTHOR_LABEL_WIDTH: f32 = 108.0;
 
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
@@ -1124,6 +1128,11 @@ impl ParamCardPanel {
         } else {
             0.0
         };
+        let label_width = if author {
+            AUTHOR_LABEL_WIDTH
+        } else {
+            crate::slider::DEFAULT_LABEL_WIDTH
+        };
         let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
 
         for i in 0..self.param_info.len() {
@@ -1152,6 +1161,7 @@ impl ParamCardPanel {
                 &SliderColors::default_slider(),
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
+                label_width,
             );
             self.slider_ids[i] = row.slider;
             self.trim_ids[i] = row.trim;
@@ -1362,6 +1372,13 @@ impl ParamCardPanel {
             let cx = inner_x + PADDING;
             let mut cy = inner_y + HEADER_HEIGHT;
             let slider_w = content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
+            // Wider label cell in the editor (Author) lane so friendly names
+            // don't clip; the inspector keeps the terse default.
+            let label_width = if self.context == CardContext::Author {
+                AUTHOR_LABEL_WIDTH
+            } else {
+                crate::slider::DEFAULT_LABEL_WIDTH
+            };
 
             for i in 0..self.param_info.len() {
                 let info = self.param_info[i].clone();
@@ -1433,6 +1450,7 @@ impl ParamCardPanel {
                         &SliderColors::gen_param(),
                         FONT_SIZE,
                         true,
+                        label_width,
                     );
                     self.slider_ids[i] = row.slider;
                     self.trim_ids[i] = row.trim;
