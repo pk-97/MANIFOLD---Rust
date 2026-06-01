@@ -96,6 +96,46 @@ rg -rn "CARD-TARGET-UNIFICATION" crates              # → empty
 When all four hold, delete this doc (or move it to a "closed migrations"
 appendix) and drop the memory pointer `project_card_target_unification`.
 
+## Bonus payoff: the `Effect*` / `Gen*` action fork collapses
+
+The card emits ~67 `PanelAction` variants, but that count is inflated by two
+multipliers, one of which this migration dissolves:
+
+1. **Undo triad (legitimate, KEEP).** ~36 of the 67 are the Snapshot / Changed
+   / Commit triad applied to six draggable surfaces (param slider, envelope
+   ADSR params, envelope range, param trim, modulation target, Ableton trim).
+   That triad is why a drag is one undo step, not a hundred — earned
+   complexity, not bloat. Not a target of this migration.
+
+2. **`Effect*` / `Gen*` mirror (avoidable — THIS migration's side effect).**
+   Nearly every action is doubled because the card serves both effects and
+   generators and bakes that distinction into the action *name*:
+   `EffectParam{Snapshot,Changed,Commit}` ↔ `GenParam{…}`,
+   `EffectEnvParam*` ↔ `GenEnvParam*`, `EffectEnvRange*` ↔ `GenEnvRange*`,
+   `EffectTrim*` ↔ `GenTrim*`, `EffectTarget*` ↔ `GenTarget*`,
+   `AbletonTrim*` ↔ `AbletonGenTrim*`, the toggles, etc.
+
+Once an action carries (or is dispatched with) a `GraphTarget` — which already
+encodes `Effect(id)` vs `Generator(id)` — the name no longer needs to. The
+mirrored pairs collapse to a single target-carrying variant
+(`ParamChanged{target, slot, phase}` replaces `EffectParam*` + `GenParam*`,
+and so on). So identity-based targeting isn't only the bug fix; it roughly
+**halves the card action enum** as a consequence.
+
+Caveat: a handful of `Gen*` actions are genuinely generator-only and have no
+effect mirror — `GenParamFire`, `GenParamToggle`, `GenStringParamClicked`,
+`GenStringParamDropdownClicked`, `GenTypeClicked`, `GenCardRightClicked`. Those
+stay. The collapse applies to the *mirrored pairs*, not to generator-specific
+surfaces.
+
+**Scope:** fold the enum collapse into step 3 (or a tightly-scoped follow-on),
+AFTER the target plumbing is identity-based — it's a downstream simplification
+the unification unlocks, not a prerequisite. Track it here so it isn't lost:
+the migration is "targeting-complete" per the done-criteria above even if the
+`Effect*/Gen*` enum collapse is deferred, but leaving the doubled enum in place
+forever would re-accrue the smell the migration was meant to remove, so it is
+an expected part of finishing the job, not optional polish.
+
 ## What this is NOT
 
 - Not a change to param-within-effect indexing (`param_values` stays
