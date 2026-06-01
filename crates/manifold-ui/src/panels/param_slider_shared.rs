@@ -5,8 +5,8 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
-use super::param_card::ParamInfo;
 use super::DriverConfigAction;
+use super::param_card::ParamInfo;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -1216,7 +1216,11 @@ pub(crate) fn build_param_row(
 
     // Envelope target or range handles (if envelope expanded).
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-        let env_mode = mod_state.env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
+        let env_mode = mod_state
+            .env_mode
+            .get(i)
+            .copied()
+            .unwrap_or(EnvelopeMode::Adsr);
         if env_mode == EnvelopeMode::Random {
             ids.envelope_range = Some(build_envelope_range_handles(
                 tree,
@@ -1288,7 +1292,11 @@ pub(crate) fn build_param_row(
 
     // Envelope config drawer.
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-        let env_mode = mod_state.env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
+        let env_mode = mod_state
+            .env_mode
+            .get(i)
+            .copied()
+            .unwrap_or(EnvelopeMode::Adsr);
         // Always build the random config buttons (mode toggle + jump toggle).
         ids.envelope_random_config = Some(build_envelope_random_config(
             tree, parent, x, cy, config_w, mod_state, i,

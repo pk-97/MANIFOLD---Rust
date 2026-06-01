@@ -1,8 +1,8 @@
 use super::clip_chrome::ClipChromePanel;
 use super::layer_chrome::LayerChromePanel;
-use super::param_card::{ParamCardConfig, ParamCardPanel};
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
+use super::param_card::{ParamCardConfig, ParamCardPanel};
 use super::{InspectorTab, Panel, PanelAction};
 use crate::color;
 use crate::input::{Modifiers, UIEvent};

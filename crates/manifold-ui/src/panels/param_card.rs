@@ -1042,7 +1042,14 @@ impl ParamCardPanel {
         }
     }
 
-    fn build_effect_sliders(&mut self, tree: &mut UITree, parent: i32, x: f32, start_y: f32, w: f32) {
+    fn build_effect_sliders(
+        &mut self,
+        tree: &mut UITree,
+        parent: i32,
+        x: f32,
+        start_y: f32,
+        w: f32,
+    ) {
         let mut cy = start_y;
         let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
 
@@ -2282,7 +2289,9 @@ impl ParamCardPanel {
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::EffectEnvRangeChanged(ei, pid, new_min, new_max)]
+                        vec![PanelAction::EffectEnvRangeChanged(
+                            ei, pid, new_min, new_max,
+                        )]
                     }
                     ParamCardKind::Generator => {
                         vec![PanelAction::GenEnvRangeChanged(pid, new_min, new_max)]
@@ -2583,7 +2592,11 @@ impl ParamCardPanel {
                 // Right-click slider track → reset to default
                 if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::EffectParamRightClick(ei, self.pid_at(pi), default)];
+                    return vec![PanelAction::EffectParamRightClick(
+                        ei,
+                        self.pid_at(pi),
+                        default,
+                    )];
                 }
                 // Right-click label → map to macro
                 if ids.label >= 0 && node_id == ids.label as u32 {

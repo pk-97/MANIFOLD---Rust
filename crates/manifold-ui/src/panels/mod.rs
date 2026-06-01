@@ -257,7 +257,9 @@ pub enum PanelAction {
     // Label / invert / curve are discrete (text-entry / single-click /
     // cycle), so each fires its own one-shot edit command directly.
     /// Snapshot the binding's `(min, max)` before a range drag begins.
-    EffectMappingRangeSnapshot { binding_id: String },
+    EffectMappingRangeSnapshot {
+        binding_id: String,
+    },
     /// Live `(min, max)` update during a range drag — writes the local
     /// project + content thread but records no undo command.
     EffectMappingRangeChanged {
@@ -267,11 +269,19 @@ pub enum PanelAction {
     },
     /// Commit a range drag — records the single `EditUserParamBinding`
     /// undo command spanning the whole drag.
-    EffectMappingRangeCommit { binding_id: String },
+    EffectMappingRangeCommit {
+        binding_id: String,
+    },
     /// Set the binding's display label. One-shot edit (one undo entry).
-    EffectMappingLabel { binding_id: String, label: String },
+    EffectMappingLabel {
+        binding_id: String,
+        label: String,
+    },
     /// Set the binding's card-slider invert flag. One-shot edit.
-    EffectMappingInvert { binding_id: String, invert: bool },
+    EffectMappingInvert {
+        binding_id: String,
+        invert: bool,
+    },
     /// Set the binding's response curve. One-shot edit.
     EffectMappingCurve {
         binding_id: String,
@@ -286,7 +296,9 @@ pub enum PanelAction {
     // EffectId and catalog default.
     /// Add a new node of `type_id` to the watched graph at the canvas
     /// center. Emitted by clicking an entry in the palette.
-    AddGraphNode { type_id: String },
+    AddGraphNode {
+        type_id: String,
+    },
     /// Open the node picker over the canvas, anchored at `screen_pos`, to
     /// spawn the chosen node at `graph_pos`. Emitted by a double-click on
     /// empty canvas space. The app resolves the spawn into an
@@ -312,12 +324,17 @@ pub enum PanelAction {
     },
     /// Remove a node from the watched graph plus every wire that
     /// touches it. Emitted by the canvas's delete-key handler.
-    RemoveGraphNode { node_id: u32 },
+    RemoveGraphNode {
+        node_id: u32,
+    },
     /// Disconnect the wire feeding `(to_node, to_port)`. The input
     /// side uniquely identifies the wire because each input port has
     /// at most one incoming wire. Emitted by clicking on an already-
     /// connected input port on the canvas.
-    DisconnectPorts { to_node: u32, to_port: String },
+    DisconnectPorts {
+        to_node: u32,
+        to_port: String,
+    },
     /// Revert the watched effect's graph to the bundled preset
     /// (`instance.graph = None`). Emitted by the "Reset to Default"
     /// button in the graph editor header when the card is diverged
@@ -327,7 +344,10 @@ pub enum PanelAction {
     RevertEffectGraph,
     /// Update a node's editor position. Emitted by the canvas's
     /// node-drag completion path.
-    MoveGraphNode { node_id: u32, new_pos: (f32, f32) },
+    MoveGraphNode {
+        node_id: u32,
+        new_pos: (f32, f32),
+    },
     /// Set an inner-node parameter to a new value. Emitted by the
     /// right-sidebar inspector when the user clicks a Bool toggle,
     /// cycles an Enum cell, or drag-scrubs a Float/Int value. The
@@ -459,13 +479,13 @@ pub enum PanelAction {
     // structurally positional in the 8-slot macro bank.
     AbletonTrimSnapshot(usize, manifold_core::effects::ParamId), // fx_idx, param_id
     AbletonTrimChanged(usize, manifold_core::effects::ParamId, f32, f32), // fx_idx, param_id, min, max
-    AbletonTrimCommit(usize, manifold_core::effects::ParamId),   // fx_idx, param_id
-    AbletonGenTrimSnapshot(manifold_core::effects::ParamId),     // param_id
-    AbletonGenTrimChanged(manifold_core::effects::ParamId, f32, f32), // param_id, min, max
-    AbletonGenTrimCommit(manifold_core::effects::ParamId),       // param_id
-    AbletonMacroTrimSnapshot(usize),                             // slot_idx
-    AbletonMacroTrimChanged(usize, f32, f32),                    // slot_idx, min, max
-    AbletonMacroTrimCommit(usize),                               // slot_idx
+    AbletonTrimCommit(usize, manifold_core::effects::ParamId),            // fx_idx, param_id
+    AbletonGenTrimSnapshot(manifold_core::effects::ParamId),              // param_id
+    AbletonGenTrimChanged(manifold_core::effects::ParamId, f32, f32),     // param_id, min, max
+    AbletonGenTrimCommit(manifold_core::effects::ParamId),                // param_id
+    AbletonMacroTrimSnapshot(usize),                                      // slot_idx
+    AbletonMacroTrimChanged(usize, f32, f32),                             // slot_idx, min, max
+    AbletonMacroTrimCommit(usize),                                        // slot_idx
 
     // Ableton config actions
     AbletonInvertToggle(usize, manifold_core::effects::ParamId), // fx_idx, param_id

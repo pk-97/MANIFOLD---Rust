@@ -1927,7 +1927,6 @@ impl Application {
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
         self.graph_editor_panel.configure(
             effect_index,
-            card_entries.clone(),
             view_for_panel.as_ref(),
             exposed_keys,
             outer_driven,

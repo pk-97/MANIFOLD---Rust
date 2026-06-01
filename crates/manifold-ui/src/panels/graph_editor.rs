@@ -228,23 +228,21 @@ struct DragState {
 /// dramatic drag covers the full range.
 const DRAG_FULL_RANGE_PX: f32 = 240.0;
 
-/// One entry in the read-only "Effect Parameters" list at the top of
-/// the sidebar. Each entry surfaces ONE inner-node parameter that is
-/// currently exposed on the effect card, regardless of which
-/// underlying surface drives it:
+/// One entry in the effect-card mirror (the editor's left lane, built by
+/// [`GraphCardMirrorPanel`](super::graph_card_mirror::GraphCardMirrorPanel)).
+/// Each entry surfaces ONE inner-node parameter currently exposed on the
+/// effect card, regardless of which underlying surface drives it:
 ///
 /// - **Static-block routings** (legacy `def.param_defs`): the outer
 ///   card slider that maps `param_values[slot_index]` into the inner
 ///   node via the effect's `ChainSpec` bindings.
 /// - **User-bindings** (`EffectInstance.user_param_bindings`): per-
 ///   instance V2 exposures the user added by ticking an inner param
-///   in the per-node section below.
+///   in the node inspector.
 ///
-/// The two surfaces are unified at the UI layer; entries are
-/// presented uniformly with a "↳ <node>.<param>" hint so the user
-/// can see exactly which inner-node parameter each card slider
-/// drives. The list is read-only — toggling exposure happens in the
-/// per-node "Inner-Node Parameters" section.
+/// The two surfaces are unified at the UI layer. The mirror is read-only
+/// for now (label plus live value); toggling exposure happens in the
+/// right-sidebar inspector's per-node rows.
 #[derive(Debug, Clone)]
 pub struct GraphEditorCardEntry {
     /// Display label (what shows on the effect card slider).
@@ -307,11 +305,6 @@ pub struct GraphEditorPanel {
     /// The effect this sidebar is editing — set when the editor
     /// opens for an effect chain. `None` when no effect is active.
     effect_index: Option<usize>,
-    /// Read-only "Effect Parameters" list at the top of the sidebar —
-    /// every inner-node param currently exposed on the effect card,
-    /// merging static-block routings + user-bindings into one
-    /// unified surface. Built by `app_render::build_card_entries`.
-    card_entries: Vec<GraphEditorCardEntry>,
     /// View of the currently-selected node, owned. `None` when no
     /// node is selected or the selection is anonymous (no
     /// `node_handle`, so its params are not user-exposable).
@@ -372,7 +365,6 @@ impl GraphEditorPanel {
     pub fn configure(
         &mut self,
         effect_index: Option<usize>,
-        card_entries: Vec<GraphEditorCardEntry>,
         selected_node: Option<&GraphEditorNodeView>,
         exposed_keys: HashSet<(String, String)>,
         outer_driven: HashMap<(String, String), String>,
@@ -380,7 +372,6 @@ impl GraphEditorPanel {
         wire_driven_keys: HashSet<(String, String)>,
     ) {
         self.effect_index = effect_index;
-        self.card_entries = card_entries;
         self.selected_node = selected_node.cloned();
         self.exposed_keys = exposed_keys;
         self.outer_driven = outer_driven;
@@ -412,76 +403,11 @@ impl GraphEditorPanel {
 
         let mut y = viewport.y + PADDING;
 
-        // ── Effect Parameters section ─────────────────────────────
-        // Read-only summary of every inner-node param currently
-        // exposed on the effect card — merging static-block routings
-        // and per-instance user-bindings into one list. Toggling lives
-        // on the per-node rows below; this section is informational
-        // only. Each entry shows its inner-node target so the user can
-        // see at a glance which card slider drives which primitive.
-        tree.add_label(
-            bg_id,
-            viewport.x + PADDING,
-            y,
-            viewport.width - 2.0 * PADDING,
-            HEADER_H - PADDING,
-            "Effect Parameters",
-            UIStyle {
-                text_color: color::TEXT_WHITE_C32,
-                font_size: HEADER_FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        );
-        y += HEADER_H;
-
-        if self.card_entries.is_empty() {
-            tree.add_label(
-                bg_id,
-                viewport.x + PADDING,
-                y,
-                viewport.width - 2.0 * PADDING,
-                ROW_H,
-                "(no parameters exposed)",
-                UIStyle {
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            );
-            y += ROW_H;
-        } else {
-            for entry in &self.card_entries {
-                let row_x = viewport.x + PADDING;
-                let row_w = (viewport.width - 2.0 * PADDING).max(10.0);
-                // Single label per row: "<Label>  ↳ <handle>.<param>".
-                // The "↳" arrow keeps the hint visually distinct from
-                // the slider label.
-                let text = format!(
-                    "{}  ↳ {}.{}",
-                    entry.label, entry.target_handle, entry.target_inner_param,
-                );
-                tree.add_label(
-                    bg_id,
-                    row_x,
-                    y,
-                    row_w,
-                    ROW_H,
-                    &text,
-                    UIStyle {
-                        text_color: color::TEXT_WHITE_C32,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
-                );
-                y += ROW_H;
-            }
-        }
-
-        // ── Selected Node section ─────────────────────────────────
-        y += PADDING;
+        // ── Selected Node section (the inspector) ─────────────────
+        // The effect-card mirror moved to the editor's left lane, so this
+        // right sidebar is purely the clicked node's parameter inspector:
+        // every param of the selected node with its live value, expose
+        // checkbox, and driver hints.
         tree.add_label(
             bg_id,
             viewport.x + PADDING,
@@ -700,11 +626,7 @@ impl GraphEditorPanel {
                     max,
                     default_value: ps.default_value,
                     current_value: ps.current_value,
-                    enum_labels_count: ps
-                        .enum_labels
-                        .as_ref()
-                        .map(|l| l.len())
-                        .unwrap_or(0),
+                    enum_labels_count: ps.enum_labels.as_ref().map(|l| l.len()).unwrap_or(0),
                     convert,
                     currently_exposed: is_exposed,
                     static_block_slot,
@@ -828,11 +750,9 @@ impl GraphEditorPanel {
                         }];
                     }
                     if value_cell_node_id.map(|v| v == node_id).unwrap_or(false) {
-                        if let Some(new_value) = value_cell_click_to_param(
-                            *kind,
-                            *current_value,
-                            *enum_labels_count,
-                        ) {
+                        if let Some(new_value) =
+                            value_cell_click_to_param(*kind, *current_value, *enum_labels_count)
+                        {
                             return vec![PanelAction::SetGraphNodeParam {
                                 node_id: *node_runtime_id,
                                 param_name: inner_param.clone(),
@@ -1121,7 +1041,6 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1147,7 +1066,6 @@ mod tests {
         let mut panel = GraphEditorPanel::new();
         panel.configure(
             Some(0),
-            Vec::new(),
             None,
             HashSet::new(),
             HashMap::new(),
@@ -1165,7 +1083,6 @@ mod tests {
         let node = snap_node_with_params(None); // no handle
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1186,7 +1103,6 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1238,7 +1154,6 @@ mod tests {
         exposed.insert(("uv_transform".to_string(), "translate".to_string()));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             exposed,
             HashMap::new(),
@@ -1270,7 +1185,6 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1300,7 +1214,6 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         panel.configure(
             None, // No effect_index — simulating a Generator graph
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1367,11 +1280,7 @@ mod tests {
                     default_value: 0.0,
                     current_value: 1.0,
                     range: None,
-                    enum_labels: Some(vec![
-                        "FoldX".into(),
-                        "FoldY".into(),
-                        "FoldBoth".into(),
-                    ]),
+                    enum_labels: Some(vec!["FoldX".into(), "FoldY".into(), "FoldBoth".into()]),
                     summary: None,
                 },
             ],
@@ -1385,7 +1294,6 @@ mod tests {
         let node = snap_node_with_mixed_kinds();
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1425,7 +1333,6 @@ mod tests {
         let node = snap_node_with_mixed_kinds(); // mode current_value = 1
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1461,11 +1368,14 @@ mod tests {
         let mut panel = GraphEditorPanel::new();
         let mut node = snap_node_with_mixed_kinds();
         // Park on the last enum option so the cycle wraps.
-        let mode = node.parameters.iter_mut().find(|p| p.name == "mode").unwrap();
+        let mode = node
+            .parameters
+            .iter_mut()
+            .find(|p| p.name == "mode")
+            .unwrap();
         mode.current_value = 2.0;
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1498,7 +1408,6 @@ mod tests {
         let node = snap_node_with_mixed_kinds(); // scale: 1.0, range (0..4)
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1544,10 +1453,7 @@ mod tests {
                 assert_eq!(param_name, "scale");
                 match new_value {
                     SerializedParamValue::Float { value } => {
-                        assert!(
-                            (*value - 2.0).abs() < 0.01,
-                            "expected ~2.0, got {value}"
-                        );
+                        assert!((*value - 2.0).abs() < 0.01, "expected ~2.0, got {value}");
                     }
                     other => panic!("expected Float, got {other:?}"),
                 }
@@ -1574,7 +1480,6 @@ mod tests {
         let node = snap_node_with_mixed_kinds();
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1613,7 +1518,10 @@ mod tests {
                 new_value: SerializedParamValue::Float { value },
                 ..
             } => {
-                assert!((*value - 4.0).abs() < 1e-3, "expected clamp to 4.0, got {value}");
+                assert!(
+                    (*value - 4.0).abs() < 1e-3,
+                    "expected clamp to 4.0, got {value}"
+                );
             }
             _ => panic!("expected clamped Float"),
         }
@@ -1635,7 +1543,6 @@ mod tests {
         );
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             driven,
@@ -1661,53 +1568,7 @@ mod tests {
         // override the outer.
         let actions = panel.handle_click(mode_cell);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::SetGraphNodeParam { .. }
-        ));
-    }
-
-    #[test]
-    fn card_entries_render_as_readonly_labels_with_no_row_state() {
-        // After the V2 unification the top "Effect Parameters" list is
-        // informational only — entries render as labels showing the
-        // inner-node target, and no `RowState::*` is pushed. The
-        // toggle moved to the per-node section.
-        let mut tree = UITree::new();
-        let mut panel = GraphEditorPanel::new();
-        let card_entries = vec![
-            GraphEditorCardEntry {
-                label: "Amount".to_string(),
-                target_handle: "mix_final".to_string(),
-                target_inner_param: "blend".to_string(),
-                current_value: 0.0,
-                kind: GraphEditorParamKind::Float,
-                enum_labels: None,
-            },
-            GraphEditorCardEntry {
-                label: "Threshold".to_string(),
-                target_handle: "threshold".to_string(),
-                target_inner_param: "value".to_string(),
-                current_value: 0.0,
-                kind: GraphEditorParamKind::Float,
-                enum_labels: None,
-            },
-        ];
-        panel.configure(
-            Some(0),
-            card_entries,
-            None,
-            HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashSet::new(),
-        );
-        panel.build(&mut tree, viewport());
-        // No clickable rows tracked for the top section.
-        assert!(
-            panel.rows.is_empty(),
-            "Effect Parameters list is read-only; no row state expected",
-        );
+        assert!(matches!(&actions[0], PanelAction::SetGraphNodeParam { .. }));
     }
 
     #[test]
@@ -1721,15 +1582,11 @@ mod tests {
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds();
         let mut static_block_targets = HashMap::new();
-        static_block_targets.insert(
-            ("uv_transform".to_string(), "scale".to_string()),
-            0_usize,
-        );
+        static_block_targets.insert(("uv_transform".to_string(), "scale".to_string()), 0_usize);
         let mut exposed_keys = HashSet::new();
         exposed_keys.insert(("uv_transform".to_string(), "scale".to_string()));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             exposed_keys,
             HashMap::new(),
@@ -1741,7 +1598,9 @@ mod tests {
         let scale_row = panel
             .rows
             .iter()
-            .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "scale"))
+            .find(
+                |r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "scale"),
+            )
             .expect("scale row exists");
         let cb_id = checkbox_id_of(scale_row);
         let actions = panel.handle_click(cb_id);
@@ -1755,10 +1614,7 @@ mod tests {
             } => {
                 assert_eq!(node_handle, "uv_transform");
                 assert_eq!(inner_param, "scale");
-                assert!(
-                    !expose,
-                    "click on a checked param emits expose: false",
-                );
+                assert!(!expose, "click on a checked param emits expose: false",);
             }
             other => panic!("expected ToggleNodeParamExpose, got {other:?}"),
         }
@@ -1771,7 +1627,6 @@ mod tests {
         let node = snap_node_with_mixed_kinds();
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1820,7 +1675,6 @@ mod tests {
         wire_driven.insert(("uv_transform".to_string(), "translate".to_string()));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),
@@ -1864,7 +1718,6 @@ mod tests {
         wire_driven.insert(("uv_transform".to_string(), "translate".to_string()));
         panel.configure(
             Some(0),
-            Vec::new(),
             Some(&node),
             HashSet::new(),
             HashMap::new(),

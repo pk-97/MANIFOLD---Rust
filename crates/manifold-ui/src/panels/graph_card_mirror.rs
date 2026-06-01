@@ -24,7 +24,7 @@ use crate::color;
 use crate::node::*;
 use crate::tree::UITree;
 
-use super::graph_editor::{format_card_entry_value, GraphEditorCardEntry};
+use super::graph_editor::{GraphEditorCardEntry, format_card_entry_value};
 
 /// Left-lane width inside the graph-editor window. Matches the old
 /// palette width so the canvas keeps the same screen origin (the canvas
@@ -180,7 +180,11 @@ mod tests {
         let mut panel = GraphCardMirrorPanel::new();
         panel.configure(vec![
             entry("Amount", 0.5, GraphEditorParamKind::Float),
-            entry("Curl", std::f32::consts::FRAC_PI_2, GraphEditorParamKind::Angle),
+            entry(
+                "Curl",
+                std::f32::consts::FRAC_PI_2,
+                GraphEditorParamKind::Angle,
+            ),
         ]);
         panel.build(&mut tree, Rect::new(0.0, 0.0, CARD_MIRROR_WIDTH, 600.0));
         assert_eq!(panel.entries.len(), 2);
@@ -188,7 +192,11 @@ mod tests {
 
     #[test]
     fn angle_value_formats_as_degrees() {
-        let e = entry("Curl", std::f32::consts::FRAC_PI_2, GraphEditorParamKind::Angle);
+        let e = entry(
+            "Curl",
+            std::f32::consts::FRAC_PI_2,
+            GraphEditorParamKind::Angle,
+        );
         assert_eq!(format_card_entry_value(&e), "90°");
     }
 }

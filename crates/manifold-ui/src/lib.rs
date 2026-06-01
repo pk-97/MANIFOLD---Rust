@@ -35,14 +35,14 @@ pub use node::*;
 pub use panels::clip_chrome::ClipChromePanel;
 pub use panels::dropdown::{DropdownAction, DropdownItem, DropdownPanel};
 pub use panels::footer::FooterPanel;
-pub use panels::param_card::{
-    ParamCardConfig, ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, ParamInfo,
-};
 pub use panels::header::HeaderPanel;
 pub use panels::inspector::InspectorCompositePanel;
 pub use panels::layer_chrome::LayerChromePanel;
 pub use panels::layer_header::{LayerHeaderPanel, LayerInfo};
 pub use panels::master_chrome::MasterChromePanel;
+pub use panels::param_card::{
+    ParamCardConfig, ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, ParamInfo,
+};
 pub use panels::stem_lane::{STEM_COUNT, STEM_NAMES, StemLaneGroupPanel};
 pub use panels::transport::TransportPanel;
 pub use panels::viewport::{
