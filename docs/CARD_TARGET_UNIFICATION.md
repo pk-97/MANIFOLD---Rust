@@ -77,6 +77,16 @@ The fork sites carry a `// CARD-TARGET-UNIFICATION:` comment pointing here.
 
 4. **Remove the `CARD-TARGET-UNIFICATION` tags** as each site converts.
 
+## Temporary guards to remove when step 3 lands
+
+- **Clip-effect guard** (`editor_card_config` in `state_sync.rs`): the editor
+  card bails to an empty lane when the resolved instance id doesn't match the
+  editor's watched effect id. This exists because `EffectTarget` has no Clip
+  variant, so the A.2 `(tab, active_layer)` override can't address a clip-scoped
+  effect. When step 3 makes the editor resolve effects by `EffectId` via
+  `find_effect_by_id`, clip effects become addressable and this guard should be
+  removed (the card then shows + drives clip effects correctly).
+
 ## Done criteria (grep-able — all must hold)
 
 ```
