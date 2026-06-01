@@ -311,6 +311,12 @@ pub struct Application {
     /// config (in the separate `values` slice), so a slider drag does NOT bump
     /// this hash and never resets an in-progress drag or an open drawer.
     pub(crate) editor_card_config_hash: Option<u64>,
+    /// Sideways mapping drawer for the editor card's Author-context rows. Same
+    /// `MappingPopover` the canvas uses for on-node rows, but anchored beside the
+    /// left-lane card row and opened by its right-edge chevron. Edits emit the
+    /// existing `EffectMapping*` actions, dispatched against
+    /// `current_editor_target` like the canvas popover.
+    pub(crate) editor_mapping_popover: crate::mapping_popover::MappingPopover,
     /// Built-once list of atoms shown in the spawn popup (node browser).
     /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
@@ -490,8 +496,16 @@ impl Application {
             graph_editor_geometry: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
-            editor_card: manifold_ui::panels::param_card::ParamCardPanel::new(),
+            editor_card: {
+                // The editor lane is the authoring surface: Author chrome
+                // (no cog / drag-reorder / perform-mapping menu, plus the
+                // sideways mapping-drawer chevron on mappable rows).
+                let mut card = manifold_ui::panels::param_card::ParamCardPanel::new();
+                card.set_context(manifold_ui::panels::param_card::CardContext::Author);
+                card
+            },
             editor_card_config_hash: None,
+            editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),
             palette_atoms_cache: {
                 use manifold_renderer::node_graph::{Category, descriptor_for};
                 let cat_of = |type_id: &str| {
@@ -1927,6 +1941,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         // handle hover. No-op when the popover is closed.
                         canvas.popover_on_move(logical_x, logical_y);
                     }
+                    // Same for the editor card's sideways mapping drawer (a
+                    // separate popover anchored on the left-lane card row).
+                    self.editor_mapping_popover.on_move(logical_x, logical_y);
                     // Forward into the editor's UITree only when the
                     // cursor sits in either margin (palette on the left
                     // or expose-panel sidebar on the right). Move
@@ -2116,17 +2133,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         );
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
-                                // The mapping popover floats over the
-                                // canvas, so it gets first crack at a
-                                // left-press wherever it lands. If it
-                                // consumes the click (handle/button/dead-
-                                // space), the canvas underneath stays
-                                // untouched; otherwise the popover closes
-                                // and we fall through to the normal path.
-                                if canvas.popover_open()
+                                // The editor card's mapping drawer floats over
+                                // the canvas (anchored right of the left-lane
+                                // card), so it gets first crack. Consumed → done;
+                                // open-but-missed → close it and fall through.
+                                let mut consumed = false;
+                                if self.editor_mapping_popover.is_open() {
+                                    if self.editor_mapping_popover.on_press(cx, cy) {
+                                        consumed = true;
+                                    } else {
+                                        self.editor_mapping_popover.close();
+                                    }
+                                }
+                                // The canvas popover (on-node rows) floats over
+                                // the canvas too — next crack. If neither popover
+                                // takes it, fall through to the panel/canvas path.
+                                if consumed {
+                                    // handled by the editor mapping drawer
+                                } else if canvas.popover_open()
                                     && canvas.popover_on_left_press(cx, cy)
                                 {
-                                    // consumed by the popover
+                                    // consumed by the canvas popover
                                 } else if in_panel {
                                     if let Some(ed) = self.graph_editor.as_mut() {
                                         ed.ui_root.input.process_pointer(
@@ -2146,7 +2173,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 }
                             }
                             (MouseButton::Left, ElementState::Released) => {
-                                // Commit any popover range drag first.
+                                // Commit any in-progress drawer/popover drag.
+                                self.editor_mapping_popover.on_release();
                                 canvas.popover_on_left_release();
                                 if in_panel {
                                     if let Some(ed) = self.graph_editor.as_mut() {

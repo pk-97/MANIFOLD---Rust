@@ -164,6 +164,12 @@ pub enum PanelAction {
     /// Currently shows a hardcoded test graph regardless of which effect
     /// triggered it; live data sync lands in a future phase.
     OpenGraphEditor(usize),
+    /// Open the sideways mapping drawer for an effect user-tail binding
+    /// (Author-context card, right-edge chevron). Carries the binding's stable
+    /// `param_id`; the host resolves its current range/scale/offset/invert/curve
+    /// from the edited effect and anchors the drawer beside the row. Editor-only:
+    /// the perform inspector never emits it (the chevron is Author-context).
+    OpenCardMapping(manifold_core::effects::ParamId),
     // ── Per-effect-param actions ────────────────────────────────────
     //
     // Every variant in this block carries `(fx_idx: usize, param_id: ParamId)`

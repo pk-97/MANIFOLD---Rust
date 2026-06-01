@@ -1338,6 +1338,9 @@ fn effects_to_configs(
                         osc_address,
                         ableton_display,
                         ableton_range,
+                        // Static-tier effect params have no UserParamBinding to
+                        // remap — no mapping-drawer chevron.
+                        mappable: false,
                     }
                 })
                 .collect();
@@ -1393,6 +1396,10 @@ fn effects_to_configs(
                     osc_address: None,
                     ableton_display,
                     ableton_range,
+                    // User-tail bindings ARE the remappable surface (range /
+                    // scale / offset / invert / curve). The Author card shows a
+                    // mapping-drawer chevron on these rows.
+                    mappable: true,
                 });
             }
 
@@ -1648,6 +1655,9 @@ fn gen_params_to_config(
                             osc_address,
                             ableton_display,
                             ableton_range,
+                            // Generator params are direct values, not remappable
+                            // bindings — no mapping-drawer chevron.
+                            mappable: false,
                         }
                     })
                     .collect();
@@ -1700,6 +1710,9 @@ fn gen_params_to_config(
                             osc_address,
                             ableton_display,
                             ableton_range,
+                            // Generator params are direct values, not remappable
+                            // bindings — no mapping-drawer chevron.
+                            mappable: false,
                         }
                     })
                     .collect();

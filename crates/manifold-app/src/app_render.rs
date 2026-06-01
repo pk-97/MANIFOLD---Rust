@@ -304,6 +304,12 @@ impl Application {
         // active layer. Appended to `actions` after a recorded boundary so the
         // dispatch loop can tell which segment they live in.
         let mut editor_card_actions: Vec<manifold_ui::panels::PanelAction> = Vec::new();
+        // The editor card's right-edge chevron requests the sideways mapping
+        // drawer. It's an editor-local interaction (open a popover anchored on
+        // the row), not a model edit, so it's peeled out of the dispatch stream
+        // and handled below once the `graph_editor` borrow is released. Last
+        // request wins within a frame.
+        let mut pending_open_card_mapping: Option<manifold_core::effects::ParamId> = None;
 
         // 2a. Drain the graph-editor window's UITree events. The editor
         // doesn't go through `UIRoot::process_events` (its panel set is
@@ -394,11 +400,18 @@ impl Application {
                         }
                         _ => Vec::new(),
                     };
-                    editor_card_actions.extend(
-                        from_card.into_iter().filter(|a| {
-                            !matches!(a, manifold_ui::panels::PanelAction::OpenGraphEditor(_))
-                        }),
-                    );
+                    for a in from_card {
+                        match a {
+                            // Cog is dropped (you're already in the editor).
+                            manifold_ui::panels::PanelAction::OpenGraphEditor(_) => {}
+                            // Chevron → open the sideways mapping drawer; handled
+                            // after this borrow scope ends.
+                            manifold_ui::panels::PanelAction::OpenCardMapping(pid) => {
+                                pending_open_card_mapping = Some(pid);
+                            }
+                            other => editor_card_actions.push(other),
+                        }
+                    }
                     // Forward every event into the right-sidebar inspector panel
                     // too — it wants Click (toggle/cycle) plus DragBegin/Drag/
                     // DragEnd (numeric scrub) for the per-node expose rows.
@@ -413,6 +426,19 @@ impl Application {
         if let Some(canvas) = self.graph_canvas.as_mut() {
             actions.extend(canvas.drain_actions());
         }
+
+        // Editor-card chevron requested the sideways mapping drawer: resolve the
+        // binding's current mapping from the edited effect, anchor on the row's
+        // chevron, and open the popover. Resolution is effect-only (generators
+        // have no UserParamBinding); a `None` (e.g. a stale id) just no-ops.
+        if let Some(pid) = pending_open_card_mapping {
+            self.open_editor_card_mapping(&pid);
+        }
+        // The editor mapping popover emits the same `EffectMapping*` actions the
+        // canvas popover does (range / scale / offset / invert / curve), keyed by
+        // binding id and dispatched against `current_editor_target` by the inline
+        // arms below — no editor override needed.
+        actions.extend(self.editor_mapping_popover.drain_actions());
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
         // These events were stashed by process_events() because the overlay
@@ -1987,6 +2013,96 @@ impl Application {
         self.frame_count += 1;
     }
 
+    /// Open the editor card's sideways mapping drawer for the binding named by
+    /// `param_id` (its right-edge chevron was clicked). Resolves the binding's
+    /// current range / scale / offset / invert / curve from the edited effect,
+    /// the declared inner-param range from the live snapshot (for the trim track
+    /// span), and anchors the popover on the chevron rect. Effect-only — a
+    /// generator target or an unresolvable id just no-ops.
+    fn open_editor_card_mapping(&mut self, param_id: &str) {
+        use manifold_editing::commands::effect_target::EffectTarget;
+        let Some((target, ei)) = self.current_editor_target.as_ref() else {
+            return;
+        };
+        let ei = *ei;
+        let effects: Option<&[manifold_core::effects::EffectInstance]> = match target {
+            EffectTarget::Master => Some(&self.local_project.settings.master_effects),
+            EffectTarget::Layer { layer_id } => self
+                .local_project
+                .timeline
+                .find_layer_by_id(layer_id)
+                .and_then(|(_, l)| l.effects.as_deref()),
+        };
+        let Some(b) = effects
+            .and_then(|e| e.get(ei))
+            .and_then(|fx| fx.user_param_bindings.iter().find(|b| b.id == param_id))
+        else {
+            return;
+        };
+        // Clone the binding's mapping out so the project borrow ends before we
+        // touch the snapshot / tree / popover.
+        let (binding_id, label, min, max, invert, curve, scale, offset) = (
+            b.id.clone(),
+            b.label.clone(),
+            b.min,
+            b.max,
+            b.invert,
+            b.curve,
+            b.scale,
+            b.offset,
+        );
+        let (node_handle, inner_param) = (b.node_handle.clone(), b.inner_param.clone());
+
+        // Declared inner-param range → the trim track's full span.
+        let range = self
+            .content_state
+            .active_graph_snapshot
+            .as_deref()
+            .and_then(|snap| {
+                snap.nodes
+                    .iter()
+                    .find(|n| n.node_handle.as_deref() == Some(node_handle.as_str()))
+                    .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
+                    .and_then(|p| p.range)
+            });
+
+        // Anchor on the chevron (UI-space rect → canvas-space Rect).
+        let Some(ed) = self.graph_editor.as_ref() else {
+            return;
+        };
+        let Some(anchor) = self
+            .editor_card
+            .mapping_chevron_rect(&ed.ui_root.tree, &binding_id)
+        else {
+            return;
+        };
+        let anchor =
+            crate::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height);
+        // Clip to the editor window's logical rect so the drawer never renders
+        // past an edge.
+        let clip = self
+            .graph_editor_window_id
+            .and_then(|wid| self.window_registry.get(&wid))
+            .map(|w| {
+                let s = w.window.scale_factor() as f32;
+                let sz = w.window.inner_size();
+                crate::graph_canvas::Rect::new(
+                    0.0,
+                    0.0,
+                    (sz.width as f32 / s).max(1.0),
+                    (sz.height as f32 / s).max(1.0),
+                )
+            })
+            .unwrap_or_else(|| crate::graph_canvas::Rect::new(0.0, 0.0, 1280.0, 800.0));
+
+        self.editor_mapping_popover.open(
+            binding_id, label, min, max, invert, curve, scale, offset, range, anchor, clip,
+        );
+        if let Some(ed) = self.graph_editor.as_mut() {
+            ed.offscreen_dirty = true;
+        }
+    }
+
     /// Render and present one frame to the graph editor window.
     ///
     /// Renders to the editor's offscreen via `UIRenderer` (clear + a
@@ -2139,11 +2255,16 @@ impl Application {
             if self.editor_card_config_hash != Some(config_hash) {
                 self.editor_card.configure(config);
                 self.editor_card_config_hash = Some(config_hash);
+                // The card's structure (or edited target) changed, so the
+                // chevron geometry the mapping drawer anchored on is stale —
+                // close it rather than leave it pointing at a moved/old row.
+                self.editor_mapping_popover.close();
             }
             self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
             self.editor_card.sync_values(&mut ws.ui_root.tree, values);
         } else {
             self.editor_card_config_hash = None;
+            self.editor_mapping_popover.close();
         }
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
@@ -2174,6 +2295,9 @@ impl Application {
             // scissor batches and the canvas's nodes/wires/grid would
             // never reach the GPU.
             ui.render_overlay_additive(&ws.ui_root.tree, 0);
+            // The sideways mapping drawer floats over everything (immediate-mode
+            // primitives), drawn last so it sits above the card + canvas.
+            self.editor_mapping_popover.render(ui);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }

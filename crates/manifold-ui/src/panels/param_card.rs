@@ -32,6 +32,22 @@ pub enum ParamCardKind {
     Generator,
 }
 
+/// Where the card is being shown — which decides its chrome, not its data.
+///
+/// `Perform` is the inspector / live surface: the full performing card with its
+/// drag-reorder handle, the "open graph editor" cog, and the right-click
+/// perform-mapping menu. `Author` is the graph editor's left lane: the same
+/// instrument, but the perform-only chrome is suppressed (you're already in the
+/// editor, reorder is meaningless against one card, and the perform-mapping menu
+/// is replaced by the sideways mapping drawer) and each mappable row gains a
+/// chevron at its right edge that opens that drawer. Default is `Perform` so
+/// every existing inspector card is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardContext {
+    Perform,
+    Author,
+}
+
 /// Per-parameter configuration info provided by the app layer. One per slot
 /// in the host's `param_values`, in declaration order (static prefix, then
 /// user-exposed tail for effects).
@@ -78,6 +94,11 @@ pub struct ParamInfo {
     /// Ableton trim range `(range_min, range_max)`. When present, trim handles
     /// are shown on the slider track.
     pub ableton_range: Option<(f32, f32)>,
+    /// This row maps to a remappable `UserParamBinding` (range / scale / offset
+    /// / invert / curve). Only effect user-tail bindings set this today; static
+    /// effect params and generator params leave it `false`. Drives the sideways
+    /// mapping-drawer chevron, which only appears in [`CardContext::Author`].
+    pub mappable: bool,
 }
 
 /// A generator string parameter — rendered as a clickable text-field row
@@ -176,6 +197,10 @@ const CORNER_RADIUS: f32 = 4.0;
 const CARD_BOTTOM_MARGIN: f32 = 6.0;
 const CHEVRON_W: f32 = 18.0;
 const COG_W: f32 = 18.0;
+/// Width of the right-edge mapping-drawer chevron lane (Author context). Rows
+/// that show it shrink their slider by this much so the chevron sits past the
+/// D/E buttons at the row's right edge.
+const MAP_CHEVRON_W: f32 = 14.0;
 
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
@@ -244,6 +269,9 @@ impl ParamCardState {
 /// [`PanelAction`] emission points.
 pub struct ParamCardPanel {
     kind: ParamCardKind,
+    /// Perform (inspector) vs Author (graph editor). Decides chrome only — the
+    /// data contract is identical. Defaults to `Perform`.
+    context: CardContext,
 
     // ── Identity ──
     /// Effect chain position (effect kind).
@@ -313,6 +341,10 @@ pub struct ParamCardPanel {
     toggle_ids: Vec<Option<ToggleParamIds>>,
     string_param_btn_ids: Vec<i32>,
 
+    /// Per-param sideways-mapping-drawer chevron (Author context, mappable rows
+    /// only). `-1` for rows without one. Indexed by param index.
+    mapping_chevron_ids: Vec<i32>,
+
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
 
@@ -338,6 +370,7 @@ impl ParamCardPanel {
     pub fn new() -> Self {
         Self {
             kind: ParamCardKind::Effect,
+            context: CardContext::Perform,
             effect_index: 0,
             effect_id: EffectId::default(),
             name: String::new(),
@@ -384,6 +417,7 @@ impl ParamCardPanel {
             ableton_config_ids: Vec::new(),
             toggle_ids: Vec::new(),
             string_param_btn_ids: Vec::new(),
+            mapping_chevron_ids: Vec::new(),
             osc_addresses: Vec::new(),
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
@@ -468,6 +502,7 @@ impl ParamCardPanel {
         self.ableton_config_ids.resize_with(n, || None);
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
+        self.mapping_chevron_ids = vec![-1; n];
         self.string_param_btn_ids = vec![-1; config.string_params.len()];
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
@@ -508,6 +543,14 @@ impl ParamCardPanel {
     }
     pub fn set_layer_id(&mut self, id: Option<LayerId>) {
         self.layer_id = id;
+    }
+
+    /// Set the chrome context (Perform vs Author). Author suppresses the cog /
+    /// drag-reorder handle / perform-mapping menu and adds the sideways
+    /// mapping-drawer chevron on mappable rows. Takes effect on the next
+    /// [`build`](Self::build); the host sets it once on its dedicated panel.
+    pub fn set_context(&mut self, context: CardContext) {
+        self.context = context;
     }
 
     /// Border color for the card's current kind + state.
@@ -572,6 +615,16 @@ impl ParamCardPanel {
                 },
             );
         }
+    }
+
+    /// Screen-space rect of the mapping-drawer chevron for the binding with
+    /// `param_id` (Author context). The host anchors the sideways drawer beside
+    /// it. `None` when the param isn't mappable, isn't built, or no chevron was
+    /// drawn (Perform context).
+    pub fn mapping_chevron_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
+        let pi = self.param_info.iter().position(|p| p.param_id == param_id)?;
+        let cid = *self.mapping_chevron_ids.get(pi)?;
+        (cid >= 0).then(|| tree.get_bounds(cid as u32))
     }
 
     /// Get string param info for text input anchoring (generator kind).
@@ -785,29 +838,38 @@ impl ParamCardPanel {
         let env_x = drv_x - GAP - BADGE_W;
         let abl_x = env_x - GAP - BADGE_W;
         let mod_x = abl_x - GAP - BADGE_W;
-        let name_x = x + PADDING + DRAG_HANDLE_W + GAP;
+        // Author mode drops the drag-reorder handle (one card, nothing to
+        // reorder against), so the name reclaims its indent.
+        let author = self.context == CardContext::Author;
+        let name_x = if author {
+            x + PADDING
+        } else {
+            x + PADDING + DRAG_HANDLE_W + GAP
+        };
         let name_w = (mod_x - GAP - name_x).max(10.0);
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
-        // Drag handle (hamburger icon drawn as 3 horizontal bars)
-        let dh_x = x + PADDING;
-        let dh_h = 16.0_f32;
-        self.drag_icon_id = tree.add_button(
-            self.header_bg_id,
-            dh_x,
-            elem_y,
-            DRAG_HANDLE_W,
-            dh_h,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::DRAG_HANDLE_HOVER_BG_C32,
-                pressed_bg_color: color::DRAG_HANDLE_BG_C32,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-        {
+        // Drag handle (hamburger icon drawn as 3 horizontal bars). Perform only
+        // — leaving `drag_icon_id = -1` in Author also disables `is_drag_handle`,
+        // so the card can't be picked up for a reorder it has no list to join.
+        if !author {
+            let dh_x = x + PADDING;
+            let dh_h = 16.0_f32;
+            self.drag_icon_id = tree.add_button(
+                self.header_bg_id,
+                dh_x,
+                elem_y,
+                DRAG_HANDLE_W,
+                dh_h,
+                UIStyle {
+                    bg_color: Color32::TRANSPARENT,
+                    hover_bg_color: color::DRAG_HANDLE_HOVER_BG_C32,
+                    pressed_bg_color: color::DRAG_HANDLE_BG_C32,
+                    ..UIStyle::default()
+                },
+                "",
+            ) as i32;
             let bar_w: f32 = 10.0;
             let bar_h: f32 = 1.5;
             let bar_x = dh_x + (DRAG_HANDLE_W - bar_w) * 0.5;
@@ -1005,21 +1067,23 @@ impl ParamCardPanel {
         ) as i32;
 
         // "Open in graph editor" affordance — three small dots in a triangle.
-        self.cog_btn_id = tree.add_button(
-            self.header_bg_id,
-            cog_x,
-            elem_y,
-            COG_W,
-            16.0,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-        {
+        // Perform only: in Author you're already in the editor, so the cog is
+        // suppressed (and `cog_btn_id` stays -1, so its click arm never fires).
+        if !author {
+            self.cog_btn_id = tree.add_button(
+                self.header_bg_id,
+                cog_x,
+                elem_y,
+                COG_W,
+                16.0,
+                UIStyle {
+                    bg_color: Color32::TRANSPARENT,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    pressed_bg_color: color::PRESS_OVERLAY,
+                    ..UIStyle::default()
+                },
+                "",
+            ) as i32;
             let dot: f32 = 3.0;
             let dot_color = color::TEXT_DIMMED_C32;
             let dot_style = UIStyle {
@@ -1051,7 +1115,16 @@ impl ParamCardPanel {
         w: f32,
     ) {
         let mut cy = start_y;
-        let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
+        // Author mode reserves a uniform right-edge lane for the mapping-drawer
+        // chevron (drawn only on mappable rows, but reserved on all so slider
+        // widths stay even). Perform mode keeps the full slider width.
+        let author = self.context == CardContext::Author;
+        let chevron_lane = if author {
+            MAP_CHEVRON_W + DE_BUTTON_GAP
+        } else {
+            0.0
+        };
+        let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
 
         for i in 0..self.param_info.len() {
             // Hidden params: leave slider_ids[i] = None and skip widget
@@ -1061,6 +1134,7 @@ impl ParamCardPanel {
                 continue;
             }
             let info = self.param_info[i].clone();
+            let row_y = cy;
             // Per-param slider + driver/envelope/Ableton drawers — the shared
             // core. Effects nest rows under `parent` (the inner-bg panel), use
             // the default slider palette + caption-size driver-config font, and
@@ -1090,6 +1164,32 @@ impl ParamCardPanel {
             self.envelope_random_config_ids[i] = row.envelope_random_config;
             self.driver_config_ids[i] = row.driver_config;
             self.ableton_config_ids[i] = row.ableton_config;
+            // Mapping-drawer chevron at the row's right edge (Author + mappable).
+            // A subtle ">" that opens the sideways range/scale/offset/invert/
+            // curve drawer for this binding. Sits past the D/E buttons in the
+            // reserved lane; click resolves via `mapping_chevron_ids`.
+            if author && info.mappable {
+                let ch_x = x + PADDING + (w - PADDING * 2.0) - MAP_CHEVRON_W;
+                let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+                self.mapping_chevron_ids[i] = tree.add_button(
+                    parent,
+                    ch_x,
+                    ch_y,
+                    MAP_CHEVRON_W,
+                    DE_BUTTON_SIZE,
+                    UIStyle {
+                        bg_color: Color32::TRANSPARENT,
+                        hover_bg_color: color::HOVER_OVERLAY,
+                        pressed_bg_color: color::PRESS_OVERLAY,
+                        text_color: color::CHEVRON_COLOR,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        corner_radius: 2.0,
+                        ..UIStyle::default()
+                    },
+                    "\u{203A}", // ›
+                ) as i32;
+            }
             cy = row.new_cy;
         }
     }
@@ -1219,22 +1319,23 @@ impl ParamCardPanel {
         ) as i32;
 
         // "Open in graph editor" affordance — three small dots in a triangle.
+        // Perform only: in Author (editor) you're already in the editor.
         let elem_y = inner_y;
-        self.cog_btn_id = tree.add_button(
-            -1,
-            cog_x,
-            elem_y,
-            COG_W,
-            HEADER_HEIGHT,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-        {
+        if self.context == CardContext::Perform {
+            self.cog_btn_id = tree.add_button(
+                -1,
+                cog_x,
+                elem_y,
+                COG_W,
+                HEADER_HEIGHT,
+                UIStyle {
+                    bg_color: Color32::TRANSPARENT,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    pressed_bg_color: color::PRESS_OVERLAY,
+                    ..UIStyle::default()
+                },
+                "",
+            ) as i32;
             let dot: f32 = 3.0;
             let dot_style = UIStyle {
                 bg_color: color::TEXT_DIMMED_C32,
@@ -1648,6 +1749,16 @@ impl ParamCardPanel {
         }
         if id == self.cog_btn_id {
             return vec![PanelAction::OpenGraphEditor(ei)];
+        }
+
+        // Mapping-drawer chevron (Author context) → open the sideways
+        // range/scale/offset/invert/curve drawer for this row's binding.
+        if let Some(pi) = self
+            .mapping_chevron_ids
+            .iter()
+            .position(|&cid| cid >= 0 && cid == id)
+        {
+            return vec![PanelAction::OpenCardMapping(self.pid_at(pi))];
         }
 
         // Per-param row elements (D/E buttons, config drawers, label copy) —
@@ -2598,8 +2709,14 @@ impl ParamCardPanel {
                         default,
                     )];
                 }
-                // Right-click label → map to macro
-                if ids.label >= 0 && node_id == ids.label as u32 {
+                // Right-click label → perform-mapping menu. Suppressed in
+                // Author: the sideways mapping drawer (right-edge chevron) is
+                // the authoring surface, and the perform menu maps drivers /
+                // Ableton, which belong to the live card.
+                if self.context == CardContext::Perform
+                    && ids.label >= 0
+                    && node_id == ids.label as u32
+                {
                     return vec![PanelAction::EffectParamLabelRightClick(ei, self.pid_at(pi))];
                 }
             }
@@ -2634,8 +2751,12 @@ impl ParamCardPanel {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
                     return vec![PanelAction::GenParamRightClick(self.pid_at(pi), default)];
                 }
-                // Right-click label → map to macro
-                if ids.label >= 0 && node_id == ids.label as u32 {
+                // Right-click label → perform-mapping menu. Suppressed in
+                // Author (see effect path above).
+                if self.context == CardContext::Perform
+                    && ids.label >= 0
+                    && node_id == ids.label as u32
+                {
                     return vec![PanelAction::GenParamLabelRightClick(self.pid_at(pi))];
                 }
             }
@@ -2685,6 +2806,7 @@ mod tests {
                     osc_address: None,
                     ableton_display: None,
                     ableton_range: None,
+                    mappable: false,
                 },
                 ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("strength"),
@@ -2701,6 +2823,7 @@ mod tests {
                     osc_address: None,
                     ableton_display: None,
                     ableton_range: None,
+                    mappable: false,
                 },
             ],
             has_drv: false,
@@ -2746,6 +2869,61 @@ mod tests {
         assert!(panel.slider_ids[0].is_some());
         assert!(panel.slider_ids[1].is_some());
         assert!(panel.node_count > 0);
+    }
+
+    /// Config with the second param marked mappable (a user-tail binding).
+    fn effect_config_with_mappable() -> ParamCardConfig {
+        let mut c = effect_config();
+        c.params[1].mappable = true;
+        c
+    }
+
+    #[test]
+    fn author_context_suppresses_perform_chrome() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.set_context(CardContext::Author);
+        panel.configure(&effect_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+
+        // Cog ("open graph editor") and the drag-reorder handle are gone.
+        assert!(panel.cog_btn_id < 0, "cog suppressed in Author");
+        assert!(panel.drag_icon_id < 0, "drag handle suppressed in Author");
+        // Mapping chevron only on the mappable row.
+        assert!(panel.mapping_chevron_ids[0] < 0, "row 0 not mappable");
+        assert!(panel.mapping_chevron_ids[1] >= 0, "row 1 mappable → chevron");
+    }
+
+    #[test]
+    fn perform_context_has_no_mapping_chevron() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // default Perform
+        panel.configure(&effect_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+
+        // Perform keeps the cog and never draws the mapping chevron.
+        assert!(panel.cog_btn_id >= 0, "cog present in Perform");
+        assert!(panel.mapping_chevron_ids.iter().all(|&id| id < 0));
+    }
+
+    #[test]
+    fn mapping_chevron_click_emits_open_card_mapping() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.set_context(CardContext::Author);
+        panel.configure(&effect_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+
+        let chevron = panel.mapping_chevron_ids[1];
+        assert!(chevron >= 0);
+        let actions = panel.handle_click(chevron as u32);
+        assert!(
+            matches!(&actions[..], [PanelAction::OpenCardMapping(pid)] if pid == "strength"),
+            "got {actions:?}"
+        );
+        // The chevron also has a resolvable anchor rect by binding id.
+        assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
+        assert!(panel.mapping_chevron_rect(&tree, "radius").is_none());
     }
 
     #[test]
@@ -2874,6 +3052,7 @@ mod tests {
                     osc_address: None,
                     ableton_display: None,
                     ableton_range: None,
+                    mappable: false,
                 },
                 ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("invert"),
@@ -2890,6 +3069,7 @@ mod tests {
                     osc_address: None,
                     ableton_display: None,
                     ableton_range: None,
+                    mappable: false,
                 },
                 ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("scale"),
@@ -2906,6 +3086,7 @@ mod tests {
                     osc_address: None,
                     ableton_display: None,
                     ableton_range: None,
+                    mappable: false,
                 },
             ],
             string_params: vec![],
