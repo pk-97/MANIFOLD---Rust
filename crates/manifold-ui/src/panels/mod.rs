@@ -4,6 +4,7 @@ pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
 pub mod dropdown;
 pub mod footer;
+pub mod graph_card_mirror;
 pub mod graph_editor;
 pub mod graph_palette;
 pub mod header;

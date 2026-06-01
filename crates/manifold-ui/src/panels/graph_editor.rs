@@ -255,6 +255,45 @@ pub struct GraphEditorCardEntry {
     /// in sync.
     pub target_handle: String,
     pub target_inner_param: String,
+    /// Live value of the driven inner param this frame, for the card
+    /// mirror's read-out. Formatted through the same `kind`-aware path
+    /// the inspector uses so degrees, Hz, and enum labels render right.
+    pub current_value: f32,
+    /// Presentation kind of the driven param. Drives value formatting:
+    /// degrees for `Angle`, Hz for `Frequency`, the enum label for
+    /// `Enum`, a plain number otherwise.
+    pub kind: GraphEditorParamKind,
+    /// Enum option labels indexed by value, when `kind` is `Enum`.
+    pub enum_labels: Option<Vec<String>>,
+}
+
+/// Format a card entry's live value for the left card mirror, reusing
+/// the inspector's conventions (degrees for `Angle`, Hz for `Frequency`,
+/// enum label for `Enum`). Free function so the card-mirror panel can
+/// share it without depending back on the inspector's private helper.
+pub fn format_card_entry_value(entry: &GraphEditorCardEntry) -> String {
+    match entry.kind {
+        GraphEditorParamKind::Enum => entry
+            .enum_labels
+            .as_ref()
+            .and_then(|labels| labels.get(entry.current_value as usize).cloned())
+            .unwrap_or_else(|| format!("{}", entry.current_value as i64)),
+        GraphEditorParamKind::Bool => {
+            if entry.current_value >= 0.5 {
+                "On".to_string()
+            } else {
+                "Off".to_string()
+            }
+        }
+        GraphEditorParamKind::Int => format!("{}", entry.current_value as i64),
+        GraphEditorParamKind::Float => format!("{:.2}", entry.current_value),
+        GraphEditorParamKind::Angle => format!("{:.0}°", entry.current_value.to_degrees()),
+        GraphEditorParamKind::Frequency => {
+            format!("{:.2} Hz", entry.current_value / std::f32::consts::TAU)
+        }
+        GraphEditorParamKind::Trigger => "▶".to_string(),
+        GraphEditorParamKind::Other => "—".to_string(),
+    }
 }
 
 /// Right-sidebar panel inside the graph-editor window.
@@ -1641,11 +1680,17 @@ mod tests {
                 label: "Amount".to_string(),
                 target_handle: "mix_final".to_string(),
                 target_inner_param: "blend".to_string(),
+                current_value: 0.0,
+                kind: GraphEditorParamKind::Float,
+                enum_labels: None,
             },
             GraphEditorCardEntry {
                 label: "Threshold".to_string(),
                 target_handle: "threshold".to_string(),
                 target_inner_param: "value".to_string(),
+                current_value: 0.0,
+                kind: GraphEditorParamKind::Float,
+                enum_labels: None,
             },
         ];
         panel.configure(

@@ -290,12 +290,13 @@ pub struct Application {
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
     /// Shares the editor window with `graph_canvas`.
     pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
-    /// Left-sidebar palette listing atoms the user can drop into the
-    /// watched graph. Mirrors `graph_editor_panel`'s lifecycle —
-    /// configured each frame, drained for clicks.
-    pub(crate) graph_palette: manifold_ui::panels::graph_palette::GraphPalette,
-    /// Built-once list of atoms shown in the palette. Cloned (cheap)
-    /// per frame into `GraphPalette::configure`.
+    /// Left-lane card mirror inside the graph editor — the exposed-param
+    /// reflection of the effect card, in the lane the node palette used to
+    /// occupy. Configured each frame from the live snapshot.
+    pub(crate) graph_card_mirror:
+        manifold_ui::panels::graph_card_mirror::GraphCardMirrorPanel,
+    /// Built-once list of atoms shown in the spawn popup (node browser).
+    /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
     /// Identifies which `EffectInstance` the editor is currently
     /// configuring. Set when `OpenGraphEditor(ei)` fires; cleared on
@@ -472,7 +473,8 @@ impl Application {
             graph_editor_geometry: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
-            graph_palette: manifold_ui::panels::graph_palette::GraphPalette::new(),
+            graph_card_mirror:
+                manifold_ui::panels::graph_card_mirror::GraphCardMirrorPanel::new(),
             palette_atoms_cache: {
                 use manifold_renderer::node_graph::{Category, descriptor_for};
                 let cat_of = |type_id: &str| {

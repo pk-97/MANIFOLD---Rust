@@ -363,12 +363,9 @@ impl Application {
                 for event in events {
                     // Forward every event into the inspector panel — it
                     // wants Click (toggle/cycle) plus DragBegin/Drag/
-                    // DragEnd (numeric scrub). The palette only cares
-                    // about Click since it just lists clickable atoms.
+                    // DragEnd (numeric scrub). The left card mirror is
+                    // read-only for now, so it has no click handler.
                     actions.extend(self.graph_editor_panel.handle_event(&event));
-                    if let manifold_ui::input::UIEvent::Click { node_id, .. } = event {
-                        actions.extend(self.graph_palette.handle_click(node_id));
-                    }
                 }
             }
         }
@@ -1877,7 +1874,10 @@ impl Application {
         // Left palette (atoms) + center canvas + right sidebar (param
         // expose). Built BEFORE rendering so the tree's nodes (panels +
         // buttons + labels) are ready to draw alongside the canvas.
-        let palette_width = manifold_ui::panels::graph_palette::PALETTE_WIDTH;
+        // Left lane is the effect-card mirror now (the node palette moved to
+        // the spawn popup). Same width as the old palette so the canvas keeps
+        // its screen origin and the coordinate mapping is untouched.
+        let palette_width = manifold_ui::panels::graph_card_mirror::CARD_MIRROR_WIDTH;
         let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
         let canvas_x = palette_width;
         let canvas_width = (logical_w as f32 - palette_width - sidebar_width).max(0.0);
@@ -1927,7 +1927,7 @@ impl Application {
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
         self.graph_editor_panel.configure(
             effect_index,
-            card_entries,
+            card_entries.clone(),
             view_for_panel.as_ref(),
             exposed_keys,
             outer_driven,
@@ -1935,20 +1935,16 @@ impl Application {
             wire_driven_keys,
         );
 
-        // Configure the left palette. Active whenever we have a
-        // watched effect id — that's the gate for "edits will land
-        // somewhere" since every graph command keys on EffectId.
-        self.graph_palette.configure(
-            self.watched_graph_target.is_some() && self.watched_catalog_default.is_some(),
-            self.palette_atoms_cache.clone(),
-        );
+        // Configure the left card mirror — the exposed-param reflection of
+        // the effect card, in the lane the node palette used to occupy.
+        self.graph_card_mirror.configure(card_entries);
 
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small (one panel container + per-param row), so a clear +
         // rebuild is cheaper than dirty-tracking and means stale rows
         // can never linger after the selected node changes.
         ws.ui_root.tree.clear();
-        self.graph_palette
+        self.graph_card_mirror
             .build(&mut ws.ui_root.tree, palette_viewport);
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
@@ -2778,6 +2774,25 @@ fn build_static_block_targets(
 ///    by the preset (label = the param's own name; appended in node
 ///    iteration order). Step 8 will collapse user-binding state into
 ///    this path; for now it covers the no-binding case.
+// Map a snapshot param kind to the UI-facing editor kind, shared by the node
+// inspector and card mirror so value formatting stays consistent.
+fn editor_kind(
+    k: manifold_renderer::node_graph::ParamSnapshotKind,
+) -> manifold_ui::panels::graph_editor::GraphEditorParamKind {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    use manifold_ui::panels::graph_editor::GraphEditorParamKind;
+    match k {
+        ParamSnapshotKind::Float => GraphEditorParamKind::Float,
+        ParamSnapshotKind::Angle => GraphEditorParamKind::Angle,
+        ParamSnapshotKind::Frequency => GraphEditorParamKind::Frequency,
+        ParamSnapshotKind::Int => GraphEditorParamKind::Int,
+        ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
+        ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,
+        ParamSnapshotKind::Trigger => GraphEditorParamKind::Trigger,
+        ParamSnapshotKind::Other => GraphEditorParamKind::Other,
+    }
+}
+
 fn build_card_entries(
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
 ) -> Vec<manifold_ui::panels::graph_editor::GraphEditorCardEntry> {
@@ -2797,14 +2812,15 @@ fn build_card_entries(
         // live graph. (For freshly-loaded presets this is always true
         // because of the Step 6 backfill; for user-toggled-off entries
         // we skip them.)
-        let is_exposed = snap
+        let param = snap
             .nodes
             .iter()
             .find(|n| n.node_handle.as_deref() == Some(r.node_handle.as_str()))
-            .and_then(|n| n.parameters.iter().find(|p| p.name == r.inner_param))
-            .map(|p| p.exposed)
-            .unwrap_or(false);
-        if !is_exposed {
+            .and_then(|n| n.parameters.iter().find(|p| p.name == r.inner_param));
+        let Some(param) = param else {
+            continue;
+        };
+        if !param.exposed {
             continue;
         }
         covered.insert((r.node_handle.clone(), r.inner_param.clone()));
@@ -2812,6 +2828,9 @@ fn build_card_entries(
             label: r.outer_label.clone(),
             target_handle: r.node_handle.clone(),
             target_inner_param: r.inner_param.clone(),
+            current_value: param.current_value,
+            kind: editor_kind(param.kind),
+            enum_labels: param.enum_labels.clone(),
         });
     }
 
@@ -2838,6 +2857,9 @@ fn build_card_entries(
                 label: p.label.clone(),
                 target_handle: handle.to_string(),
                 target_inner_param: p.name.clone(),
+                current_value: p.current_value,
+                kind: editor_kind(p.kind),
+                enum_labels: p.enum_labels.clone(),
             });
             covered.insert(key);
         }
