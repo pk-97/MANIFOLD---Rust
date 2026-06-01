@@ -258,3 +258,41 @@ runtime applied the scale. Verify the value reaches the inner param (the regress
 Peter's eyes.
 
 FluidSimulation's fold campaign is **DONE**: Curl + particle count folded, everything else correctly kept.
+
+## Editor card rebuild — status (2026-06-01, post-A.2)
+
+The graph-editor left lane now renders the REAL `ParamCardPanel`, interactive and
+target-correct by identity. Shipped:
+
+- **A.1** (commit ed8e8273): real card in a widened 340px lane (the dead
+  `GraphCardMirrorPanel` deleted). Configured from the edited target via
+  `state_sync::editor_card_config` — effect via `current_editor_target`,
+  generator via `watched_graph_target`, one surface.
+- **A.2** (commit 5d40066c): card is interactive. Pointer events map to the
+  card's node-id methods. Edits resolve by IDENTITY via an additive
+  `editor_override: Option<&EditorDispatchTarget>{tab, active_layer}` threaded
+  through `dispatch → dispatch_inspector` (None = perform path, byte-identical,
+  adversarially confirmed). Configure-gated on a config hash so drags/drawers
+  survive. Clip-effect guard bails to an empty lane (no Clip variant in
+  `EffectTarget`) — full clip support is step 3.
+
+**NEXT = B: the sideways mapping drawer + `CardContext`.**
+- Add a `CardContext` (Perform / Author) to `ParamCardPanel`. Author mode (the
+  editor) shows the sideways control-param drawer and SUPPRESSES the cog
+  ("open graph editor" — you're already in it), drag-reorder, and the
+  perform-mapping label-right-click menu. Perform mode (inspector) is unchanged.
+- Control params (range / scale / offset / invert / curve) open SIDEWAYS
+  (horizontal), reusing the `EffectMappingAffine*` emit + the `MappingPopover`
+  scale/offset controls; chevron affordance at the row's right edge (NOT
+  right-click). Drivers + modulators keep opening DOWN. This is where the
+  hardened scale/offset binding path gets its on-card surface.
+- B also absorbs the deferred A.2 nits: the editor label-right-click menu
+  (inert today; either suppress in Author mode or wire it with the override),
+  and optionally a lighter configure-gate than the Debug-hash.
+
+**DEFERRED (own pass): step 3** — migrate the inspector/perform path to the same
+identity targeting and delete `EffectTarget` + the ambient resolution + the
+clip guard + the `Effect*/Gen*` action fork. Full spec + grep-able done-criteria
+in `docs/CARD_TARGET_UNIFICATION.md`; fork sites carry `CARD-TARGET-UNIFICATION`.
+This is the workflow-shaped one (broad sweep + adversarial verify on the perform
+path).
