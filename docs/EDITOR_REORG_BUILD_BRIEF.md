@@ -324,3 +324,16 @@ entirely" was wrong) and split it into stages — see the rewritten
 Checkpointed here on purpose: the foundation is proven, the design is corrected +
 precise, and the app-dispatch rewrite is a focused atomic block best done with a
 full runway rather than half-landed under budget pressure.
+
+**Scope expansion (2026-06-01): generator editable bindings fold into Step 3.**
+The sideways mapping drawer is effect-only today because `GeneratorParamState`
+has no `user_param_bindings` (generator exposure just flips an `exposed_params`
+flag — no binding object to remap), so `mappable` is correctly false on
+generator rows. Peter: generators "1000% need this." Decided to fold the fix
+into Step 3 (not a separate pass) so the binding command + mapping dispatch
+generalize to a graph target ONCE. This REVISES Stage A: the stashed
+`EditUserParamBindingCommand(EffectId, …)` becomes target-generic
+(`Effect(EffectId) | Generator(LayerId)`). The UI is already unified (chevron
+gated on `mappable`), so once `gen_params_to_config` sets `mappable: true` for
+generator bindings the chevron lights up with no UI work. Full plan in
+`docs/CARD_TARGET_UNIFICATION.md` § "Stage B+ — generator editable bindings".

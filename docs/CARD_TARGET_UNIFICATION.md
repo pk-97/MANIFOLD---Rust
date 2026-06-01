@@ -130,6 +130,46 @@ stash@{0}` to restore. It does:
    and `manifold-app/tests/user_param_bindings_e2e.rs`.
 4. **Remove the `CARD-TARGET-UNIFICATION` tags** as each site converts.
 
+### Stage B+ — generator editable bindings (folded in, decided 2026-06-01)
+
+**Decision (Peter): the generator binding model folds INTO Step 3**, not a
+separate pass — so the binding command + mapping dispatch are generalized to a
+graph target ONCE, with no transitional effect-only fork.
+
+The fork the mapping drawer exposed is a *data-model* asymmetry, not a UI one:
+
+- `EffectInstance` carries `user_param_bindings: Vec<UserParamBinding>` — the
+  per-instance, editable mapping (label / min / max / invert / curve / scale /
+  offset). That object is what the drawer edits.
+- `GeneratorParamState` (`manifold-core/src/generator.rs`) has `param_values`,
+  `base_param_values`, `drivers` — and **no `user_param_bindings`**. Generator
+  param-exposure (`graph.rs` `flip_graph_exposed`) only flips the inner node's
+  `exposed_params` flag; it never creates a binding. So a generator param has
+  nowhere to store a mapping, and `gen_params_to_config` correctly leaves
+  `ParamInfo.mappable = false` → no chevron.
+
+The UI is ALREADY unified (one `ParamCardPanel`, chevron gated on the data flag
+`mappable`), so the moment the generator gains bindings the chevron lights up
+with **zero UI changes**. The work is all model + command + runtime:
+
+1. Add `user_param_bindings: Vec<UserParamBinding>` to `GeneratorParamState`
+   (serde-default empty → every shipped project byte-identical).
+2. Generator param-exposure creates a `UserParamBinding` (like
+   `ToggleEffectParamExposeCommand`), not just an `exposed_params` flip.
+3. Generator runtime applies them — `json_graph_generator` already resolves
+   bindings + honors scale (the 2026-06-01 Curl-scale convergence), so this is
+   mostly wiring the per-instance tail in.
+4. **Generalize the binding edit + mapping dispatch to a graph target.** This
+   REVISES Stage A: the stashed `EditUserParamBindingCommand(EffectId, …)` is
+   effect-only; Stage B makes it take `GraphTarget` (or an `Effect(EffectId) |
+   Generator(LayerId)` target) so one command serves both. The card already
+   carries its `GraphTarget`; the editor's `EffectMapping*` arms resolve it.
+5. `gen_params_to_config` sets `mappable: true` for generator user-tail
+   bindings → the existing chevron path lights up.
+
+This rides the same binding-command rework Stage B/C already does, so it adds
+model surface but no new dispatch fork.
+
 ### Stage C — the `Effect*`/`Gen*` enum collapse (optional final purity)
 
 After Stage B the editor reads zero ambient context, but the *inspector* still
