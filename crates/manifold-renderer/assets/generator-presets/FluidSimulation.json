@@ -41,7 +41,8 @@
         "convert": { "type": "Float" } },
 
       { "id": "curl",              "label": "Curl",         "defaultValue": 85.0,
-        "target": { "kind": "handleNode", "handle": "rotation_rad_base", "param": "a" },
+        "target": { "kind": "handleNode", "handle": "rotation_final", "param": "a" },
+        "scale": 0.017453293,
         "convert": { "type": "Float" } },
 
       { "id": "turbulence",        "label": "Turbulence",   "defaultValue": 0.001,
@@ -207,9 +208,6 @@
 
     { "id": 23, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc",
       "params": { "a": { "type": "Float", "value": 2000000.0 }, "scale": { "type": "Float", "value": 0.000004096 }, "offset": { "type": "Float", "value": 0.5 } } },
-
-    { "id": 24, "typeId": "node.affine_scalar", "handle": "rotation_rad_base",
-      "params": { "a": { "type": "Float", "value": 85.0 }, "scale": { "type": "Float", "value": 0.017453293 }, "offset": { "type": "Float", "value": 0.0 } } },
 
     { "id": 25, "typeId": "node.canvas_area_scale", "handle": "area_scale",
       "params": { "width": { "type": "Float", "value": 1920.0 }, "height": { "type": "Float", "value": 1080.0 }, "reference_area": { "type": "Float", "value": 2073600.0 }, "min_width": { "type": "Float", "value": 640.0 }, "min_height": { "type": "Float", "value": 360.0 } } },
@@ -381,7 +379,6 @@
     { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "in_0" },
     { "fromNode": 40, "fromPort": "out", "toNode": 41, "toPort": "a" },
 
-    { "fromNode": 24, "fromPort": "out", "toNode": 47, "toPort": "a" },
     { "fromNode": 46, "fromPort": "out", "toNode": 47, "toPort": "b" },
     { "fromNode": 45, "fromPort": "out", "toNode": 46, "toPort": "in_1" },
     { "fromNode": 40, "fromPort": "out", "toNode": 45, "toPort": "a" },
