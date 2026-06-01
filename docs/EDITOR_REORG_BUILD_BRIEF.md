@@ -91,14 +91,30 @@ Two blockers, both fatal to a blind fold:
    lose the friendly degree value, and would ripple to any driver/Ableton mapping
    on that card param.
 
-**Decision needed from Peter (surface at pass-over):** WS3 is blocked on a design
-call — either (a) extend `UserParamBinding` with an optional `scale`/`offset`
-(default 1/0 = identity = byte-identical) so the card slider absorbs the affine
-map, then fold only the genuine card→inner remaps; or (b) accept these affines as
-legitimate graph computation and leave them (the "tower" is the generator's real
-math, not mapping cruft). Did NOT fire the migration workflow and did NOT mutate
-any preset. The effect presets (BlobTracking/QuadMirror/VoronoiPrism/DepthOfField,
-2 affines each) still want the same per-node audit under whichever option wins.
+**RESOLVED 2026-06-01 (Peter):** option (a) — extend `UserParamBinding` with
+`scale`/`offset` and fold the card→consumer affines into the binding. Correcting
+my earlier worry: there is **NO value-semantics ripple**. The card already stores
+the friendly value (Curl 85°, Particle Count 2.0) and the affine sits *downstream*
+of the card, so moving its scale into the binding leaves the stored card value and
+every driver/Ableton/envelope write unchanged. It is byte-identical (copy the
+affine's exact `scale`/`offset` into the binding). This unifies WS2's left card
+mirror with WS3: same mapping surface. The affines only exist because the binding
+couldn't remap yet.
+
+Plan:
+1. Add `scale`/`offset` to `UserParamBinding` (serde-default 1.0/0.0 = passthrough
+   = every shipped binding byte-identical), applied at `ResolvedBinding::apply`
+   after reshape, before wrap/convert, with an identity early-skip. Same shape as
+   the shipped invert/curve.
+2. Surface scale/offset in the left card-mirror mapping controls (WS2a).
+3. Migrate **card → single-consumer** affines (deg→rad at a card, ×1e6 particle
+   count, pixel-norm) into the binding's scale/offset; delete the nodes; verify
+   per preset. KEEP affines that feed multiple consumers or derive from other
+   computed values (the energy scalar) — genuine graph math.
+
+The `node.convert` idea is **dropped** for card-boundary conversions (they're just
+the binding's scale). It only returns if the audit finds a genuinely mid-graph
+conversion (two computed values, no card between). None seen so far.
 
 ## Verify bar
 
