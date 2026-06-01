@@ -1986,10 +1986,11 @@ impl Application {
         // Left palette (atoms) + center canvas + right sidebar (param
         // expose). Built BEFORE rendering so the tree's nodes (panels +
         // buttons + labels) are ready to draw alongside the canvas.
-        // Left lane is the effect-card mirror now (the node palette moved to
-        // the spawn popup). Same width as the old palette so the canvas keeps
-        // its screen origin and the coordinate mapping is untouched.
-        let palette_width = manifold_ui::panels::graph_card_mirror::CARD_MIRROR_WIDTH;
+        // Left lane renders the real effect/generator card now (the node
+        // palette moved to the spawn popup). Width comes from the single
+        // EDITOR_CARD_LANE_WIDTH constant the canvas input path also reads, so
+        // the canvas origin and click hit-testing stay in lockstep.
+        let palette_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
         let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
         let canvas_x = palette_width;
         let canvas_width = (logical_w as f32 - palette_width - sidebar_width).max(0.0);
@@ -2025,7 +2026,6 @@ impl Application {
             &self.local_project,
         );
         let exposed_keys = build_card_exposures(snap_arc.as_deref());
-        let card_entries = build_card_entries(snap_arc.as_deref());
         // Outer→inner routings declared by the effect (Mirror's
         // `Amount` → `Mix.amount`, `Mode` → `Transform.mode`, etc.).
         // The panel uses this to disable inner-param rows the outer
@@ -2046,17 +2046,28 @@ impl Application {
             wire_driven_keys,
         );
 
-        // Configure the left card mirror — the exposed-param reflection of
-        // the effect card, in the lane the node palette used to occupy.
-        self.graph_card_mirror.configure(card_entries);
+        // The left lane renders the REAL effect/generator card for the edited
+        // target — the same `ParamCardPanel` the inspector shows, configured
+        // from the same `EffectInstance` / `GeneratorParamState` (effect via
+        // `current_editor_target`, generator via `watched_graph_target`).
+        // Resolved once per editor frame; `None` (degenerate open state with
+        // no resolvable target) leaves the lane empty.
+        let editor_card_data = crate::ui_bridge::editor_card_config(
+            &self.local_project,
+            self.current_editor_target.as_ref(),
+            self.watched_graph_target.as_ref(),
+            &self.selection,
+        );
 
         // Rebuild the editor's UITree from scratch each frame: tree state
-        // is small (one panel container + per-param row), so a clear +
-        // rebuild is cheaper than dirty-tracking and means stale rows
-        // can never linger after the selected node changes.
+        // is small, so a clear + rebuild is cheaper than dirty-tracking and
+        // means stale rows can never linger after the target changes.
         ws.ui_root.tree.clear();
-        self.graph_card_mirror
-            .build(&mut ws.ui_root.tree, palette_viewport);
+        if let Some((config, values)) = editor_card_data.as_ref() {
+            self.editor_card.configure(config);
+            self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
+            self.editor_card.sync_values(&mut ws.ui_root.tree, values);
+        }
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
 
@@ -2876,119 +2887,4 @@ fn build_static_block_targets(
         .collect()
 }
 
-/// Build the read-only "Effect Parameters" summary list for the
-/// graph-editor sidebar — every inner-node param currently exposed,
-/// in a stable order. Reads ONLY the snapshot — the graph is the
-/// single source of truth, identical for Effect-hosted and
-/// Generator-hosted graphs.
-///
-/// Ordering:
-/// 1. Preset-declared bindings first, in `outer_routings` order
-///    (label = the preset's outer label).
-/// 2. Synthesised entries for params that are exposed but not bound
-///    by the preset (label = the param's own name; appended in node
-///    iteration order). Step 8 will collapse user-binding state into
-///    this path; for now it covers the no-binding case.
-// Map a snapshot param kind to the UI-facing editor kind, shared by the node
-// inspector and card mirror so value formatting stays consistent.
-fn editor_kind(
-    k: manifold_renderer::node_graph::ParamSnapshotKind,
-) -> manifold_ui::panels::graph_editor::GraphEditorParamKind {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
-    use manifold_ui::panels::graph_editor::GraphEditorParamKind;
-    match k {
-        ParamSnapshotKind::Float => GraphEditorParamKind::Float,
-        ParamSnapshotKind::Angle => GraphEditorParamKind::Angle,
-        ParamSnapshotKind::Frequency => GraphEditorParamKind::Frequency,
-        ParamSnapshotKind::Int => GraphEditorParamKind::Int,
-        ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
-        ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,
-        ParamSnapshotKind::Trigger => GraphEditorParamKind::Trigger,
-        ParamSnapshotKind::Other => GraphEditorParamKind::Other,
-    }
-}
 
-fn build_card_entries(
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
-) -> Vec<manifold_ui::panels::graph_editor::GraphEditorCardEntry> {
-    use manifold_ui::panels::graph_editor::GraphEditorCardEntry;
-    let Some(snap) = snapshot else {
-        return Vec::new();
-    };
-
-    let mut covered: std::collections::HashSet<(String, String)> = Default::default();
-    // One mirror row per card param id. A fan-out binding (one card slider
-    // driving several inner targets — Feather → two blur nodes, Clip Trigger
-    // → three gates) shares one `outer_param_id`, so collapse it to a single
-    // row. All its targets still register in `covered` so pass 2 skips them.
-    let mut seen_card_ids: std::collections::HashSet<String> = Default::default();
-    let mut entries: Vec<GraphEditorCardEntry> = Vec::new();
-
-    // Pass 1: preset-bound exposures. Walk outer_routings so the
-    // user-facing label ("Amount") comes from the preset's binding,
-    // not the inner-node param name ("blend").
-    for r in &snap.outer_routings {
-        // Only include if the target param is actually exposed in the
-        // live graph. (For freshly-loaded presets this is always true
-        // because of the Step 6 backfill; for user-toggled-off entries
-        // we skip them.)
-        let param = snap
-            .nodes
-            .iter()
-            .find(|n| n.node_handle.as_deref() == Some(r.node_handle.as_str()))
-            .and_then(|n| n.parameters.iter().find(|p| p.name == r.inner_param));
-        let Some(param) = param else {
-            continue;
-        };
-        if !param.exposed {
-            continue;
-        }
-        covered.insert((r.node_handle.clone(), r.inner_param.clone()));
-        // Fan-out: same card param, already has a row. Mark the target
-        // covered (above) but don't add a duplicate row.
-        if !seen_card_ids.insert(r.outer_param_id.clone()) {
-            continue;
-        }
-        entries.push(GraphEditorCardEntry {
-            label: r.outer_label.clone(),
-            target_handle: r.node_handle.clone(),
-            target_inner_param: r.inner_param.clone(),
-            current_value: param.current_value,
-            kind: editor_kind(param.kind),
-            enum_labels: param.enum_labels.clone(),
-        });
-    }
-
-    // Pass 2: exposed params without a preset binding. Synthesise a
-    // label from the param's own name so the user sees their custom
-    // exposure in the summary list. Walk nodes in id order for
-    // determinism.
-    let mut node_refs: Vec<&manifold_renderer::node_graph::NodeSnapshot> =
-        snap.nodes.iter().collect();
-    node_refs.sort_by_key(|n| n.id);
-    for node in node_refs {
-        let Some(handle) = node.node_handle.as_deref() else {
-            continue;
-        };
-        for p in &node.parameters {
-            if !p.exposed {
-                continue;
-            }
-            let key = (handle.to_string(), p.name.clone());
-            if covered.contains(&key) {
-                continue;
-            }
-            entries.push(GraphEditorCardEntry {
-                label: p.label.clone(),
-                target_handle: handle.to_string(),
-                target_inner_param: p.name.clone(),
-                current_value: p.current_value,
-                kind: editor_kind(p.kind),
-                enum_labels: p.enum_labels.clone(),
-            });
-            covered.insert(key);
-        }
-    }
-
-    entries
-}

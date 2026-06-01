@@ -294,11 +294,14 @@ pub struct Application {
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
     /// Shares the editor window with `graph_canvas`.
     pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
-    /// Left-lane card mirror inside the graph editor — the exposed-param
-    /// reflection of the effect card, in the lane the node palette used to
-    /// occupy. Configured each frame from the live snapshot.
-    pub(crate) graph_card_mirror:
-        manifold_ui::panels::graph_card_mirror::GraphCardMirrorPanel,
+    /// The REAL effect/generator card rendered in the graph editor's left
+    /// lane — the same `ParamCardPanel` the inspector shows, configured each
+    /// editor frame from the edited target's `EffectInstance` /
+    /// `GeneratorParamState` (via `state_sync::editor_card_config`). This is
+    /// the "card IS the card" surface: the editor lane is the actual
+    /// instrument card, not a read-only mirror, so slider/driver/mapping
+    /// edits happen on it directly.
+    pub(crate) editor_card: manifold_ui::panels::param_card::ParamCardPanel,
     /// Built-once list of atoms shown in the spawn popup (node browser).
     /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
@@ -478,8 +481,7 @@ impl Application {
             graph_editor_geometry: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
-            graph_card_mirror:
-                manifold_ui::panels::graph_card_mirror::GraphCardMirrorPanel::new(),
+            editor_card: manifold_ui::panels::param_card::ParamCardPanel::new(),
             palette_atoms_cache: {
                 use manifold_renderer::node_graph::{Category, descriptor_for};
                 let cat_of = |type_id: &str| {
@@ -1894,7 +1896,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .unwrap_or((1.0, 1.0, 1.0));
                     let logical_x = position.x as f32 / scale as f32;
                     let logical_y = position.y as f32 / scale as f32;
-                    let palette_width = manifold_ui::panels::graph_palette::PALETTE_WIDTH;
+                    let palette_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
                     let sidebar_x = window_w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
                     // Canvas viewport matches the render-time slice
                     // (offset by palette_width); without this the
@@ -2083,7 +2085,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             .unwrap_or((1.0, 1.0));
                         let (cx, cy) = canvas.cursor();
                         let palette_width =
-                            manifold_ui::panels::graph_palette::PALETTE_WIDTH;
+                            manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
                         let sidebar_x =
                             window_size.0 - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
                         // The UITree spans the whole editor window — both

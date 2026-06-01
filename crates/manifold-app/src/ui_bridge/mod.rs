@@ -675,3 +675,5 @@ pub use state_sync::{
     TransportDisplayCache, check_auto_scroll, push_state, sync_clip_positions, sync_inspector_data,
     sync_project_data,
 };
+// Crate-internal: the graph editor's left-lane card resolver.
+pub(crate) use state_sync::editor_card_config;

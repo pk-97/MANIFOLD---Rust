@@ -117,6 +117,15 @@ pub struct GraphEditorNodeView {
 /// param label without truncation.
 pub const SIDEBAR_WIDTH: f32 = 320.0;
 
+/// Left-lane width inside the graph-editor window — the lane that renders the
+/// real `ParamCardPanel` for the edited effect/generator. Wide enough to fit
+/// the full card (label + slider + value + the E/→ row buttons) without the
+/// cramping the 200px mirror lane had. SINGLE SOURCE OF TRUTH: both the render
+/// path (`present_graph_editor_window`) and the canvas input-mapping path (the
+/// editor window's pointer handlers) must read this same constant, or the
+/// canvas origin and click hit-testing desync.
+pub const EDITOR_CARD_LANE_WIDTH: f32 = 340.0;
+
 const ROW_H: f32 = 28.0;
 const PADDING: f32 = 12.0;
 const HEADER_H: f32 = 32.0;
@@ -227,72 +236,6 @@ struct DragState {
 /// sweep. Slightly larger than the typical sidebar width so a single
 /// dramatic drag covers the full range.
 const DRAG_FULL_RANGE_PX: f32 = 240.0;
-
-/// One entry in the effect-card mirror (the editor's left lane, built by
-/// [`GraphCardMirrorPanel`](super::graph_card_mirror::GraphCardMirrorPanel)).
-/// Each entry surfaces ONE inner-node parameter currently exposed on the
-/// effect card, regardless of which underlying surface drives it:
-///
-/// - **Static-block routings** (legacy `def.param_defs`): the outer
-///   card slider that maps `param_values[slot_index]` into the inner
-///   node via the effect's `ChainSpec` bindings.
-/// - **User-bindings** (`EffectInstance.user_param_bindings`): per-
-///   instance V2 exposures the user added by ticking an inner param
-///   in the node inspector.
-///
-/// The two surfaces are unified at the UI layer. The mirror is read-only
-/// for now (label plus live value); toggling exposure happens in the
-/// right-sidebar inspector's per-node rows.
-#[derive(Debug, Clone)]
-pub struct GraphEditorCardEntry {
-    /// Display label (what shows on the effect card slider).
-    pub label: String,
-    /// Inner-node target — the `(node_handle, inner_param)` the slider
-    /// drives. Matches a row's `(handle, ps.name)` in the per-node
-    /// section so the visual hint and the per-node checkbox state stay
-    /// in sync.
-    pub target_handle: String,
-    pub target_inner_param: String,
-    /// Live value of the driven inner param this frame, for the card
-    /// mirror's read-out. Formatted through the same `kind`-aware path
-    /// the inspector uses so degrees, Hz, and enum labels render right.
-    pub current_value: f32,
-    /// Presentation kind of the driven param. Drives value formatting:
-    /// degrees for `Angle`, Hz for `Frequency`, the enum label for
-    /// `Enum`, a plain number otherwise.
-    pub kind: GraphEditorParamKind,
-    /// Enum option labels indexed by value, when `kind` is `Enum`.
-    pub enum_labels: Option<Vec<String>>,
-}
-
-/// Format a card entry's live value for the left card mirror, reusing
-/// the inspector's conventions (degrees for `Angle`, Hz for `Frequency`,
-/// enum label for `Enum`). Free function so the card-mirror panel can
-/// share it without depending back on the inspector's private helper.
-pub fn format_card_entry_value(entry: &GraphEditorCardEntry) -> String {
-    match entry.kind {
-        GraphEditorParamKind::Enum => entry
-            .enum_labels
-            .as_ref()
-            .and_then(|labels| labels.get(entry.current_value as usize).cloned())
-            .unwrap_or_else(|| format!("{}", entry.current_value as i64)),
-        GraphEditorParamKind::Bool => {
-            if entry.current_value >= 0.5 {
-                "On".to_string()
-            } else {
-                "Off".to_string()
-            }
-        }
-        GraphEditorParamKind::Int => format!("{}", entry.current_value as i64),
-        GraphEditorParamKind::Float => format!("{:.2}", entry.current_value),
-        GraphEditorParamKind::Angle => format!("{:.0}°", entry.current_value.to_degrees()),
-        GraphEditorParamKind::Frequency => {
-            format!("{:.2} Hz", entry.current_value / std::f32::consts::TAU)
-        }
-        GraphEditorParamKind::Trigger => "▶".to_string(),
-        GraphEditorParamKind::Other => "—".to_string(),
-    }
-}
 
 /// Right-sidebar panel inside the graph-editor window.
 ///

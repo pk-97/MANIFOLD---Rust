@@ -1148,6 +1148,82 @@ pub fn sync_inspector_data(
     }
 }
 
+/// Build the single [`ParamCardConfig`] for whatever the graph editor is
+/// currently editing — an effect instance (via `current_editor_target`) or a
+/// layer generator (via `watched_graph_target == Generator`). The editor's
+/// left lane renders the REAL card from this: the same [`ParamCardConfig`] the
+/// inspector builds, sourced from the same `EffectInstance` /
+/// `GeneratorParamState`, so the editor card is the actual instrument card and
+/// not a separate mirror. Returns `None` when nothing is being edited or the
+/// target can't be resolved (degenerate open state → the lane shows nothing).
+///
+/// Effect target takes precedence: it's set only for effect editors, while a
+/// generator editor leaves `current_editor_target` `None` and identifies
+/// itself through `watched_graph_target`. This keeps the editor a single
+/// surface that doesn't fork its data model on Effect vs Generator.
+pub(crate) fn editor_card_config(
+    project: &Project,
+    current_editor_target: Option<&(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
+    watched_graph_target: Option<&manifold_core::GraphTarget>,
+    selection: &SelectionState,
+) -> Option<(ParamCardConfig, Vec<manifold_core::effects::ParamSlot>)> {
+    use manifold_editing::commands::effect_target::EffectTarget;
+
+    if let Some((target, ei)) = current_editor_target {
+        let ei = *ei;
+        let (config, values) = match target {
+            EffectTarget::Master => {
+                let effects = &project.settings.master_effects;
+                // Match on `effect_index` rather than positional `.get(ei)` for
+                // the config: `effects_to_configs` filter_maps, so a skipped
+                // instance would shift positions and hand back the wrong card.
+                let config = effects_to_configs(effects, &[], OscScope::Master)
+                    .into_iter()
+                    .find(|c| c.effect_index == ei)?;
+                let values = effects.get(ei)?.param_values.clone();
+                (config, values)
+            }
+            EffectTarget::Layer { layer_id } => {
+                let (_, layer) = project.timeline.find_layer_by_id(layer_id.as_str())?;
+                let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+                let effects = layer.effects.as_deref().unwrap_or(&[]);
+                let config =
+                    effects_to_configs(effects, envs, OscScope::Layer(layer.layer_id.as_str()))
+                        .into_iter()
+                        .find(|c| c.effect_index == ei)?;
+                let values = effects.get(ei)?.param_values.clone();
+                (config, values)
+            }
+        };
+        return Some((config, values));
+    }
+
+    if let Some(manifold_core::GraphTarget::Generator(lid)) = watched_graph_target {
+        let (_, layer) = project.timeline.find_layer_by_id(lid.as_str())?;
+        let gp = layer
+            .gen_params()
+            .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)?;
+        let clip_string_params = selection
+            .primary_selected_clip_id
+            .as_ref()
+            .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+            .or_else(|| layer.clips.first())
+            .and_then(|c| c.string_params.as_ref());
+        let config = gen_params_to_config(
+            gp,
+            layer.layer_id.as_str(),
+            clip_string_params,
+            layer.generator_graph.as_ref(),
+        );
+        return Some((config, gp.param_values.clone()));
+    }
+
+    None
+}
+
 // ── Helpers ──────────────────────────────────────────────────────
 
 /// OSC address scope for effect param configs.
