@@ -487,6 +487,8 @@ impl Command for ToggleEffectParamExposeCommand {
                     is_angle: meta.is_angle,
                     invert: false,
                     curve: Default::default(),
+                    scale: 1.0,
+                    offset: 0.0,
                 };
                 effect.append_user_binding(binding);
                 ReverseState::Exposed { user_param_id: id }
@@ -953,6 +955,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: MacroCurve::Linear,
+            scale: 1.0,
+            offset: 0.0,
         }
     }
 

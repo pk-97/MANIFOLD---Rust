@@ -1647,6 +1647,8 @@ mod user_binding_tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         });
         // Drag the user-tail slider to `translate_value`. With static
         // count = 3 (amount, zoom, rotate) the user binding's slot lives
@@ -1778,6 +1780,8 @@ mod user_binding_tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         });
         // Leave the outer slot at its declared default so the test
         // depends on the seed pass, not on the apply-with-divergent-
@@ -2151,6 +2155,8 @@ mod chain_error_tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         });
 
         let cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)

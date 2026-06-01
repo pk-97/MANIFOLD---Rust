@@ -251,34 +251,46 @@ pub struct ResolvedBinding {
     pub(crate) wraps_angle: bool,
 }
 
-/// Non-identity card-slider reshape applied to a User binding's value at the
-/// write boundary: normalize the value within `[min, max]`, optional invert,
-/// then the response curve, then scale back into `[min, max]`. Built (`Some`)
-/// only for User bindings whose invert/curve differ from identity
-/// (false / Linear), so every existing show carries `None` and stays
-/// byte-identical with zero per-frame cost.
+/// Non-identity card mapping applied to a User binding's value at the write
+/// boundary in two stages. First the slider response: when `invert` or a
+/// non-Linear `curve` is set, normalize within `[min, max]`, invert, apply the
+/// curve, and scale back — this stage clamps to `[0, 1]` so the response is well
+/// defined across the slider. Then the card→consumer remap `out = v*scale+offset`,
+/// UNCLAMPED — this is where a folded `affine_scalar` lands, and it must not clamp
+/// to stay byte-identical with the node it replaces (e.g. a deg→rad scale on a
+/// value a driver may push past the slider max, which the angle wrap then tames).
+/// Built (`Some`) only when at least one stage is non-identity (invert,
+/// curve != Linear, scale != 1, or offset != 0), so every existing show carries
+/// `None` and stays byte-identical with zero per-frame cost.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Reshape {
     min: f32,
     max: f32,
     invert: bool,
     curve: manifold_core::macro_bank::MacroCurve,
+    scale: f32,
+    offset: f32,
 }
 
 impl Reshape {
-    /// Reshape a physical slot value through invert + curve, staying within
-    /// `[min, max]`. Identity passthrough when the range is degenerate.
+    /// Apply the slider response (clamped, only when invert/curve is set) then
+    /// the card→consumer affine remap (unclamped). A pure scale/offset fold with
+    /// no invert/curve skips the normalize+clamp entirely, so it reproduces the
+    /// replaced `affine_scalar` exactly.
     fn apply(&self, value: f32) -> f32 {
-        let range = self.max - self.min;
-        if range.abs() < f32::EPSILON {
-            return value;
+        let mut v = value;
+        if self.invert || self.curve != manifold_core::macro_bank::MacroCurve::Linear {
+            let range = self.max - self.min;
+            if range.abs() >= f32::EPSILON {
+                let mut n = ((v - self.min) / range).clamp(0.0, 1.0);
+                if self.invert {
+                    n = 1.0 - n;
+                }
+                n = self.curve.apply(n);
+                v = self.min + range * n;
+            }
         }
-        let mut n = ((value - self.min) / range).clamp(0.0, 1.0);
-        if self.invert {
-            n = 1.0 - n;
-        }
-        n = self.curve.apply(n);
-        self.min + range * n
+        v * self.scale + self.offset
     }
 }
 
@@ -381,14 +393,19 @@ impl ResolvedBinding {
             source: BindingSource::User,
             source_index,
             // Only carry a reshape when the card mapping is non-identity, so
-            // every existing binding (invert=false, curve=Linear) stays 1:1.
+            // every existing binding (invert=false, curve=Linear, scale=1,
+            // offset=0) stays 1:1. scale/offset carry a folded affine_scalar.
             reshape: (core.invert
-                || core.curve != manifold_core::macro_bank::MacroCurve::Linear)
+                || core.curve != manifold_core::macro_bank::MacroCurve::Linear
+                || core.scale != 1.0
+                || core.offset != 0.0)
                 .then_some(Reshape {
                     min: core.min,
                     max: core.max,
                     invert: core.invert,
                     curve: core.curve,
+                    scale: core.scale,
+                    offset: core.offset,
                 }),
             wraps_angle,
         })
@@ -726,12 +743,14 @@ mod tests {
     #[test]
     fn reshape_invert_curve_and_identity() {
         use manifold_core::macro_bank::MacroCurve;
-        // Identity (Linear, no invert): value passes through unchanged.
+        // Identity (Linear, no invert, scale 1 / offset 0): passes through.
         let id = Reshape {
             min: 0.0,
             max: 10.0,
             invert: false,
             curve: MacroCurve::Linear,
+            scale: 1.0,
+            offset: 0.0,
         };
         assert!((id.apply(2.5) - 2.5).abs() < 1e-4);
         // Invert: 25% of the range becomes 75%.
@@ -740,6 +759,8 @@ mod tests {
             max: 10.0,
             invert: true,
             curve: MacroCurve::Linear,
+            scale: 1.0,
+            offset: 0.0,
         };
         assert!((inv.apply(2.5) - 7.5).abs() < 1e-4);
         // SCurve (Hermite 3t^2-2t^3): n=0.25 -> 0.15625 -> *10 = 1.5625.
@@ -748,6 +769,8 @@ mod tests {
             max: 10.0,
             invert: false,
             curve: MacroCurve::SCurve,
+            scale: 1.0,
+            offset: 0.0,
         };
         assert!((s.apply(2.5) - 1.5625).abs() < 1e-3);
         // Degenerate range: passthrough, no divide-by-zero.
@@ -756,8 +779,24 @@ mod tests {
             max: 5.0,
             invert: false,
             curve: MacroCurve::Exponential,
+            scale: 1.0,
+            offset: 0.0,
         };
         assert!((deg.apply(42.0) - 42.0).abs() < 1e-6);
+        // Folded affine (deg->rad): no invert/curve, so the normalize+clamp is
+        // skipped and scale/offset apply to the RAW value, unclamped. 85 ->
+        // 85*pi/180 = 1.4835 rad; a past-max 400 -> 6.981 (clamp would have
+        // pinned it to the slider max — it must not).
+        let conv = Reshape {
+            min: 0.0,
+            max: 360.0,
+            invert: false,
+            curve: MacroCurve::Linear,
+            scale: std::f32::consts::PI / 180.0,
+            offset: 0.0,
+        };
+        assert!((conv.apply(85.0) - 85.0 * std::f32::consts::PI / 180.0).abs() < 1e-5);
+        assert!((conv.apply(400.0) - 400.0 * std::f32::consts::PI / 180.0).abs() < 1e-4);
     }
     use crate::node_graph::boundary_nodes::Source;
     // AffineTransform stands in for the legacy stateful-feedback
@@ -908,6 +947,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         let rb = ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0)
             .expect("user binding hydrates");
@@ -937,6 +978,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         let handles: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_user(&core, &g, &handles, 0).is_none());
@@ -958,6 +1001,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         assert!(ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0).is_none());
     }
@@ -1181,6 +1226,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1215,6 +1262,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1249,6 +1298,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];

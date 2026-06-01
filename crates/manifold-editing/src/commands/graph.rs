@@ -1339,6 +1339,8 @@ fn mirror_effect_side(
             is_angle: inner_is_angle,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         };
         effect.append_user_binding(binding);
         EffectMirrorReverse::AppendedUserBinding {

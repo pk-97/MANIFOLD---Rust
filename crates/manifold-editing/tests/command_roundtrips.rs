@@ -795,6 +795,8 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
         is_angle: false,
         invert: false,
         curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
     });
     project.settings.master_effects.push(fx);
 
@@ -1548,6 +1550,8 @@ fn expose_already_exposed_is_idempotent_noop() {
         is_angle: false,
         invert: false,
         curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
     });
     project.settings.master_effects.push(fx);
 
@@ -1592,6 +1596,8 @@ fn unexpose_effect_param_command_undo_roundtrip() {
         is_angle: false,
         invert: false,
         curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
     });
     // Drag the slider — user-tail at index 2 (n_static=2 + j=0) changed.
     fx.param_values[2].value = 0.42;
@@ -1674,6 +1680,8 @@ fn generate_user_param_id_collision_probe() {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         },
         UserParamBinding {
             id: "user.uv_transform.translate.2".to_string(),
@@ -1687,6 +1695,8 @@ fn generate_user_param_id_collision_probe() {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         },
     ];
     let id = generate_user_param_id("uv_transform", "translate", &existing);
@@ -1721,6 +1731,8 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
         is_angle: false,
         invert: false,
         curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
     });
     // Attach a driver keyed to the user binding's id. Plus a driver
     // for the static `amount` param — that one must survive the
@@ -1816,6 +1828,8 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
         is_angle: false,
         invert: false,
         curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
     });
     let address = AbletonMacroAddress {
         track_id: 0,
@@ -1886,6 +1900,8 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
         is_angle: false,
         invert: false,
         curve: Default::default(),
+        scale: 1.0,
+        offset: 0.0,
     });
     // Layer envelopes are keyed by (target_effect_type, param_id).
     // Plant one targeting our binding and one targeting an unrelated

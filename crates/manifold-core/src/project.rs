@@ -1152,6 +1152,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         }
     }
 

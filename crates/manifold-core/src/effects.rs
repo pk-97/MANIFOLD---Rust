@@ -271,6 +271,24 @@ pub struct UserParamBinding {
     /// `serde(default)` (Linear) keeps every saved show 1:1.
     #[serde(default)]
     pub curve: crate::macro_bank::MacroCurve,
+    /// Card→consumer linear remap applied at the renderer write boundary AFTER
+    /// the slider reshape and BEFORE wrap/convert: `out = value * scale + offset`.
+    /// This is where an in-graph `affine_scalar` that only rescaled a card value
+    /// toward its inner consumer folds in — the card keeps storing the friendly
+    /// value (Curl 85°, Particle Count 2.0), drivers/Ableton/envelopes write the
+    /// same slot unchanged, and the binding does the scale the node used to do.
+    /// `serde(default = "one")` keeps `scale = 1.0`; with `offset = 0.0` that is
+    /// identity, so every saved show stays byte-identical until a fold sets them.
+    #[serde(default = "one")]
+    pub scale: f32,
+    #[serde(default)]
+    pub offset: f32,
+}
+
+/// serde default for [`UserParamBinding::scale`] — identity is `1.0`, not the
+/// `f32::default()` of `0.0` (which would zero every un-migrated binding).
+fn one() -> f32 {
+    1.0
 }
 
 // ─── Param Value (per-slot state) ───
@@ -2760,6 +2778,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         }
     }
 
@@ -3002,6 +3022,8 @@ mod tests {
             is_angle: false,
             invert: false,
             curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
         });
         let pd = ParamSource::get_param_def(&fx, 1);
         assert_eq!(pd.id, "user.uv.translate.1");
