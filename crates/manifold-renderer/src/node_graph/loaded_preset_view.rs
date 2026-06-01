@@ -108,6 +108,8 @@ fn binding_def_to_runtime(def: &BindingDef) -> ParamBinding {
         default_value: def.default_value,
         target: target_def_to_runtime(&def.target),
         convert: def.convert,
+        scale: def.scale,
+        offset: def.offset,
     }
 }
 

@@ -1623,6 +1623,8 @@ fn prepare_generator_mirror(
             },
             convert: inner_convert,
             user_added: true,
+            scale: 1.0,
+            offset: 0.0,
         };
         let spec_index = meta.params.len();
         let binding_index = meta.bindings.len();
@@ -2549,6 +2551,8 @@ mod tests {
                         },
                         convert: ParamConvert::EnumRound,
                         user_added: false,
+                        scale: 1.0,
+                        offset: 0.0,
                     },
                     BindingDef {
                         id: "scale".into(),
@@ -2560,6 +2564,8 @@ mod tests {
                         },
                         convert: ParamConvert::Float,
                         user_added: false,
+                        scale: 1.0,
+                        offset: 0.0,
                     },
                 ],
                 skip_mode: Default::default(),
@@ -2792,6 +2798,8 @@ mod tests {
                         },
                         convert: ParamConvert::EnumRound,
                         user_added: false,
+                        scale: 1.0,
+                        offset: 0.0,
                     },
                     BindingDef {
                         id: "user.render.animate.1".into(),
@@ -2803,6 +2811,8 @@ mod tests {
                         },
                         convert: ParamConvert::BoolThreshold,
                         user_added: true,
+                        scale: 1.0,
+                        offset: 0.0,
                     },
                 ],
                 skip_mode: Default::default(),
@@ -3195,6 +3205,8 @@ mod tests {
                     },
                     convert: ParamConvert::EnumRound,
                     user_added: false,
+                    scale: 1.0,
+                    offset: 0.0,
                 }],
                 skip_mode: Default::default(),
                 param_aliases: vec![],

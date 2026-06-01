@@ -361,10 +361,32 @@ pub struct BindingDef {
     /// byte-identical to the on-disk source.
     #[serde(default, skip_serializing_if = "is_false")]
     pub user_added: bool,
+    /// Card→consumer linear remap applied at the renderer write boundary:
+    /// `out = value * scale + offset`. This is where an in-graph
+    /// `affine_scalar` that only rescaled a card value toward its inner
+    /// consumer folds in, so the node can be deleted. `scale = 1.0`,
+    /// `offset = 0.0` is identity, and both are skipped on serialize when
+    /// identity so every un-folded preset stays byte-identical on disk.
+    #[serde(default = "one_f32", skip_serializing_if = "is_one")]
+    pub scale: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: f32,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn one_f32() -> f32 {
+    1.0
+}
+
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// Outer-card text-config declaration. Renders as a text field in the
@@ -598,6 +620,8 @@ mod tests {
                 },
                 convert: ParamConvert::Float,
                 user_added: false,
+                scale: 1.0,
+                offset: 0.0,
             }],
             skip_mode: SkipModeDef::OnZero {
                 param_id: "amount".to_string(),

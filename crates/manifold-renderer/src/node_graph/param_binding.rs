@@ -95,6 +95,12 @@ pub struct ParamBinding {
     /// Conversion from f32 (UI/storage form) to the typed
     /// [`ParamValue`] the graph node expects.
     pub convert: ParamConvert,
+    /// Card→consumer linear remap: `out = value * scale + offset`, applied
+    /// at the write boundary via [`ResolvedBinding::from_static`]'s reshape.
+    /// `1.0` / `0.0` is identity (no reshape, byte-identical). This is where
+    /// a folded preset `affine_scalar` lives so the node can be deleted.
+    pub scale: f32,
+    pub offset: f32,
 }
 
 /// Routing destination declared on a spec [`ParamBinding`].
@@ -334,7 +340,19 @@ impl ResolvedBinding {
             convert: b.convert,
             source: BindingSource::Static,
             source_index,
-            reshape: None,
+            // Only carry a reshape when scale/offset are non-identity, so
+            // every un-folded preset binding (scale=1, offset=0) stays 1:1
+            // and byte-identical. A folded affine_scalar lands here: the
+            // min/max/invert/curve stay identity (preset bindings have no
+            // slider reshape), so apply() does a plain `value * scale + offset`.
+            reshape: (b.scale != 1.0 || b.offset != 0.0).then_some(Reshape {
+                min: 0.0,
+                max: 1.0,
+                invert: false,
+                curve: manifold_core::macro_bank::MacroCurve::Linear,
+                scale: b.scale,
+                offset: b.offset,
+            }),
             wraps_angle: false,
         })
     }
@@ -741,6 +759,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn from_static_folds_scale_offset_into_reshape() {
+        let feedback = NodeInstanceId(7);
+        let handles = handles_for(feedback);
+        // Identity scale/offset → no reshape, so every un-folded preset
+        // binding stays byte-identical.
+        let plain = static_amount_binding();
+        let rb = ResolvedBinding::from_static(&plain, &handles, 0).unwrap();
+        assert!(
+            rb.reshape.is_none(),
+            "identity scale/offset must carry no reshape"
+        );
+        // A folded deg→rad affine_scalar (scale = π/180): the reshape must
+        // reproduce the node's `a * scale` exactly. Card stores 85°, the
+        // consumer must see 85·π/180 rad, byte-identical to the old node.
+        let mut folded = static_amount_binding();
+        folded.scale = std::f32::consts::PI / 180.0;
+        let rb = ResolvedBinding::from_static(&folded, &handles, 0).unwrap();
+        let reshape = rb.reshape.expect("non-identity scale carries a reshape");
+        let expected = 85.0_f32 * std::f32::consts::PI / 180.0;
+        assert!(
+            (reshape.apply(85.0) - expected).abs() < 1e-6,
+            "folded affine must be byte-identical, got {}",
+            reshape.apply(85.0)
+        );
+    }
+
+    #[test]
     fn reshape_invert_curve_and_identity() {
         use manifold_core::macro_bank::MacroCurve;
         // Identity (Linear, no invert, scale 1 / offset 0): passes through.
@@ -879,6 +924,8 @@ mod tests {
                 param: "scale",
             },
             convert: ParamConvert::Float,
+            scale: 1.0,
+            offset: 0.0,
         }
     }
 

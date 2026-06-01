@@ -1320,6 +1320,8 @@ mod tests {
                 // the exact mismatch this fence catches.
                 convert: ParamConvert::EnumRound,
                 user_added: false,
+                scale: 1.0,
+                offset: 0.0,
             }],
             skip_mode: Default::default(),
             param_aliases: vec![],
