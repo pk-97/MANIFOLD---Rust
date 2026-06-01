@@ -415,28 +415,33 @@ impl JsonGraphGenerator {
                             );
                             None
                         })?;
-                    Some(ResolvedBinding {
-                        id: std::borrow::Cow::Owned(b.id.clone()),
-                        label: std::borrow::Cow::Owned(b.label.clone()),
-                        default_value: b.default_value,
-                        target: ResolvedTarget::Node {
+                    // Funnel through the SAME shared constructor the effect
+                    // preset path uses (`ResolvedBinding::from_static` →
+                    // `assemble_affine`), so the binding's scale/offset folds
+                    // into the reshape identically. The generator used to
+                    // hand-roll this literal with `reshape: None`, which
+                    // silently dropped a folded affine's deg→rad scale and
+                    // over-drove the target 57×. There is no longer a second
+                    // literal to forget. (Angle-wrap stays a future follow-up
+                    // if a looping generator knob ever needs it.)
+                    Some(ResolvedBinding::assemble_affine(
+                        std::borrow::Cow::Owned(b.id.clone()),
+                        std::borrow::Cow::Owned(b.label.clone()),
+                        b.default_value,
+                        ResolvedTarget::Node {
                             node: node_id,
                             param: static_param,
                         },
-                        convert: b.convert,
-                        source: if b.user_added {
+                        b.convert,
+                        if b.user_added {
                             BindingSource::User
                         } else {
                             BindingSource::Static
                         },
                         source_index,
-                        // Generator bindings don't carry a card reshape or
-                        // angle-loop yet (matches the effect-side default for
-                        // non-Angle params; generator-side angle wrap is a
-                        // future follow-up if a looping generator knob needs it).
-                        reshape: None,
-                        wraps_angle: false,
-                    })
+                        b.scale,
+                        b.offset,
+                    ))
                 }
                 BindingTarget::Composite { .. } => None,
             })
@@ -1025,6 +1030,76 @@ mod tests {
             inst.params.get("scale"),
             Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
         ));
+    }
+
+    /// Regression for the on-stage FluidSimulation Curl bug. A binding's
+    /// `scale` (where a folded `affine_scalar` lives) MUST reach the
+    /// inner-node param on the GENERATOR path, exactly as it does on the
+    /// effect path. The generator used to hand-roll its `ResolvedBinding`
+    /// literal with `reshape: None`, silently dropping the scale: a folded
+    /// deg→rad Curl binding then drove the rotation 57× too hard and the
+    /// fluid sim went unstable on stage. Both paths now funnel through
+    /// `ResolvedBinding::assemble_affine`, so scale/offset fold into the
+    /// reshape identically and there's no second literal to forget.
+    ///
+    /// Here: outer `amt = 4.0` with binding `scale = 0.5` must land the inner
+    /// `offset` param on 2.0. Before the fix it landed on 4.0 (scale dropped).
+    #[test]
+    fn generator_binding_scale_folds_into_inner_param() {
+        let json = r#"{
+            "version": 1,
+            "name": "ScaledBindingTest",
+            "presetMetadata": {
+                "id": "ScaledBindingTest",
+                "displayName": "Scaled Binding Test",
+                "category": "Generator",
+                "oscPrefix": "scaledBindingTest",
+                "params": [
+                    { "id": "amt", "name": "Amount", "min": 0.0, "max": 10.0, "defaultValue": 0.0 }
+                ],
+                "bindings": [
+                    { "id": "amt", "label": "Amount", "defaultValue": 0.0,
+                      "target": { "kind": "handleNode", "handle": "so", "param": "offset" },
+                      "scale": 0.5,
+                      "convert": { "type": "Float" } }
+                ]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "node.scale_offset_texture", "handle": "so" },
+                { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+
+        let mut g =
+            JsonGraphGenerator::from_json_str(json, &PrimitiveRegistry::with_builtin())
+                .expect("scaled-binding test preset must load");
+
+        let so_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "so")
+            .map(|(_, id)| id)
+            .expect("preset declares a `so` handle");
+
+        // Outer `amt = 4.0`; binding scale 0.5 → inner offset = 4.0 * 0.5 = 2.0.
+        g.apply_param_values(&[4.0]);
+
+        let inst = g.graph.get_node(so_id).unwrap();
+        assert!(
+            matches!(
+                inst.params.get("offset"),
+                Some(ParamValue::Float(v)) if (*v - 2.0).abs() < 1e-5
+            ),
+            "generator binding scale dropped: offset should be 4.0 * 0.5 = 2.0, got {:?}. \
+             If this is 4.0 the generator path ignored the binding's scale (reshape: None).",
+            inst.params.get("offset"),
+        );
     }
 
     fn frame_time() -> FrameTime {

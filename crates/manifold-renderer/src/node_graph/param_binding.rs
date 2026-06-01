@@ -300,6 +300,24 @@ impl Reshape {
     }
 }
 
+/// Build the card→consumer affine reshape (`out = value * scale + offset`)
+/// when scale/offset are non-identity, else `None` so the binding stays 1:1
+/// and byte-identical (every un-folded preset / identity binding pays
+/// nothing). The single definition of the affine-fold semantics: both the
+/// effect preset path and the generator path reach it through
+/// [`ResolvedBinding::assemble_affine`], so a folded `affine_scalar`
+/// reproduces the node it replaced identically on either side.
+fn scale_offset_reshape(scale: f32, offset: f32) -> Option<Reshape> {
+    (scale != 1.0 || offset != 0.0).then_some(Reshape {
+        min: 0.0,
+        max: 1.0,
+        invert: false,
+        curve: manifold_core::macro_bank::MacroCurve::Linear,
+        scale,
+        offset,
+    })
+}
+
 impl ResolvedBinding {
     /// Resolve a spec [`ParamBinding`] against the splice's handle
     /// map. `HandleNode` targets become `Node`; other variants pass
@@ -332,29 +350,20 @@ impl ResolvedBinding {
             },
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
-        Some(Self {
-            id: b.id.clone(),
-            label: Cow::Borrowed(b.label),
-            default_value: b.default_value,
+        // Funnel through the shared affine constructor — the same one the
+        // generator path uses — so the scale/offset → reshape derivation has
+        // exactly one definition and can't drift between the two paths.
+        Some(Self::assemble_affine(
+            b.id.clone(),
+            Cow::Borrowed(b.label),
+            b.default_value,
             target,
-            convert: b.convert,
-            source: BindingSource::Static,
+            b.convert,
+            BindingSource::Static,
             source_index,
-            // Only carry a reshape when scale/offset are non-identity, so
-            // every un-folded preset binding (scale=1, offset=0) stays 1:1
-            // and byte-identical. A folded affine_scalar lands here: the
-            // min/max/invert/curve stay identity (preset bindings have no
-            // slider reshape), so apply() does a plain `value * scale + offset`.
-            reshape: (b.scale != 1.0 || b.offset != 0.0).then_some(Reshape {
-                min: 0.0,
-                max: 1.0,
-                invert: false,
-                curve: manifold_core::macro_bank::MacroCurve::Linear,
-                scale: b.scale,
-                offset: b.offset,
-            }),
-            wraps_angle: false,
-        })
+            b.scale,
+            b.offset,
+        ))
     }
 
     /// Resolve a per-instance user binding against the splice's
@@ -399,34 +408,101 @@ impl ResolvedBinding {
             manifold_core::effects::ParamConvert::EnumRound => ParamConvert::EnumRound,
             manifold_core::effects::ParamConvert::Trigger => ParamConvert::Trigger,
         };
-        Some(Self {
-            id: Cow::Owned(core.id.clone()),
-            label: Cow::Owned(core.label.clone()),
-            default_value: core.default_value,
-            target: ResolvedTarget::Node {
+        // Only carry a reshape when the card mapping is non-identity, so
+        // every existing binding (invert=false, curve=Linear, scale=1,
+        // offset=0) stays 1:1. scale/offset carry a folded affine_scalar; the
+        // slider response (min/max/invert/curve) is the User-only extra the
+        // affine path never sets, so this reshape is built here rather than
+        // via `scale_offset_reshape`.
+        let reshape = (core.invert
+            || core.curve != manifold_core::macro_bank::MacroCurve::Linear
+            || core.scale != 1.0
+            || core.offset != 0.0)
+            .then_some(Reshape {
+                min: core.min,
+                max: core.max,
+                invert: core.invert,
+                curve: core.curve,
+                scale: core.scale,
+                offset: core.offset,
+            });
+        Some(Self::assemble(
+            Cow::Owned(core.id.clone()),
+            Cow::Owned(core.label.clone()),
+            core.default_value,
+            ResolvedTarget::Node {
                 node: target_node,
                 param: target_param,
             },
             convert,
-            source: BindingSource::User,
+            BindingSource::User,
             source_index,
-            // Only carry a reshape when the card mapping is non-identity, so
-            // every existing binding (invert=false, curve=Linear, scale=1,
-            // offset=0) stays 1:1. scale/offset carry a folded affine_scalar.
-            reshape: (core.invert
-                || core.curve != manifold_core::macro_bank::MacroCurve::Linear
-                || core.scale != 1.0
-                || core.offset != 0.0)
-                .then_some(Reshape {
-                    min: core.min,
-                    max: core.max,
-                    invert: core.invert,
-                    curve: core.curve,
-                    scale: core.scale,
-                    offset: core.offset,
-                }),
+            reshape,
             wraps_angle,
-        })
+        ))
+    }
+
+    /// The single field-assembly point for a resolved binding. Every
+    /// constructor — `from_static`, `from_user`, and the generator path in
+    /// [`crate::generators::json_graph_generator`] — funnels through here, so
+    /// a newly-added field can't be silently dropped by a second hand-rolled
+    /// literal. (The generator copy once hard-coded `reshape: None` and
+    /// over-drove a folded deg→rad affine 57×; this constructor is why that
+    /// can't recur — there is no second literal to forget.)
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn assemble(
+        id: ParamId,
+        label: Cow<'static, str>,
+        default_value: f32,
+        target: ResolvedTarget,
+        convert: ParamConvert,
+        source: BindingSource,
+        source_index: usize,
+        reshape: Option<Reshape>,
+        wraps_angle: bool,
+    ) -> Self {
+        Self {
+            id,
+            label,
+            default_value,
+            target,
+            convert,
+            source,
+            source_index,
+            reshape,
+            wraps_angle,
+        }
+    }
+
+    /// Assemble a static / affine binding: the card→consumer remap is a pure
+    /// `value * scale + offset` (or identity when scale=1, offset=0). Shared
+    /// by the effect preset path ([`Self::from_static`]) and the generator
+    /// path so a folded `affine_scalar` behaves identically whichever rides
+    /// it. Angle-wrap is never set here — affine folds don't loop, and
+    /// `from_user` is the only path that tags Angle knobs.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn assemble_affine(
+        id: ParamId,
+        label: Cow<'static, str>,
+        default_value: f32,
+        target: ResolvedTarget,
+        convert: ParamConvert,
+        source: BindingSource,
+        source_index: usize,
+        scale: f32,
+        offset: f32,
+    ) -> Self {
+        Self::assemble(
+            id,
+            label,
+            default_value,
+            target,
+            convert,
+            source,
+            source_index,
+            scale_offset_reshape(scale, offset),
+            false,
+        )
     }
 
     /// Apply this binding's value to the graph.
