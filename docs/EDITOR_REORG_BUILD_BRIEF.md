@@ -230,19 +230,31 @@ folded preset feeds the consumer the UNSCALED value → broken look):**
    reshape applies them (the runtime path is distinct from `from_user`, which already
    does). This is the load-bearing correctness step — verify with a one-frame execute.
 
-**Per-affine analysis (FluidSimulation.json):** an affine folds iff its `.a` is a
-card binding target AND it has one consumer AND no other wired inputs.
-- **FOLDABLE:** `rotation_rad_base` (id 24) — Curl binding → `.a`, scale `0.017453293`
-  (deg→rad), single consumer `rotation_final.a` (node 47, `node.math`). Fold = retarget
-  Curl binding to `rotation_final.a` + `scale: 0.017453293`, delete node 24, delete
-  wire 24→47.a. Byte-identical (binding writes 85, reshape ×0.0174 = 1.4835 rad, same
-  value the affine produced). `particle_count_calc` (×1e6) is the same shape.
-- **KEEP (derived, not card→consumer):** `scaled_energy_calc` (a = computed 2e6),
-  `intensity_calc` (a = computed). Their `.a` is NOT a binding target.
-- Check blur radius + others case-by-case against the criterion before folding.
+**Per-affine analysis (FluidSimulation.json) — COMPLETE 2026-06-01, both folds shipped + visually confirmed:**
+an affine folds iff its `.a` is a card binding target AND it has one consumer AND no other wired inputs.
+- **FOLDED ✓** `rotation_rad_base` (id 24) — Curl binding → `rotation_final.a` + `scale 0.017453293`
+  (deg→rad). Shipped (commit 74468be2; re-applied after the generator-scale fix below).
+- **FOLDED ✓** `particle_count_calc` (id 20) — count_m binding → `active_count_calc.a` + `scale 1000000`
+  (card 2.0 → 2M). Single consumer (wire 20→21.a), no other inputs. Byte-identical default 2.0×1e6 = 2e6
+  matches the static default. Shipped (commit c4c8b819).
+- **KEEP — canvas-responsive, NOT a single-value affine (brief CORRECTED here):** the blur chain
+  `blur_radius_x_width/height` (60/62) → `blur_h/v_radius_final` (61/63). The blur radius is
+  `canvas_dim × feather × (1/1280)` — `blur_radius_x_*.a` is **wired to the live canvas width/height**
+  from `generator_input`, so it's a two-input computation, not a single-value affine. Folding feather into
+  a binding scale would bake in 1080p and break the blur at other resolutions. The earlier "scale 1/1280,
+  foldable" note was WRONG.
+- **KEEP — derived (wire-fed `.a`, not a card target):** `scaled_energy_calc` (a ← active_count_calc),
+  `intensity_calc` (a ← canvas_area_scale), `noise_z` (a ← time).
 
-**Why surfaced, not auto-applied:** FluidSimulation is the load-bearing show fixture
-(Liveschool). The fold is byte-identical BY CONSTRUCTION, but the GPU gates prove
-execute, not look, and a wrong retarget/rewire breaks the show silently. Do the
-loader change (safe), then exemplar-fold `rotation_rad_base`, verify (check-presets +
-`bundled_presets` + Liveschool load), show Peter, then fold the rest.
+**The generator-scale gotcha (the real lesson, 2026-06-01):** the first Curl fold *broke on stage*. The
+generator runtime (`json_graph_generator.rs`) hand-rolled its own `ResolvedBinding` with `reshape: None`,
+silently dropping the binding scale — 72° went in as 72 **radians** (57× over-drive, unstable vortices).
+The effect path was always fine; only generators were broken. Fixed by converging BOTH paths onto one
+constructor (`ResolvedBinding::assemble` / `assemble_affine`) sharing one `scale_offset_reshape`, plus a
+generator regression test (`generator_binding_scale_folds_into_inner_param`). The generator no longer has
+its own binding literal, so this bug class cannot recur. **Any future preset fold rides this now-correct
+path** — but note the lesson: a fold's gates (check-presets + execute) prove load + run, NOT that the
+runtime applied the scale. Verify the value reaches the inner param (the regression test does), then
+Peter's eyes.
+
+FluidSimulation's fold campaign is **DONE**: Curl + particle count folded, everything else correctly kept.
