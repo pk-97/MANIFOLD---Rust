@@ -387,6 +387,9 @@ pub fn dispatch(
         | PanelAction::EffectMappingLabel { .. }
         | PanelAction::EffectMappingInvert { .. }
         | PanelAction::EffectMappingCurve { .. }
+        | PanelAction::EffectMappingAffineSnapshot { .. }
+        | PanelAction::EffectMappingAffineChanged { .. }
+        | PanelAction::EffectMappingAffineCommit { .. }
         | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }

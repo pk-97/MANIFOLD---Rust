@@ -796,6 +796,12 @@ pub struct BindingMappingEdit {
     pub max: Option<f32>,
     pub invert: Option<bool>,
     pub curve: Option<manifold_core::macro_bank::MacroCurve>,
+    /// Card→consumer linear remap. This is where an in-graph
+    /// `affine_scalar` that only rescaled a card value toward its
+    /// consumer folds in: `out = value * scale + offset`. `scale = 1.0`,
+    /// `offset = 0.0` is identity.
+    pub scale: Option<f32>,
+    pub offset: Option<f32>,
 }
 
 impl BindingMappingEdit {
@@ -817,6 +823,12 @@ impl BindingMappingEdit {
         if let Some(curve) = self.curve {
             binding.curve = curve;
         }
+        if let Some(scale) = self.scale {
+            binding.scale = scale;
+        }
+        if let Some(offset) = self.offset {
+            binding.offset = offset;
+        }
     }
 
     /// Snapshot the binding's *current* values for exactly the fields
@@ -830,6 +842,8 @@ impl BindingMappingEdit {
             max: self.max.map(|_| binding.max),
             invert: self.invert.map(|_| binding.invert),
             curve: self.curve.map(|_| binding.curve),
+            scale: self.scale.map(|_| binding.scale),
+            offset: self.offset.map(|_| binding.offset),
         }
     }
 }
@@ -990,6 +1004,8 @@ mod tests {
             max: Some(3.5),
             invert: Some(true),
             curve: Some(MacroCurve::SCurve),
+            scale: Some(0.017453293),
+            offset: Some(1.5),
         };
         let mut cmd = EditUserParamBindingCommand::new(
             EffectTarget::Master,
@@ -1007,6 +1023,8 @@ mod tests {
         assert_eq!(b.max, 3.5);
         assert!(b.invert);
         assert_eq!(b.curve, MacroCurve::SCurve);
+        assert_eq!(b.scale, 0.017453293);
+        assert_eq!(b.offset, 1.5);
         // Routing/identity fields untouched.
         assert_eq!(b.node_handle, "uv_transform");
         assert_eq!(b.inner_param, "rotation");
@@ -1023,6 +1041,8 @@ mod tests {
         assert_eq!(b.max, 1.0);
         assert!(!b.invert);
         assert_eq!(b.curve, MacroCurve::Linear);
+        assert_eq!(b.scale, 1.0, "scale restored to identity on undo");
+        assert_eq!(b.offset, 0.0, "offset restored to identity on undo");
         let v2 = project.settings.master_effects[0].user_param_bindings_version;
         assert_ne!(v2, v1, "undo must bump user_param_bindings_version");
 
@@ -1034,6 +1054,8 @@ mod tests {
         assert_eq!(b.max, 3.5);
         assert!(b.invert);
         assert_eq!(b.curve, MacroCurve::SCurve);
+        assert_eq!(b.scale, 0.017453293);
+        assert_eq!(b.offset, 1.5);
     }
 
     #[test]

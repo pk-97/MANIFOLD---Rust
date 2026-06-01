@@ -1055,6 +1055,118 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::EffectMappingAffineSnapshot { binding_id } => {
+                    // Capture the binding's pre-drag (scale, offset) so the
+                    // commit records one undo command for the whole drag.
+                    if let Some((target, ei)) = self.current_editor_target.as_ref() {
+                        self.mapping_affine_snapshot = manifold_editing::commands::effect_target::with_effects(
+                            &self.local_project,
+                            target,
+                            |effects, _| {
+                                effects.get(*ei).and_then(|fx| {
+                                    fx.user_param_bindings
+                                        .iter()
+                                        .find(|b| &b.id == binding_id)
+                                        .map(|b| (b.scale, b.offset))
+                                })
+                            },
+                        )
+                        .flatten();
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingAffineChanged {
+                    binding_id,
+                    scale,
+                    offset,
+                } => {
+                    // Live drag: write the local project AND the content
+                    // thread so the next snapshot sync doesn't clobber the
+                    // in-progress drag. No undo command yet.
+                    if let Some((target, ei)) = self.current_editor_target.clone() {
+                        let bid = binding_id.clone();
+                        let (sc, of) = (*scale, *offset);
+                        manifold_editing::commands::effect_target::with_effects_mut(
+                            &mut self.local_project,
+                            &target,
+                            |effects, _| {
+                                if let Some(fx) = effects.get_mut(ei)
+                                    && let Some(b) = fx
+                                        .user_param_bindings
+                                        .iter_mut()
+                                        .find(|b| b.id == bid)
+                                {
+                                    b.scale = sc;
+                                    b.offset = of;
+                                    fx.user_param_bindings_version =
+                                        fx.user_param_bindings_version.wrapping_add(1);
+                                }
+                            },
+                        );
+                        let bid2 = binding_id.clone();
+                        self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
+                            manifold_editing::commands::effect_target::with_effects_mut(
+                                p,
+                                &target,
+                                |effects, _| {
+                                    if let Some(fx) = effects.get_mut(ei)
+                                        && let Some(b) = fx
+                                            .user_param_bindings
+                                            .iter_mut()
+                                            .find(|b| b.id == bid2)
+                                    {
+                                        b.scale = sc;
+                                        b.offset = of;
+                                        fx.user_param_bindings_version =
+                                            fx.user_param_bindings_version.wrapping_add(1);
+                                    }
+                                },
+                            );
+                        })));
+                    }
+                    continue;
+                }
+                PanelAction::EffectMappingAffineCommit { binding_id } => {
+                    // Drag release: record ONE EditUserParamBindingCommand
+                    // spanning the whole scale/offset drag.
+                    if let (Some((old_scale, old_offset)), Some((target, ei))) = (
+                        self.mapping_affine_snapshot.take(),
+                        self.current_editor_target.clone(),
+                    ) {
+                        let new = manifold_editing::commands::effect_target::with_effects(
+                            &self.local_project,
+                            &target,
+                            |effects, _| {
+                                effects.get(ei).and_then(|fx| {
+                                    fx.user_param_bindings
+                                        .iter()
+                                        .find(|b| &b.id == binding_id)
+                                        .map(|b| (b.scale, b.offset))
+                                })
+                            },
+                        )
+                        .flatten();
+                        if let Some((new_scale, new_offset)) = new
+                            && ((old_scale - new_scale).abs() > f32::EPSILON
+                                || (old_offset - new_offset).abs() > f32::EPSILON)
+                        {
+                            let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                                scale: Some(new_scale),
+                                offset: Some(new_offset),
+                                ..Default::default()
+                            };
+                            let cmd =
+                                manifold_editing::commands::effects::EditUserParamBindingCommand::new(
+                                    target,
+                                    ei,
+                                    binding_id.clone(),
+                                    edit,
+                                );
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                    continue;
+                }
                 PanelAction::EnterPerformMode => {
                     self.perform.pending_enter = true;
                     continue;

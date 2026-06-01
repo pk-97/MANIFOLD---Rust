@@ -287,6 +287,24 @@ pub enum PanelAction {
         binding_id: String,
         curve: manifold_core::macro_bank::MacroCurve,
     },
+    /// Snapshot the binding's pre-drag (scale, offset) before a
+    /// scale/offset scrub, so the matching commit records one undo entry
+    /// for the whole drag. Mirrors `EffectMappingRangeSnapshot`.
+    EffectMappingAffineSnapshot {
+        binding_id: String,
+    },
+    /// Live scale/offset drag: update the binding's card→consumer affine
+    /// remap (`out = value * scale + offset`) without recording undo.
+    EffectMappingAffineChanged {
+        binding_id: String,
+        scale: f32,
+        offset: f32,
+    },
+    /// Scale/offset drag release: record one `EditUserParamBindingCommand`
+    /// spanning the whole drag.
+    EffectMappingAffineCommit {
+        binding_id: String,
+    },
 
     // ── Graph editor mutations (Phase 4) ──────────────────────────────
     //

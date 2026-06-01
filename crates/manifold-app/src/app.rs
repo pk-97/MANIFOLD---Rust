@@ -213,6 +213,10 @@ pub struct Application {
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
     pub(crate) mapping_range_snapshot: Option<(f32, f32)>,
+    /// User param-binding scale/offset drag snapshot `(scale, offset)` for
+    /// undo. Captured on `EffectMappingAffineSnapshot`, committed as one
+    /// `EditUserParamBindingCommand` on `EffectMappingAffineCommit`.
+    pub(crate) mapping_affine_snapshot: Option<(f32, f32)>,
 
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub(crate) active_inspector_drag: Option<ActiveInspectorDrag>,
@@ -439,6 +443,7 @@ impl Application {
             target_snapshot: None,
             range_snapshot: None,
             mapping_range_snapshot: None,
+            mapping_affine_snapshot: None,
             active_inspector_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,
