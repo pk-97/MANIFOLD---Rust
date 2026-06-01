@@ -1198,6 +1198,19 @@ pub(crate) fn editor_card_config(
                 (config, values)
             }
         };
+        // CLIP-SAFETY (CARD-TARGET-UNIFICATION): a Clip-scoped effect collapses
+        // to its Layer in `current_editor_target` (EffectTarget has no Clip
+        // variant), so the (tab, active_layer) override would address a DIFFERENT
+        // effect than the one the editor was opened on. Only show + drive the
+        // card when the resolved instance's id matches the editor's watched
+        // effect id; otherwise bail to an empty lane so a card edit can never
+        // corrupt an unrelated layer effect. Full clip support arrives with the
+        // id-based step-3 migration (docs/CARD_TARGET_UNIFICATION.md).
+        if let Some(manifold_core::GraphTarget::Effect(watched_id)) = watched_graph_target
+            && &config.effect_id != watched_id
+        {
+            return None;
+        }
         return Some((config, values));
     }
 

@@ -297,6 +297,14 @@ impl Application {
         // 2. Process UI events and dispatch actions
         let mut actions = self.ws.ui_root.process_events();
 
+        // Editor LEFT-LANE CARD actions are collected separately so they can be
+        // dispatched with the editor's identity override (CARD-TARGET-UNIFICATION):
+        // they carry the same PanelAction variants the inspector emits, but must
+        // resolve against the edited effect/generator, not the main window's
+        // active layer. Appended to `actions` after a recorded boundary so the
+        // dispatch loop can tell which segment they live in.
+        let mut editor_card_actions: Vec<manifold_ui::panels::PanelAction> = Vec::new();
+
         // 2a. Drain the graph-editor window's UITree events. The editor
         // doesn't go through `UIRoot::process_events` (its panel set is
         // a single `GraphEditorPanel`, not the full main-window mix), so
@@ -360,12 +368,41 @@ impl Application {
                     }
                 }
             } else {
-                for event in events {
-                    // Forward every event into the inspector panel — it
-                    // wants Click (toggle/cycle) plus DragBegin/Drag/
-                    // DragEnd (numeric scrub). The left card mirror is
-                    // read-only for now, so it has no click handler.
-                    actions.extend(self.graph_editor_panel.handle_event(&event));
+                use manifold_ui::input::UIEvent;
+                for event in &events {
+                    // Left-lane card: map editor pointer events to the card's
+                    // node-id methods, exactly as the inspector composite does
+                    // (Click→handle_click, PointerDown→grab, Drag→scrub,
+                    // DragEnd→commit, RightClick→menu). The card ignores node_ids
+                    // that aren't its own, so forwarding every event is safe.
+                    // OpenGraphEditor (the card cog) is dropped here — you're
+                    // already in the editor; CardContext suppresses the button in
+                    // a later pass.
+                    let from_card = match event {
+                        UIEvent::Click { node_id, .. } => self.editor_card.handle_click(*node_id),
+                        UIEvent::PointerDown { node_id, pos, .. } => {
+                            self.editor_card.handle_pointer_down(*node_id, *pos)
+                        }
+                        UIEvent::Drag { pos, .. } => {
+                            self.editor_card.handle_drag(*pos, &mut ed.ui_root.tree)
+                        }
+                        UIEvent::DragEnd { .. } => {
+                            self.editor_card.handle_drag_end(&mut ed.ui_root.tree)
+                        }
+                        UIEvent::RightClick { node_id, .. } => {
+                            self.editor_card.handle_right_click(*node_id)
+                        }
+                        _ => Vec::new(),
+                    };
+                    editor_card_actions.extend(
+                        from_card.into_iter().filter(|a| {
+                            !matches!(a, manifold_ui::panels::PanelAction::OpenGraphEditor(_))
+                        }),
+                    );
+                    // Forward every event into the right-sidebar inspector panel
+                    // too — it wants Click (toggle/cycle) plus DragBegin/Drag/
+                    // DragEnd (numeric scrub) for the per-node expose rows.
+                    actions.extend(self.graph_editor_panel.handle_event(event));
                 }
             }
         }
@@ -490,7 +527,20 @@ impl Application {
         let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_id.clone();
         let prev_sel_version = self.selection.selection_version;
-        for action in &actions {
+
+        // Append the editor card's actions as a trailing segment, recording where
+        // it starts. Actions at or past `editor_card_seg_start` were emitted by
+        // the graph editor's left-lane card and dispatch with the editor's
+        // identity override; everything before is main-window / sidebar and
+        // dispatches against the ambient context (CARD-TARGET-UNIFICATION).
+        let editor_card_seg_start = actions.len();
+        actions.extend(editor_card_actions);
+        let editor_dispatch_override = crate::ui_bridge::editor_dispatch_target(
+            self.current_editor_target.as_ref(),
+            self.watched_graph_target.as_ref(),
+        );
+
+        for (action_idx, action) in actions.iter().enumerate() {
             // Intercept actions that need Application-level access
             match action {
                 PanelAction::CopyOscAddress(addr) => {
@@ -1465,6 +1515,13 @@ impl Application {
                 _ => {}
             }
             let content_tx = self.content_tx.as_ref().unwrap();
+            // Editor card segment → dispatch with the editor's identity override;
+            // main-window / sidebar actions → None (ambient, unchanged).
+            let editor_ov = if action_idx >= editor_card_seg_start {
+                editor_dispatch_override.as_ref()
+            } else {
+                None
+            };
             let result = crate::ui_bridge::dispatch(
                 action,
                 &mut self.local_project,
@@ -1480,6 +1537,7 @@ impl Application {
                 &mut self.range_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
+                editor_ov,
             );
             if result.structural_change {
                 needs_structural_sync = true;
@@ -2064,9 +2122,28 @@ impl Application {
         // means stale rows can never linger after the target changes.
         ws.ui_root.tree.clear();
         if let Some((config, values)) = editor_card_data.as_ref() {
-            self.editor_card.configure(config);
+            // Gate `configure` on a structural/mod-state change (same discipline
+            // as the inspector's gated `sync_inspector_data`): reconfiguring
+            // resets the card's transient UI state — open drawers, in-progress
+            // drags — so doing it every frame would make the card uninteractive.
+            // Param VALUES are not in the config (they ride `values`), so a drag
+            // leaves this hash unchanged. Hash the config's Debug form: cheap for
+            // one card, and captures every field `configure` consumes without
+            // needing PartialEq across the UI config types.
+            let config_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                format!("{config:?}").hash(&mut hasher);
+                hasher.finish()
+            };
+            if self.editor_card_config_hash != Some(config_hash) {
+                self.editor_card.configure(config);
+                self.editor_card_config_hash = Some(config_hash);
+            }
             self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
             self.editor_card.sync_values(&mut ws.ui_root.tree, values);
+        } else {
+            self.editor_card_config_hash = None;
         }
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);

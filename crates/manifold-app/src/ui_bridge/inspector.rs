@@ -44,8 +44,31 @@ pub(super) fn dispatch_inspector(
     target_snapshot: &mut Option<f32>,
     range_snapshot: &mut Option<(f32, f32)>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
+    editor_override: Option<&super::EditorDispatchTarget>,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
+
+    // CARD-TARGET-UNIFICATION (fork site B — the ambient/legacy resolution).
+    // Every effect/generator arm below resolves "which effect/generator" from
+    // `tab` + `active_layer`. When the graph editor supplies an `editor_override`
+    // we resolve from the EDITOR's identity instead, so a card edit inside the
+    // editor targets the effect/generator the editor was opened on — not the main
+    // window's current selection. `None` => unchanged ambient behaviour. Computed
+    // once here; the per-arm `let tab = effective_tab;` and the shadowed
+    // `active_layer` below feed it into every resolver. Step 3 deletes the
+    // ambient branch and makes identity the only path.
+    let effective_tab: InspectorTab = editor_override
+        .map(|o| o.tab)
+        .unwrap_or_else(|| ui.inspector.last_effect_tab());
+    let effective_active_layer: Option<LayerId> = match editor_override {
+        Some(o) => o.active_layer.clone(),
+        None => active_layer.clone(),
+    };
+    // Shadow the &mut param: no arm in this function mutates `active_layer`, so an
+    // immutable shadow is sound and routes every downstream resolver through the
+    // effective layer.
+    let active_layer: &Option<LayerId> = &effective_active_layer;
+
     match action {
         // ── Macros panel collapse ─────────────────────────────────
         PanelAction::MacrosCollapseToggle => {
@@ -495,7 +518,7 @@ pub(super) fn dispatch_inspector(
 
         // ── Effect operations ──────────────────────────────────────
         PanelAction::EffectToggle(fx_idx) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let selected = ui.inspector.get_selected_effect_indices();
             // If clicked effect is part of multi-selection, apply to all selected
             let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
@@ -550,7 +573,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectCollapseToggle(fx_idx) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let selected = ui.inspector.get_selected_effect_indices();
             // If clicked effect is part of multi-selection, apply to all selected
             let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
@@ -608,7 +631,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectParamRightClick(fx_idx, param_id, default_val) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let (effects_mut, target) = resolve_effects_mut(tab, project, active_layer, selection);
             if let Some(effects) = effects_mut
                 && let Some(fx) = effects.get_mut(*fx_idx)
@@ -631,7 +654,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectParamSnapshot(fx_idx, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
             if let Some(fx) = effects.and_then(|e| e.get(*fx_idx))
                 && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
@@ -654,7 +677,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectParamChanged(fx_idx, param_id, val) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             {
                 let (effects_mut, _target) =
                     resolve_effects_mut(tab, project, active_layer, selection);
@@ -700,7 +723,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectParamCommit(fx_idx, param_id) => {
             if let Some(old_val) = drag_snapshot.take() {
-                let tab = ui.inspector.last_effect_tab();
+                let tab = effective_tab;
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*fx_idx))
                     && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
@@ -725,7 +748,7 @@ pub(super) fn dispatch_inspector(
 
         // ── Effect modulation ──────────────────────────────────────
         PanelAction::EffectDriverToggle(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effect_target = super::resolve_effect_target(tab, active_layer, project);
             let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
             if let Some(effects) = effects_ref
@@ -778,7 +801,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EffectEnvelopeToggle(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 effects
@@ -831,7 +854,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EffectDriverConfig(ei, param_id, cfg) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effect_target = super::resolve_effect_target(tab, active_layer, project);
             let target = DriverTarget::Effect {
                 effect_target,
@@ -929,7 +952,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EffectEnvParamChanged(ei, param_id, param, val) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -995,7 +1018,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectTrimChanged(ei, param_id, min, max) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             {
                 let (effects_mut, _) = resolve_effects_mut(tab, project, active_layer, selection);
                 if let Some(effects) = effects_mut
@@ -1041,7 +1064,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectTargetChanged(ei, param_id, norm) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1097,7 +1120,7 @@ pub(super) fn dispatch_inspector(
 
         // ── Modulation undo: snapshot/commit ────────────────────────
         PanelAction::EffectTrimSnapshot(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
             if let Some(fx) = effects.and_then(|e| e.get(*ei))
                 && let Some(driver) = fx
@@ -1111,7 +1134,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectTrimCommit(ei, param_id) => {
             if let Some((old_min, old_max)) = trim_snapshot.take() {
-                let tab = ui.inspector.last_effect_tab();
+                let tab = effective_tab;
                 let effect_target = super::resolve_effect_target(tab, active_layer, project);
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*ei))
@@ -1140,7 +1163,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectTargetSnapshot(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1182,7 +1205,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectTargetCommit(ei, param_id) => {
             if let Some(old_target) = target_snapshot.take() {
-                let tab = ui.inspector.last_effect_tab();
+                let tab = effective_tab;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1225,7 +1248,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectEnvRangeChanged(ei, param_id, rmin, rmax) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1282,7 +1305,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectEnvRangeSnapshot(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1313,7 +1336,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectEnvRangeCommit(ei, param_id) => {
             if let Some((old_min, old_max)) = range_snapshot.take() {
-                let tab = ui.inspector.last_effect_tab();
+                let tab = effective_tab;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1359,7 +1382,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EffectEnvParamSnapshot(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1406,7 +1429,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectEnvParamCommit(ei, param_id) => {
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
-                let tab = ui.inspector.last_effect_tab();
+                let tab = effective_tab;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1460,7 +1483,7 @@ pub(super) fn dispatch_inspector(
 
         // ── Envelope mode toggles ──────────────────────────────────
         PanelAction::EffectEnvModeToggle(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 effects
@@ -1519,7 +1542,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EffectEnvRandomJumpToggle(ei, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 effects
@@ -1570,7 +1593,7 @@ pub(super) fn dispatch_inspector(
         PanelAction::AddEffectClicked(_tab) => DispatchResult::handled(),
         PanelAction::BrowserSearchClicked => DispatchResult::handled(),
         PanelAction::RemoveEffect(fx_idx) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let (effects_ref, target) = resolve_effects_read(tab, project, active_layer, selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(*fx_idx)
@@ -1586,7 +1609,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EffectReorder(from_idx, to_idx) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let target = super::resolve_effect_target(tab, active_layer, project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
             {
@@ -1604,7 +1627,7 @@ pub(super) fn dispatch_inspector(
         // layer — the command itself handles both.
         PanelAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let target = super::resolve_effect_target(tab, active_layer, project);
             let (effects_mut, _target) = resolve_effects_mut(tab, project, active_layer, selection);
             if let Some(effects) = effects_mut {
@@ -2834,7 +2857,7 @@ pub(super) fn dispatch_inspector(
 
         // Ableton trim handles — update range_min/range_max on the mapping.
         PanelAction::AbletonTrimChanged(fx_idx, param_id, min, max) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let min = *min;
             let max = *max;
             let fx_idx = *fx_idx;
@@ -2971,7 +2994,7 @@ pub(super) fn dispatch_inspector(
         }
 
         PanelAction::AbletonInvertToggle(fx_idx, param_id) => {
-            let tab = ui.inspector.last_effect_tab();
+            let tab = effective_tab;
             let fx_idx = *fx_idx;
             let effect_type = match tab {
                 InspectorTab::Master => {

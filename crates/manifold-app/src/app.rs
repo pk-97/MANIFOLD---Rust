@@ -302,6 +302,15 @@ pub struct Application {
     /// instrument card, not a read-only mirror, so slider/driver/mapping
     /// edits happen on it directly.
     pub(crate) editor_card: manifold_ui::panels::param_card::ParamCardPanel,
+    /// Hash of the editor card's last-applied `ParamCardConfig`. `configure`
+    /// rebuilds the card's transient UI state (open driver/envelope drawers,
+    /// the mapping drawer), so — exactly like the inspector, whose
+    /// `sync_inspector_data` is gated on structural change — we only reconfigure
+    /// the editor card when its structure or mod-state actually changes, and
+    /// `sync_values` every frame for live values. Param values live outside the
+    /// config (in the separate `values` slice), so a slider drag does NOT bump
+    /// this hash and never resets an in-progress drag or an open drawer.
+    pub(crate) editor_card_config_hash: Option<u64>,
     /// Built-once list of atoms shown in the spawn popup (node browser).
     /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
@@ -482,6 +491,7 @@ impl Application {
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
             editor_card: manifold_ui::panels::param_card::ParamCardPanel::new(),
+            editor_card_config_hash: None,
             palette_atoms_cache: {
                 use manifold_renderer::node_graph::{Category, descriptor_for};
                 let cat_of = |type_id: &str| {

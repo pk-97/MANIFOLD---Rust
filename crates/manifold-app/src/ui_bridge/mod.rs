@@ -74,6 +74,10 @@ pub fn dispatch(
     range_snapshot: &mut Option<(f32, f32)>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
+    // CARD-TARGET-UNIFICATION: `Some` when the graph editor dispatches a card
+    // action (identity-based targeting); `None` for the inspector/perform path
+    // (ambient targeting, unchanged). Only consulted by `dispatch_inspector`.
+    editor_override: Option<&EditorDispatchTarget>,
 ) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
@@ -277,6 +281,7 @@ pub fn dispatch(
             target_snapshot,
             range_snapshot,
             active_inspector_drag,
+            editor_override,
         ),
 
         // ── Layer operations ──────────────────────────────────────
@@ -645,6 +650,59 @@ pub(crate) fn resolve_effects_mut<'a>(
             (effects, target)
         }
     }
+}
+
+// CARD-TARGET-UNIFICATION (fork site A — the identity-based path).
+// The graph editor is the first dispatch host to target by identity instead of
+// by the ambient inspector tab + active layer. When it dispatches a card action
+// it supplies this override; `dispatch_inspector` then resolves "which effect /
+// generator" from the editor's own target rather than `last_effect_tab()` +
+// `active_layer`. `None` => the inspector / perform path, byte-identical to
+// before. Step 3 (docs/CARD_TARGET_UNIFICATION.md) migrates the inspector onto
+// the same scheme and deletes the ambient resolution; until then this is an
+// additive override and the perform path is untouched.
+//
+// Why a (tab, layer) pair is the full identity the resolvers need: every
+// Effect* arm resolves through `last_effect_tab()` + `active_layer`, and the
+// envelope/target sub-family is layer-stored keyed by (effect_type, param_id) —
+// so forcing tab + layer makes those arms read the editor's layer, and the
+// effect *type* is derived downstream from `effects[ei]` (ei rides the action
+// payload). Master effects carry no layer envelope, so a Master override
+// correctly no-ops envelope edits, matching today's behaviour.
+#[derive(Debug, Clone)]
+pub(crate) struct EditorDispatchTarget {
+    pub tab: InspectorTab,
+    pub active_layer: Option<LayerId>,
+}
+
+/// Build the editor's dispatch override from its identity fields, or `None` when
+/// no editor target is resolvable (→ ambient resolution, perform path).
+/// Effect editors carry the `EffectTarget` directly in `current_editor_target`;
+/// generators are identified by `watched_graph_target` and resolve via the
+/// active layer alone (`current_editor_target` is `None` for them).
+pub(crate) fn editor_dispatch_target(
+    current_editor_target: Option<&(EffectTarget, usize)>,
+    watched_graph_target: Option<&manifold_core::GraphTarget>,
+) -> Option<EditorDispatchTarget> {
+    if let Some((target, _ei)) = current_editor_target {
+        return Some(match target {
+            EffectTarget::Master => EditorDispatchTarget {
+                tab: InspectorTab::Master,
+                active_layer: None,
+            },
+            EffectTarget::Layer { layer_id } => EditorDispatchTarget {
+                tab: InspectorTab::Layer,
+                active_layer: Some(layer_id.clone()),
+            },
+        });
+    }
+    if let Some(manifold_core::GraphTarget::Generator(lid)) = watched_graph_target {
+        return Some(EditorDispatchTarget {
+            tab: InspectorTab::Layer,
+            active_layer: Some(lid.clone()),
+        });
+    }
+    None
 }
 
 /// Build the display label for the LED exit path dropdown button.
