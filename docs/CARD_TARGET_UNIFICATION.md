@@ -170,6 +170,52 @@ with **zero UI changes**. The work is all model + command + runtime:
 This rides the same binding-command rework Stage B/C already does, so it adds
 model surface but no new dispatch fork.
 
+### Stage B++ — unify the editable mapping across ALL card params (decided 2026-06-01)
+
+The drawer being effect-user-binding-only exposed a deeper, three-way fork in
+the editable-mapping model. The card param a user wants to reshape can be backed
+by any of:
+
+1. **A built-in effect param** (static `param_def` + a preset-level `BindingDef`
+   that routes it to an inner node, carrying scale/offset/invert/curve at the
+   *definition* level — not per-instance editable). This is most stock-effect
+   rows (e.g. ColorGrade's Amount/Gain — see `ColorGrade.json`'s `bindings`).
+2. **A user-exposed effect param** (per-instance `EffectInstance.user_param_bindings`
+   — fully editable; the ONLY rows with a chevron today).
+3. **A generator param** (no binding object at all — see Stage B+).
+
+End-game: **every exposed card param is a first-class, per-instance, editable
+binding** — built-in or user-exposed, effect or generator — and all open the
+drawer identically. Most likely shape: the instance carries its bindings seeded
+from the preset (copy-on-write per instance), which collapses the
+static-param-vs-user-binding split. `mappable` then becomes "this row has an
+editable binding" = always true for exposed rows, and the chevron shows on every
+card.
+
+#### HARD INVARIANT — Ableton / OSC / drivers / envelopes must stay byte-identical
+
+This is the load-bearing safety property (the live instrument —
+[[feedback_param_values_is_performance_surface]]). Every modulation surface
+addresses a param by stable `param_id` → value slot via
+`EffectInstance::param_id_to_value_index` (static block first, then user tail),
+and writes the *card value* into that slot every frame. The mapping
+(range/invert/curve/scale/offset) is a DOWNSTREAM reshape: it reads the slot and
+reshapes on the way to the inner consumer, never rewriting the slot, applied
+AFTER the modulation write. Therefore the unification **must**:
+
+- **Never change a param's `param_id` or its value-slot index.** The editable
+  mapping is a per-instance OVERLAY keyed by the existing `param_id`, applied at
+  the existing binding-reshape point.
+- **Never duplicate a built-in param into a user binding** (that would collide
+  ids + double slots — the one way this breaks Ableton/OSC). Promote the
+  built-in param's mapping to instance-editable WITHOUT adding a slot.
+
+If both hold, an Ableton macro / OSC address / driver / envelope on a stock
+effect writes byte-identically before and after — only the downstream reshape
+becomes editable. The adversarial verification gate (below) checks this directly:
+for a fixture effect with Ableton + OSC + driver + envelope bound, the per-frame
+writes must match pre-unification exactly.
+
 ### Stage C — the `Effect*`/`Gen*` enum collapse (optional final purity)
 
 After Stage B the editor reads zero ambient context, but the *inspector* still
@@ -194,7 +240,10 @@ order:
    config, envelope, expose, Ableton trim, reorder) produces byte-identical
    commands to pre-migration, and that the editor path now targets by identity.
    This is the real gate for the show rig — do not commit Stage B on a green
-   build alone.
+   build alone. **For Stage B++ specifically:** take a fixture effect with an
+   Ableton macro + an OSC address + a driver + an envelope bound to its params,
+   and assert the per-frame value writes (`param_id` → slot) are byte-identical
+   before and after the mapping unification — proving no `param_id`/slot moved.
 4. Load the canonical fixture (`Liveschool Live Show V6 LEDS.manifold`); it must
    render + edit byte-identical.
 
