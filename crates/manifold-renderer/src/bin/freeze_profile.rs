@@ -19,8 +19,6 @@
 //!
 //! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
 
-use std::time::Instant;
-
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -28,9 +26,10 @@ use manifold_renderer::generator::Generator;
 use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::node_graph::primitives::Gain;
 use manifold_renderer::node_graph::{
-    EffectGraphDefExt, EffectNode, ExecutionPlan, Executor, FrameTime, MetalBackend,
-    NodeInstanceId, PrimitiveRegistry, ResourceId, Source, compile,
+    EffectGraphDefExt, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
+    MetalBackend, NodeInstanceId, PrimitiveRegistry, ResourceId, Source, compile,
 };
 use manifold_renderer::render_target::RenderTarget;
 
@@ -97,7 +96,9 @@ fn main() {
     let device = GpuDevice::new();
     let source_type_id = Source::new().type_id().as_str().to_string();
 
-    println!("freeze-profile — graph-runtime GPU cost (avg over {FRAMES} frames)\n");
+    println!(
+        "freeze-profile — REAL GPU time (MTLCommandBuffer GPUStartTime/EndTime), avg over {FRAMES} frames\n"
+    );
     println!("--- effects (texture domain) ---");
     println!(
         "{:<16} {:>6} {:>7} {:>11} {:>11}",
@@ -173,17 +174,16 @@ fn main() {
                 enc.commit_and_wait_completed();
             }
 
-            let start = Instant::now();
+            let mut gpu_secs = 0.0_f64;
             for _ in 0..FRAMES {
                 let mut enc = device.create_encoder("freeze-profile-timed");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                     exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
                 }
-                enc.commit_and_wait_completed();
+                gpu_secs += enc.commit_and_wait_completed_timed();
             }
-            let elapsed = start.elapsed();
-            let ms_frame = elapsed.as_secs_f64() * 1000.0 / f64::from(FRAMES);
+            let ms_frame = gpu_secs * 1000.0 / f64::from(FRAMES);
             let ms_step = if steps > 0 {
                 ms_frame / steps as f64
             } else {
@@ -199,7 +199,84 @@ fn main() {
     println!("\nms/step ≈ per-dispatch texture round-trip cost a fusion pass collapses.");
     println!("Fusing a pointwise run of length L recovers ~(L-1) × ms/step per frame.");
 
+    profile_synthetic_pointwise(&device);
     profile_generators(&registry, &device);
+}
+
+/// Synthetic per-pass measurement: `Source → Gain×N → FinalOutput` at 4K,
+/// real GPU time per N. N=1 is the true cost of ONE full-canvas pointwise
+/// dispatch; the marginal (N→N+1) is what a fusion pass removes per
+/// collapsed pointwise node. This is an *isolated, measured* per-pass cost
+/// — not total ÷ step-count — and it sidesteps ColorGrade's branched
+/// topology (it forks at `mix`, so linear prefix-truncation would be
+/// ambiguous). Gain runs at its default (identity) but still does a full
+/// read+math+write pass, which is exactly the bandwidth cost being measured.
+fn profile_synthetic_pointwise(device: &GpuDevice) {
+    let (w, h) = (3840u32, 2160u32);
+    println!(
+        "\n--- synthetic pointwise chains (Source → Gain×N → FinalOutput) @ {w}x{h}, real GPU time ---"
+    );
+    println!("{:<10} {:>11} {:>16}", "N passes", "ms/frame", "marginal/pass");
+    println!("{}", "-".repeat(40));
+
+    // Port names from a throwaway probe (avoid hardcoding "in"/"out").
+    let probe = Gain::new();
+    let in_port = probe.inputs()[0].name;
+    let out_port = probe.outputs()[0].name;
+    drop(probe);
+
+    let mut prev = 0.0_f64;
+    for n in 1..=6u32 {
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(Source::new()));
+        let mut last = source;
+        let mut last_out: &'static str = "out";
+        for _ in 0..n {
+            let g = graph.add_node(Box::new(Gain::new()));
+            graph.connect((last, last_out), (g, in_port)).unwrap();
+            last = g;
+            last_out = out_port;
+        }
+        let fout = graph.add_node(Box::new(FinalOutput::new()));
+        graph.connect((last, last_out), (fout, "in")).unwrap();
+
+        let plan = compile(&graph).expect("synthetic graph compiles");
+        let source_res =
+            resource_for_output(&plan, source, "out").expect("Source.out resolves");
+        let input_rt = RenderTarget::new(device, w, h, FORMAT, "syn-input");
+        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        backend.pre_bind_texture_2d(source_res, input_rt);
+        let mut exec = Executor::new(Box::new(backend));
+        let frame_time = FrameTime {
+            beats: Beats(1.0),
+            seconds: Seconds(1.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+
+        for _ in 0..WARMUP {
+            let mut enc = device.create_encoder("syn-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            }
+            enc.commit_and_wait_completed();
+        }
+        let mut gpu_secs = 0.0_f64;
+        for _ in 0..FRAMES {
+            let mut enc = device.create_encoder("syn-timed");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            }
+            gpu_secs += enc.commit_and_wait_completed_timed();
+        }
+        let ms = gpu_secs * 1000.0 / f64::from(FRAMES);
+        let marginal = if n == 1 { ms } else { ms - prev };
+        prev = ms;
+        println!("{:<10} {:>11.4} {:>16.4}", n, ms, marginal);
+    }
+    println!("marginal/pass ≈ true cost of one full-canvas pointwise dispatch (what fusion removes).");
 }
 
 /// Profile generator presets (the BUFFER / particle domain) via the
@@ -264,7 +341,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                     enc.commit_and_wait_completed();
                 }
 
-                let start = Instant::now();
+                let mut gpu_secs = 0.0_f64;
                 for i in 0..GEN_FRAMES {
                     let mut enc = device.create_encoder("freeze-profile-gen-timed");
                     {
@@ -275,9 +352,9 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                             &mk_ctx(f64::from(GEN_WARMUP + i) / 60.0),
                         );
                     }
-                    enc.commit_and_wait_completed();
+                    gpu_secs += enc.commit_and_wait_completed_timed();
                 }
-                Ok::<f64, String>(start.elapsed().as_secs_f64() * 1000.0 / f64::from(GEN_FRAMES))
+                Ok::<f64, String>(gpu_secs * 1000.0 / f64::from(GEN_FRAMES))
             }));
 
             match result {

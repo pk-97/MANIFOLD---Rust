@@ -1473,6 +1473,25 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilCompleted() };
     }
+
+    /// Commit, block until completion, and return the **true GPU execution
+    /// time** of this command buffer in seconds (`GPUEndTime - GPUStartTime`).
+    ///
+    /// This is actual GPU-side time as reported by the driver, NOT CPU
+    /// wall-clock around the submit — the correct source for profiling
+    /// (wall-clock includes encode + scheduling + wait latency). Returns
+    /// `0.0` if the driver reports no GPU timestamps for this buffer
+    /// (degenerate / no-GPU-work case). Use for benches/profilers only.
+    pub fn commit_and_wait_completed_timed(mut self) -> f64 {
+        self.end_current();
+        self.cmd_buf.commit();
+        unsafe {
+            self.cmd_buf.waitUntilCompleted();
+            let start = self.cmd_buf.GPUStartTime();
+            let end = self.cmd_buf.GPUEndTime();
+            (end - start).max(0.0)
+        }
+    }
 }
 
 impl Drop for GpuEncoder {

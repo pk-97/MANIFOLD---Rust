@@ -40,6 +40,32 @@ Driven through the production `Generator::render` path, avg over 60 frames:
 
 **Key diagnostic — resolution scaling separates the domains.** Cost that stays ~flat from 1080p→4K is *element/buffer-bound* (cost = per-particle / per-instance compute, not pixels); cost that scales ~linearly with pixel count is *texture-bound*. So **FluidSimulation** (11→14 ms, flat) and **DigitalPlants** (2.4→2.8, flat) are the real **buffer-domain** fusion targets — their cost is the per-particle / per-instance chains. **OilyFluid**, despite the name, is *texture*-bound (a grid fluid that scales 4× with resolution), so its win is texture-domain (the color-grade tail + per-pixel composites), not buffer. FluidSimulation at 11–14 ms is the single heaviest preset in the library and it's buffer-bound — concrete confirmation that buffer fusion is not optional. (Per-stage attribution within a generator needs finer instrumentation than this total-frame bench; deferred — the generator hides its plan behind `JsonGraphGenerator`.)
 
+### 1c. Proper GPU timing — real GPU time + isolated per-pass (no wall-clock)
+
+The §1/§1b tables above (v1) timed CPU wall-clock around `commit_and_wait`, which conflates GPU execution with encode + scheduling + wait latency. Replaced with **true GPU time** via `MTLCommandBuffer.GPUStartTime/GPUEndTime` (added as `GpuEncoder::commit_and_wait_completed_timed`). What that changed:
+
+- **Heavy presets barely moved** (GPU work dominates): ColorGrade 4K 2.73→**2.60 ms**, Glitch 4.53→4.39, FluidSim 4K 14.2→13.9 — wall-clock was only ~2–5% high.
+- **Cheap presets were massively overstated** (a fixed ~0.1–0.2 ms commit/wait overhead swamped the real GPU time): Plasma 1080p 0.25→**0.032 ms** (8×), InvertColors 0.14→0.039. The v1 cheap-preset numbers were mostly overhead, not GPU. (So treat §1/§1b as v1 wall-clock; real GPU is within ~5% on the heavy presets that matter.)
+
+**Synthetic per-pass — the rigorous per-node number.** `Source → Gain×N → FinalOutput` at 4K, real GPU time, isolating ONE full-canvas pointwise dispatch instead of dividing a total by a step count:
+
+| N passes | ms/frame | marginal/pass |
+|---|---|---|
+| 1 | 0.353 | 0.353 |
+| 2 | 0.695 | 0.342 |
+| 3 | 1.039 | 0.344 |
+| 4 | 1.385 | 0.346 |
+| 5 | 1.726 | 0.341 |
+| 6 | 2.075 | 0.349 |
+
+**Dead-linear at ~0.344 ms/pass** — each added pointwise pass costs the same fixed amount regardless of math: the bandwidth round-trip (read + write a 4K RGBA16F canvas), proven by controlled experiment rather than inferred from an average.
+
+**Grounded ColorGrade fusion math (no longer an estimate):** its 7 fusable pointwise passes ≈ 7 × 0.344 ≈ 2.41 ms of the 2.60 ms total (the ~0.19 ms remainder is source/output). Fusing 7→1 keeps one read + all math in registers + one write ≈ 0.344 ms, saving ~6 × 0.344 ≈ 2.06 ms → **ColorGrade 4K ≈ 0.5 ms, ≈ 4.8× faster.** Measured per-pass, measured total.
+
+**FluidSim per-stage still pending.** The generator bench gives an accurate *total* (11.1→13.9 ms, flat = buffer-bound) but not a per-stage split (force-chain vs scatter/resolve). That split needs either an executor per-step profiling mode or `MTLCounterSampleBuffer` timestamps — both touch shared code or need a dependency-feature + device-support gamble, so it's deferred (not done unsupervised). It's the one remaining measurement that settles whether buffer fusion helps FluidSim specifically, vs a non-fusion lever (fewer particles / better scatter).
+
+**Method note:** real GPU timing is via `commit_and_wait_completed_timed` — the only manifold-gpu addition, backend-agnostic in spirit (a Vulkan backend would expose the equivalent via timestamp queries). The bench (`freeze-profile`) is a dev tool and uses `MetalBackend` directly as the one concrete backend; the compiler/runtime stays on the `Backend` trait.
+
 ## 2. Finding 1 — per-element cost is a bandwidth tax (~0.3 ms/full-canvas pass at 4K)
 
 `ms/step` clusters at **0.25–0.3 ms at 4K** for full-canvas passes regardless of the math (ColorGrade 0.304, Glitch 0.284, VoronoiPrism 0.271, QuadMirror 0.314…), scaling ~3.3× down at 1080p. That math-independence is the signature of a **bandwidth-bound round-trip**: each pass reads + writes a full 4K RGBA16F texture (~67 MB), dominating arithmetic. The 5× thesis confirmed — the cost is intermediate round-trips, not compute. **This applies identically to the buffer domain**: an intermediate `Array<Particle>` or `Array<f32>` written then re-read is the same VRAM round-trip. Fusion keeps intermediates in registers either way.
