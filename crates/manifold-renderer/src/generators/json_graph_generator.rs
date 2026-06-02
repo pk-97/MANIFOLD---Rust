@@ -208,6 +208,11 @@ pub struct JsonGraphGenerator {
     /// generator only writes outer→inner for slots that already diverge
     /// from their default.
     binding_cache: LastAppliedCache,
+    /// Reusable scratch for wrapping the host's `&[f32]` value bus into the
+    /// `&[ParamSlot]` the shared `apply_bindings` loop takes. Cleared and
+    /// refilled each frame so the per-frame apply stays allocation-free (the
+    /// exposure flag is irrelevant to the apply — only `.value` is read).
+    param_slot_scratch: Vec<ParamSlot>,
     /// String-typed outer-card → inner-node bindings. Each entry routes
     /// one entry from the host's `clip.string_params` map (looked up by
     /// the binding's `source_key`) into the target node's String param.
@@ -500,6 +505,7 @@ impl JsonGraphGenerator {
             target_format: None,
             bindings,
             binding_cache,
+            param_slot_scratch: Vec::new(),
             string_bindings,
             state_store: StateStore::new(),
             binding_specs,
@@ -685,15 +691,16 @@ impl JsonGraphGenerator {
         // survive at-rest sliders), and logs structured errors on routing
         // failure. `apply_bindings` takes `&[ParamSlot]`; wrap the host's
         // float bus into exposed slots (the exposure flag is irrelevant to
-        // the apply — only `.value` is read). The wrap is a small
-        // stack-ish Vec (≤ MAX_GEN_PARAMS); the FrameContext work folds it
-        // away later.
-        let slots: Vec<ParamSlot> = values.iter().map(|v| ParamSlot::exposed(*v)).collect();
+        // the apply — only `.value` is read), reusing the persistent scratch
+        // so the per-frame path doesn't allocate.
+        self.param_slot_scratch.clear();
+        self.param_slot_scratch
+            .extend(values.iter().map(|v| ParamSlot::exposed(*v)));
         apply_bindings(
             &self.bindings,
             &mut self.graph,
             None,
-            &slots,
+            &self.param_slot_scratch,
             &mut self.binding_cache,
         );
     }
