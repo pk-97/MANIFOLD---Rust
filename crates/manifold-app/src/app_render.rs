@@ -1967,39 +1967,66 @@ impl Application {
         let Some(eid) = self.watched_effect_id() else {
             return;
         };
-        let Some(b) = self
-            .local_project
-            .find_effect_by_id(&eid)
-            .and_then(|fx| fx.user_param_bindings.iter().find(|b| b.id == param_id))
-        else {
-            return;
+        // Resolve the param's current mapping values + the trim-track
+        // range. One of three sources, in priority order — and the drawer
+        // edits all three through the same command:
+        //   1. a user-exposed binding's inline reshape (range from snapshot),
+        //   2. a stock-param reshape NOTE (range from the registry ParamDef),
+        //   3. a stock param with no note yet — a fresh identity seed from
+        //      the ParamDef (byte-identical to the recipe until edited).
+        let resolved = {
+            let Some(fx) = self.local_project.find_effect_by_id(&eid) else {
+                return;
+            };
+            if let Some(b) = fx.user_param_bindings.iter().find(|b| b.id == param_id) {
+                let (node_handle, inner_param) = (b.node_handle.clone(), b.inner_param.clone());
+                let range = self
+                    .content_state
+                    .active_graph_snapshot
+                    .as_deref()
+                    .and_then(|snap| {
+                        snap.nodes
+                            .iter()
+                            .find(|n| n.node_handle.as_deref() == Some(node_handle.as_str()))
+                            .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
+                            .and_then(|p| p.range)
+                    });
+                (
+                    b.id.clone(), b.label.clone(), b.min, b.max, b.invert, b.curve, b.scale,
+                    b.offset, range,
+                )
+            } else {
+                use manifold_core::effect_definition_registry;
+                let Some((pd_name, pd_min, pd_max)) =
+                    effect_definition_registry::try_get(fx.effect_type()).and_then(|def| {
+                        def.id_to_index.get(param_id).map(|&i| {
+                            let pd = &def.param_defs[i];
+                            (pd.name.clone(), pd.min, pd.max)
+                        })
+                    })
+                else {
+                    // Not a known stock param (and not a user binding) —
+                    // nothing to reshape.
+                    return;
+                };
+                match fx.param_mapping(param_id) {
+                    Some(note) => (
+                        param_id.to_string(),
+                        note.label.clone().unwrap_or(pd_name),
+                        note.min, note.max, note.invert, note.curve, note.scale, note.offset,
+                        Some((pd_min, pd_max)),
+                    ),
+                    None => (
+                        param_id.to_string(),
+                        pd_name,
+                        pd_min, pd_max, false, manifold_core::macro_bank::MacroCurve::Linear, 1.0,
+                        0.0,
+                        Some((pd_min, pd_max)),
+                    ),
+                }
+            }
         };
-        // Clone the binding's mapping out so the project borrow ends before we
-        // touch the snapshot / tree / popover.
-        let (binding_id, label, min, max, invert, curve, scale, offset) = (
-            b.id.clone(),
-            b.label.clone(),
-            b.min,
-            b.max,
-            b.invert,
-            b.curve,
-            b.scale,
-            b.offset,
-        );
-        let (node_handle, inner_param) = (b.node_handle.clone(), b.inner_param.clone());
-
-        // Declared inner-param range → the trim track's full span.
-        let range = self
-            .content_state
-            .active_graph_snapshot
-            .as_deref()
-            .and_then(|snap| {
-                snap.nodes
-                    .iter()
-                    .find(|n| n.node_handle.as_deref() == Some(node_handle.as_str()))
-                    .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
-                    .and_then(|p| p.range)
-            });
+        let (binding_id, label, min, max, invert, curve, scale, offset, range) = resolved;
 
         // Anchor on the chevron (UI-space rect → canvas-space Rect).
         let Some(ed) = self.graph_editor.as_ref() else {
