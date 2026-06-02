@@ -509,19 +509,15 @@ pub enum PanelAction {
     // keep their positional indices: generators have a single static
     // tier with no user-exposed extensions, and macro slots are
     // structurally positional in the 8-slot macro bank.
-    AbletonTrimSnapshot(usize, manifold_core::effects::ParamId), // fx_idx, param_id
-    AbletonTrimChanged(usize, manifold_core::effects::ParamId, f32, f32), // fx_idx, param_id, min, max
-    AbletonTrimCommit(usize, manifold_core::effects::ParamId),            // fx_idx, param_id
-    AbletonGenTrimSnapshot(manifold_core::effects::ParamId),              // param_id
-    AbletonGenTrimChanged(manifold_core::effects::ParamId, f32, f32),     // param_id, min, max
-    AbletonGenTrimCommit(manifold_core::effects::ParamId),                // param_id
+    AbletonTrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    AbletonTrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
+    AbletonTrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
     AbletonMacroTrimSnapshot(usize),                                      // slot_idx
     AbletonMacroTrimChanged(usize, f32, f32),                             // slot_idx, min, max
     AbletonMacroTrimCommit(usize),                                        // slot_idx
 
     // Ableton config actions
-    AbletonInvertToggle(usize, manifold_core::effects::ParamId), // fx_idx, param_id
-    AbletonGenInvertToggle(manifold_core::effects::ParamId),     // param_id
+    AbletonInvertToggle(GraphParamTarget, manifold_core::effects::ParamId),
     AbletonMacroInvertToggle(usize),                             // slot_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)

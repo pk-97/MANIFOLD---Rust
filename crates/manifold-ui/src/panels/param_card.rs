@@ -1818,7 +1818,7 @@ impl ParamCardPanel {
                     vec![PanelAction::EnvRandomJumpToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::AbletonInvert(pi) => {
-                    vec![PanelAction::AbletonInvertToggle(ei, self.pid_at(pi))]
+                    vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
@@ -1914,7 +1914,7 @@ impl ParamCardPanel {
                     vec![PanelAction::EnvRandomJumpToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::AbletonInvert(pi) => {
-                    vec![PanelAction::AbletonGenInvertToggle(self.pid_at(pi))]
+                    vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
@@ -2014,12 +2014,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonTrimSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonTrimSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
             }
         }
@@ -2295,12 +2295,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonGenTrimSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonGenTrimSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
             }
         }
@@ -2585,10 +2585,10 @@ impl ParamCardPanel {
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::AbletonTrimChanged(ei, pid, new_min, new_max)]
+                        vec![PanelAction::AbletonTrimChanged(GraphParamTarget::Effect(ei), pid, new_min, new_max)]
                     }
                     ParamCardKind::Generator => {
-                        vec![PanelAction::AbletonGenTrimChanged(pid, new_min, new_max)]
+                        vec![PanelAction::AbletonTrimChanged(GraphParamTarget::Generator, pid, new_min, new_max)]
                     }
                 };
             }
@@ -2686,8 +2686,8 @@ impl ParamCardPanel {
             self.drag.dragging_ableton_trim_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::AbletonTrimCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::AbletonGenTrimCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_env_param >= 0 {

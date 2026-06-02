@@ -2885,7 +2885,7 @@ pub(super) fn dispatch_inspector(
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
         // Ableton trim handles — update range_min/range_max on the mapping.
-        PanelAction::AbletonTrimChanged(fx_idx, param_id, min, max) => {
+        PanelAction::AbletonTrimChanged(GraphParamTarget::Effect(fx_idx), param_id, min, max) => {
             let tab = effective_tab;
             let min = *min;
             let max = *max;
@@ -2961,7 +2961,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonGenTrimChanged(param_id, min, max) => {
+        PanelAction::AbletonTrimChanged(GraphParamTarget::Generator, param_id, min, max) => {
             let min = *min;
             let max = *max;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -2989,9 +2989,6 @@ pub(super) fn dispatch_inspector(
                     })),
                 );
             }
-            DispatchResult::handled()
-        }
-        PanelAction::AbletonGenTrimSnapshot(_) | PanelAction::AbletonGenTrimCommit(_) => {
             DispatchResult::handled()
         }
 
@@ -3022,7 +3019,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonInvertToggle(fx_idx, param_id) => {
+        PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(fx_idx), param_id) => {
             let tab = effective_tab;
             let fx_idx = *fx_idx;
             let effect_type = match tab {
@@ -3087,7 +3084,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
 
-        PanelAction::AbletonGenInvertToggle(param_id) => {
+        PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
