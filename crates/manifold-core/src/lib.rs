@@ -42,7 +42,7 @@ pub use effect_type_id::EffectTypeId;
 pub use effects::{EffectContainer, ParamSource};
 pub use generator_type_id::GeneratorTypeId;
 pub use graph_target::GraphTarget;
-pub use id::{ClipId, EffectGroupId, EffectId, LayerId, MarkerId};
+pub use id::{ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
     MACRO_COUNT, MacroBank, MacroCurve, MacroMapping, MacroMappingTarget, MacroSlot,

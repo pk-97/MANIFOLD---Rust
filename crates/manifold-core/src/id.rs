@@ -35,6 +35,16 @@ pub struct EffectId(Arc<str>);
 #[serde(transparent)]
 pub struct MarkerId(Arc<str>);
 
+/// Graph-node identifier — wraps a short UUID string. Minted once when a node
+/// is created and **stable for the life of the node**: it does not change when
+/// the node is grouped, ungrouped, moved between levels, or flattened. This is
+/// the identity that param bindings target, so a card slider keeps driving its
+/// inner node no matter how the graph is reorganized. The node's `handle` is a
+/// display/search name with no addressing role. See `docs/NODE_ID_TARGETING.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NodeId(Arc<str>);
+
 // ── Macro for shared impls ──
 
 macro_rules! impl_id_type {
@@ -139,6 +149,7 @@ impl_id_type!(LayerId);
 impl_id_type!(EffectGroupId);
 impl_id_type!(EffectId);
 impl_id_type!(MarkerId);
+impl_id_type!(NodeId);
 
 #[cfg(test)]
 mod tests {
@@ -187,6 +198,18 @@ mod tests {
         assert_eq!(json, "\"test-id-42\"");
         let deserialized: ClipId = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, id);
+    }
+
+    #[test]
+    fn node_id_is_a_transparent_stable_identity() {
+        // Same shape as the other ids: transparent string serde + cheap clone.
+        let id = NodeId::new(crate::short_id());
+        let json = serde_json::to_string(&id).unwrap();
+        let back: NodeId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, id);
+        assert!(Arc::ptr_eq(&id.0, &id.clone().0));
+        // Distinct mints never collide.
+        assert_ne!(NodeId::new(crate::short_id()), NodeId::new(crate::short_id()));
     }
 
     #[test]
