@@ -348,6 +348,9 @@ pub fn instantiate_def(
             HandleScope::PerSplice => graph.add_node(boxed),
         };
         id_map.insert(node_doc.id, runtime_id);
+        // Copy the stable document identity onto the live instance so param
+        // bindings can resolve to it regardless of handle / nesting.
+        graph.set_node_id(runtime_id, node_doc.node_id.clone());
 
         // PerSplice: record the handle in the effect-local map. Owned
         // Cow because the handle string comes off disk and we don't

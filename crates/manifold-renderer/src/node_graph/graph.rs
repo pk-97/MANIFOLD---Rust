@@ -18,6 +18,12 @@ use crate::node_graph::validation::{GraphError, validate_connection};
 /// inside the boxed node, keyed implicitly by the node owning it.
 pub struct NodeInstance {
     pub id: NodeInstanceId,
+    /// Stable document identity (`EffectGraphNode::node_id`), copied here when
+    /// the node is instantiated from a def. This is what param bindings
+    /// resolve against — globally unique, so a lookup is unambiguous even in a
+    /// shared chain graph holding many effects' nodes. Empty for nodes built
+    /// directly in Rust (test composites) that never carried a doc identity.
+    pub node_id: manifold_core::NodeId,
     pub node: Box<dyn EffectNode>,
     /// Current values for every parameter the node defines.
     /// Initialised to defaults when the instance is added to the graph.
@@ -42,6 +48,7 @@ impl NodeInstance {
         node.reconfigure(&params);
         Self {
             id,
+            node_id: manifold_core::NodeId::default(),
             node,
             params,
             exposed_params: AHashSet::default(),
@@ -123,6 +130,29 @@ impl Graph {
     /// break anything).
     pub fn node_id_by_handle(&self, handle: &str) -> Option<NodeInstanceId> {
         self.handles.get(handle).copied()
+    }
+
+    /// Set the stable document identity on an instance, copied from the def
+    /// node at instantiation. No-op if the instance isn't present.
+    pub fn set_node_id(&mut self, id: NodeInstanceId, node_id: manifold_core::NodeId) {
+        if let Some(inst) = self.nodes.get_mut(&id) {
+            inst.node_id = node_id;
+        }
+    }
+
+    /// Resolve a stable [`manifold_core::NodeId`] to its live instance id.
+    /// Node ids are globally unique, so this is unambiguous even when the
+    /// graph holds many spliced effects. `None` for an unknown / empty id.
+    /// This is the binding resolver's lookup — the node-id successor to
+    /// `node_id_by_handle`.
+    pub fn instance_by_node_id(&self, node_id: &manifold_core::NodeId) -> Option<NodeInstanceId> {
+        if node_id.is_empty() {
+            return None;
+        }
+        self.nodes
+            .values()
+            .find(|inst| &inst.node_id == node_id)
+            .map(|inst| inst.id)
     }
 
     /// Register a handle for a node that was added via plain

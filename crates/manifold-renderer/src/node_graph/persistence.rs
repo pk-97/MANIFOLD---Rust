@@ -509,7 +509,15 @@ impl EffectGraphDefExt for EffectGraphDef {
                 }
                 EffectGraphNode {
                     id: inst.id.0,
-                    node_id: manifold_core::NodeId::new(manifold_core::short_id()),
+                    // Preserve the instance's stable identity so a graph→def
+                    // round-trip keeps bindings pointing at the same node. A
+                    // freshly-minted id (for a Rust-built node with no doc
+                    // identity) keeps the field non-empty post-round-trip.
+                    node_id: if inst.node_id.is_empty() {
+                        manifold_core::NodeId::new(manifold_core::short_id())
+                    } else {
+                        inst.node_id.clone()
+                    },
                     type_id: inst.node.type_id().as_str().to_string(),
                     handle: id_to_handle.get(&inst.id.0).cloned(),
                     params,
