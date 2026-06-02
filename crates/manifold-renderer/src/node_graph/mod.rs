@@ -23,6 +23,7 @@ pub mod descriptor;
 mod effect_node;
 mod execution;
 mod execution_plan;
+pub mod freeze;
 mod graph;
 mod graph_loader;
 mod loaded_preset_view;
