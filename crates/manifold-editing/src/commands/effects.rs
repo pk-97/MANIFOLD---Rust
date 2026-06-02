@@ -237,31 +237,36 @@ impl Command for ReorderEffectGroupCommand {
     }
 }
 
-/// Change a single parameter value on an effect.
+/// Change a single parameter value on an effect or a generator.
 ///
-/// Addresses the parameter by stable [`ParamId`] (not by position).
-/// The id is resolved against the effect registry on each
-/// `execute`/`undo` so an undo entry stays correct even if the
-/// effect's param list is reordered between recording and replaying.
-///
-/// Step 16 of `docs/EFFECT_RUNTIME_UNIFICATION.md` §11.
+/// Addresses the parameter by stable [`ParamId`] (not by position) and the
+/// host by [`GraphTarget`]. The id is resolved against the host's
+/// registry/tier on each `execute`/`undo` via
+/// [`manifold_core::GraphHost::set_base_param_by_id`], so an undo entry
+/// stays correct even if the param list is reordered between recording and
+/// replaying. Each host keeps its own clamp policy (generators clamp
+/// against the registry inside `set_base_param_by_id`; effects clamp in the
+/// UI). Replaces the former `ChangeEffectParamCommand` (effects) and
+/// `ChangeGeneratorParamsCommand` (the generator whole-vector command,
+/// whose every caller edited exactly one slot — by-id is the collapse and
+/// a correctness upgrade).
 #[derive(Debug)]
-pub struct ChangeEffectParamCommand {
-    effect_id: EffectId,
+pub struct ChangeGraphParamCommand {
+    target: GraphTarget,
     param_id: ParamId,
     old_value: f32,
     new_value: f32,
 }
 
-impl ChangeEffectParamCommand {
+impl ChangeGraphParamCommand {
     pub fn new(
-        effect_id: EffectId,
+        target: GraphTarget,
         param_id: impl Into<ParamId>,
         old_value: f32,
         new_value: f32,
     ) -> Self {
         Self {
-            effect_id,
+            target,
             param_id: param_id.into(),
             old_value,
             new_value,
@@ -269,29 +274,25 @@ impl ChangeEffectParamCommand {
     }
 }
 
-impl Command for ChangeEffectParamCommand {
+impl Command for ChangeGraphParamCommand {
     fn execute(&mut self, project: &mut Project) {
         let id = self.param_id.clone();
         let val = self.new_value;
-        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
-            && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
-        {
-            effect.set_base_param(idx, val);
-        }
+        project.with_graph_host_mut(&self.target, |host| {
+            host.set_base_param_by_id(id.as_ref(), val);
+        });
     }
 
     fn undo(&mut self, project: &mut Project) {
         let id = self.param_id.clone();
         let val = self.old_value;
-        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
-            && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
-        {
-            effect.set_base_param(idx, val);
-        }
+        project.with_graph_host_mut(&self.target, |host| {
+            host.set_base_param_by_id(id.as_ref(), val);
+        });
     }
 
     fn description(&self) -> &str {
-        "Change Effect Param"
+        "Change Param"
     }
 }
 

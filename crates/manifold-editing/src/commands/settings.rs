@@ -358,48 +358,6 @@ impl Command for ChangeLayerOpacityCommand {
     }
 }
 
-/// Change generator param values for a layer.
-#[derive(Debug)]
-pub struct ChangeGeneratorParamsCommand {
-    layer_id: LayerId,
-    old_params: Vec<f32>,
-    new_params: Vec<f32>,
-}
-
-impl ChangeGeneratorParamsCommand {
-    pub fn new(layer_id: LayerId, old_params: Vec<f32>, new_params: Vec<f32>) -> Self {
-        Self {
-            layer_id,
-            old_params,
-            new_params,
-        }
-    }
-
-    fn apply_params(layer: &mut manifold_core::layer::Layer, params: &[f32]) {
-        for (i, &val) in params.iter().enumerate() {
-            layer.set_gen_param_base(i, val);
-        }
-    }
-}
-
-impl Command for ChangeGeneratorParamsCommand {
-    fn execute(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply_params(layer, &self.new_params);
-        }
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply_params(layer, &self.old_params);
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Change Generator Params"
-    }
-}
-
 /// Change generator type for a layer (snapshots and restores params/drivers/envelopes).
 #[derive(Debug)]
 pub struct ChangeGeneratorTypeCommand {

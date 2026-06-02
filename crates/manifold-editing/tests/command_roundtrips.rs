@@ -727,7 +727,12 @@ fn change_effect_param_undo_roundtrip() {
 
     // Step 16: id-keyed addressing (was positional `0`).
     let effect_id = project.settings.master_effects[0].id.clone();
-    let mut cmd = ChangeEffectParamCommand::new(effect_id.clone(), "amount", 0.5, 0.9);
+    let mut cmd = ChangeGraphParamCommand::new(
+        manifold_core::GraphTarget::Effect(effect_id.clone()),
+        "amount",
+        0.5,
+        0.9,
+    );
 
     cmd.execute(&mut project);
     assert!((project.settings.master_effects[0].param_values[0].value - 0.9).abs() < 0.001);
@@ -737,7 +742,12 @@ fn change_effect_param_undo_roundtrip() {
 
     // Targets `threshold` (index 1) — confirm id-based addressing
     // routes to the right slot, not just index 0.
-    let mut cmd2 = ChangeEffectParamCommand::new(effect_id, "threshold", 0.3, 0.7);
+    let mut cmd2 = ChangeGraphParamCommand::new(
+        manifold_core::GraphTarget::Effect(effect_id),
+        "threshold",
+        0.3,
+        0.7,
+    );
     cmd2.execute(&mut project);
     assert!((project.settings.master_effects[0].param_values[1].value - 0.7).abs() < 0.001);
     cmd2.undo(&mut project);
@@ -756,7 +766,12 @@ fn change_effect_param_unknown_id_is_no_op() {
     project.settings.master_effects.push(fx);
 
     let effect_id = project.settings.master_effects[0].id.clone();
-    let mut cmd = ChangeEffectParamCommand::new(effect_id, "phantom_param", 0.5, 0.9);
+    let mut cmd = ChangeGraphParamCommand::new(
+        manifold_core::GraphTarget::Effect(effect_id),
+        "phantom_param",
+        0.5,
+        0.9,
+    );
 
     cmd.execute(&mut project);
     // Unchanged — no slot was matched.
@@ -809,7 +824,12 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
     assert_eq!(tail_idx, 2, "user binding lands past the 2-param static prefix");
 
     let effect_id = project.settings.master_effects[0].id.clone();
-    let mut cmd = ChangeEffectParamCommand::new(effect_id, user_id, 0.0, 0.42);
+    let mut cmd = ChangeGraphParamCommand::new(
+        manifold_core::GraphTarget::Effect(effect_id),
+        user_id,
+        0.0,
+        0.42,
+    );
     cmd.execute(&mut project);
     let v = project.settings.master_effects[0].param_values[tail_idx].value;
     assert!((v - 0.42).abs() < 0.001, "execute writes the user-tail slot");

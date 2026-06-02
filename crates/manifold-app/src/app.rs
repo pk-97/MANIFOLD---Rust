@@ -981,8 +981,11 @@ impl Application {
                                 )
                         {
                             let cmd =
-                                manifold_editing::commands::effects::ChangeEffectParamCommand::new(
-                                    effect_id, param_id, old_val, new_val,
+                                manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                    manifold_core::GraphTarget::Effect(effect_id),
+                                    param_id,
+                                    old_val,
+                                    new_val,
                                 );
                             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                                 Box::new(cmd);
@@ -1015,24 +1018,23 @@ impl Application {
                         parsed
                     };
                     if let Some(gp) = layer.gen_params() {
-                        // Base-value snapshot as plain floats (base if present,
-                        // else effective). `param_values` is `Vec<ParamSlot>`
-                        // now, so fall back through the float projection.
-                        let base: Vec<f32> = gp.snapshot_params();
-                        let old_val = base.get(param_idx).copied().unwrap_or(0.0);
-                        if (old_val - new_val).abs() > f32::EPSILON {
-                            let mut old_params = base.clone();
-                            let mut new_params = base.clone();
-                            if param_idx < new_params.len() {
-                                new_params[param_idx] = new_val;
-                            }
-                            if param_idx < old_params.len() {
-                                old_params[param_idx] = old_val;
-                            }
+                        let old_val = gp.get_param_base(param_idx);
+                        // Resolve the positional registry index to the stable
+                        // param id the unified by-id command addresses.
+                        let param_id =
+                            manifold_core::generator_definition_registry::try_get(gen_type)
+                                .and_then(|d| d.param_ids.get(param_idx).copied());
+                        if (old_val - new_val).abs() > f32::EPSILON
+                            && let Some(param_id) = param_id
+                        {
                             let lid = layer.layer_id.clone();
-                            let cmd = manifold_editing::commands::settings::ChangeGeneratorParamsCommand::new(
-                                        lid, old_params, new_params,
-                                    );
+                            let cmd =
+                                manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                    manifold_core::GraphTarget::Generator(lid),
+                                    param_id,
+                                    old_val,
+                                    new_val,
+                                );
                             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                                 Box::new(cmd);
                             boxed.execute(&mut self.local_project);
