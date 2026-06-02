@@ -66,7 +66,23 @@ A single region-growing fusion pass, **parametrized by domain**, not two separat
 
 This is Halide-shaped (separate the per-element algorithm from the schedule/fusion) applied **uniformly across texture, buffer, and volume domains** — which is the "state of the art" bar. The freeze/closed-world step (un-exposed params → constants → DCE → fuse → specialize) and the verification harness (oracle: render/run two ways, diff) apply to both domains unchanged.
 
-## 6. Status & next
+## 6. Chain fusion + automatic compilation (no freeze button)
+
+Two graph levels: the **per-card graph** (authored in the editor) and the **chain graph** (the layer's effect rack, which the runtime already splices into one `ChainGraph` and rebuilds on rack edits per `EFFECT_RUNTIME_UNIFICATION`). Chain fusion is an added pass in that existing rebuild — fuse across card boundaries = **link-time optimization over the rack**. For this to work, a specialized/baked card must stay an *optimized graph*, NOT an opaque kernel — sealing it would recreate native's black-box-per-effect limitation and kill cross-card fusion. (Per-card freeze = compile-a-unit-with-optimization; chain fusion = LTO across units. Frozen cards are LTO-enabled object files, not sealed machine code.)
+
+**No explicit Freeze button.** The closed world is defined by the **expose-state**: exposed params (bound to MIDI/Ableton/LFO) stay live uniforms; unexposed params are de-facto constants (nothing drives them at runtime) → auto-baked → constant-fold + DCE. The expose choices the user already makes ARE the freeze contract; there is nothing extra to declare. Baking is **stability-gated** (idle / perform-mode entry), not per-keystroke, so tuning an unexposed param stays fluid — it stays live until it settles, then the specialized kernel compiles in the background and hot-swaps. Compile runs on a worker off the UI + content-render threads; the unfused chain runs immediately; MTLBinaryArchive caches per-config across sessions — so rack edits never stall, and only a brief novel-config window runs unfused. **UX surface = a status badge** (fused / baking… / baked ✓), not a button. An optional auto-warm on perform-mode entry guarantees zero mid-show compiles.
+
+## 7. Why this is hard for TouchDesigner (the substrate is the moat)
+
+This compiler is not a novel algorithm (fusion + LTO is textbook); it is the **payoff of MANIFOLD's existing architectural bets**, and those bets are the moat. To current knowledge TouchDesigner does not do general multi-pass TOP fusion — its answer to "too slow" is the hand-written GLSL TOP, i.e. it pushes fusion onto the user. (Verify before claiming publicly; TD internals aren't fully open — but the GLSL-TOP escape hatch is strong evidence.) Three structural reasons it's hard for a TD-style tool:
+
+1. **Sealed operators vs a decomposed atom library.** A TD TOP is a compiled black-box shader with no extractable per-element body and no self-describing wire types. Fusion needs atoms authored as inlineable fragments + a type system that hands the compiler the intermediate layout — MANIFOLD has both (primitive library + channel type system §16). You can't fuse what you can't introspect and splice.
+2. **Live-always vs an authoring/perform split.** TD's identity is no-build-step interactivity; there's nowhere to hide a compile pass. MANIFOLD's authoring-vs-perform split makes a background compile invisible.
+3. **Openness vs a closed world.** TD allows anything to change anytime (Python/C++/live topology); the specialization half needs a closed world (a known fixed-vs-live set). MANIFOLD's fixed-rack-during-show + explicit exposed-param set provides it.
+
+The substrate — typed atom library + channel system + authoring/perform split, built for composability / AI authoring / drill-in — is exactly the precondition for this compiler. TD made reasonable bets for a general-purpose tool that preclude it without a foundation rebuild. Not a claim of across-the-board superiority: TD is far broader and more mature; this is one capability that falls out of MANIFOLD's narrower, more opinionated foundation.
+
+## 8. Status & next
 
 - **Phase 0: complete.** Bandwidth-round-trip thesis confirmed (both domains); ColorGrade first target (~3–6×); the breadth lever (fusion-model richness) and the second co-equal domain (buffer/array, channel-powered) identified.
 - **Phase 1 (verification harness)** + **Phase 2 (`wgsl_body` convention)** next. The convention must be domain-parametric from day one (§5.5) — that is the keystone checkpoint, Peter's call before implementation.
