@@ -38,7 +38,7 @@ Driven through the production `Generator::render` path, avg over 60 frames:
 | DigitalPlants | 2.43 | 2.79 | **flat** (1.1×) | **buffer** (array_math + 160k instanced render) |
 | FluidSimulation | 11.34 | 14.17 | **flat** (1.25×) | **buffer/particle** (heaviest preset measured) |
 
-**Key diagnostic — resolution scaling separates the domains.** Cost that stays ~flat from 1080p→4K is *element/buffer-bound* (cost = per-particle / per-instance compute, not pixels); cost that scales ~linearly with pixel count is *texture-bound*. So **FluidSimulation** (11→14 ms, flat) and **DigitalPlants** (2.4→2.8, flat) are the real **buffer-domain** fusion targets — their cost is the per-particle / per-instance chains. **OilyFluid**, despite the name, is *texture*-bound (a grid fluid that scales 4× with resolution), so its win is texture-domain (the color-grade tail + per-pixel composites), not buffer. FluidSimulation at 11–14 ms is the single heaviest preset in the library and it's buffer-bound — concrete confirmation that buffer fusion is not optional. (Per-stage attribution within a generator needs finer instrumentation than this total-frame bench; deferred — the generator hides its plan behind `JsonGraphGenerator`.)
+**Key diagnostic — resolution scaling separates the domains.** Cost that stays ~flat from 1080p→4K is *element/buffer-bound* (cost = per-particle / per-instance compute, not pixels); cost that scales ~linearly with pixel count is *texture-bound*. So **FluidSimulation** (11→14 ms, flat) and **DigitalPlants** (2.4→2.8, flat) are the real **buffer-domain** fusion targets — their cost is the per-particle / per-instance chains. **OilyFluid**, despite the name, is *texture*-bound (a grid fluid that scales 4× with resolution), so its win is texture-domain (the color-grade tail + per-pixel composites), not buffer. FluidSimulation at 11–14 ms is the single heaviest preset in the library and it's buffer-bound — concrete confirmation that buffer fusion is not optional. (Cost decomposition — how much of that 11 ms is the fusible per-particle chain — is now measured via parameter sweeps in **§1d**, no finer instrumentation needed.)
 
 ### 1c. Proper GPU timing — real GPU time + isolated per-pass (no wall-clock)
 
@@ -62,7 +62,24 @@ The §1/§1b tables above (v1) timed CPU wall-clock around `commit_and_wait`, wh
 
 **Grounded ColorGrade fusion math (no longer an estimate):** its 7 fusable pointwise passes ≈ 7 × 0.344 ≈ 2.41 ms of the 2.60 ms total (the ~0.19 ms remainder is source/output). Fusing 7→1 keeps one read + all math in registers + one write ≈ 0.344 ms, saving ~6 × 0.344 ≈ 2.06 ms → **ColorGrade 4K ≈ 0.5 ms, ≈ 4.8× faster.** Measured per-pass, measured total.
 
-**FluidSim per-stage still pending.** The generator bench gives an accurate *total* (11.1→13.9 ms, flat = buffer-bound) but not a per-stage split (force-chain vs scatter/resolve). That split needs either an executor per-step profiling mode or `MTLCounterSampleBuffer` timestamps — both touch shared code or need a dependency-feature + device-support gamble, so it's deferred (not done unsupervised). It's the one remaining measurement that settles whether buffer fusion helps FluidSim specifically, vs a non-fusion lever (fewer particles / better scatter).
+### 1d. FluidSim cost decomposition — measured, not inferred
+
+The §1c "per-stage still pending" note is now resolved by **two orthogonal parameter sweeps** at fixed 1080p — no executor surgery, no `MTLCounterSampleBuffer` gamble, just driving the graph's own params and timing real GPU frames. This decomposes the 11.3 ms into per-particle (buffer-domain, fusible) vs per-pixel/fixed.
+
+**First, a negative control that almost fooled me.** Sweeping `active_count` (250k → 2M) left the frame time **dead flat at ~11.3 ms**. `active_count` is a *logical alive-gate* read inside the kernels — the per-particle dispatches are sized by the pool **capacity** (`max_capacity = 8,000,000` on the seed node), not by how many particles are "alive." Profiling FluidSim by `active_count` measures nothing. (Gotcha worth recording: the work-size knob is `max_capacity`, not `active_count`.)
+
+**The real sweep — `max_capacity` (pool size), `active_count` tracked with it:**
+
+| pool size | ms/frame | ns/particle |
+|---|---|---|
+| 1M | 3.56 | 3.56 |
+| 2M | 6.58 | 3.29 |
+| 4M | 8.20 | 2.05 |
+| 8M (shipped) | 11.37 | 1.42 |
+
+Linear fit: **~1.0 ns/particle marginal slope, ~3.6 ms fixed floor** (the 4× gaussian-blur tail + per-dispatch launch overhead — the part that doesn't scale with particles). At the shipped 8M pool, **~69% of the 11.3 ms (~7.8 ms) is per-particle buffer-domain work** that scales with capacity. This *overturns* the earlier "just buffer-bound, attribution deferred" read with a number: the dominant cost is the per-particle chain, exactly the buffer-fusion target. Buffer fusion is the right lever for the heaviest preset in the library — not a fewer-particles or better-scatter workaround.
+
+**Fusible vs not, within that 7.8 ms (structural, not separately GPU-timed):** the per-particle pass set is ~7 pointwise/gather dispatches (noise-force → sample → rotate → gradient → euler-integrate → wrap → anti-clump), each a full read+write of the particle buffer, **plus** `scatter_particles` (an atomic splat into a canvas accumulator) and `resolve_accumulator` (a reduction). The ~7 pointwise dispatches fuse into ~1 (read once, integrate in registers, write once); **scatter and resolve do not** (scatter is write-contended atomics, resolve is a reduction — different access patterns, hard seams). So buffer fusion attacks the pointwise integrate chain (the bulk of the 7.8 ms) and leaves scatter/resolve as separate dispatches. Separating those two buckets exactly needs the per-dispatch timestamp path we deliberately didn't build for a one-off; the capacity sweep already answers the design question (fusion helps, and a lot).
 
 **Method note:** real GPU timing is via `commit_and_wait_completed_timed` — the only manifold-gpu addition, backend-agnostic in spirit (a Vulkan backend would expose the equivalent via timestamp queries). The bench (`freeze-profile`) is a dev tool and uses `MetalBackend` directly as the one concrete backend; the compiler/runtime stays on the `Backend` trait.
 

@@ -19,7 +19,7 @@
 //!
 //! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
 
-use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::generator::Generator;
@@ -68,8 +68,16 @@ const GEN_PRESETS: &[&str] = &[
     "FluidSimulation",
 ];
 
+/// Asset roots resolved against the crate manifest dir (baked in at compile
+/// time), so the bench finds presets regardless of the shell's CWD — it can
+/// be built/run from a worktree via `--manifest-path` and still read that
+/// worktree's assets.
+const EFFECT_PRESETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/effect-presets");
+const GENERATOR_PRESETS_DIR: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets");
+
 fn preset_path(name: &str) -> String {
-    format!("crates/manifold-renderer/assets/effect-presets/{name}.json")
+    format!("{EFFECT_PRESETS_DIR}/{name}.json")
 }
 
 /// Replicates the parity harness helper: find the `ResourceId` a given
@@ -201,6 +209,7 @@ fn main() {
 
     profile_synthetic_pointwise(&device);
     profile_generators(&registry, &device);
+    profile_fluidsim_particle_sweep(&registry, &device);
 }
 
 /// Synthetic per-pass measurement: `Source → Gain×N → FinalOutput` at 4K,
@@ -289,7 +298,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
     println!("{}", "-".repeat(36));
 
     for name in GEN_PRESETS {
-        let path = format!("crates/manifold-renderer/assets/generator-presets/{name}.json");
+        let path = format!("{GENERATOR_PRESETS_DIR}/{name}.json");
         let bytes = match std::fs::read_to_string(&path) {
             Ok(b) => b,
             Err(e) => {
@@ -362,6 +371,160 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                 Ok(Err(e)) => println!("{:<16} {:>5}p   load-err: {e}", name, h),
                 Err(_) => println!("{:<16} {:>5}p   FAILED (panicked)", name, h),
             }
+        }
+    }
+}
+
+/// FluidSim cost-decomposition sweep. FluidSimulation's per-frame GPU time
+/// is the sum of two orthogonal workloads:
+///   - **per-particle** (buffer domain, fusible): seed / noise-force /
+///     sample / euler-integrate / wrap / anti-clump / scatter — all sized by
+///     `active_count`, independent of canvas resolution.
+///   - **per-pixel** (texture domain): 4× gaussian_blur, downsample,
+///     resolve_accumulator, tonemap, final output — sized by canvas, flat in
+///     particle count.
+///
+/// The earlier resolution sweep (1080p→2160p) isolates the per-pixel slope.
+/// THIS sweep fixes resolution at 1080p and varies the particle-pool size.
+/// NOTE: `active_count` is only a logical "alive" gate read inside the
+/// kernels — the per-particle dispatches are sized by the pool CAPACITY
+/// (`max_capacity` on the seed node), so sweeping `active_count` alone leaves
+/// GPU time flat. We sweep `max_capacity` (and set `active_count` to match, so
+/// the pool is full) from 1M up to the preset's 8M ceiling. The slope
+/// ms/particle is the buffer-domain cost — the part buffer fusion targets; the
+/// intercept (extrapolated to 0) is the texture-domain + fixed/per-dispatch
+/// overhead. This decomposes the 11 ms by measurement, not inference, and
+/// answers "does buffer fusion help FluidSim, or does it need a different
+/// lever."
+fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDevice) {
+    const COUNTS: &[i32] = &[1_000_000, 2_000_000, 4_000_000, 8_000_000];
+    let (w, h) = (1920u32, 1080u32);
+
+    println!(
+        "\n--- FluidSim pool-capacity sweep @ {w}x{h} (resolution fixed; max_capacity + \
+         active_count tracked together), avg over {GEN_FRAMES} frames ---"
+    );
+    println!("{:<14} {:>11} {:>16}", "pool size", "ms/frame", "ns/particle");
+    println!("{}", "-".repeat(44));
+
+    let path = format!("{GENERATOR_PRESETS_DIR}/FluidSimulation.json");
+    let bytes = match std::fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("skip fluidsim sweep: read {e}");
+            return;
+        }
+    };
+    let base_def: EffectGraphDef = match serde_json::from_str(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("skip fluidsim sweep: parse {e}");
+            return;
+        }
+    };
+
+    let mut points: Vec<(f64, f64)> = Vec::new(); // (count, ms)
+    for &count in COUNTS {
+        // Track pool capacity AND active count together, so the dispatch grid
+        // (sized by `max_capacity`) and the alive-gate (`active_count`) both
+        // scale — a full pool at every sweep point.
+        let mut def = base_def.clone();
+        for node in &mut def.nodes {
+            if node.params.contains_key("active_count") {
+                node.params
+                    .insert("active_count".to_string(), SerializedParamValue::Int { value: count });
+            }
+            if node.params.contains_key("max_capacity") {
+                node.params
+                    .insert("max_capacity".to_string(), SerializedParamValue::Int { value: count });
+            }
+        }
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut generator =
+                JsonGraphGenerator::from_def_with_device(def, registry, device, w, h, FORMAT)
+                    .map_err(|e| e.to_string())?;
+            let target = RenderTarget::new(device, w, h, FORMAT, "fluidsweep-gen");
+            let mk_ctx = |t: f64| GeneratorContext {
+                time: t,
+                beat: t * 2.0,
+                dt: 1.0_f32 / 60.0,
+                width: w,
+                height: h,
+                output_width: w,
+                output_height: h,
+                aspect: w as f32 / h as f32,
+                anim_progress: 0.0,
+                trigger_count: 0,
+                params: [0.0; MAX_GEN_PARAMS],
+                param_count: 0,
+            };
+
+            for i in 0..GEN_WARMUP {
+                let mut enc = device.create_encoder("fluidsweep-warmup");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                    generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0));
+                }
+                enc.commit_and_wait_completed();
+            }
+            let mut gpu_secs = 0.0_f64;
+            for i in 0..GEN_FRAMES {
+                let mut enc = device.create_encoder("fluidsweep-timed");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &mk_ctx(f64::from(GEN_WARMUP + i) / 60.0),
+                    );
+                }
+                gpu_secs += enc.commit_and_wait_completed_timed();
+            }
+            Ok::<f64, String>(gpu_secs * 1000.0 / f64::from(GEN_FRAMES))
+        }));
+
+        match result {
+            Ok(Ok(ms)) => {
+                let ns_per = ms * 1e6 / f64::from(count);
+                println!("{:<14} {:>11.3} {:>16.4}", count, ms, ns_per);
+                points.push((f64::from(count), ms));
+            }
+            Ok(Err(e)) => println!("{:<14}   load-err: {e}", count),
+            Err(_) => println!("{:<14}   FAILED (panicked)", count),
+        }
+    }
+
+    // Least-squares fit ms = slope·count + intercept across the sweep.
+    // slope = per-particle GPU cost (buffer-domain, fusible);
+    // intercept = texture-domain + fixed overhead at this resolution.
+    if points.len() >= 2 {
+        let n = points.len() as f64;
+        let sx: f64 = points.iter().map(|p| p.0).sum();
+        let sy: f64 = points.iter().map(|p| p.1).sum();
+        let sxx: f64 = points.iter().map(|p| p.0 * p.0).sum();
+        let sxy: f64 = points.iter().map(|p| p.0 * p.1).sum();
+        let denom = n * sxx - sx * sx;
+        if denom.abs() > f64::EPSILON {
+            let slope = (n * sxy - sx * sy) / denom;
+            let intercept = (sy - slope * sx) / n;
+            let ceiling = 8_000_000.0_f64; // preset's shipped pool size
+            let at_ceiling = slope * ceiling + intercept;
+            let particle_share = if at_ceiling > 0.0 {
+                (slope * ceiling) / at_ceiling * 100.0
+            } else {
+                0.0
+            };
+            println!("\nlinear fit @ {w}x{h}:");
+            println!("  per-particle slope : {:.4} ns/particle", slope * 1e6);
+            println!(
+                "  intercept (0 particles, texture-domain + fixed/per-dispatch) : {:.3} ms",
+                intercept
+            );
+            println!(
+                "  @ 8,000,000 (shipped pool): {:.3} ms total, of which ~{:.0}% is per-particle (buffer-domain, fusible)",
+                at_ceiling, particle_share
+            );
         }
     }
 }
