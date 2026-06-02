@@ -68,6 +68,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     // 1. Expose UVTransform.translate via the command.
     let mut expose = ToggleEffectParamExposeCommand::new(
         effect_id.clone(),
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -82,7 +83,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
         assert_eq!(fx.user_param_bindings.len(), 1);
         let ub = &fx.user_param_bindings[0];
         assert_eq!(ub.id, user_id);
-        assert_eq!(ub.node_handle, "uv_transform");
+        assert_eq!(ub.node_id, "uv_transform");
         assert_eq!(ub.inner_param, "translate");
         // param_values gained one slot at index 2 (n_static + 0).
         assert_eq!(fx.param_values.len(), 3);
@@ -155,7 +156,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     assert_eq!(fx.user_param_bindings.len(), 1, "binding survives reload");
     let ub = &fx.user_param_bindings[0];
     assert_eq!(ub.id, user_id);
-    assert_eq!(ub.node_handle, "uv_transform");
+    assert_eq!(ub.node_id, "uv_transform");
     assert_eq!(ub.inner_param, "translate");
     assert_eq!(ub.label, "Translate");
     assert!((ub.min - -1.0).abs() < f32::EPSILON);
@@ -203,6 +204,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
 
     let mut expose = ToggleEffectParamExposeCommand::new(
         effect_id.clone(),
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -215,6 +217,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
 
     let mut unexpose = ToggleEffectParamExposeCommand::new(
         effect_id.clone(),
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         false,
@@ -229,6 +232,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
 
     let mut expose_again = ToggleEffectParamExposeCommand::new(
         effect_id.clone(),
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -260,6 +264,7 @@ fn second_expose_under_same_handle_increments_n() {
 
     let mut a = ToggleEffectParamExposeCommand::new(
         effect_id.clone(),
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -269,6 +274,7 @@ fn second_expose_under_same_handle_increments_n() {
 
     let mut b = ToggleEffectParamExposeCommand::new(
         effect_id.clone(),
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "scale".to_string(),
         true,

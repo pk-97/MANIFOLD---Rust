@@ -137,16 +137,81 @@ impl Project {
         // alias table, so re-running is a no-op.
         self.migrate_legacy_param_values();
 
-        // User-exposed binding node-id backfill (handle → NodeId) for
-        // pre-node-id projects runs at the renderer layer
-        // (`manifold_renderer::node_graph::migrate_user_param_bindings_to_node_id`),
-        // since resolving a `graph: None` instance's handles needs the
-        // canonical bundled-preset graph, which is renderer-side. Nothing
-        // to do in core post-load.
+        // Node-id normalization for pre-node-id graph overrides. A node's
+        // stable id defaults to its handle; old override defs
+        // (EffectInstance.graph, Layer.generator_graph) saved their nodes
+        // without ids, so stamp empty ones = handle here. This makes the
+        // handle-targeted bindings those same files carry resolve (the
+        // serde layer upgrades `handleNode` targets to `node` with
+        // node_id == handle to match). Idempotent; only ever fills empties,
+        // which post-cutover documents don't have.
+        self.normalize_override_node_ids();
+
+        // The remaining backfill — per-instance `UserParamBinding`s whose
+        // target lives in a `graph: None` instance — runs at the renderer
+        // layer (`migrate_user_param_bindings_to_node_id`), because
+        // resolving those handles needs the canonical bundled-preset
+        // graph, which is renderer-side. Override-hosted user bindings
+        // resolve against the nodes normalized just above.
 
         // Normalize layer order into tree pre-order (group children contiguous
         // immediately after parent). Also reindexes.
         self.timeline.enforce_tree_order();
+    }
+
+    /// Stamp `node_id == handle` on every graph-override node whose id is
+    /// empty (a pre-node-id document). Walks `EffectInstance.graph` on
+    /// master / layer / clip effects and each layer's `generator_graph`,
+    /// recursing into group bodies.
+    ///
+    /// A node's stable id defaults to its handle — the same convention the
+    /// bundled-preset stamp uses — so a handle-targeted binding (which the
+    /// serde layer reads as `node_id == handle`) lands on the right node.
+    /// Idempotent: non-empty ids and handle-less boundary nodes are left
+    /// untouched, so post-cutover documents pass through unchanged.
+    fn normalize_override_node_ids(&mut self) {
+        use crate::effect_graph_def::{EffectGraphDef, EffectGraphNode};
+
+        fn stamp_nodes(nodes: &mut [EffectGraphNode]) {
+            for n in nodes.iter_mut() {
+                if n.node_id.is_empty()
+                    && let Some(handle) = n.handle.clone()
+                {
+                    n.node_id = crate::NodeId::new(handle);
+                }
+                if let Some(group) = n.group.as_mut() {
+                    stamp_nodes(&mut group.nodes);
+                }
+            }
+        }
+        fn stamp(def: &mut EffectGraphDef) {
+            stamp_nodes(&mut def.nodes);
+        }
+
+        for fx in &mut self.settings.master_effects {
+            if let Some(def) = fx.graph.as_mut() {
+                stamp(def);
+            }
+        }
+        for layer in &mut self.timeline.layers {
+            if let Some(gen_graph) = layer.generator_graph.as_mut() {
+                stamp(gen_graph);
+            }
+            if let Some(effects) = layer.effects.as_mut() {
+                for fx in effects.iter_mut() {
+                    if let Some(def) = fx.graph.as_mut() {
+                        stamp(def);
+                    }
+                }
+            }
+            for clip in &mut layer.clips {
+                for fx in &mut clip.effects {
+                    if let Some(def) = fx.graph.as_mut() {
+                        stamp(def);
+                    }
+                }
+            }
+        }
     }
 
     /// Resize all effect param arrays to match their definitions.
@@ -1100,6 +1165,72 @@ mod tests {
             d.legacy_param_index,
             Some(2),
             "RegistryMissing must preserve legacy index for next-load recovery"
+        );
+    }
+
+    // ── Node-id normalization for pre-node-id graph overrides ─────
+
+    #[test]
+    fn normalize_override_node_ids_stamps_empty_ids_with_handle() {
+        use crate::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode};
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let make_node = |id: u32, handle: Option<&str>| EffectGraphNode {
+            id,
+            node_id: crate::NodeId::default(), // pre-node-id document
+            type_id: "node.blur".to_string(),
+            handle: handle.map(|h| h.to_string()),
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            // One handled node + one anonymous boundary node.
+            nodes: vec![make_node(0, Some("softblur")), make_node(1, None)],
+            wires: vec![],
+        };
+        let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        fx.graph = Some(def);
+        let mut p = Project::default();
+        p.settings.master_effects.push(fx);
+
+        p.normalize_override_node_ids();
+
+        let nodes = &p.settings.master_effects[0].graph.as_ref().unwrap().nodes;
+        assert_eq!(nodes[0].node_id, "softblur", "handled node id defaults to handle");
+        assert!(
+            nodes[1].node_id.is_empty(),
+            "anonymous node left empty — never a binding target"
+        );
+
+        // Idempotent: a node that already has an explicit id is untouched.
+        let mut fx2 = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let mut explicit = make_node(0, Some("softblur"));
+        explicit.node_id = crate::NodeId::new("explicit");
+        fx2.graph = Some(EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![explicit],
+            wires: vec![],
+        });
+        let mut p2 = Project::default();
+        p2.settings.master_effects.push(fx2);
+        p2.normalize_override_node_ids();
+        assert_eq!(
+            p2.settings.master_effects[0].graph.as_ref().unwrap().nodes[0].node_id,
+            "explicit",
+            "explicit id preserved"
         );
     }
 

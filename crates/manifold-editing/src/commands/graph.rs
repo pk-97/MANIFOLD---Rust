@@ -2510,7 +2510,7 @@ mod tests {
     /// → mix → final_output, four nodes plus four wires. Mirrors the
     /// shape the runtime `build_mirror` produces.
     fn mirror_catalog_default() -> EffectGraphDef {
-        EffectGraphDef {
+        let mut def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
@@ -2599,7 +2599,15 @@ mod tests {
                     to_port: "in".to_string(),
                 },
             ],
+        };
+        // Stamp node ids == handle, matching the bundled-preset convention
+        // (a node's stable id is its authoring handle).
+        for n in &mut def.nodes {
+            if let Some(h) = n.handle.clone() {
+                n.node_id = manifold_core::NodeId::new(h);
+            }
         }
+        def
     }
 
     /// Project with one master Mirror effect, graph: None.
@@ -2998,6 +3006,7 @@ mod tests {
         let (mut project, lid) = project_with_one_generator_layer();
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("uv_transform"),
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3103,8 +3112,8 @@ mod tests {
                         id: "shape".into(),
                         label: "Shape".into(),
                         default_value: 0.0,
-                        target: BindingTarget::HandleNode {
-                            handle: "render".into(),
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
                             param: "shape".into(),
                         },
                         convert: ParamConvert::EnumRound,
@@ -3116,8 +3125,8 @@ mod tests {
                         id: "scale".into(),
                         label: "Scale".into(),
                         default_value: 1.0,
-                        target: BindingTarget::HandleNode {
-                            handle: "render".into(),
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
                             param: "scale".into(),
                         },
                         convert: ParamConvert::Float,
@@ -3128,14 +3137,13 @@ mod tests {
                 ],
                 skip_mode: Default::default(),
                 param_aliases: vec![],
-                node_aliases: vec![],
                 value_aliases: vec![],
                 string_params: vec![],
                 string_bindings: vec![],
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
-                node_id: manifold_core::NodeId::default(),
+                node_id: manifold_core::NodeId::new("render"),
                 type_id: "node.render_lines".to_string(),
                 handle: Some("render".to_string()),
                 params: BTreeMap::new(),
@@ -3173,6 +3181,7 @@ mod tests {
         // command must synthesize a user-added entry.
         let mut expose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("render"),
             "render".to_string(),
             "animate".to_string(),
             true,
@@ -3209,8 +3218,8 @@ mod tests {
         assert!(
             matches!(
                 &new_binding.target,
-                BindingTarget::HandleNode { handle, param }
-                    if handle == "render" && param == "animate"
+                BindingTarget::Node { node_id, param }
+                    if node_id == "render" && param == "animate"
             ),
             "new binding routes to render.animate"
         );
@@ -3352,8 +3361,8 @@ mod tests {
                         id: "shape".into(),
                         label: "Shape".into(),
                         default_value: 0.0,
-                        target: BindingTarget::HandleNode {
-                            handle: "render".into(),
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
                             param: "shape".into(),
                         },
                         convert: ParamConvert::EnumRound,
@@ -3365,8 +3374,8 @@ mod tests {
                         id: "user.render.animate.1".into(),
                         label: "Animate".into(),
                         default_value: 0.0,
-                        target: BindingTarget::HandleNode {
-                            handle: "render".into(),
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
                             param: "animate".into(),
                         },
                         convert: ParamConvert::BoolThreshold,
@@ -3377,14 +3386,13 @@ mod tests {
                 ],
                 skip_mode: Default::default(),
                 param_aliases: vec![],
-                node_aliases: vec![],
                 value_aliases: vec![],
                 string_params: vec![],
                 string_bindings: vec![],
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
-                node_id: manifold_core::NodeId::default(),
+                node_id: manifold_core::NodeId::new("render"),
                 type_id: "node.render_lines".to_string(),
                 handle: Some("render".to_string()),
                 params: BTreeMap::new(),
@@ -3438,6 +3446,7 @@ mod tests {
 
         let mut unexpose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("render"),
             "render".to_string(),
             "animate".to_string(),
             false,
@@ -3524,6 +3533,7 @@ mod tests {
         // Expose first.
         let mut expose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3584,6 +3594,7 @@ mod tests {
         // Unexpose. Drivers + Ableton mappings must be pruned.
         let mut unexpose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
             "uv_transform".to_string(),
             "rotation".to_string(),
             false,
@@ -3654,6 +3665,7 @@ mod tests {
         // Expose first, attach an envelope to the synthesised id.
         let mut expose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3689,6 +3701,7 @@ mod tests {
         // one must survive.
         let mut unexpose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
             "uv_transform".to_string(),
             "rotation".to_string(),
             false,
@@ -3761,8 +3774,8 @@ mod tests {
                     id: "pattern".into(),
                     label: "Pattern".into(),
                     default_value: 0.0,
-                    target: BindingTarget::HandleNode {
-                        handle: "gen".into(),
+                    target: BindingTarget::Node {
+                        node_id: manifold_core::NodeId::new("gen"),
                         param: "pattern".into(),
                     },
                     convert: ParamConvert::EnumRound,
@@ -3772,14 +3785,13 @@ mod tests {
                 }],
                 skip_mode: Default::default(),
                 param_aliases: vec![],
-                node_aliases: vec![],
                 value_aliases: vec![],
                 string_params: vec![],
                 string_bindings: vec![],
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
-                node_id: manifold_core::NodeId::default(),
+                node_id: manifold_core::NodeId::new("gen"),
                 type_id: "node.plasma_pattern_2d".to_string(),
                 handle: Some("gen".to_string()),
                 params: BTreeMap::new(),
@@ -3812,6 +3824,7 @@ mod tests {
         // UNCHECK Pattern.
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("gen"),
             "gen".to_string(),
             "pattern".to_string(),
             false,
@@ -3869,6 +3882,7 @@ mod tests {
 
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3895,7 +3909,7 @@ mod tests {
         // Effect-side mirror: user_param_bindings appended because the
         // catalog default has no preset bindings for this param.
         assert_eq!(fx.user_param_bindings.len(), 1);
-        assert_eq!(fx.user_param_bindings[0].node_handle, "uv_transform");
+        assert_eq!(fx.user_param_bindings[0].node_id, "uv_transform");
         assert_eq!(fx.user_param_bindings[0].inner_param, "rotation");
 
         // Undo reverses both sides.

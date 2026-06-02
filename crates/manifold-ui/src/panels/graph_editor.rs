@@ -931,6 +931,7 @@ mod tests {
     fn snap_node_with_params(handle: Option<&str>) -> GraphEditorNodeView {
         GraphEditorNodeView {
             runtime_node_id: 42,
+            node_id: handle.map(manifold_core::NodeId::new).unwrap_or_default(),
             node_handle: handle.map(|h| h.to_string()),
             title: "UV Transform".to_string(),
             parameters: vec![
@@ -1074,6 +1075,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::ToggleNodeParamExpose {
+                node_id,
                 node_handle,
                 inner_param,
                 expose,
@@ -1084,6 +1086,7 @@ mod tests {
                 convert,
                 is_angle,
             } => {
+                assert_eq!(node_id, "uv_transform");
                 assert_eq!(node_handle, "uv_transform");
                 assert_eq!(inner_param, "translate");
                 assert!(*expose);
@@ -1203,6 +1206,7 @@ mod tests {
     fn snap_node_with_mixed_kinds() -> GraphEditorNodeView {
         GraphEditorNodeView {
             runtime_node_id: 7,
+            node_id: manifold_core::NodeId::new("uv_transform"),
             node_handle: Some("uv_transform".to_string()),
             title: "Transform".to_string(),
             parameters: vec![

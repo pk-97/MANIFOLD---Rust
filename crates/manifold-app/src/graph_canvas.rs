@@ -2304,6 +2304,7 @@ mod tests {
     fn node(id: u32, type_id: &str, handle: Option<&str>) -> NodeSnapshot {
         NodeSnapshot {
             id,
+            node_id: handle.map(manifold_core::NodeId::new).unwrap_or_default(),
             node_handle: handle.map(|h| h.to_string()),
             type_id: type_id.to_string(),
             title: handle.unwrap_or(type_id).to_string(),

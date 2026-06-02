@@ -519,7 +519,7 @@ pub struct StringBindingDef {
 /// `ParamTarget::Custom(fn)` are not representable here — the first
 /// because live IDs aren't serializable, the second because function
 /// pointers aren't.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum BindingTarget {
     /// Route to an inner-graph node identified by its stable
@@ -534,6 +534,38 @@ pub enum BindingTarget {
     /// composite-shaped effects where one outer slider fans out to
     /// multiple inner-node parameters.
     Composite { outer_name: String },
+}
+
+impl<'de> Deserialize<'de> for BindingTarget {
+    /// Tolerant read: accepts the current `node` / `composite` forms AND
+    /// the pre-node-id `handleNode` form, which it upgrades in place to
+    /// `Node` with `node_id` == the old handle. That is the same "a
+    /// node's id defaults to its handle" convention the bundled-preset
+    /// stamp and the load-time node-id normalization use, so a
+    /// handle-targeted binding lands on exactly the node that normalizes
+    /// to the same id. A one-shot read migration, not a runtime fallback:
+    /// the resolver only ever sees `Node`/`Composite`, and serialization
+    /// only ever emits `node`/`composite`.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+        enum Wire {
+            Node { node_id: NodeId, param: String },
+            Composite { outer_name: String },
+            HandleNode { handle: String, param: String },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Node { node_id, param } => BindingTarget::Node { node_id, param },
+            Wire::Composite { outer_name } => BindingTarget::Composite { outer_name },
+            Wire::HandleNode { handle, param } => BindingTarget::Node {
+                node_id: NodeId::from(handle),
+                param,
+            },
+        })
+    }
 }
 
 /// JSON-wire shape mirroring `manifold_renderer::node_graph::SkipMode`.
@@ -910,6 +942,39 @@ mod tests {
         assert!(json.contains("\"kind\":\"node\""));
         assert!(json.contains("\"nodeId\":\"feedback_id\""));
         assert!(json.contains("\"param\":\"amount\""));
+    }
+
+    /// Pre-node-id documents stored targets as `handleNode`. The serde
+    /// layer upgrades them to `Node` with `node_id == the old handle` —
+    /// the same convention the preset stamp + load normalization use, so
+    /// the binding lands on the node that normalizes to the same id.
+    #[test]
+    fn legacy_handle_node_target_deserializes_as_node_keyed_by_handle() {
+        let legacy = r#"{ "kind": "handleNode", "handle": "blur", "param": "radius" }"#;
+        let t: BindingTarget = serde_json::from_str(legacy).unwrap();
+        assert_eq!(
+            t,
+            BindingTarget::Node {
+                node_id: NodeId::new("blur"),
+                param: "radius".to_string(),
+            }
+        );
+        // And it re-serializes in the new `node` form (never handleNode).
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("\"kind\":\"node\""));
+        assert!(!json.contains("handleNode"));
+    }
+
+    /// The current `node` form still round-trips unchanged.
+    #[test]
+    fn node_target_round_trips() {
+        let t = BindingTarget::Node {
+            node_id: NodeId::new("n123"),
+            param: "amount".to_string(),
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: BindingTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(t, back);
     }
 
     #[test]

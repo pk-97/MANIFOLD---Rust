@@ -3032,7 +3032,11 @@ mod tests {
         let ub = sample_user_binding("user.uv_transform.translate.1", "uv_transform", "translate");
         let json = serde_json::to_string(&ub).unwrap();
         assert!(json.contains("\"id\":\"user.uv_transform.translate.1\""));
-        assert!(json.contains("\"nodeHandle\":\"uv_transform\""));
+        assert!(json.contains("\"nodeId\":\"uv_transform\""));
+        // The runtime addressing key is `nodeId`; the legacy `nodeHandle`
+        // key only ever appears when reading a pre-node-id file and is
+        // skip-serialized once cleared.
+        assert!(!json.contains("nodeHandle"));
         assert!(json.contains("\"innerParam\":\"translate\""));
         assert!(json.contains("\"defaultValue\":0.25"));
         assert!(json.contains("\"convert\":{\"type\":\"Float\"}"));
@@ -3051,6 +3055,10 @@ mod tests {
         }"#;
         let ub: UserParamBinding = serde_json::from_str(json).unwrap();
         assert_eq!(ub.convert, ParamConvert::Float);
+        // Pre-node-id `nodeHandle` is captured by the load shim (node_id
+        // stays empty until the renderer-layer migration resolves it).
+        assert_eq!(ub.legacy_node_handle.as_deref(), Some("x"));
+        assert!(ub.node_id.is_empty());
     }
 
     #[test]

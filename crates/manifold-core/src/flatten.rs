@@ -697,6 +697,45 @@ mod tests {
     }
 
     #[test]
+    fn grouping_prefixes_handle_but_preserves_node_id() {
+        // The whole point of node-id targeting: a card slider binds to an
+        // inner node by its stable id. Grouping flatten-prefixes the
+        // node's handle, so if bindings keyed off the handle the slider
+        // would go dead the moment the node was grouped. The id must NOT
+        // move — that's what keeps the binding alive across regrouping.
+        let mut blur = node(1, "node.blur", Some("blur"));
+        blur.node_id = crate::NodeId::new("stable_blur");
+        let mut group = node(1, GROUP_TYPE_ID, Some("soft"));
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: vec![port("src")],
+                outputs: vec![port("out")],
+                params: vec![],
+            },
+            nodes: vec![
+                node(0, GROUP_INPUT_TYPE_ID, None),
+                blur,
+                node(3, GROUP_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![wire(0, "src", 1, "src"), wire(1, "out", 3, "out")],
+        }));
+        let d = def(
+            vec![
+                node(0, "system.source", Some("source")),
+                group,
+                node(2, "system.final_output", Some("final")),
+            ],
+            vec![wire(0, "out", 1, "src"), wire(1, "out", 2, "in")],
+        );
+        let flat = flatten_groups(&d).unwrap();
+        let inner = find(&flat, "soft/blur");
+        assert_eq!(
+            inner.node_id, "stable_blur",
+            "stable node id survives the group handle prefix"
+        );
+    }
+
+    #[test]
     fn fans_out_group_input_to_all_inner_consumers() {
         let d = def(
             vec![node(0, "system.source", Some("source")), soft_focus_group(1, "g")],
