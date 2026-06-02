@@ -94,7 +94,7 @@ pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
 pub use param_doc::{ParamDoc, tooltip_for};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
-    ArrayMatchMode, ChannelSnapshot, GraphSnapshot, NodeSnapshot, OuterParamRouting,
+    ArrayMatchMode, ChannelSnapshot, GraphSnapshot, GroupSnapshot, NodeSnapshot, OuterParamRouting,
     OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
     WireSnapshot,
 };

@@ -2640,6 +2640,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     return;
                 }
+                // Editor window: graph-canvas navigation + debug keys.
+                //   Esc → leave the current group (pop one scope level), if
+                //         the view is inside a group.
+                //   `   → toggle the debug overlay HUD.
+                // (Ctrl+G group / Ctrl+Shift+G ungroup are handled below.)
+                if is_graph_editor {
+                    use winit::keyboard::{Key, NamedKey};
+                    let mut handled = false;
+                    match &logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            if let Some(canvas) = self.graph_canvas.as_mut() {
+                                handled = canvas.exit_group();
+                            }
+                        }
+                        Key::Character(c) if c.as_str() == "`" => {
+                            if let Some(canvas) = self.graph_canvas.as_mut() {
+                                canvas.toggle_debug_overlay();
+                            }
+                            handled = true;
+                        }
+                        _ => {}
+                    }
+                    if handled {
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                        return;
+                    }
+                }
                 // Editor window: Cmd+Z / Cmd+Shift+Z route to the
                 // content thread's undo stack so graph edits can be
                 // reverted while the editor has focus. (The primary

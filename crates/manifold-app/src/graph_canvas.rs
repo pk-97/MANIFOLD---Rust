@@ -17,11 +17,29 @@
 //! / Panel infrastructure. Pan via middle-mouse drag, zoom via scroll
 //! wheel, hover highlights. No editing yet.
 
-use manifold_renderer::node_graph::{GraphSnapshot, PortKindSnapshot};
+use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, WireSnapshot};
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::PanelAction;
 
+use manifold_core::effect_graph_def::GROUP_TYPE_ID;
+
 use crate::mapping_popover::MappingPopover;
+
+/// Set `GROUP_CANVAS_LOG=1` in the environment to print the gesture pipeline
+/// (scope enter/exit, group/ungroup emits, marquee commits) to stderr. Cheap
+/// when off — one env read per gesture, never per frame. The handoff doc's
+/// debug-friendly mandate: a failing interaction should leave a trail.
+fn group_log_enabled() -> bool {
+    std::env::var_os("GROUP_CANVAS_LOG").is_some()
+}
+
+macro_rules! group_log {
+    ($($arg:tt)*) => {
+        if group_log_enabled() {
+            eprintln!("[group-canvas] {}", format!($($arg)*));
+        }
+    };
+}
 
 const HEADER_HEIGHT: f32 = 28.0;
 const NODE_WIDTH: f32 = 168.0;
@@ -64,6 +82,26 @@ const PORT_ARRAY_COLOR: [f32; 4] = [0.50, 1.00, 0.62, 1.0];
 const PORT_CAMERA_COLOR: [f32; 4] = [1.00, 0.55, 0.55, 1.0];
 const PORT_LIGHT_COLOR: [f32; 4] = [1.00, 0.95, 0.55, 1.0];
 const PORT_MATERIAL_COLOR: [f32; 4] = [0.95, 0.65, 0.40, 1.0];
+/// Group node tint. A group reads as a distinct, slightly heavier box than an
+/// atom so a complex graph shows its structure at a glance — teal-leaning
+/// header + a faint teal body wash, the colour we reserve for "container".
+const GROUP_HEADER_BG: [f32; 4] = [0.18, 0.34, 0.40, 1.0];
+const GROUP_BODY_BG: [f32; 4] = [0.16, 0.22, 0.25, 1.0];
+const GROUP_BODY_BG_HOVER: [f32; 4] = [0.20, 0.27, 0.30, 1.0];
+/// Border on a group's bounding box and the "enter" chevron, brighter than a
+/// plain node border so the affordance ("this opens") is legible.
+const GROUP_ACCENT: [f32; 4] = [0.45, 0.82, 0.88, 1.0];
+/// Breadcrumb bar text + the "› " separators, drawn in the canvas header when
+/// the view is inside one or more groups.
+const BREADCRUMB_TEXT: [u8; 4] = [180, 215, 220, 255];
+const BREADCRUMB_DIM: [u8; 4] = [120, 130, 140, 255];
+/// Translucent backdrop behind the debug overlay readout so it stays legible
+/// over busy graph content.
+const DEBUG_OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.62];
+const DEBUG_OVERLAY_TEXT: [u8; 4] = [120, 230, 160, 255];
+/// Breadcrumb font size (logical px). The bitmap font is ~0.55em wide; the
+/// segment layout uses that ratio so render and hit-test agree.
+const BREADCRUMB_FONT: f32 = 12.0;
 /// On-node param fill bar: a faint track plus a brighter fill showing where
 /// a ranged value sits between its declared min and max.
 const PARAM_FILL_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
@@ -148,6 +186,12 @@ struct NodeView {
     /// here close a feedback loop; `auto_layout` skips them so depth
     /// propagation doesn't accumulate around the loop.
     breaks_dependency_cycle: bool,
+    /// True when this node is a group (subgraph) instance — `type_id ==
+    /// GROUP_TYPE_ID`. Drives the distinct group rendering and the
+    /// double-click-to-enter gesture. Its `inputs`/`outputs` are the group's
+    /// interface ports; the body lives in the snapshot and is re-resolved by
+    /// scope, not stored on the view.
+    is_group: bool,
 }
 
 impl NodeView {
@@ -386,6 +430,17 @@ impl DragMode {
     fn is_pan(&self) -> bool {
         matches!(self, DragMode::Pan)
     }
+
+    /// Short tag for the debug overlay readout.
+    fn debug_label(&self) -> &'static str {
+        match self {
+            DragMode::None => "none",
+            DragMode::Pan => "pan",
+            DragMode::WireFrom { .. } => "wire",
+            DragMode::NodeMove { .. } => "node-move",
+            DragMode::ParamScrub { .. } => "param-scrub",
+        }
+    }
 }
 
 /// A port resolved from a screen-space cursor position. Used by the
@@ -429,16 +484,36 @@ pub struct GraphCanvas {
     /// just hosts it, draws it on top of the nodes, and forwards pointer
     /// events to it while it's open. Closed by default.
     mapping_popover: MappingPopover,
-    /// Wall-clock seconds at the last empty-canvas left-press, used to
-    /// detect a double-click on empty space (which opens the node picker
-    /// instead of starting a pan). `None` until the first such press, and
-    /// reset to `None` after a double-click fires so a third press starts
-    /// a fresh single-click rather than re-triggering.
-    last_empty_click_time: Option<f32>,
-    /// Screen-space cursor at the last empty-canvas left-press. Paired with
-    /// `last_empty_click_time` so a double-click only registers when the
-    /// two presses land within a few pixels of each other.
-    last_empty_click_pos: (f32, f32),
+    /// Wall-clock seconds at the last left-press, used to detect a
+    /// double-click — on empty space (opens the node picker) or on a group
+    /// node (descends into it). `None` until the first press, and reset to
+    /// `None` after a double-click fires so a third press starts a fresh
+    /// single-click rather than re-triggering.
+    last_click_time: Option<f32>,
+    /// Screen-space cursor at the last left-press. Paired with
+    /// `last_click_time` so a double-click only registers when the two
+    /// presses land within a few pixels of each other.
+    last_click_pos: (f32, f32),
+    /// Node id under the last left-press (`None` for empty space). A
+    /// double-click only counts when both presses land on the *same* target,
+    /// so dragging between two groups doesn't accidentally enter one.
+    last_click_node: Option<u32>,
+    /// Current view scope — a path of group node ids from the document root
+    /// to the level being shown. Empty = root. Pushed on enter-group, popped
+    /// on exit. The canvas re-resolves which level to render from the live
+    /// snapshot each frame using this path, so navigation is purely UI-local
+    /// (no command, no content round-trip).
+    scope: Vec<u32>,
+    /// Display titles of the groups in `scope`, captured at enter time (the
+    /// ancestor group nodes aren't in the current level's views, so their
+    /// names have to be remembered). Always the same length as `scope`; the
+    /// breadcrumb bar reads `["Root", scope_titles…]`.
+    scope_titles: Vec<String>,
+    /// When true, draw the debug overlay (scope path, selection, hover, drag
+    /// mode) in the canvas corner. Toggled by the backtick key. The handoff
+    /// doc's mandate: let the canvas tell Peter what it thinks is happening
+    /// without a debugger.
+    debug_overlay: bool,
 }
 
 /// Max seconds between two empty-canvas presses for them to count as a
@@ -466,8 +541,12 @@ impl GraphCanvas {
             pending_actions: Vec::new(),
             collapsed: ahash::AHashMap::new(),
             mapping_popover: MappingPopover::new(),
-            last_empty_click_time: None,
-            last_empty_click_pos: (0.0, 0.0),
+            last_click_time: None,
+            last_click_pos: (0.0, 0.0),
+            last_click_node: None,
+            scope: Vec::new(),
+            scope_titles: Vec::new(),
+            debug_overlay: false,
         }
     }
 
@@ -505,7 +584,21 @@ impl GraphCanvas {
     /// Push the latest snapshot. Rebuilds nodes+wires; recomputes
     /// auto-layout only when topology changed.
     pub fn set_snapshot(&mut self, snap: &GraphSnapshot) {
-        let new_hash = hash_topology(snap);
+        // Resolve which level the current scope addresses. If the path no
+        // longer resolves — the group was deleted, ungrouped, or an undo
+        // pulled it out from under us — drop back to the document root.
+        if !self.scope.is_empty() && resolve_level(snap, &self.scope).is_none() {
+            group_log!("scope {:?} no longer resolves — returning to root", self.scope);
+            self.scope.clear();
+            self.scope_titles.clear();
+        }
+        let (level_nodes, level_wires) =
+            resolve_level(snap, &self.scope).unwrap_or((&snap.nodes, &snap.wires));
+
+        // Hash the resolved level (not the whole snapshot) plus the scope, so
+        // entering or leaving a group re-runs layout even though the
+        // underlying snapshot is byte-for-byte the same document.
+        let new_hash = hash_level(&self.scope, level_nodes, level_wires);
         if new_hash == self.topology_hash && !self.nodes.is_empty() {
             // Topology unchanged — keep the existing layout, but refresh
             // each node's on-face param values in place. They show live
@@ -513,7 +606,7 @@ impl GraphCanvas {
             // an inspector edit) must update them without re-running
             // auto-layout.
             for node in &mut self.nodes {
-                if let Some(sn) = snap.nodes.iter().find(|s| s.id == node.id) {
+                if let Some(sn) = level_nodes.iter().find(|s| s.id == node.id) {
                     node.params = sn.parameters.iter().map(format_param_for_node).collect();
                     node.summary = node_summary(&sn.parameters);
                 }
@@ -533,8 +626,7 @@ impl GraphCanvas {
             .map(|n| (n.id, n.pos_graph))
             .collect();
 
-        let new_nodes: Vec<NodeView> = snap
-            .nodes
+        let new_nodes: Vec<NodeView> = level_nodes
             .iter()
             .map(|n| NodeView {
                 id: n.id,
@@ -562,11 +654,11 @@ impl GraphCanvas {
                     .map(|p| PortView::from_kind(p.name.clone(), &p.kind))
                     .collect(),
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
+                is_group: n.type_id == GROUP_TYPE_ID,
             })
             .collect();
         self.nodes = new_nodes;
-        self.wires = snap
-            .wires
+        self.wires = level_wires
             .iter()
             .map(|w| WireView {
                 from_node: w.from_node,
@@ -605,11 +697,115 @@ impl GraphCanvas {
                 }
             }
         }
-        for (view, snap_node) in self.nodes.iter_mut().zip(snap.nodes.iter()) {
+        for (view, snap_node) in self.nodes.iter_mut().zip(level_nodes.iter()) {
             if let Some(p) = snap_node.editor_pos {
                 view.pos_graph = p;
             }
         }
+    }
+
+    // ── Group navigation (scope) ────────────────────────────────────
+
+    /// The current view scope as a path of group node ids (empty = root).
+    /// Read by the app to pass as `scope_path` when it routes a group/ungroup
+    /// command for this level (wired in Layer 3); also used by tests.
+    #[allow(dead_code)]
+    pub fn scope_path(&self) -> &[u32] {
+        &self.scope
+    }
+
+    /// Descend into a group node, showing its body as the canvas level. The
+    /// next `set_snapshot` re-resolves and re-lays-out at the new level.
+    /// No-op if the id isn't a group in the current view. Clears selection so
+    /// a stale id from the parent level can't linger.
+    fn enter_group(&mut self, group_id: u32) {
+        let Some(node) = self.nodes.iter().find(|n| n.id == group_id) else {
+            return;
+        };
+        if !node.is_group {
+            return;
+        }
+        let title = node.title.clone();
+        group_log!(
+            "enter group {group_id} ({title:?}): scope {:?} -> depth {}",
+            self.scope,
+            self.scope.len() + 1
+        );
+        self.selected = None;
+        self.scope.push(group_id);
+        self.scope_titles.push(title);
+    }
+
+    /// Pop one level back toward the root. Returns `true` if it moved (there
+    /// was a level to leave), so the caller can mark the editor dirty. Clears
+    /// selection for the same reason as `enter_group`.
+    pub fn exit_group(&mut self) -> bool {
+        if let Some(left) = self.scope.pop() {
+            self.scope_titles.pop();
+            group_log!("exit group {left}: scope now {:?}", self.scope);
+            self.selected = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Jump directly to a breadcrumb depth (0 = root, 1 = first group, …),
+    /// truncating the scope path. Used by breadcrumb-bar clicks. No-op if the
+    /// depth is already current or out of range.
+    pub fn set_scope_depth(&mut self, depth: usize) {
+        if depth < self.scope.len() {
+            group_log!("breadcrumb jump to depth {depth}: {:?}", self.scope);
+            self.scope.truncate(depth);
+            self.scope_titles.truncate(depth);
+            self.selected = None;
+        }
+    }
+
+    /// Toggle the debug overlay (scope/selection/hover/drag readout). Wired to
+    /// the backtick key in the editor window.
+    pub fn toggle_debug_overlay(&mut self) {
+        self.debug_overlay = !self.debug_overlay;
+        group_log!("debug overlay -> {}", self.debug_overlay);
+    }
+
+    /// Lay out the breadcrumb segments in the canvas header, left to right:
+    /// `[Root › title0 › title1 …]`. Returns `(target_depth, rect, label,
+    /// is_current)` per segment. Empty at the document root (no breadcrumb
+    /// drawn). Shared by render and hit-test so the click zones match the
+    /// glyphs.
+    fn breadcrumb_segments(&self, viewport: Rect) -> Vec<(usize, Rect, String, bool)> {
+        if self.scope.is_empty() {
+            return Vec::new();
+        }
+        let cw = BREADCRUMB_FONT * 0.55;
+        let sep_w = 3.0 * cw; // width reserved for the " › " separator
+        let y = viewport.y + (HEADER_HEIGHT - BREADCRUMB_FONT) * 0.5;
+        let mut x = viewport.x + 10.0;
+        let current_depth = self.scope_titles.len();
+        let labels = std::iter::once("Root".to_string())
+            .chain(self.scope_titles.iter().cloned());
+        let mut segs = Vec::new();
+        for (depth, label) in labels.enumerate() {
+            let w = label.chars().count() as f32 * cw;
+            segs.push((
+                depth,
+                Rect::new(x, y - 2.0, w, BREADCRUMB_FONT + 4.0),
+                label,
+                depth == current_depth,
+            ));
+            x += w + sep_w;
+        }
+        segs
+    }
+
+    /// Breadcrumb segment under a header click, by target depth (0 = root).
+    /// `None` when the click misses every segment or there's no breadcrumb.
+    fn breadcrumb_hit(&self, viewport: Rect, sx: f32, sy: f32) -> Option<usize> {
+        self.breadcrumb_segments(viewport)
+            .into_iter()
+            .find(|(_, r, _, _)| sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h)
+            .map(|(depth, _, _, _)| depth)
     }
 
     /// Compute node positions by topological depth. Sources (in-degree
@@ -1017,6 +1213,13 @@ impl GraphCanvas {
     /// from the window event loop, used to distinguish a double-click on
     /// empty space from a pan-start single click.
     pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32, now: f32) {
+        // Breadcrumb bar (header chrome) — jump to a shallower scope. Gets
+        // first crack like the reset button since it sits above the canvas
+        // surface. No-op return value means the click wasn't on a crumb.
+        if let Some(depth) = self.breadcrumb_hit(viewport, sx, sy) {
+            self.set_scope_depth(depth);
+            return;
+        }
         // Header button has priority over everything else — it sits in
         // the chrome above the canvas surface.
         if self.has_graph_mod {
@@ -1078,6 +1281,25 @@ impl GraphCanvas {
                 return;
             }
         }
+        // Double-click on a group node descends into it. Checked before the
+        // header-drag path so entering doesn't also start a move; a single
+        // click on a group falls through to select / header-drag below.
+        if let Some(node_id) = self.node_under(viewport, sx, sy) {
+            let is_group = self
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .is_some_and(|n| n.is_group);
+            if is_group {
+                let dbl = self.is_double_click(sx, sy, now, Some(node_id));
+                self.note_click(sx, sy, now, Some(node_id));
+                if dbl {
+                    self.last_click_time = None; // latch so a 3rd press is fresh
+                    self.enter_group(node_id);
+                    return;
+                }
+            }
+        }
         if let Some(node_id) = self.header_under(viewport, sx, sy) {
             self.selected = Some(node_id);
             let (gx, gy) = self.to_graph(viewport, sx, sy);
@@ -1098,35 +1320,47 @@ impl GraphCanvas {
             None => {
                 self.selected = None;
                 // Double-click on empty space opens the node picker at the
-                // cursor instead of panning. Two presses within the time +
-                // distance window count as a double-click.
-                let dx = sx - self.last_empty_click_pos.0;
-                let dy = sy - self.last_empty_click_pos.1;
-                let is_double = self
-                    .last_empty_click_time
-                    .map(|t| now - t < DOUBLE_CLICK_SECONDS)
-                    .unwrap_or(false)
-                    && (dx * dx + dy * dy) < DOUBLE_CLICK_RADIUS_PX * DOUBLE_CLICK_RADIUS_PX;
+                // cursor instead of panning. Two presses on empty space within
+                // the time + distance window count as a double-click.
+                let is_double = self.is_double_click(sx, sy, now, None);
+                self.note_click(sx, sy, now, None);
                 if is_double {
                     // Latch reset so a third press doesn't triple-fire.
-                    self.last_empty_click_time = None;
+                    self.last_click_time = None;
                     let (gx, gy) = self.to_graph(viewport, sx, sy);
                     self.pending_actions.push(PanelAction::OpenNodePicker {
                         screen_pos: (sx, sy),
                         graph_pos: (gx, gy),
                     });
                 } else {
-                    // First press of a potential double-click — record it and
-                    // start the pan as usual. A single click pans exactly as
-                    // before.
-                    self.last_empty_click_time = Some(now);
-                    self.last_empty_click_pos = (sx, sy);
+                    // First press of a potential double-click — start the pan
+                    // as usual. A single click pans exactly as before.
                     self.drag_mode = DragMode::Pan;
                     self.drag_anchor = (sx, sy);
                     self.drag_pan_start = self.pan;
                 }
             }
         }
+    }
+
+    /// Record a left-press for double-click detection. `node` is the node id
+    /// under the press (`None` for empty space).
+    fn note_click(&mut self, sx: f32, sy: f32, now: f32, node: Option<u32>) {
+        self.last_click_time = Some(now);
+        self.last_click_pos = (sx, sy);
+        self.last_click_node = node;
+    }
+
+    /// True when the press at `(sx, sy, now)` over `node` completes a
+    /// double-click of the previous press: same target, within the time and
+    /// distance window.
+    fn is_double_click(&self, sx: f32, sy: f32, now: f32, node: Option<u32>) -> bool {
+        let dx = sx - self.last_click_pos.0;
+        let dy = sy - self.last_click_pos.1;
+        self.last_click_time
+            .is_some_and(|t| now - t < DOUBLE_CLICK_SECONDS)
+            && (dx * dx + dy * dy) < DOUBLE_CLICK_RADIUS_PX * DOUBLE_CLICK_RADIUS_PX
+            && self.last_click_node == node
     }
 
     pub fn on_left_button_up(&mut self, viewport: Rect, sx: f32, sy: f32) {
@@ -1221,20 +1455,39 @@ impl GraphCanvas {
         ui.draw_rect(viewport.x, viewport.y, viewport.w, viewport.h, BG_COLOR);
 
         ui.draw_rect(viewport.x, viewport.y, viewport.w, HEADER_HEIGHT, HEADER_BG);
-        let header_label = if self.nodes.is_empty() {
-            "No active graph — open an effect card"
-        } else if self.has_graph_mod {
-            "Live Graph — MODIFIED"
+        if self.scope.is_empty() {
+            let header_label = if self.nodes.is_empty() {
+                "No active graph — open an effect card"
+            } else if self.has_graph_mod {
+                "Live Graph — MODIFIED"
+            } else {
+                "Live Graph"
+            };
+            ui.draw_text(
+                viewport.x + 10.0,
+                viewport.y + (HEADER_HEIGHT - 12.0) * 0.5,
+                header_label,
+                12.0,
+                TEXT_HEADER,
+            );
         } else {
-            "Live Graph"
-        };
-        ui.draw_text(
-            viewport.x + 10.0,
-            viewport.y + (HEADER_HEIGHT - 12.0) * 0.5,
-            header_label,
-            12.0,
-            TEXT_HEADER,
-        );
+            // Inside one or more groups — draw the breadcrumb trail instead.
+            // The current (deepest) crumb is bright; ancestors dim, signalling
+            // they're clickable jump targets.
+            let text_y = viewport.y + (HEADER_HEIGHT - BREADCRUMB_FONT) * 0.5;
+            let cw = BREADCRUMB_FONT * 0.55;
+            for (_, r, label, is_current) in self.breadcrumb_segments(viewport) {
+                let color = if is_current {
+                    BREADCRUMB_TEXT
+                } else {
+                    BREADCRUMB_DIM
+                };
+                ui.draw_text(r.x, text_y, &label, BREADCRUMB_FONT, color);
+                if !is_current {
+                    ui.draw_text(r.x + r.w + cw, text_y, "›", BREADCRUMB_FONT, BREADCRUMB_DIM);
+                }
+            }
+        }
         let zoom_text = format!("Zoom {:.0}%", self.zoom * 100.0);
         ui.draw_text(
             viewport.x + viewport.w - 90.0,
@@ -1316,6 +1569,46 @@ impl GraphCanvas {
         // Mapping popover floats above everything else so its handles and
         // buttons are never buried under a node it overlaps.
         self.mapping_popover.render(ui);
+
+        // Debug overlay last, on top of everything — it's a diagnostic HUD.
+        if self.debug_overlay {
+            self.draw_debug_overlay(ui, canvas);
+        }
+    }
+
+    /// Corner HUD showing what the canvas thinks is happening: scope path,
+    /// node/wire counts, selection, hover, and the active drag mode. Toggled
+    /// by the backtick key. The handoff doc's debug-friendly mandate — Peter
+    /// reads this instead of reaching for a debugger.
+    fn draw_debug_overlay(&self, ui: &mut UIRenderer, canvas: Rect) {
+        let lines = [
+            format!("scope: {:?}", self.scope),
+            format!("crumbs: {:?}", self.scope_titles),
+            format!("nodes: {}   wires: {}", self.nodes.len(), self.wires.len()),
+            format!("selected: {:?}   hovered: {:?}", self.selected, self.hovered),
+            format!("drag: {}", self.drag_mode.debug_label()),
+            format!(
+                "zoom: {:.2}   pan: ({:.0}, {:.0})",
+                self.zoom, self.pan.0, self.pan.1
+            ),
+        ];
+        let size = 11.0;
+        let line_h = 15.0;
+        let pad = 6.0;
+        let w = 380.0;
+        let h = pad * 2.0 + lines.len() as f32 * line_h;
+        let x = canvas.x + 8.0;
+        let y = canvas.y + canvas.h - h - 8.0;
+        ui.draw_rect(x, y, w, h, DEBUG_OVERLAY_BG);
+        for (i, line) in lines.iter().enumerate() {
+            ui.draw_text(
+                x + pad,
+                y + pad + i as f32 * line_h,
+                line,
+                size,
+                DEBUG_OVERLAY_TEXT,
+            );
+        }
     }
 
     fn draw_ghost_wire(
@@ -1404,9 +1697,19 @@ impl GraphCanvas {
 
         let hovered = self.hovered == Some(node.id);
         let selected = self.selected == Some(node.id);
-        let bg = if hovered { NODE_BG_HOVER } else { NODE_BG };
+        // Groups read as containers: a teal-washed body + a brighter accent
+        // border so the eye picks out the boxes that "open".
+        let bg = if node.is_group {
+            if hovered { GROUP_BODY_BG_HOVER } else { GROUP_BODY_BG }
+        } else if hovered {
+            NODE_BG_HOVER
+        } else {
+            NODE_BG
+        };
         let (border, border_w) = if selected {
             (NODE_BORDER_SELECTED, 2.0)
+        } else if node.is_group {
+            (GROUP_ACCENT, 1.5)
         } else {
             (NODE_BORDER, 1.0)
         };
@@ -1423,12 +1726,17 @@ impl GraphCanvas {
         );
 
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
+        let header_color = if node.is_group {
+            GROUP_HEADER_BG
+        } else {
+            node.header_color
+        };
         ui.draw_rounded_rect(
             sx,
             sy,
             sw,
             header_h,
-            node.header_color,
+            header_color,
             NODE_CORNER * self.zoom,
         );
 
@@ -1455,6 +1763,20 @@ impl GraphCanvas {
                 if node.collapsed { "+" } else { "-" },
                 chev_size,
                 TEXT_SECONDARY,
+            );
+        }
+
+        // Group "enter" chevron — signals the box opens on double-click.
+        // Groups carry no on-face params, so this never collides with the
+        // collapse chevron above.
+        if show_text && node.is_group {
+            let chev_size = (13.0 * self.zoom).max(9.0);
+            ui.draw_text(
+                sx + sw - 16.0 * self.zoom,
+                sy + (header_h - chev_size) * 0.5,
+                "›",
+                chev_size,
+                BREADCRUMB_TEXT,
             );
         }
 
@@ -1711,20 +2033,219 @@ fn cubic_bezier(
     )
 }
 
-fn hash_topology(snap: &GraphSnapshot) -> u64 {
+/// Walk `scope` (a path of group node ids) into `snap`, returning the
+/// `(nodes, wires)` of the addressed level. Empty scope → the document root.
+/// `None` if any id in the path isn't a group at its level — e.g. the group
+/// was deleted or ungrouped out from under the canvas. Pure; unit-tested.
+fn resolve_level<'a>(
+    snap: &'a GraphSnapshot,
+    scope: &[u32],
+) -> Option<(&'a [NodeSnapshot], &'a [WireSnapshot])> {
+    let mut nodes: &[NodeSnapshot] = &snap.nodes;
+    let mut wires: &[WireSnapshot] = &snap.wires;
+    for &gid in scope {
+        let group = nodes.iter().find(|n| n.id == gid)?.group.as_deref()?;
+        nodes = &group.nodes;
+        wires = &group.wires;
+    }
+    Some((nodes, wires))
+}
+
+/// Topology hash of one resolved level plus the scope path, so the canvas
+/// re-runs layout when the displayed level changes (enter/leave a group)
+/// even though the underlying snapshot document is byte-for-byte the same.
+/// Param values are deliberately excluded — they refresh in place without a
+/// relayout (see the param-only fast path in `set_snapshot`).
+fn hash_level(scope: &[u32], nodes: &[NodeSnapshot], wires: &[WireSnapshot]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
-    snap.nodes.len().hash(&mut h);
-    for n in &snap.nodes {
+    scope.hash(&mut h);
+    nodes.len().hash(&mut h);
+    for n in nodes {
         n.id.hash(&mut h);
         n.type_id.hash(&mut h);
     }
-    snap.wires.len().hash(&mut h);
-    for w in &snap.wires {
+    wires.len().hash(&mut h);
+    for w in wires {
         w.from_node.hash(&mut h);
         w.from_port.hash(&mut h);
         w.to_node.hash(&mut h);
         w.to_port.hash(&mut h);
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pure-logic tests for the group-aware canvas. Everything that isn't
+    //! pixels is exercised here so a misbehaving canvas points to rendering
+    //! (eyes only), not logic. Per the handoff doc's debug-friendly mandate.
+    use super::*;
+    use manifold_renderer::node_graph::{
+        GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
+    };
+
+    fn port(name: &str) -> PortSnapshot {
+        PortSnapshot {
+            name: name.to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }
+    }
+
+    /// Build a plain (non-group) node snapshot with one `in` / one `out`.
+    fn node(id: u32, type_id: &str, handle: Option<&str>) -> NodeSnapshot {
+        NodeSnapshot {
+            id,
+            node_handle: handle.map(|h| h.to_string()),
+            type_id: type_id.to_string(),
+            title: handle.unwrap_or(type_id).to_string(),
+            inputs: vec![port("in")],
+            outputs: vec![port("out")],
+            parameters: Vec::new(),
+            editor_pos: None,
+            breaks_dependency_cycle: false,
+            group: None,
+        }
+    }
+
+    fn wire(fln: u32, fp: &str, tn: u32, tp: &str) -> WireSnapshot {
+        WireSnapshot {
+            from_node: fln,
+            from_port: fp.to_string(),
+            to_node: tn,
+            to_port: tp.to_string(),
+        }
+    }
+
+    /// Root: source(0) → group(10) → final(2). The group body is
+    /// group_input(0) → inner(1) → group_output(2).
+    fn grouped_snapshot() -> GraphSnapshot {
+        let body = GroupSnapshot {
+            nodes: vec![
+                node(0, "system.group_input", None),
+                node(1, "node.blur", Some("inner")),
+                node(2, "system.group_output", None),
+            ],
+            wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
+        };
+        let mut group = node(10, GROUP_TYPE_ID, Some("tweak"));
+        group.inputs = vec![port("src")];
+        group.outputs = vec![port("out")];
+        group.group = Some(Box::new(body));
+        GraphSnapshot {
+            nodes: vec![
+                node(0, "system.source", Some("source")),
+                group,
+                node(2, "system.final_output", Some("final")),
+            ],
+            wires: vec![wire(0, "out", 10, "src"), wire(10, "out", 2, "in")],
+            outer_routings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_level_root_then_descend_then_invalid() {
+        let snap = grouped_snapshot();
+
+        // Empty scope → document root (3 nodes incl. the group).
+        let (rn, rw) = resolve_level(&snap, &[]).expect("root resolves");
+        assert_eq!(rn.len(), 3);
+        assert_eq!(rw.len(), 2);
+        assert!(rn.iter().any(|n| n.type_id == GROUP_TYPE_ID));
+
+        // Into the group → its body (group_input, inner, group_output).
+        let (bn, bw) = resolve_level(&snap, &[10]).expect("group body resolves");
+        assert_eq!(bn.len(), 3);
+        assert_eq!(bw.len(), 2);
+        assert!(bn.iter().any(|n| n.node_handle.as_deref() == Some("inner")));
+
+        // A non-group id (source) or a missing id → None.
+        assert!(resolve_level(&snap, &[0]).is_none());
+        assert!(resolve_level(&snap, &[999]).is_none());
+    }
+
+    #[test]
+    fn set_snapshot_marks_groups_and_navigation_swaps_level() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+
+        // Root level: the group node is flagged and the inner node is hidden.
+        canvas.set_snapshot(&snap);
+        assert_eq!(canvas.nodes.len(), 3);
+        let group = canvas.nodes.iter().find(|n| n.is_group).expect("group view");
+        assert_eq!(group.id, 10);
+        assert!(canvas.nodes.iter().all(|n| n.title != "inner"));
+
+        // Descend → the canvas now shows the group body.
+        canvas.enter_group(10);
+        canvas.set_snapshot(&snap);
+        assert_eq!(canvas.scope_path(), &[10]);
+        assert!(canvas.nodes.iter().any(|n| n.title == "inner"));
+        assert!(canvas.nodes.iter().all(|n| !n.is_group));
+
+        // Exit → back to root.
+        assert!(canvas.exit_group());
+        canvas.set_snapshot(&snap);
+        assert!(canvas.scope_path().is_empty());
+        assert!(canvas.nodes.iter().any(|n| n.is_group));
+    }
+
+    #[test]
+    fn stale_scope_falls_back_to_root() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snap);
+        canvas.enter_group(10);
+        canvas.set_snapshot(&snap);
+        assert_eq!(canvas.scope_path(), &[10]);
+
+        // The group vanishes (e.g. an undo dissolved it). Next push of a
+        // snapshot without node 10 must drop the canvas back to root rather
+        // than render an empty level.
+        let mut flat = grouped_snapshot();
+        flat.nodes.retain(|n| n.id != 10);
+        flat.wires.clear();
+        canvas.set_snapshot(&flat);
+        assert!(canvas.scope_path().is_empty());
+    }
+
+    #[test]
+    fn breadcrumb_segments_track_scope_titles() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
+
+        // Root → no breadcrumb.
+        canvas.set_snapshot(&snap);
+        assert!(canvas.breadcrumb_segments(vp).is_empty());
+
+        // Inside the group → [Root, tweak], with "tweak" current.
+        canvas.enter_group(10);
+        canvas.set_snapshot(&snap);
+        let segs = canvas.breadcrumb_segments(vp);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].2, "Root");
+        assert!(!segs[0].3, "root crumb is an ancestor, not current");
+        assert_eq!(segs[1].2, "tweak");
+        assert!(segs[1].3, "deepest crumb is current");
+
+        // Breadcrumb jump back to root.
+        canvas.set_scope_depth(0);
+        assert!(canvas.scope_path().is_empty());
+    }
+
+    #[test]
+    fn double_click_window_requires_same_target() {
+        let mut canvas = GraphCanvas::new();
+        // First press on node 7.
+        canvas.note_click(100.0, 100.0, 1.0, Some(7));
+        // Second press just after, same spot, same node → double.
+        assert!(canvas.is_double_click(100.5, 100.0, 1.1, Some(7)));
+        // Same timing but a different node → not a double.
+        assert!(!canvas.is_double_click(100.5, 100.0, 1.1, Some(8)));
+        // Same node but too far → not a double.
+        assert!(!canvas.is_double_click(140.0, 100.0, 1.1, Some(7)));
+        // Same node but too slow → not a double.
+        assert!(!canvas.is_double_click(100.5, 100.0, 1.0 + 5.0, Some(7)));
+    }
 }
