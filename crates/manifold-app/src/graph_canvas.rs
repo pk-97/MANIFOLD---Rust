@@ -102,6 +102,9 @@ const DEBUG_OVERLAY_TEXT: [u8; 4] = [120, 230, 160, 255];
 /// Breadcrumb font size (logical px). The bitmap font is ~0.55em wide; the
 /// segment layout uses that ratio so render and hit-test agree.
 const BREADCRUMB_FONT: f32 = 12.0;
+/// Rubber-band selection rectangle: a faint blue wash with a brighter border.
+const MARQUEE_FILL: [f32; 4] = [0.50, 0.78, 1.00, 0.12];
+const MARQUEE_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.80];
 /// On-node param fill bar: a faint track plus a brighter fill showing where
 /// a ranged value sits between its declared min and max.
 const PARAM_FILL_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
@@ -160,6 +163,10 @@ impl PortView {
 #[derive(Debug, Clone)]
 struct NodeView {
     id: u32,
+    /// Stable string handle from the def, if any (`None` for boundary /
+    /// anonymous nodes). Used to mint a collision-free handle when this
+    /// node's level gets a new group, and by Ctrl+G's payload.
+    handle: Option<String>,
     title: String,
     /// The node's parameters, drawn as compact rows on the node face when
     /// the node is expanded, so you can read and tune each one in place.
@@ -424,6 +431,15 @@ enum DragMode {
         is_int: bool,
         press_origin_x: f32,
     },
+    /// Rubber-band selection from an empty-canvas press. `origin_screen` is
+    /// the press point; the live rect spans it to the current cursor. On
+    /// release, nodes whose box intersects the rect become the selection
+    /// (union with `base` when the drag began with Shift held, else replace).
+    Marquee {
+        origin_screen: (f32, f32),
+        additive: bool,
+        base: ahash::AHashSet<u32>,
+    },
 }
 
 impl DragMode {
@@ -439,6 +455,7 @@ impl DragMode {
             DragMode::WireFrom { .. } => "wire",
             DragMode::NodeMove { .. } => "node-move",
             DragMode::ParamScrub { .. } => "param-scrub",
+            DragMode::Marquee { .. } => "marquee",
         }
     }
 }
@@ -466,7 +483,10 @@ pub struct GraphCanvas {
     drag_anchor: (f32, f32),
     drag_pan_start: (f32, f32),
     hovered: Option<u32>,
-    selected: Option<u32>,
+    /// Selected node ids at the current scope level. A set so the user can
+    /// rubber-band or Shift-click several nodes before collapsing them into a
+    /// group. A plain click selects exactly one; Shift toggles.
+    selected: ahash::AHashSet<u32>,
     /// `instance.graph.is_some()` for the watched effect. Drives the
     /// "Reset to Default" affordance in the header — only shown when
     /// the user has diverged from the bundled preset.
@@ -536,7 +556,7 @@ impl GraphCanvas {
             drag_anchor: (0.0, 0.0),
             drag_pan_start: (0.0, 0.0),
             hovered: None,
-            selected: None,
+            selected: ahash::AHashSet::new(),
             has_graph_mod: false,
             pending_actions: Vec::new(),
             collapsed: ahash::AHashMap::new(),
@@ -570,15 +590,60 @@ impl GraphCanvas {
         actions
     }
 
-    /// Emit a `RemoveGraphNode` action for the currently-selected
-    /// node, if any. Wired to the Delete/Backspace key handler on the
-    /// editor window. Clears the selection on emit so the next frame
-    /// doesn't double-fire.
+    /// Emit a `RemoveGraphNode` action for every currently-selected node.
+    /// Wired to the Delete/Backspace key handler on the editor window. Clears
+    /// the selection on emit so the next frame doesn't double-fire. Multiple
+    /// selected nodes each emit one action (and one undo entry apiece).
     pub fn request_delete_selected(&mut self) {
-        if let Some(id) = self.selected.take() {
+        for id in std::mem::take(&mut self.selected) {
             self.pending_actions
                 .push(PanelAction::RemoveGraphNode { node_id: id });
         }
+    }
+
+    /// Emit a `GroupSelection` action collapsing the current selection into a
+    /// new group at this scope level. Wired to Ctrl+G. No-op on an empty
+    /// selection. The new group's handle is auto-named (`group_N`) and made
+    /// unique among the level's existing handles so flatten-time prefixing
+    /// can't collide. The content thread validates the rest (boundary nodes,
+    /// connectivity); a rejected group simply doesn't change the def.
+    pub fn request_group_selection(&mut self) {
+        let node_ids = self.selected_ids();
+        if node_ids.is_empty() {
+            return;
+        }
+        let existing: ahash::AHashSet<&str> =
+            self.nodes.iter().filter_map(|n| n.handle.as_deref()).collect();
+        let mut i = 1u32;
+        let mut handle = format!("group_{i}");
+        while existing.contains(handle.as_str()) {
+            i += 1;
+            handle = format!("group_{i}");
+        }
+        group_log!(
+            "GroupSelection scope={:?} ids={node_ids:?} -> {handle:?}",
+            self.scope
+        );
+        self.pending_actions.push(PanelAction::GroupSelection {
+            scope_path: self.scope.clone(),
+            node_ids,
+            handle,
+            centroid: self.selection_centroid(),
+        });
+    }
+
+    /// Emit an `Ungroup` action dissolving the selected group back into this
+    /// level. Wired to Ctrl+Shift+G. No-op unless exactly one group node is
+    /// selected.
+    pub fn request_ungroup(&mut self) {
+        let Some(group_id) = self.single_selected_group() else {
+            return;
+        };
+        group_log!("Ungroup scope={:?} group={group_id}", self.scope);
+        self.pending_actions.push(PanelAction::Ungroup {
+            scope_path: self.scope.clone(),
+            group_id,
+        });
     }
 
     /// Push the latest snapshot. Rebuilds nodes+wires; recomputes
@@ -630,6 +695,7 @@ impl GraphCanvas {
             .iter()
             .map(|n| NodeView {
                 id: n.id,
+                handle: n.node_handle.clone(),
                 title: n.title.clone(),
                 params: n.parameters.iter().map(format_param_for_node).collect(),
                 summary: node_summary(&n.parameters),
@@ -731,7 +797,7 @@ impl GraphCanvas {
             self.scope,
             self.scope.len() + 1
         );
-        self.selected = None;
+        self.selected.clear();
         self.scope.push(group_id);
         self.scope_titles.push(title);
     }
@@ -743,7 +809,7 @@ impl GraphCanvas {
         if let Some(left) = self.scope.pop() {
             self.scope_titles.pop();
             group_log!("exit group {left}: scope now {:?}", self.scope);
-            self.selected = None;
+            self.selected.clear();
             true
         } else {
             false
@@ -758,7 +824,7 @@ impl GraphCanvas {
             group_log!("breadcrumb jump to depth {depth}: {:?}", self.scope);
             self.scope.truncate(depth);
             self.scope_titles.truncate(depth);
-            self.selected = None;
+            self.selected.clear();
         }
     }
 
@@ -1127,8 +1193,9 @@ impl GraphCanvas {
                     n.pos_graph = (gx - offset.0, gy - offset.1);
                 }
             }
-            DragMode::WireFrom { .. } => {
-                // Cursor position is enough — render reads `self.cursor`.
+            DragMode::WireFrom { .. } | DragMode::Marquee { .. } => {
+                // Cursor position is enough — render reads `self.cursor` for
+                // both the ghost wire and the live marquee rect.
             }
             DragMode::ParamScrub {
                 node_id,
@@ -1207,12 +1274,21 @@ impl GraphCanvas {
     /// 5. Node header → start node-move drag.
     /// 6. Node body → select.
     /// 7. Empty canvas, double-click → open the node picker at the cursor.
-    /// 8. Empty canvas, single click → clear selection, start pan.
+    /// 8. Empty canvas, drag → rubber-band select. A click with no drag
+    ///    commits an empty rect, which clears the selection.
     ///
     /// `now` is a frame-monotonic wall-clock time in seconds, threaded in
     /// from the window event loop, used to distinguish a double-click on
-    /// empty space from a pan-start single click.
-    pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32, now: f32) {
+    /// empty space from a marquee-start single click. `shift` is the Shift
+    /// modifier state: it makes node clicks toggle and marquees additive.
+    pub fn on_left_button_down(
+        &mut self,
+        viewport: Rect,
+        sx: f32,
+        sy: f32,
+        now: f32,
+        shift: bool,
+    ) {
         // Breadcrumb bar (header chrome) — jump to a shallower scope. Gets
         // first crack like the reset button since it sits above the canvas
         // surface. No-op return value means the click wasn't on a crumb.
@@ -1267,7 +1343,7 @@ impl GraphCanvas {
                 .find(|n| n.id == node_id)
                 .and_then(|n| n.params.get(pi).map(|p| (p.name.clone(), p.scrub)));
             if let Some((param_name, scrub)) = info {
-                self.selected = Some(node_id);
+                self.select_single(node_id);
                 if let Some(s) = scrub {
                     self.drag_mode = DragMode::ParamScrub {
                         node_id,
@@ -1301,7 +1377,7 @@ impl GraphCanvas {
             }
         }
         if let Some(node_id) = self.header_under(viewport, sx, sy) {
-            self.selected = Some(node_id);
+            self.click_select(node_id, shift);
             let (gx, gy) = self.to_graph(viewport, sx, sy);
             if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
                 let anchor_offset = (gx - node.pos_graph.0, gy - node.pos_graph.1);
@@ -1315,13 +1391,12 @@ impl GraphCanvas {
         }
         match self.node_under(viewport, sx, sy) {
             Some(id) => {
-                self.selected = Some(id);
+                self.click_select(id, shift);
             }
             None => {
-                self.selected = None;
                 // Double-click on empty space opens the node picker at the
-                // cursor instead of panning. Two presses on empty space within
-                // the time + distance window count as a double-click.
+                // cursor. Two presses on empty space within the time +
+                // distance window count as a double-click.
                 let is_double = self.is_double_click(sx, sy, now, None);
                 self.note_click(sx, sy, now, None);
                 if is_double {
@@ -1333,11 +1408,20 @@ impl GraphCanvas {
                         graph_pos: (gx, gy),
                     });
                 } else {
-                    // First press of a potential double-click — start the pan
-                    // as usual. A single click pans exactly as before.
-                    self.drag_mode = DragMode::Pan;
-                    self.drag_anchor = (sx, sy);
-                    self.drag_pan_start = self.pan;
+                    // Otherwise start a rubber-band selection. Shift keeps the
+                    // current selection as a base to add onto; a plain drag
+                    // replaces it. A press with no drag commits an empty rect,
+                    // which clears the selection. (Pan is on middle-mouse.)
+                    let base = if shift {
+                        self.selected.clone()
+                    } else {
+                        ahash::AHashSet::new()
+                    };
+                    self.drag_mode = DragMode::Marquee {
+                        origin_screen: (sx, sy),
+                        additive: shift,
+                        base,
+                    };
                 }
             }
         }
@@ -1361,6 +1445,67 @@ impl GraphCanvas {
             .is_some_and(|t| now - t < DOUBLE_CLICK_SECONDS)
             && (dx * dx + dy * dy) < DOUBLE_CLICK_RADIUS_PX * DOUBLE_CLICK_RADIUS_PX
             && self.last_click_node == node
+    }
+
+    /// Apply a node click to the selection set. Shift toggles membership; a
+    /// plain click on an unselected node selects just it; a plain click on an
+    /// already-selected node leaves the (possibly multi-) selection intact so
+    /// it can be dragged as a group.
+    fn click_select(&mut self, id: u32, shift: bool) {
+        if shift {
+            if !self.selected.insert(id) {
+                self.selected.remove(&id);
+            }
+        } else if !self.selected.contains(&id) {
+            self.selected.clear();
+            self.selected.insert(id);
+        }
+    }
+
+    /// Replace the selection with exactly `id`. Used where multi-select
+    /// doesn't apply (param-row focus).
+    fn select_single(&mut self, id: u32) {
+        self.selected.clear();
+        self.selected.insert(id);
+    }
+
+    /// The selected node ids at the current scope, sorted for stable command
+    /// payloads. Read by Layer 3's Ctrl+G to build the group selection.
+    pub fn selected_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.selected.iter().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// If exactly one node is selected and it's a group, its id — for
+    /// Ctrl+Shift+G ungroup. `None` otherwise.
+    pub fn single_selected_group(&self) -> Option<u32> {
+        if self.selected.len() != 1 {
+            return None;
+        }
+        let id = *self.selected.iter().next()?;
+        self.nodes
+            .iter()
+            .find(|n| n.id == id && n.is_group)
+            .map(|n| n.id)
+    }
+
+    /// Graph-space centroid of the current selection — the natural drop point
+    /// for a new group node. Falls back to the layout origin when empty.
+    pub fn selection_centroid(&self) -> (f32, f32) {
+        let mut sx = 0.0;
+        let mut sy = 0.0;
+        let mut n = 0.0;
+        for node in self.nodes.iter().filter(|nv| self.selected.contains(&nv.id)) {
+            sx += node.pos_graph.0;
+            sy += node.pos_graph.1;
+            n += 1.0;
+        }
+        if n > 0.0 {
+            (sx / n, sy / n)
+        } else {
+            LAYOUT_ORIGIN
+        }
     }
 
     pub fn on_left_button_up(&mut self, viewport: Rect, sx: f32, sy: f32) {
@@ -1396,6 +1541,29 @@ impl GraphCanvas {
             // The scrub emitted its value on each pointer move; nothing to
             // finalize on release.
             DragMode::ParamScrub { .. } => {}
+            DragMode::Marquee {
+                origin_screen,
+                additive,
+                base,
+            } => {
+                // Build the graph-space rect from the press point to the
+                // release point, then select every node it intersects. Replace
+                // the selection unless the drag started additive (Shift).
+                let (ox, oy) = origin_screen;
+                let (gx0, gy0) = self.to_graph(viewport, ox.min(sx), oy.min(sy));
+                let (gx1, gy1) = self.to_graph(viewport, ox.max(sx), oy.max(sy));
+                let rect = (gx0, gy0, gx1 - gx0, gy1 - gy0);
+                let mut sel = if additive { base } else { ahash::AHashSet::new() };
+                for id in marquee_hits(rect, &self.nodes) {
+                    sel.insert(id);
+                }
+                self.selected = sel;
+                group_log!(
+                    "marquee commit: {} node(s) selected {:?}",
+                    self.selected.len(),
+                    self.selected
+                );
+            }
         }
     }
 
@@ -1427,12 +1595,16 @@ impl GraphCanvas {
         }
     }
 
-    /// Currently-selected node id within the graph the canvas is
-    /// viewing. Set by `on_left_button_down` when the click lands on
-    /// a node. Read by the editor's right-sidebar panel to figure out
-    /// which inner-node parameters to show as expose checkboxes.
+    /// The single focused node id, or `None` when zero or several are
+    /// selected. Read by the editor's right-sidebar panel to figure out which
+    /// inner-node parameters to show as expose checkboxes — that surface only
+    /// makes sense for one node, so a multi-selection reports `None`.
     pub fn selected_node_id(&self) -> Option<u32> {
-        self.selected
+        if self.selected.len() == 1 {
+            self.selected.iter().copied().next()
+        } else {
+            None
+        }
     }
 
     pub fn on_scroll(&mut self, viewport: Rect, dy: f32) {
@@ -1547,23 +1719,34 @@ impl GraphCanvas {
         }
 
         // Nodes: everything else first, then the hovered node, then the
-        // selected node last, so the node you're working on is never buried
-        // under its neighbours in a dense graph.
+        // selected nodes last, so the node(s) you're working on are never
+        // buried under their neighbours in a dense graph.
         for node in &self.nodes {
-            if Some(node.id) != self.selected && Some(node.id) != self.hovered {
+            if !self.selected.contains(&node.id) && self.hovered != Some(node.id) {
                 self.draw_node(ui, viewport, canvas, node);
             }
         }
         if let Some(h) = self.hovered
-            && Some(h) != self.selected
+            && !self.selected.contains(&h)
             && let Some(node) = self.find_node(h)
         {
             self.draw_node(ui, viewport, canvas, node);
         }
-        if let Some(s) = self.selected
-            && let Some(node) = self.find_node(s)
-        {
-            self.draw_node(ui, viewport, canvas, node);
+        for &s in &self.selected {
+            if let Some(node) = self.find_node(s) {
+                self.draw_node(ui, viewport, canvas, node);
+            }
+        }
+
+        // Live rubber-band rectangle while marquee-selecting.
+        if let DragMode::Marquee { origin_screen, .. } = &self.drag_mode {
+            let (ox, oy) = *origin_screen;
+            let (cx, cy) = self.cursor;
+            let x = ox.min(cx);
+            let y = oy.min(cy);
+            let w = (cx - ox).abs();
+            let h = (cy - oy).abs();
+            ui.draw_bordered_rect(x, y, w, h, MARQUEE_FILL, 0.0, 1.0, MARQUEE_BORDER);
         }
 
         // Mapping popover floats above everything else so its handles and
@@ -1696,7 +1879,7 @@ impl GraphCanvas {
         }
 
         let hovered = self.hovered == Some(node.id);
-        let selected = self.selected == Some(node.id);
+        let selected = self.selected.contains(&node.id);
         // Groups read as containers: a teal-washed body + a brighter accent
         // border so the eye picks out the boxes that "open".
         let bg = if node.is_group {
@@ -1903,8 +2086,10 @@ impl GraphCanvas {
     /// Such wires draw last and at full strength so the focused node's
     /// connections stand out from the rest of the graph.
     fn wire_touches_focus(&self, wire: &WireView) -> bool {
-        let focus = [self.selected, self.hovered];
-        focus.contains(&Some(wire.from_node)) || focus.contains(&Some(wire.to_node))
+        self.selected.contains(&wire.from_node)
+            || self.selected.contains(&wire.to_node)
+            || self.hovered == Some(wire.from_node)
+            || self.hovered == Some(wire.to_node)
     }
 
     fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: &WireView) {
@@ -2049,6 +2234,25 @@ fn resolve_level<'a>(
         wires = &group.wires;
     }
     Some((nodes, wires))
+}
+
+/// Axis-aligned rectangle overlap, each `(x, y, w, h)`. Touching edges don't
+/// count as overlapping (strict inequality), matching the marquee feel: a
+/// node is grabbed only once the band actually crosses into it.
+fn rects_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    a.0 < b.0 + b.2 && a.0 + a.2 > b.0 && a.1 < b.1 + b.3 && a.1 + a.3 > b.1
+}
+
+/// Ids of nodes whose box intersects the marquee `rect` (graph space). Pure;
+/// unit-tested via `rects_overlap`.
+fn marquee_hits(rect: (f32, f32, f32, f32), nodes: &[NodeView]) -> Vec<u32> {
+    nodes
+        .iter()
+        .filter(|n| {
+            rects_overlap(rect, (n.pos_graph.0, n.pos_graph.1, NODE_WIDTH, n.height()))
+        })
+        .map(|n| n.id)
+        .collect()
 }
 
 /// Topology hash of one resolved level plus the scope path, so the canvas
@@ -2232,6 +2436,20 @@ mod tests {
         // Breadcrumb jump back to root.
         canvas.set_scope_depth(0);
         assert!(canvas.scope_path().is_empty());
+    }
+
+    #[test]
+    fn rects_overlap_is_strict_and_symmetric() {
+        let a = (0.0, 0.0, 10.0, 10.0);
+        // Overlapping.
+        assert!(rects_overlap(a, (5.0, 5.0, 10.0, 10.0)));
+        assert!(rects_overlap((5.0, 5.0, 10.0, 10.0), a));
+        // Fully containing.
+        assert!(rects_overlap(a, (2.0, 2.0, 1.0, 1.0)));
+        // Touching edge only — not an overlap (strict).
+        assert!(!rects_overlap(a, (10.0, 0.0, 5.0, 5.0)));
+        // Disjoint.
+        assert!(!rects_overlap(a, (20.0, 20.0, 5.0, 5.0)));
     }
 
     #[test]

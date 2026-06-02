@@ -2126,6 +2126,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         cx,
                                         cy,
                                         self.time_since_start,
+                                        self.modifiers.shift,
                                     );
                                 }
                             }
@@ -2668,6 +2669,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         return;
                     }
+                }
+                // Editor window: Ctrl+G collapses the canvas selection into a
+                // group; Ctrl+Shift+G dissolves a selected group. Ctrl (not
+                // Cmd) — Cmd+Shift+G opens the editor window and is handled on
+                // the primary window, so there's no clash.
+                if is_graph_editor
+                    && self.modifiers.ctrl
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("g")
+                {
+                    let shift = self.modifiers.shift;
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        if shift {
+                            canvas.request_ungroup();
+                        } else {
+                            canvas.request_group_selection();
+                        }
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
                 }
                 // Editor window: Cmd+Z / Cmd+Shift+Z route to the
                 // content thread's undo stack so graph edits can be

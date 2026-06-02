@@ -938,6 +938,46 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::GroupSelection {
+                    scope_path,
+                    node_ids,
+                    handle,
+                    centroid,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::GroupNodesCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            node_ids.clone(),
+                            handle.clone(),
+                            *centroid,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::Ungroup {
+                    scope_path,
+                    group_id,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::UngroupNodeCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            *group_id,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::ToggleNodeParamExpose {
                     node_handle,
                     inner_param,

@@ -383,6 +383,25 @@ pub enum PanelAction {
         param_name: String,
         new_value: manifold_core::effect_graph_def::SerializedParamValue,
     },
+    /// Collapse a set of nodes at `scope_path` (the canvas's current view
+    /// depth, a path of group ids; empty = document root) into a single group
+    /// node. Emitted by Ctrl+G on a canvas selection. `handle` is the new
+    /// group's stable handle — auto-named and collision-free at its level;
+    /// `centroid` is the graph-space point the group node drops at. Routed to
+    /// `GroupNodesCommand`.
+    GroupSelection {
+        scope_path: Vec<u32>,
+        node_ids: Vec<u32>,
+        handle: String,
+        centroid: (f32, f32),
+    },
+    /// Dissolve a group node at `scope_path` back into its level, splicing its
+    /// body in where the group sat. Emitted by Ctrl+Shift+G on a selected
+    /// group. Routed to `UngroupNodeCommand`.
+    Ungroup {
+        scope_path: Vec<u32>,
+        group_id: u32,
+    },
 
     // ── Per-generator-param actions ────────────────────────────────
     //

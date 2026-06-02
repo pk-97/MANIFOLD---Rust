@@ -389,6 +389,8 @@ pub fn dispatch(
         | PanelAction::RemoveGraphNode { .. }
         | PanelAction::MoveGraphNode { .. }
         | PanelAction::SetGraphNodeParam { .. }
+        | PanelAction::GroupSelection { .. }
+        | PanelAction::Ungroup { .. }
         | PanelAction::EffectMappingRangeSnapshot { .. }
         | PanelAction::EffectMappingRangeChanged { .. }
         | PanelAction::EffectMappingRangeCommit { .. }
