@@ -773,9 +773,8 @@ impl GraphCanvas {
     // ── Group navigation (scope) ────────────────────────────────────
 
     /// The current view scope as a path of group node ids (empty = root).
-    /// Read by the app to pass as `scope_path` when it routes a group/ungroup
-    /// command for this level (wired in Layer 3); also used by tests.
-    #[allow(dead_code)]
+    /// Read by the app to scope graph edits (group/ungroup and per-node
+    /// mutations) to the level the canvas is showing.
     pub fn scope_path(&self) -> &[u32] {
         &self.scope
     }

@@ -160,6 +160,10 @@ pub struct AddGraphNodeCommand {
     node_type_id: String,
     pos: Option<(f32, f32)>,
     catalog_default: EffectGraphDef,
+    /// View depth this edit targets — a path of group ids (empty = document
+    /// root). Lets the editor add nodes *inside* a group the user has
+    /// descended into. See [`descend_level`].
+    scope_path: Vec<u32>,
     /// `id` minted at first execute. Persisted across undo/redo so
     /// re-execute reuses the same id — downstream commands
     /// (`ConnectPorts`, `SetGraphNodeParam`) address by id.
@@ -178,8 +182,15 @@ impl AddGraphNodeCommand {
             node_type_id,
             pos,
             catalog_default,
+            scope_path: Vec::new(),
             minted_id: None,
         }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
     }
 
     /// Id assigned to the newly-added node on first execute. `None`
@@ -194,15 +205,12 @@ impl Command for AddGraphNodeCommand {
         let node_type_id = self.node_type_id.clone();
         let pos = self.pos;
         let prev_minted = self.minted_id;
+        let scope = self.scope_path.clone();
         let minted = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
-            let next_id = def
-                .nodes
-                .iter()
-                .map(|n| n.id)
-                .max()
-                .map_or(0, |m| m + 1);
+            let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
             let id = prev_minted.unwrap_or(next_id);
-            def.nodes.push(EffectGraphNode {
+            nodes.push(EffectGraphNode {
                 id,
                 type_id: node_type_id,
                 handle: None,
@@ -215,22 +223,27 @@ impl Command for AddGraphNodeCommand {
                 output_canvas_scales: BTreeMap::new(),
                 group: None,
             });
-            id
-        });
+            Some(id)
+        })
+        .flatten();
         match minted {
             Some(id) => self.minted_id = Some(id),
             None => eprintln!(
-                "[manifold-editing] AddGraphNode: target {} did not resolve",
-                self.target.label()
+                "[manifold-editing] AddGraphNode: target {} / scope {:?} did not resolve",
+                self.target.label(),
+                self.scope_path
             ),
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(id) = self.minted_id else { return };
+        let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-            def.nodes.retain(|n| n.id != id);
-            def.wires.retain(|w| w.from_node != id && w.to_node != id);
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                nodes.retain(|n| n.id != id);
+                wires.retain(|w| w.from_node != id && w.to_node != id);
+            }
         });
     }
 
@@ -250,6 +263,8 @@ pub struct RemoveGraphNodeCommand {
     target: GraphTarget,
     node_id: u32,
     catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
     /// Reverse state. `None` before first execute; populated to the
     /// removed node + its incident wires on success.
     removed: Option<RemovedNode>,
@@ -267,26 +282,33 @@ impl RemoveGraphNodeCommand {
             target,
             node_id,
             catalog_default,
+            scope_path: Vec::new(),
             removed: None,
         }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
     }
 }
 
 impl Command for RemoveGraphNodeCommand {
     fn execute(&mut self, project: &mut Project) {
         let node_id = self.node_id;
+        let scope = self.scope_path.clone();
         let removed =
             with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
-                let node_pos = def.nodes.iter().position(|n| n.id == node_id)?;
-                let node = def.nodes.remove(node_pos);
-                let removed_wires: Vec<EffectGraphWire> = def
-                    .wires
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let node_pos = nodes.iter().position(|n| n.id == node_id)?;
+                let node = nodes.remove(node_pos);
+                let removed_wires: Vec<EffectGraphWire> = wires
                     .iter()
                     .filter(|w| w.from_node == node_id || w.to_node == node_id)
                     .cloned()
                     .collect();
-                def.wires
-                    .retain(|w| w.from_node != node_id && w.to_node != node_id);
+                wires.retain(|w| w.from_node != node_id && w.to_node != node_id);
                 Some(RemovedNode {
                     node,
                     wires: removed_wires,
@@ -302,9 +324,12 @@ impl Command for RemoveGraphNodeCommand {
         let Some(removed) = self.removed.clone() else {
             return;
         };
+        let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-            def.nodes.push(removed.node);
-            def.wires.extend(removed.wires);
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                nodes.push(removed.node);
+                wires.extend(removed.wires);
+            }
         });
     }
 
@@ -329,6 +354,8 @@ pub struct ConnectPortsCommand {
     to_node: u32,
     to_port: String,
     catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
     /// Wire that previously fed `(to_node, to_port)`, if any.
     /// Restored by undo before the new wire is removed.
     displaced: Option<EffectGraphWire>,
@@ -350,8 +377,15 @@ impl ConnectPortsCommand {
             to_node,
             to_port,
             catalog_default,
+            scope_path: Vec::new(),
             displaced: None,
         }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
     }
 }
 
@@ -361,14 +395,15 @@ impl Command for ConnectPortsCommand {
         let from_port = self.from_port.clone();
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
+        let scope = self.scope_path.clone();
         let displaced =
             with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
-                let displaced = def
-                    .wires
+                let (_nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let displaced = wires
                     .iter()
                     .position(|w| w.to_node == to_node && w.to_port == to_port)
-                    .map(|i| def.wires.remove(i));
-                def.wires.push(EffectGraphWire {
+                    .map(|i| wires.remove(i));
+                wires.push(EffectGraphWire {
                     from_node,
                     from_port,
                     to_node,
@@ -386,17 +421,22 @@ impl Command for ConnectPortsCommand {
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
         let displaced = self.displaced.take();
+        let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-            if let Some(pos) = def.wires.iter().position(|w| {
+            let Some((_nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+            else {
+                return;
+            };
+            if let Some(pos) = wires.iter().position(|w| {
                 w.from_node == from_node
                     && w.from_port == from_port
                     && w.to_node == to_node
                     && w.to_port == to_port
             }) {
-                def.wires.remove(pos);
+                wires.remove(pos);
             }
             if let Some(wire) = displaced {
-                def.wires.push(wire);
+                wires.push(wire);
             }
         });
     }
@@ -418,6 +458,8 @@ pub struct DisconnectPortsCommand {
     to_node: u32,
     to_port: String,
     catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
     /// The wire we removed, restored by undo.
     removed: Option<EffectGraphWire>,
 }
@@ -434,8 +476,15 @@ impl DisconnectPortsCommand {
             to_node,
             to_port,
             catalog_default,
+            scope_path: Vec::new(),
             removed: None,
         }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
     }
 }
 
@@ -443,11 +492,13 @@ impl Command for DisconnectPortsCommand {
     fn execute(&mut self, project: &mut Project) {
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
+        let scope = self.scope_path.clone();
         let removed = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
-            def.wires
+            let (_nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            wires
                 .iter()
                 .position(|w| w.to_node == to_node && w.to_port == to_port)
-                .map(|pos| def.wires.remove(pos))
+                .map(|pos| wires.remove(pos))
         })
         .flatten();
         self.removed = removed;
@@ -457,8 +508,11 @@ impl Command for DisconnectPortsCommand {
         let Some(wire) = self.removed.take() else {
             return;
         };
+        let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-            def.wires.push(wire);
+            if let Some((_nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                wires.push(wire);
+            }
         });
     }
 
@@ -480,6 +534,8 @@ pub struct MoveGraphNodeCommand {
     node_id: u32,
     new_pos: (f32, f32),
     catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
     /// Position before execute(), for undo.
     previous_pos: Option<Option<(f32, f32)>>,
 }
@@ -496,8 +552,15 @@ impl MoveGraphNodeCommand {
             node_id,
             new_pos,
             catalog_default,
+            scope_path: Vec::new(),
             previous_pos: None,
         }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
     }
 }
 
@@ -506,9 +569,11 @@ impl Command for MoveGraphNodeCommand {
         let node_id = self.node_id;
         let new_pos = self.new_pos;
         let prev_already_captured = self.previous_pos.is_some();
+        let scope = self.scope_path.clone();
         let captured =
             with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
-                let node = def.nodes.iter_mut().find(|n| n.id == node_id)?;
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let node = nodes.iter_mut().find(|n| n.id == node_id)?;
                 let prev = node.editor_pos;
                 node.editor_pos = Some(new_pos);
                 Some(prev)
@@ -524,8 +589,11 @@ impl Command for MoveGraphNodeCommand {
             return;
         };
         let node_id = self.node_id;
+        let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-            if let Some(node) = def.nodes.iter_mut().find(|n| n.id == node_id) {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some(node) = nodes.iter_mut().find(|n| n.id == node_id)
+            {
                 node.editor_pos = previous;
             }
         });
@@ -551,6 +619,8 @@ pub struct SetGraphNodeParamCommand {
     param_name: String,
     new_value: SerializedParamValue,
     catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
     /// Value before execute(). `Some(None)` means "key was absent";
     /// `Some(Some(v))` means "key existed with value `v`". `None` at
     /// pre-execute time.
@@ -571,8 +641,15 @@ impl SetGraphNodeParamCommand {
             param_name,
             new_value,
             catalog_default,
+            scope_path: Vec::new(),
             previous_value: None,
         }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
     }
 }
 
@@ -582,14 +659,17 @@ impl Command for SetGraphNodeParamCommand {
         let param_name = self.param_name.clone();
         let new_value = self.new_value.clone();
         let prev_already_captured = self.previous_value.is_some();
+        let scope = self.scope_path.clone();
         // Closure return: `Option<SerializedParamValue>` — None if the
         // key didn't exist before the insert, Some(prev) if it did.
         // `with_target_graph_mut` wraps in another Option for target
-        // resolution. `.flatten()` collapses: `None` here means either
-        // the target didn't resolve OR the node id wasn't in the graph.
+        // resolution. `.flatten()` collapses: `None` here means the target
+        // didn't resolve, the scope path didn't resolve, OR the node id
+        // wasn't in the (descended) graph level.
         let captured: Option<Option<SerializedParamValue>> =
             with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
-                def.nodes
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                nodes
                     .iter_mut()
                     .find(|n| n.id == node_id)
                     .map(|node| node.params.insert(param_name, new_value))
@@ -609,8 +689,11 @@ impl Command for SetGraphNodeParamCommand {
         };
         let node_id = self.node_id;
         let param_name = self.param_name.clone();
+        let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-            if let Some(node) = def.nodes.iter_mut().find(|n| n.id == node_id) {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some(node) = nodes.iter_mut().find(|n| n.id == node_id)
+            {
                 match prev {
                     Some(v) => {
                         node.params.insert(param_name, v);
@@ -2271,6 +2354,131 @@ mod tests {
                 .iter()
                 .any(|n| n.handle.as_deref() == Some("g") && n.group.is_some()),
             "undo of ungroup restores the group"
+        );
+    }
+
+    /// Collapse `b` into a group, then confirm a scoped Move edit targets the
+    /// body node (not a root node sharing its id) and undo restores it. This
+    /// is the Layer 3.5 contract: editing inside a group descends to its level.
+    #[test]
+    fn scoped_move_targets_group_body() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        let mut mv = MoveGraphNodeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            1, // body node `b` kept its id when it moved into the group
+            (42.0, 24.0),
+            mirror_catalog_default(),
+        )
+        .with_scope(vec![g_id]);
+        mv.execute(&mut project);
+
+        let body_pos = |project: &Project| {
+            graph_of(project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == g_id)
+                .unwrap()
+                .group
+                .as_deref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.handle.as_deref() == Some("b"))
+                .unwrap()
+                .editor_pos
+        };
+        assert_eq!(
+            body_pos(&project),
+            Some((42.0, 24.0)),
+            "scoped move landed on the body node"
+        );
+
+        mv.undo(&mut project);
+        assert_eq!(
+            body_pos(&project),
+            None,
+            "undo restored the body node's editor_pos"
+        );
+    }
+
+    /// A scoped Add drops the new node into the group body, not the root, and
+    /// undo removes it from the body.
+    #[test]
+    fn scoped_add_node_lands_in_group_body() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        let mut add = AddGraphNodeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            "node.transform".to_string(),
+            Some((1.0, 2.0)),
+            mirror_catalog_default(),
+        )
+        .with_scope(vec![g_id]);
+        add.execute(&mut project);
+        let new_id = add.new_node_id().expect("node added");
+
+        let def = graph_of(&project, &fx);
+        let body = def
+            .nodes
+            .iter()
+            .find(|n| n.id == g_id)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
+        assert!(
+            body.nodes.iter().any(|n| n.id == new_id),
+            "new node added to the group body"
+        );
+        assert!(
+            !def.nodes.iter().any(|n| n.id == new_id),
+            "new node not added at root"
+        );
+
+        add.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        let body = def
+            .nodes
+            .iter()
+            .find(|n| n.id == g_id)
+            .unwrap()
+            .group
+            .as_deref()
+            .unwrap();
+        assert!(
+            !body.nodes.iter().any(|n| n.id == new_id),
+            "undo removed the node from the body"
         );
     }
 

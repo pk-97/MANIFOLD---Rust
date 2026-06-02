@@ -579,6 +579,14 @@ impl Application {
         // borrow it while `dispatch` mutably borrows `self`'s other fields.
         let editor_graph_target: Option<manifold_core::GraphTarget> =
             self.watched_graph_target.clone();
+        // The canvas's current view depth (a path of group ids; empty = root),
+        // captured once so the per-node graph edits below target the level the
+        // user is actually looking at when they're inside a group.
+        let canvas_scope: Vec<u32> = self
+            .graph_canvas
+            .as_ref()
+            .map(|c| c.scope_path().to_vec())
+            .unwrap_or_default();
 
         for (action_idx, action) in actions.iter().enumerate() {
             // Intercept actions that need Application-level access
@@ -837,7 +845,8 @@ impl Application {
                             type_id.clone(),
                             Some(*graph_pos),
                             default.clone(),
-                        );
+                        )
+                        .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -859,7 +868,8 @@ impl Application {
                             *to_node,
                             to_port.clone(),
                             default.clone(),
-                        );
+                        )
+                        .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -884,7 +894,8 @@ impl Application {
                             *to_node,
                             to_port.clone(),
                             default.clone(),
-                        );
+                        )
+                        .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -898,7 +909,8 @@ impl Application {
                             eid.clone(),
                             *node_id,
                             default.clone(),
-                        );
+                        )
+                        .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -913,7 +925,8 @@ impl Application {
                             *node_id,
                             *new_pos,
                             default.clone(),
-                        );
+                        )
+                        .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -933,7 +946,8 @@ impl Application {
                             param_name.clone(),
                             new_value.clone(),
                             default.clone(),
-                        );
+                        )
+                        .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
