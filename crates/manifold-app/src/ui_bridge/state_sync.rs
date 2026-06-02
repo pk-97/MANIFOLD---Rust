@@ -1672,9 +1672,11 @@ fn gen_params_to_config(
                             osc_address,
                             ableton_display,
                             ableton_range,
-                            // Generator params are direct values, not remappable
-                            // bindings — no mapping-drawer chevron.
-                            mappable: false,
+                            // Generator params are now remappable too: the
+                            // mapping drawer edits a per-instance ParamMapping
+                            // note on GeneratorParamState, so the Author-card
+                            // chevron shows on every exposed generator row.
+                            mappable: true,
                         }
                     })
                     .collect();
@@ -1727,9 +1729,11 @@ fn gen_params_to_config(
                             osc_address,
                             ableton_display,
                             ableton_range,
-                            // Generator params are direct values, not remappable
-                            // bindings — no mapping-drawer chevron.
-                            mappable: false,
+                            // Generator params are now remappable too: the
+                            // mapping drawer edits a per-instance ParamMapping
+                            // note on GeneratorParamState, so the Author-card
+                            // chevron shows on every exposed generator row.
+                            mappable: true,
                         }
                     })
                     .collect();

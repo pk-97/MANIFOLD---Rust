@@ -1,6 +1,6 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
-use manifold_core::EffectId;
+use manifold_core::{EffectId, LayerId};
 use manifold_core::effects::{
     EffectInstance, ParamConvert, ParamEnvelope, ParamId, ParamMapping, ParamSlot, ParameterDriver,
     UserParamBinding,
@@ -881,6 +881,13 @@ enum MappingReverse {
     /// Stock-param note this command CREATED (copy-on-write): undo removes
     /// it, returning the knob to the recipe's reshape.
     NoteRemove(String),
+    /// Note path with an EXPLICIT pre-drag reverse (the drag-commit case):
+    /// undo applies these field values to the note. Used when a live-drag
+    /// preview already mutated the note before commit, so the command can't
+    /// self-capture the true pre-drag value — the caller supplies it from
+    /// the drag-start snapshot, mirroring `ChangeEffectParamCommand`'s
+    /// explicit `old_value`.
+    NoteApply(BindingMappingEdit),
 }
 
 /// Edit a [`UserParamBinding`]'s card-slider mapping — its display
@@ -914,6 +921,13 @@ pub struct EditUserParamBindingCommand {
     /// which store the reshape lives in (user binding vs stock note) so
     /// undo reverts the right one.
     reverse: Option<MappingReverse>,
+    /// Explicit pre-drag reverse for the drag-commit case. When set, undo
+    /// restores THESE field values instead of whatever the command would
+    /// self-capture at execute time — necessary because a live-drag
+    /// preview already mutated the store before commit. `None` for
+    /// single-shot edits (invert / curve / label), which self-capture
+    /// correctly since nothing mutated the store first.
+    explicit_reverse: Option<BindingMappingEdit>,
 }
 
 impl EditUserParamBindingCommand {
@@ -923,6 +937,25 @@ impl EditUserParamBindingCommand {
             binding_id,
             new,
             reverse: None,
+            explicit_reverse: None,
+        }
+    }
+
+    /// Drag-commit constructor: `reverse` carries the pre-drag field values
+    /// captured at drag start, so undo restores them (not the
+    /// preview-mutated values the command would otherwise self-capture).
+    pub fn new_with_reverse(
+        effect_id: EffectId,
+        binding_id: String,
+        new: BindingMappingEdit,
+        reverse: BindingMappingEdit,
+    ) -> Self {
+        Self {
+            effect_id,
+            binding_id,
+            new,
+            reverse: None,
+            explicit_reverse: Some(reverse),
         }
     }
 }
@@ -931,6 +964,7 @@ impl Command for EditUserParamBindingCommand {
     fn execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         let new = self.new.clone();
+        let explicit = self.explicit_reverse.clone();
         self.reverse = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
             // User-exposed binding (inline reshape) — the existing path.
             if let Some(binding) = effect
@@ -938,9 +972,11 @@ impl Command for EditUserParamBindingCommand {
                 .iter_mut()
                 .find(|b| b.id == binding_id)
             {
-                // Snapshot the OLD values of exactly the touched fields
-                // BEFORE applying, so undo restores precisely what changed.
-                let reverse = new.snapshot_inverse(binding);
+                // Explicit pre-drag reverse wins (drag commit); else snapshot
+                // the OLD values of the touched fields BEFORE applying.
+                let reverse = explicit
+                    .clone()
+                    .unwrap_or_else(|| new.snapshot_inverse(binding));
                 new.apply_to(binding);
                 // Bump so the renderer rebuilds the user-binding tail (and
                 // drops its LastAppliedCache tail) on the next frame.
@@ -956,7 +992,12 @@ impl Command for EditUserParamBindingCommand {
                     let mut note = prior.clone();
                     new.apply_to_mapping(&mut note);
                     effect.upsert_param_mapping(note); // bumps version
-                    Some(MappingReverse::NoteRestore(prior))
+                    // Explicit reverse (drag) restores the pre-drag fields;
+                    // else restore the whole prior note (single-shot).
+                    Some(match explicit {
+                        Some(e) => MappingReverse::NoteApply(e),
+                        None => MappingReverse::NoteRestore(prior),
+                    })
                 }
                 None => {
                     // Only seed a note for a REAL param (one that resolves
@@ -966,7 +1007,12 @@ impl Command for EditUserParamBindingCommand {
                     let mut note = seed_stock_note(effect, &binding_id);
                     new.apply_to_mapping(&mut note);
                     effect.upsert_param_mapping(note); // bumps version
-                    Some(MappingReverse::NoteRemove(binding_id))
+                    // Single-shot removes the freshly-created note on undo;
+                    // a drag restores the pre-drag (seed/identity) fields.
+                    Some(match explicit {
+                        Some(e) => MappingReverse::NoteApply(e),
+                        None => MappingReverse::NoteRemove(binding_id),
+                    })
                 }
             }
         });
@@ -998,11 +1044,150 @@ impl Command for EditUserParamBindingCommand {
             MappingReverse::NoteRemove(id) => {
                 effect.remove_param_mapping(&id); // bumps version
             }
+            MappingReverse::NoteApply(fields) => {
+                if let Some(mut note) = effect.param_mapping(&binding_id).cloned() {
+                    fields.apply_to_mapping(&mut note);
+                    effect.upsert_param_mapping(note); // bumps version
+                }
+            }
         }
     }
 
     fn description(&self) -> &str {
         "Edit param mapping"
+    }
+}
+
+/// Seed a fresh reshape note for a generator param, identity-valued.
+/// Range from the generator registry `ParamDef` when available; a `0..1`
+/// fallback covers JSON-only generators with no registry entry and
+/// registry-less tests (only matters for invert/curve).
+fn seed_gen_note(
+    gp: &manifold_core::generator::GeneratorParamState,
+    param_id: &str,
+) -> ParamMapping {
+    let (min, max) = manifold_core::generator_definition_registry::try_get(gp.generator_type())
+        .and_then(|def| def.id_to_index.get(param_id).map(|&i| (def, i)))
+        .map(|(def, i)| (def.param_defs[i].min, def.param_defs[i].max))
+        .unwrap_or((0.0, 1.0));
+    ParamMapping {
+        param_id: param_id.to_string(),
+        label: None,
+        min,
+        max,
+        invert: false,
+        curve: manifold_core::macro_bank::MacroCurve::Linear,
+        scale: 1.0,
+        offset: 0.0,
+    }
+}
+
+/// Edit a generator card param's reshape note — the generator twin of
+/// [`EditUserParamBindingCommand`]'s stock-param path. Generators have no
+/// user-binding tier, so this is purely the note store
+/// (`GeneratorParamState.param_mappings`), addressed by `layer_id` +
+/// stable `param_id` (never mutated). Seeds the note copy-on-write
+/// (identity, so the un-edited note is byte-identical to the recipe);
+/// undo restores the prior note or removes a freshly-created one.
+#[derive(Debug)]
+pub struct EditGenParamMappingCommand {
+    layer_id: LayerId,
+    param_id: String,
+    new: BindingMappingEdit,
+    reverse: Option<MappingReverse>,
+    /// Explicit pre-drag reverse for the drag-commit case — see
+    /// [`EditUserParamBindingCommand::explicit_reverse`].
+    explicit_reverse: Option<BindingMappingEdit>,
+}
+
+impl EditGenParamMappingCommand {
+    pub fn new(layer_id: LayerId, param_id: String, new: BindingMappingEdit) -> Self {
+        Self {
+            layer_id,
+            param_id,
+            new,
+            reverse: None,
+            explicit_reverse: None,
+        }
+    }
+
+    /// Drag-commit constructor — `reverse` carries the pre-drag fields.
+    pub fn new_with_reverse(
+        layer_id: LayerId,
+        param_id: String,
+        new: BindingMappingEdit,
+        reverse: BindingMappingEdit,
+    ) -> Self {
+        Self {
+            layer_id,
+            param_id,
+            new,
+            reverse: None,
+            explicit_reverse: Some(reverse),
+        }
+    }
+}
+
+impl Command for EditGenParamMappingCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let param_id = self.param_id.clone();
+        let new = self.new.clone();
+        let explicit = self.explicit_reverse.clone();
+        self.reverse = project
+            .timeline
+            .find_layer_by_id_mut(self.layer_id.as_str())
+            .and_then(|(_, l)| l.gen_params_mut())
+            .map(|gp| match gp.param_mapping(&param_id).cloned() {
+                Some(prior) => {
+                    let mut note = prior.clone();
+                    new.apply_to_mapping(&mut note);
+                    gp.upsert_param_mapping(note);
+                    match explicit {
+                        Some(e) => MappingReverse::NoteApply(e),
+                        None => MappingReverse::NoteRestore(prior),
+                    }
+                }
+                None => {
+                    let mut note = seed_gen_note(gp, &param_id);
+                    new.apply_to_mapping(&mut note);
+                    gp.upsert_param_mapping(note);
+                    match explicit {
+                        Some(e) => MappingReverse::NoteApply(e),
+                        None => MappingReverse::NoteRemove(param_id.clone()),
+                    }
+                }
+            });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(reverse) = self.reverse.clone() else {
+            return;
+        };
+        let param_id = self.param_id.clone();
+        let Some(gp) = project
+            .timeline
+            .find_layer_by_id_mut(self.layer_id.as_str())
+            .and_then(|(_, l)| l.gen_params_mut())
+        else {
+            return;
+        };
+        match reverse {
+            MappingReverse::NoteRestore(prior) => gp.upsert_param_mapping(prior),
+            MappingReverse::NoteRemove(id) => gp.remove_param_mapping(&id),
+            MappingReverse::NoteApply(fields) => {
+                if let Some(mut note) = gp.param_mapping(&param_id).cloned() {
+                    fields.apply_to_mapping(&mut note);
+                    gp.upsert_param_mapping(note);
+                }
+            }
+            // Generators have no user-binding tier; this variant is never
+            // produced by this command.
+            MappingReverse::UserFields(_) => {}
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Edit generator param mapping"
     }
 }
 
@@ -1240,5 +1425,96 @@ mod tests {
             project.settings.master_effects[0].param_mappings.is_empty(),
             "no orphan note minted for an unknown id",
         );
+    }
+
+    /// Generator command: create a note copy-on-write, edit it, undo
+    /// (NoteRemove since it was created), redo, then re-edit (NoteRestore).
+    #[test]
+    fn edit_gen_param_mapping_roundtrip() {
+        use manifold_core::GeneratorTypeId;
+        use manifold_core::layer::Layer;
+
+        let mut project = Project::default();
+        let layer = Layer::new_generator("Gen".into(), GeneratorTypeId::new("Plasma"), 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.insert_layer(0, layer);
+        assert!(
+            project
+                .timeline
+                .find_layer_by_id_mut(layer_id.as_str())
+                .and_then(|(_, l)| l.gen_params_mut())
+                .is_some(),
+            "generator layer has gen_params",
+        );
+
+        let edit = BindingMappingEdit {
+            invert: Some(true),
+            scale: Some(2.0),
+            ..Default::default()
+        };
+        let mut cmd =
+            EditGenParamMappingCommand::new(layer_id.clone(), "complexity".to_string(), edit);
+
+        let note = |p: &Project, lid: &str| -> Option<ParamMapping> {
+            p.timeline
+                .layers
+                .iter()
+                .find(|l| l.layer_id.as_str() == lid)
+                .and_then(|l| l.gen_params())
+                .and_then(|gp| gp.param_mapping("complexity").cloned())
+        };
+
+        // create
+        cmd.execute(&mut project);
+        let n = note(&project, layer_id.as_str()).expect("note created");
+        assert!(n.invert);
+        assert_eq!(n.scale, 2.0);
+
+        // undo removes the freshly-created note
+        cmd.undo(&mut project);
+        assert!(note(&project, layer_id.as_str()).is_none(), "undo removes created note");
+
+        // redo re-creates
+        cmd.execute(&mut project);
+        assert!(note(&project, layer_id.as_str()).unwrap().invert);
+    }
+
+    /// The drag-undo fix: a live-drag preview mutates the store to the
+    /// final value BEFORE commit, so a self-capturing command would record
+    /// the wrong "before." `new_with_reverse` carries the explicit pre-drag
+    /// value (from the drag-start snapshot), so undo restores it — not the
+    /// preview-mutated final. Proven for a user binding (the same explicit
+    /// path serves stock + generator notes).
+    #[test]
+    fn drag_commit_explicit_reverse_restores_pre_drag_not_preview_final() {
+        let (mut project, effect_id, binding_id) = project_with_one_user_binding();
+        // Simulate the live-drag preview having already moved scale 1.0 -> 3.0.
+        project.settings.master_effects[0].user_param_bindings[0].scale = 3.0;
+
+        let mut cmd = EditUserParamBindingCommand::new_with_reverse(
+            effect_id,
+            binding_id.clone(),
+            BindingMappingEdit {
+                scale: Some(3.0), // new = the dragged-to (final) value
+                ..Default::default()
+            },
+            BindingMappingEdit {
+                scale: Some(1.0), // explicit pre-drag reverse from the snapshot
+                ..Default::default()
+            },
+        );
+        cmd.execute(&mut project);
+        assert_eq!(master_binding(&project, &binding_id).scale, 3.0, "commit lands final");
+
+        cmd.undo(&mut project);
+        assert_eq!(
+            master_binding(&project, &binding_id).scale, 1.0,
+            "undo restores the PRE-DRAG value (1.0), not the preview-mutated final (3.0) \
+             — the quirk Peter caught",
+        );
+
+        // redo re-applies the final.
+        cmd.execute(&mut project);
+        assert_eq!(master_binding(&project, &binding_id).scale, 3.0, "redo re-lands final");
     }
 }
