@@ -846,6 +846,85 @@ mod tests {
         }
     }
 
+    /// End-to-end: a JSON document containing a node group flattens and loads
+    /// through the real `into_graph` against the builtin registry — proving the
+    /// rewired wires type-check against real primitive ports, the boundary
+    /// nodes fold away, inner handles are prefixed, and the interface param
+    /// routes onto the right inner node. This is the integration the
+    /// pure-`flatten` unit tests can't cover.
+    #[test]
+    fn grouped_document_flattens_and_loads_end_to_end() {
+        // group `tweak`: src -> so1 -> so2 -> out, with `amount` -> so2.scale.
+        // Two scale_offset_texture atoms (in: Texture2D, out: Texture2D, param
+        // `scale`). The instance overrides amount to 0.25.
+        let json = r#"{
+            "version": 1,
+            "nodes": [
+                { "id": 0, "typeId": "system.source", "handle": "source" },
+                {
+                    "id": 1, "typeId": "group", "handle": "tweak",
+                    "params": { "amount": { "type": "Float", "value": 0.25 } },
+                    "group": {
+                        "interface": {
+                            "inputs":  [{ "name": "src", "portType": "Texture2D" }],
+                            "outputs": [{ "name": "out", "portType": "Texture2D" }],
+                            "params":  [{ "name": "amount", "targetHandle": "so2",
+                                          "targetParam": "scale",
+                                          "default": { "type": "Float", "value": 1.0 } }]
+                        },
+                        "nodes": [
+                            { "id": 0, "typeId": "system.group_input" },
+                            { "id": 1, "typeId": "node.scale_offset_texture", "handle": "so1" },
+                            { "id": 2, "typeId": "node.scale_offset_texture", "handle": "so2" },
+                            { "id": 3, "typeId": "system.group_output" }
+                        ],
+                        "wires": [
+                            { "fromNode": 0, "fromPort": "src", "toNode": 1, "toPort": "in" },
+                            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "out" }
+                        ]
+                    }
+                },
+                { "id": 2, "typeId": "system.final_output", "handle": "final" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "src" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+            ]
+        }"#;
+
+        let doc: GraphDocument = serde_json::from_str(json).expect("grouped doc parses");
+        let g = doc
+            .into_graph(&registry())
+            .expect("grouped document flattens and loads");
+
+        // Boundary + group nodes folded away: only source, so1, so2, final.
+        assert_eq!(g.node_count(), 4, "group/boundary nodes must fold away");
+
+        // Inner handles are prefixed with the group instance handle.
+        let so1 = g
+            .node_id_by_handle("tweak/so1")
+            .expect("inner handle 'tweak/so1' present after flatten");
+        let so2 = g
+            .node_id_by_handle("tweak/so2")
+            .expect("inner handle 'tweak/so2' present after flatten");
+
+        // The interface param routed onto so2.scale; so1 kept its default.
+        assert_eq!(
+            g.get_node(so2).unwrap().params.get("scale").cloned().unwrap(),
+            ParamValue::Float(0.25),
+            "amount override routed to so2.scale"
+        );
+        assert_eq!(
+            g.get_node(so1).unwrap().params.get("scale").cloned().unwrap(),
+            ParamValue::Float(1.0),
+            "so1.scale untouched at its declared default"
+        );
+
+        // Three concrete wires survived: source->so1, so1->so2, so2->final.
+        assert_eq!(g.wires().len(), 3);
+    }
+
     #[test]
     fn round_trip_bloom_like_three_node_graph() {
         let mut g = Graph::new();
@@ -1003,6 +1082,7 @@ mod tests {
                 title: Some("Particle Sim".to_string()),
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
@@ -1075,6 +1155,7 @@ mod tests {
                 title: None,
                 output_formats,
                 output_canvas_scales,
+                group: None,
             }],
             wires: vec![],
         };
@@ -1109,6 +1190,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
@@ -1151,6 +1233,7 @@ mod tests {
                     title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
+                    group: None,
                 },
                 NodeDocument {
                     id: 1,
@@ -1163,6 +1246,7 @@ mod tests {
                     title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
+                    group: None,
                 },
             ],
             wires: vec![WireDocument {
@@ -1199,6 +1283,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
@@ -1230,6 +1315,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
@@ -1352,6 +1438,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
