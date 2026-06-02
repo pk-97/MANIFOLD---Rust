@@ -95,6 +95,72 @@ pub enum FlattenError {
     GroupCycle { depth: usize },
 }
 
+impl std::fmt::Display for FlattenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FlattenError::UnknownGroupPort {
+                group_handle,
+                port,
+                side,
+            } => write!(
+                f,
+                "group '{group_handle}': wire {side:?} references undeclared port '{port}'"
+            ),
+            FlattenError::AmbiguousGroupOutput {
+                group_handle,
+                port,
+                producers,
+            } => write!(
+                f,
+                "group '{group_handle}': output '{port}' has {producers} inner producers (need exactly 1)"
+            ),
+            FlattenError::DuplicateInterfaceName { group_handle, name } => {
+                write!(f, "group '{group_handle}': duplicate interface name '{name}'")
+            }
+            FlattenError::UnknownGroupParam {
+                group_handle,
+                param,
+            } => write!(
+                f,
+                "group '{group_handle}': override targets undeclared param '{param}'"
+            ),
+            FlattenError::GroupParamTargetMissing {
+                group_handle,
+                target_handle,
+                target_param,
+            } => write!(
+                f,
+                "group '{group_handle}': param routes to missing inner target '{target_handle}.{target_param}'"
+            ),
+            FlattenError::ReservedHandleChar { handle } => {
+                write!(f, "handle '{handle}' contains the reserved '/' character")
+            }
+            FlattenError::MissingGroupHandle { node_id } => write!(
+                f,
+                "group node {node_id} has no handle (a group instance must be named)"
+            ),
+            FlattenError::MalformedBoundaryWire { node_id, side } => {
+                write!(f, "node {node_id}: wire {side:?} misuses a group boundary node")
+            }
+            FlattenError::PassthroughNotSupported {
+                group_handle,
+                input_port,
+                output_port,
+            } => write!(
+                f,
+                "group '{group_handle}': direct input '{input_port}' -> output '{output_port}' \
+                 passthrough is unsupported; insert an explicit pass-through node"
+            ),
+            FlattenError::GroupCycle { depth } => write!(
+                f,
+                "group nesting exceeded depth {depth} (reference cycle or pathological nesting)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FlattenError {}
+
 /// Expand every group in `def` into a flat document. Groupless documents are
 /// returned clone-equal (ids preserved); documents containing groups are
 /// renumbered with fresh, unique node ids.

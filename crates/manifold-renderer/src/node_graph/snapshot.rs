@@ -823,6 +823,7 @@ mod tests {
                     title: None,
                     output_formats: Default::default(),
                     output_canvas_scales: std::collections::BTreeMap::new(),
+                    group: None,
                 },
                 EffectGraphNode {
                     id: 99,
@@ -835,6 +836,7 @@ mod tests {
                     title: None,
                     output_formats: Default::default(),
                     output_canvas_scales: std::collections::BTreeMap::new(),
+                    group: None,
                 },
             ],
             wires: vec![EffectGraphWire {
@@ -873,6 +875,7 @@ mod tests {
                 title: None,
                 output_formats: Default::default(),
                 output_canvas_scales: std::collections::BTreeMap::new(),
+                group: None,
             }],
             wires: Vec::new(),
         };

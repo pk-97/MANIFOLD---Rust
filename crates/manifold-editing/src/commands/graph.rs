@@ -213,6 +213,7 @@ impl Command for AddGraphNodeCommand {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             });
             id
         });
@@ -1977,6 +1978,7 @@ mod tests {
                     title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
+                    group: None,
                 },
                 EffectGraphNode {
                     id: 1,
@@ -1989,6 +1991,7 @@ mod tests {
                     title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
+                    group: None,
                 },
                 EffectGraphNode {
                     id: 2,
@@ -2001,6 +2004,7 @@ mod tests {
                     title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
+                    group: None,
                 },
                 EffectGraphNode {
                     id: 3,
@@ -2013,6 +2017,7 @@ mod tests {
                     title: None,
                     output_formats: BTreeMap::new(),
                     output_canvas_scales: BTreeMap::new(),
+                    group: None,
                 },
             ],
             wires: vec![
@@ -2586,6 +2591,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
@@ -2837,6 +2843,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };
@@ -3226,6 +3233,7 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: vec![],
         };

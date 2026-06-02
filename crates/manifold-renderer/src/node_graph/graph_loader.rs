@@ -138,6 +138,9 @@ pub enum GraphBuildError {
     },
     MissingBoundarySource,
     MissingBoundaryFinalOutput,
+    /// A node group failed to flatten into a flat document before
+    /// instantiation. See [`manifold_core::flatten::FlattenError`].
+    Flatten(manifold_core::flatten::FlattenError),
 }
 
 /// Which side of a wire failed to resolve.
@@ -239,6 +242,21 @@ pub fn instantiate_def(
             max: EFFECT_GRAPH_VERSION_WITH_METADATA,
         });
     }
+
+    // Fold any node groups before anything else runs. After this the def
+    // contains no `group` nodes, so every path below — the boundary scan,
+    // per-node construction, wire translation — sees a flat document and is
+    // unchanged. Groupless documents pass through as a cheap clone, so the
+    // overwhelmingly common case is untouched. This is the *group* boundary
+    // (`system.group_input`/`output`); the *effect* boundary
+    // (`system.source`/`final_output`) handled below is a separate layer.
+    let flattened;
+    let def = if def.nodes.iter().any(|n| n.group.is_some()) {
+        flattened = manifold_core::flatten::flatten_groups(def).map_err(GraphBuildError::Flatten)?;
+        &flattened
+    } else {
+        def
+    };
 
     // For Splice, identify the def's Source and FinalOutput up front so
     // we know which nodes to skip during instantiation and which wires
@@ -712,6 +730,9 @@ pub fn log_build_error(context: &str, err: &GraphBuildError) {
         }
         GraphBuildError::MissingBoundaryFinalOutput => {
             let _ = write!(buf, "splice def has no system.final_output boundary");
+        }
+        GraphBuildError::Flatten(e) => {
+            let _ = write!(buf, "group flatten failed: {e}");
         }
     }
     eprintln!("{buf}");

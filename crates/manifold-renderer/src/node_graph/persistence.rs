@@ -302,6 +302,9 @@ pub enum LoadError {
         convert: &'static str,
         target_param_type: &'static str,
     },
+    /// A node group failed to flatten before instantiation. Carries the
+    /// formatted [`manifold_core::flatten::FlattenError`] message.
+    Flatten(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -376,6 +379,7 @@ impl std::fmt::Display for LoadError {
                  Pick a convert variant that matches: Float / IntRound → Float or Int targets, \
                  BoolThreshold → Bool targets, EnumRound → Enum targets."
             ),
+            Self::Flatten(msg) => write!(f, "group flatten failed: {msg}"),
         }
     }
 }
@@ -518,6 +522,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                     title: inst.node.display_title().map(|s| s.to_string()),
                     output_formats,
                     output_canvas_scales,
+                    group: None,
                 }
             })
             .collect();
@@ -735,6 +740,7 @@ fn load_error_from_build(e: crate::node_graph::graph_loader::GraphBuildError) ->
             reason: "graph_loader reported a Splice-only boundary error from a Standalone build"
                 .to_string(),
         },
+        G::Flatten(e) => LoadError::Flatten(e.to_string()),
     }
 }
 
