@@ -13,3 +13,9 @@
 pub mod diff;
 
 pub use diff::{DiffResult, TextureDiff};
+
+/// First end-to-end fusion proof — a hand-fused Gain chain validated against
+/// the unfused chain through the oracle (correct fusion clears, wrong fusion
+/// fails). Test-only; the eventual codegen reuses this render-two-ways shape.
+#[cfg(test)]
+mod proof;
