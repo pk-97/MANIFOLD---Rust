@@ -349,8 +349,25 @@ pub fn instantiate_def(
         };
         id_map.insert(node_doc.id, runtime_id);
         // Copy the stable document identity onto the live instance so param
-        // bindings can resolve to it regardless of handle / nesting.
-        graph.set_node_id(runtime_id, node_doc.node_id.clone());
+        // bindings can resolve to it regardless of handle / nesting. A
+        // node's id **defaults to its handle** when the document carries
+        // none — pre-node-id documents, or any graph JSON loaded outside
+        // `Project` normalization (hand-authored defs, `from_json_str`).
+        // This is the runtime chokepoint every def→graph path funnels
+        // through, so the "node_id defaults to handle" convention (shared
+        // with the preset stamp + the `BindingTarget` deserialize) holds
+        // uniformly here: a handle-targeted binding resolves no matter how
+        // the def reached us.
+        let resolved_node_id = if node_doc.node_id.is_empty() {
+            node_doc
+                .handle
+                .as_deref()
+                .map(manifold_core::NodeId::new)
+                .unwrap_or_default()
+        } else {
+            node_doc.node_id.clone()
+        };
+        graph.set_node_id(runtime_id, resolved_node_id);
 
         // PerSplice: record the handle in the effect-local map. Owned
         // Cow because the handle string comes off disk and we don't
