@@ -739,7 +739,7 @@ impl Project {
             }
             crate::graph_target::GraphTarget::Generator(lid) => {
                 let (_, layer) = self.timeline.find_layer_by_id_mut(lid.as_str())?;
-                let mut host = layer.graph_host_mut()?;
+                let mut host = layer.graph_host_mut();
                 Some(f(&mut host))
             }
         }

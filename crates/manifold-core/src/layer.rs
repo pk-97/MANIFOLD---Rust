@@ -304,18 +304,18 @@ impl Layer {
     }
 
     /// A [`crate::graph_host::GraphHost`] view over this layer's
-    /// generator, bundling the generator state with the layer's
-    /// `generator_graph` override (which the host needs for
-    /// `preset_metadata`-aware slot resolution and for the graph editing
-    /// commands). `None` if the layer has no generator. Split-borrows the
-    /// three disjoint fields so the host can mutate all of them.
-    pub fn graph_host_mut(&mut self) -> Option<crate::graph_host::GeneratorHost<'_>> {
-        let params = self.gen_params.as_mut()?;
-        Some(crate::graph_host::GeneratorHost {
-            params,
+    /// generator, bundling the `generator_graph` override (always present
+    /// — drives graph editing) with an *optional* `gen_params` handle (the
+    /// param surface, absent before the generator's params are set up).
+    /// Split-borrows the three disjoint fields so the host can mutate all
+    /// of them. Always returns a host: graph editing must work even before
+    /// param state exists.
+    pub fn graph_host_mut(&mut self) -> crate::graph_host::GeneratorHost<'_> {
+        crate::graph_host::GeneratorHost {
+            params: self.gen_params.as_mut(),
             graph: &mut self.generator_graph,
             graph_version: &mut self.generator_graph_version,
-        })
+        }
     }
 
     /// Ensure both clip ordering caches are up-to-date.

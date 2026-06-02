@@ -10,7 +10,7 @@
 //! disk. Everything that is *genuinely symmetric* lives behind this
 //! trait: the per-instance graph override + its version, the
 //! `param_values` value bus, the per-instance reshape notes
-//! (`param_mappings`), and the driver / Ableton modulation stores. Those
+//! (`param_mappings`), and the driver / Ableton modulation reads. Those
 //! fields are field-for-field identical on both structs, so the commands
 //! that touch them can operate on `&mut dyn GraphHost` and exist once.
 //!
@@ -26,20 +26,28 @@
 //! - **Envelopes.** Effect envelopes live on the owning [`Layer`], keyed
 //!   by `(effect_type, param_id)` (master effects have none); generator
 //!   envelopes live on [`GeneratorParamState`] itself, keyed by
-//!   `param_id` alone. The trait carries no envelope accessor — a
-//!   `&mut dyn GraphHost` resolved to an effect can't reach its host
-//!   layer, so envelope round-tripping stays at the command layer.
+//!   `param_id` alone. The trait carries no envelope accessor.
 //! - **Base-param clamping.** Generators clamp writes against the
 //!   registry; effects clamp upstream in the UI. Each impl of
 //!   [`GraphHost::set_base_param_by_id`] keeps its own policy.
 //!
+//! ## A generator host can exist without param state
+//!
+//! Graph editing (Add/Remove/Connect/… nodes) only needs the
+//! `generator_graph` override, which a generator layer always has;
+//! [`GeneratorParamState`] (`gen_params`) may still be `None` on a
+//! freshly-created generator layer whose graph is being edited before
+//! its params are initialised. So [`GeneratorHost`] carries an *optional*
+//! params handle: the graph-def methods always work, and the param
+//! methods degrade to empty / no-op / `false` when params are absent.
+//!
 //! ## Resolution: closure, not borrow-return
 //!
-//! A generator host is a *temporary* ([`GeneratorHost`]) bundling two
-//! disjoint [`Layer`] fields, so it can't be returned as
-//! `&mut dyn GraphHost`. [`crate::project::Project::with_graph_host_mut`]
-//! takes a closure instead, matching the existing
-//! `with_target_graph_mut` pattern in the graph editing commands.
+//! A generator host is a *temporary* ([`GeneratorHost`]) bundling disjoint
+//! [`Layer`] fields, so it can't be returned as `&mut dyn GraphHost`.
+//! [`crate::project::Project::with_graph_host_mut`] takes a closure
+//! instead, matching the existing `with_target_graph_mut` pattern in the
+//! graph editing commands.
 
 use crate::ableton_mapping::AbletonParamMapping;
 use crate::effect_graph_def::EffectGraphDef;
@@ -61,7 +69,7 @@ pub trait GraphHost {
     /// Discriminator for the few genuinely kind-specific call sites.
     fn host_kind(&self) -> GraphHostKind;
 
-    // ── Per-instance graph override ───────────────────────────────────
+    // ── Per-instance graph override (always available) ────────────────
     // Effect: `EffectInstance::graph` / `graph_version`.
     // Generator: `Layer::generator_graph` / `generator_graph_version`.
 
@@ -74,10 +82,9 @@ pub trait GraphHost {
 
     // ── Value bus (`param_values`) ────────────────────────────────────
 
-    /// The effective (post-modulation) value slots.
+    /// The effective (post-modulation) value slots (empty if the
+    /// generator has no param state yet).
     fn param_values(&self) -> &[ParamSlot];
-    /// Mutable value slots — for the host-generic show/hide-exposed edit.
-    fn param_values_mut(&mut self) -> &mut Vec<ParamSlot>;
 
     /// Resolve a stable `param_id` to its `param_values` slot, including
     /// the effect user-binding tail / generator `preset_metadata` tier.
@@ -87,8 +94,9 @@ pub trait GraphHost {
     fn get_base_param_by_id(&self, param_id: &str) -> Option<f32>;
 
     /// Write the user-set base value for a `param_id`. Returns `true` if
-    /// the id resolved. Each impl keeps its own clamp policy (generators
-    /// clamp against the registry; effects don't — the UI clamps).
+    /// the id resolved (and there was param state to write). Each impl
+    /// keeps its own clamp policy (generators clamp against the registry;
+    /// effects don't — the UI clamps).
     fn set_base_param_by_id(&mut self, param_id: &str, value: f32) -> bool;
 
     /// Static-registry index for `param_id` (the declaration-order slot,
@@ -100,12 +108,11 @@ pub trait GraphHost {
     /// Defaults to `(0.0, 1.0)` when the registry can't supply a range.
     fn param_range(&self, index: usize) -> (f32, f32);
 
-    // ── Modulation stores (field-for-field identical on both) ─────────
+    // ── Modulation stores (read; mutable accessors land with their
+    //    Phase-C/E callers, shaped Option-safely there) ───────────────
 
     fn drivers(&self) -> Option<&Vec<ParameterDriver>>;
-    fn drivers_mut(&mut self) -> &mut Option<Vec<ParameterDriver>>;
     fn ableton_mappings(&self) -> Option<&Vec<AbletonParamMapping>>;
-    fn ableton_mappings_mut(&mut self) -> &mut Option<Vec<AbletonParamMapping>>;
 
     // ── Per-instance reshape notes (`param_mappings`) ─────────────────
 
@@ -142,9 +149,6 @@ impl GraphHost for EffectInstance {
     fn param_values(&self) -> &[ParamSlot] {
         &self.param_values
     }
-    fn param_values_mut(&mut self) -> &mut Vec<ParamSlot> {
-        &mut self.param_values
-    }
 
     fn resolve_param_slot(&self, param_id: &str) -> Option<usize> {
         self.param_id_to_value_index(param_id)
@@ -180,14 +184,8 @@ impl GraphHost for EffectInstance {
     fn drivers(&self) -> Option<&Vec<ParameterDriver>> {
         self.drivers.as_ref()
     }
-    fn drivers_mut(&mut self) -> &mut Option<Vec<ParameterDriver>> {
-        &mut self.drivers
-    }
     fn ableton_mappings(&self) -> Option<&Vec<AbletonParamMapping>> {
         self.ableton_mappings.as_ref()
-    }
-    fn ableton_mappings_mut(&mut self) -> &mut Option<Vec<AbletonParamMapping>> {
-        &mut self.ableton_mappings
     }
 
     fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
@@ -207,12 +205,13 @@ impl GraphHost for EffectInstance {
 
 // ── Generator: impl on a Layer-bound wrapper ──────────────────────────
 
-/// A generator host: a [`GeneratorParamState`] together with its owning
-/// layer's `generator_graph` override (needed for `preset_metadata`-aware
-/// slot resolution and for the graph editing commands). Constructed by
-/// [`crate::layer::Layer::graph_host_mut`] from disjoint layer fields.
+/// A generator host: the layer's `generator_graph` override (always
+/// present, drives graph editing) together with an *optional*
+/// [`GeneratorParamState`] handle (the param / modulation surface, absent
+/// on a generator layer whose params aren't initialised yet). Constructed
+/// by [`crate::layer::Layer::graph_host_mut`] from disjoint layer fields.
 pub struct GeneratorHost<'a> {
-    pub params: &'a mut GeneratorParamState,
+    pub params: Option<&'a mut GeneratorParamState>,
     pub graph: &'a mut Option<EffectGraphDef>,
     pub graph_version: &'a mut u32,
 }
@@ -233,38 +232,43 @@ impl GraphHost for GeneratorHost<'_> {
     }
 
     fn param_values(&self) -> &[ParamSlot] {
-        &self.params.param_values
-    }
-    fn param_values_mut(&mut self) -> &mut Vec<ParamSlot> {
-        &mut self.params.param_values
+        self.params
+            .as_deref()
+            .map(|p| p.param_values.as_slice())
+            .unwrap_or(&[])
     }
 
     fn resolve_param_slot(&self, param_id: &str) -> Option<usize> {
         // Mirror of `Layer::resolve_gen_param_slot`: prefer the override
-        // graph's `preset_metadata.params` (which carries user-added
-        // bindings), else the static generator registry.
+        // graph's `preset_metadata.params` (carries user-added bindings,
+        // and works even before param state exists), else the static
+        // generator registry (which needs the generator type from params).
         if let Some(graph) = self.graph.as_ref()
             && let Some(meta) = graph.preset_metadata.as_ref()
             && !meta.params.is_empty()
         {
             return meta.params.iter().position(|p| p.id == param_id);
         }
+        let params = self.params.as_deref()?;
         crate::generator_definition_registry::param_id_to_index(
-            self.params.generator_type(),
+            params.generator_type(),
             param_id,
         )
     }
 
     fn get_base_param_by_id(&self, param_id: &str) -> Option<f32> {
         let idx = self.resolve_param_slot(param_id)?;
-        Some(self.params.get_param_base(idx))
+        Some(self.params.as_deref()?.get_param_base(idx))
     }
 
     fn set_base_param_by_id(&mut self, param_id: &str, value: f32) -> bool {
-        match self.resolve_param_slot(param_id) {
+        let Some(idx) = self.resolve_param_slot(param_id) else {
+            return false;
+        };
+        match self.params.as_deref_mut() {
             // Generators clamp against the registry inside `set_param_base`.
-            Some(idx) => {
-                self.params.set_param_base(idx, value);
+            Some(params) => {
+                params.set_param_base(idx, value);
                 true
             }
             None => false,
@@ -272,40 +276,45 @@ impl GraphHost for GeneratorHost<'_> {
     }
 
     fn param_id_to_static_index(&self, param_id: &str) -> Option<usize> {
+        let params = self.params.as_deref()?;
         crate::generator_definition_registry::param_id_to_index(
-            self.params.generator_type(),
+            params.generator_type(),
             param_id,
         )
     }
 
     fn param_range(&self, index: usize) -> (f32, f32) {
-        crate::generator_definition_registry::try_get(self.params.generator_type())
-            .and_then(|d| d.param_defs.get(index))
-            .map(|p| (p.min, p.max))
+        self.params
+            .as_deref()
+            .and_then(|p| {
+                crate::generator_definition_registry::try_get(p.generator_type())
+                    .and_then(|d| d.param_defs.get(index))
+                    .map(|pd| (pd.min, pd.max))
+            })
             .unwrap_or((0.0, 1.0))
     }
 
     fn drivers(&self) -> Option<&Vec<ParameterDriver>> {
-        self.params.drivers.as_ref()
-    }
-    fn drivers_mut(&mut self) -> &mut Option<Vec<ParameterDriver>> {
-        &mut self.params.drivers
+        self.params.as_deref().and_then(|p| p.drivers.as_ref())
     }
     fn ableton_mappings(&self) -> Option<&Vec<AbletonParamMapping>> {
-        self.params.ableton_mappings.as_ref()
-    }
-    fn ableton_mappings_mut(&mut self) -> &mut Option<Vec<AbletonParamMapping>> {
-        &mut self.params.ableton_mappings
+        self.params
+            .as_deref()
+            .and_then(|p| p.ableton_mappings.as_ref())
     }
 
     fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
-        self.params.param_mapping(id)
+        self.params.as_deref().and_then(|p| p.param_mapping(id))
     }
     fn upsert_param_mapping(&mut self, mapping: ParamMapping) {
-        self.params.upsert_param_mapping(mapping)
+        if let Some(params) = self.params.as_deref_mut() {
+            params.upsert_param_mapping(mapping)
+        }
     }
     fn remove_param_mapping(&mut self, id: &str) {
-        self.params.remove_param_mapping(id)
+        if let Some(params) = self.params.as_deref_mut() {
+            params.remove_param_mapping(id)
+        }
     }
 
     fn user_param_bindings(&self) -> &[UserParamBinding] {

@@ -50,24 +50,14 @@ fn with_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    match target {
-        GraphTarget::Effect(eid) => {
-            let inst = project.find_effect_by_id_mut(eid)?;
-            let def = inst.graph.get_or_insert_with(|| catalog_default.clone());
-            let r = f(def);
-            inst.graph_version = inst.graph_version.wrapping_add(1);
-            Some(r)
-        }
-        GraphTarget::Generator(lid) => {
-            let (_, layer) = project.timeline.find_layer_by_id_mut(lid)?;
-            let def = layer
-                .generator_graph
-                .get_or_insert_with(|| catalog_default.clone());
-            let r = f(def);
-            layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
-            Some(r)
-        }
-    }
+    project.with_graph_host_mut(target, |host| {
+        let def = host
+            .graph_def_mut()
+            .get_or_insert_with(|| catalog_default.clone());
+        let r = f(def);
+        host.bump_graph_version();
+        r
+    })
 }
 
 /// Variant of [`with_target_graph_mut`] that doesn't lift the graph
@@ -83,22 +73,14 @@ fn with_existing_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    match target {
-        GraphTarget::Effect(eid) => {
-            let inst = project.find_effect_by_id_mut(eid)?;
-            let def = inst.graph.as_mut()?;
+    project
+        .with_graph_host_mut(target, |host| {
+            let def = host.graph_def_mut().as_mut()?;
             let r = f(def);
-            inst.graph_version = inst.graph_version.wrapping_add(1);
+            host.bump_graph_version();
             Some(r)
-        }
-        GraphTarget::Generator(lid) => {
-            let (_, layer) = project.timeline.find_layer_by_id_mut(lid)?;
-            let def = layer.generator_graph.as_mut()?;
-            let r = f(def);
-            layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
-            Some(r)
-        }
-    }
+        })
+        .flatten()
 }
 
 /// Helper for the Revert command: take the target's current
@@ -108,20 +90,11 @@ fn take_target_graph(
     project: &mut Project,
     target: &GraphTarget,
 ) -> Option<Option<EffectGraphDef>> {
-    match target {
-        GraphTarget::Effect(eid) => {
-            let inst = project.find_effect_by_id_mut(eid)?;
-            let prev = inst.graph.take();
-            inst.graph_version = inst.graph_version.wrapping_add(1);
-            Some(prev)
-        }
-        GraphTarget::Generator(lid) => {
-            let (_, layer) = project.timeline.find_layer_by_id_mut(lid)?;
-            let prev = layer.generator_graph.take();
-            layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
-            Some(prev)
-        }
-    }
+    project.with_graph_host_mut(target, |host| {
+        let prev = host.graph_def_mut().take();
+        host.bump_graph_version();
+        prev
+    })
 }
 
 /// Helper for the Revert command: install a given graph (or `None`)
@@ -131,21 +104,10 @@ fn install_target_graph(
     target: &GraphTarget,
     graph: Option<EffectGraphDef>,
 ) {
-    match target {
-        GraphTarget::Effect(eid) => {
-            if let Some(inst) = project.find_effect_by_id_mut(eid) {
-                inst.graph = graph;
-                inst.graph_version = inst.graph_version.wrapping_add(1);
-            }
-        }
-        GraphTarget::Generator(lid) => {
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
-                layer.generator_graph = graph;
-                layer.generator_graph_version =
-                    layer.generator_graph_version.wrapping_add(1);
-            }
-        }
-    }
+    project.with_graph_host_mut(target, |host| {
+        *host.graph_def_mut() = graph;
+        host.bump_graph_version();
+    });
 }
 
 // ---------------------------------------------------------------------------
