@@ -431,15 +431,10 @@ enum DragMode {
         is_int: bool,
         press_origin_x: f32,
     },
-    /// Rubber-band selection from an empty-canvas press. `origin_screen` is
-    /// the press point; the live rect spans it to the current cursor. On
-    /// release, nodes whose box intersects the rect become the selection
-    /// (union with `base` when the drag began with Shift held, else replace).
-    Marquee {
-        origin_screen: (f32, f32),
-        additive: bool,
-        base: ahash::AHashSet<u32>,
-    },
+    /// Rubber-band selection from a Shift+empty-canvas press. `origin_screen`
+    /// is the press point; the live rect spans it to the current cursor. On
+    /// release, the nodes the box intersects become the selection (replace).
+    Marquee { origin_screen: (f32, f32) },
 }
 
 impl DragMode {
@@ -542,6 +537,10 @@ const DOUBLE_CLICK_SECONDS: f32 = 0.3;
 /// Max screen-space distance (px) between the two presses of a double-click.
 /// A drag further than this is two separate single-clicks, not a double.
 const DOUBLE_CLICK_RADIUS_PX: f32 = 4.0;
+/// A left-press that moves less than this on release counts as a click, not a
+/// drag — used to tell a pan from a deselecting click, and a marquee from a
+/// stray shift-click.
+const CLICK_MOVE_SLOP_PX: f32 = 4.0;
 
 impl GraphCanvas {
     pub fn new() -> Self {
@@ -1273,13 +1272,15 @@ impl GraphCanvas {
     /// 5. Node header → start node-move drag.
     /// 6. Node body → select.
     /// 7. Empty canvas, double-click → open the node picker at the cursor.
-    /// 8. Empty canvas, drag → rubber-band select. A click with no drag
-    ///    commits an empty rect, which clears the selection.
+    /// 8. Empty canvas, Shift+drag → rubber-band box select.
+    /// 9. Empty canvas, plain drag → pan (trackpad-friendly); a click with no
+    ///    drag clears the selection.
     ///
     /// `now` is a frame-monotonic wall-clock time in seconds, threaded in
     /// from the window event loop, used to distinguish a double-click on
-    /// empty space from a marquee-start single click. `shift` is the Shift
-    /// modifier state: it makes node clicks toggle and marquees additive.
+    /// empty space from a pan-start single click. `shift` is the Shift
+    /// modifier state: it makes node clicks toggle, and an empty-canvas drag
+    /// a box-select instead of a pan.
     pub fn on_left_button_down(
         &mut self,
         viewport: Rect,
@@ -1406,21 +1407,20 @@ impl GraphCanvas {
                         screen_pos: (sx, sy),
                         graph_pos: (gx, gy),
                     });
-                } else {
-                    // Otherwise start a rubber-band selection. Shift keeps the
-                    // current selection as a base to add onto; a plain drag
-                    // replaces it. A press with no drag commits an empty rect,
-                    // which clears the selection. (Pan is on middle-mouse.)
-                    let base = if shift {
-                        self.selected.clone()
-                    } else {
-                        ahash::AHashSet::new()
-                    };
+                } else if shift {
+                    // Shift+drag = rubber-band box select (replaces the
+                    // selection with whatever the box covers). A shift-press
+                    // with no drag is a no-op (guarded on release).
                     self.drag_mode = DragMode::Marquee {
                         origin_screen: (sx, sy),
-                        additive: shift,
-                        base,
                     };
+                } else {
+                    // Plain left-drag = pan, so the canvas stays navigable on a
+                    // trackpad. A left-click with no drag clears the selection
+                    // (handled on release).
+                    self.drag_mode = DragMode::Pan;
+                    self.drag_anchor = (sx, sy);
+                    self.drag_pan_start = self.pan;
                 }
             }
         }
@@ -1510,7 +1510,16 @@ impl GraphCanvas {
     pub fn on_left_button_up(&mut self, viewport: Rect, sx: f32, sy: f32) {
         let prev = std::mem::replace(&mut self.drag_mode, DragMode::None);
         match prev {
-            DragMode::Pan | DragMode::None => {}
+            DragMode::None => {}
+            DragMode::Pan => {
+                // A left-press that didn't actually pan (cursor barely moved) is
+                // a click on empty space — clear the selection. A real pan
+                // leaves the selection alone.
+                let moved = (sx - self.drag_anchor.0).hypot(sy - self.drag_anchor.1);
+                if moved < CLICK_MOVE_SLOP_PX {
+                    self.selected.clear();
+                }
+            }
             DragMode::WireFrom {
                 from_node,
                 from_port,
@@ -1540,23 +1549,19 @@ impl GraphCanvas {
             // The scrub emitted its value on each pointer move; nothing to
             // finalize on release.
             DragMode::ParamScrub { .. } => {}
-            DragMode::Marquee {
-                origin_screen,
-                additive,
-                base,
-            } => {
-                // Build the graph-space rect from the press point to the
-                // release point, then select every node it intersects. Replace
-                // the selection unless the drag started additive (Shift).
+            DragMode::Marquee { origin_screen } => {
+                // A shift-press with no real drag leaves the selection alone —
+                // don't let a zero-area box wipe it.
                 let (ox, oy) = origin_screen;
+                if (sx - ox).hypot(sy - oy) < CLICK_MOVE_SLOP_PX {
+                    return;
+                }
+                // Build the graph-space rect from press to release; the nodes
+                // it intersects become the selection (replace).
                 let (gx0, gy0) = self.to_graph(viewport, ox.min(sx), oy.min(sy));
                 let (gx1, gy1) = self.to_graph(viewport, ox.max(sx), oy.max(sy));
                 let rect = (gx0, gy0, gx1 - gx0, gy1 - gy0);
-                let mut sel = if additive { base } else { ahash::AHashSet::new() };
-                for id in marquee_hits(rect, &self.nodes) {
-                    sel.insert(id);
-                }
-                self.selected = sel;
+                self.selected = marquee_hits(rect, &self.nodes).into_iter().collect();
                 group_log!(
                     "marquee commit: {} node(s) selected {:?}",
                     self.selected.len(),
@@ -1738,7 +1743,7 @@ impl GraphCanvas {
         }
 
         // Live rubber-band rectangle while marquee-selecting.
-        if let DragMode::Marquee { origin_screen, .. } = &self.drag_mode {
+        if let DragMode::Marquee { origin_screen } = &self.drag_mode {
             let (ox, oy) = *origin_screen;
             let (cx, cy) = self.cursor;
             let x = ox.min(cx);

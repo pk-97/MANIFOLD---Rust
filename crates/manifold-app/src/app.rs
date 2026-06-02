@@ -2670,12 +2670,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         return;
                     }
                 }
-                // Editor window: Ctrl+G collapses the canvas selection into a
-                // group; Ctrl+Shift+G dissolves a selected group. Ctrl (not
-                // Cmd) — Cmd+Shift+G opens the editor window and is handled on
-                // the primary window, so there's no clash.
+                // Editor window: Cmd+G collapses the canvas selection into a
+                // group; Cmd+Shift+G dissolves a selected group. The primary
+                // window's Cmd+Shift+G (open editor) and Cmd+G (group layers)
+                // are gated on `is_primary`, so there's no clash — the editor
+                // window intercepts here and returns before either fires.
                 if is_graph_editor
-                    && self.modifiers.ctrl
+                    && self.modifiers.command
                     && let winit::keyboard::Key::Character(c) = &logical_key
                     && c.eq_ignore_ascii_case("g")
                 {
