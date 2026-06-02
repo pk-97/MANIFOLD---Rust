@@ -15,12 +15,16 @@
 //! every frame for V1 (4-node test graph). A future optimization is to
 //! gate snapshot generation on a topology version counter.
 
+use crate::node_graph::effect_node::{EffectNode, ParamValues};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 use crate::node_graph::ports::{ChannelElementType, MatchMode, PortKind, PortType};
 
-use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::effect_graph_def::{
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
+    GROUP_TYPE_ID, GroupInterface,
+};
 
 /// Owned, `Send`able view of a graph for the editor canvas.
 #[derive(Debug, Clone)]
@@ -107,6 +111,21 @@ pub struct NodeSnapshot {
     /// propagation around the loop pushes consumers off-screen to
     /// the right (one extra column per relaxation pass × n+1 passes).
     pub breaks_dependency_cycle: bool,
+    /// `Some` when this node is a group instance (`type_id` ==
+    /// `manifold_core::effect_graph_def::GROUP_TYPE_ID`). Its `inputs`/
+    /// `outputs` are the group's interface ports; the recursive body lives
+    /// here so the canvas can descend into it. `None` for every ordinary node.
+    pub group: Option<Box<GroupSnapshot>>,
+}
+
+/// The body of a group node as the editor sees it — a sub-graph the canvas
+/// renders when you descend into the group. Recursive (a body node may itself
+/// be a group). Built by [`GraphSnapshot::from_def`] without flattening, so the
+/// nesting survives all the way to the canvas.
+#[derive(Debug, Clone)]
+pub struct GroupSnapshot {
+    pub nodes: Vec<NodeSnapshot>,
+    pub wires: Vec<WireSnapshot>,
 }
 
 /// Snapshot of one inner-node parameter, sized for the user-exposed-
@@ -404,6 +423,7 @@ impl GraphSnapshot {
                     parameters,
                     editor_pos: None,
                     breaks_dependency_cycle: inst.node.breaks_dependency_cycle(),
+                    group: None,
                 }
             })
             .collect();
@@ -446,6 +466,14 @@ impl GraphSnapshot {
     /// like "no active graph" rather than showing a partial state.
     pub fn from_def(def: &EffectGraphDef) -> Option<Self> {
         let registry = PrimitiveRegistry::with_builtin();
+        // Groups can't go through the flatten-based path below: `into_graph`
+        // would expand them away, and the 1:1 runtime↔doc id remap would
+        // misalign (one group node in the def vs. N expanded nodes in the
+        // graph). Snapshot the document structurally instead, preserving the
+        // nesting so the canvas can render and descend into groups.
+        if def.nodes.iter().any(|n| n.group.is_some()) {
+            return Self::from_def_structural(def, &registry);
+        }
         let graph = match def.clone().into_graph(&registry) {
             Ok(g) => g,
             Err(e) => {
@@ -491,6 +519,208 @@ impl GraphSnapshot {
             }
         }
         Some(snap)
+    }
+
+    /// Structural snapshot that preserves groups (no flattening). Each ordinary
+    /// node is constructed from the registry to read its real ports; group
+    /// nodes keep their interface ports and recurse into their body; the
+    /// `group_input`/`group_output` boundary nodes get ports synthesized from
+    /// the enclosing interface. `None` if any node has an unknown type id.
+    fn from_def_structural(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Option<Self> {
+        let (nodes, wires) = snapshot_level(&def.nodes, &def.wires, registry, None)?;
+        Some(Self {
+            nodes,
+            wires,
+            outer_routings: Vec::new(),
+        })
+    }
+}
+
+/// Recursively snapshot one graph level (a list of def nodes + wires).
+/// `parent_interface` is the enclosing group's interface when this level is a
+/// group body — used to synthesize the boundary nodes' ports; `None` at the
+/// document root.
+fn snapshot_level(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    registry: &PrimitiveRegistry,
+    parent_interface: Option<&GroupInterface>,
+) -> Option<(Vec<NodeSnapshot>, Vec<WireSnapshot>)> {
+    // Interface ports carry no resolved type in the def (it's advisory), so the
+    // canvas draws them as the common case; category-exact typing is polish.
+    let iface_ports = |ports: &[manifold_core::effect_graph_def::InterfacePortDef]| {
+        ports
+            .iter()
+            .map(|p| PortSnapshot {
+                name: p.name.clone(),
+                kind: PortKindSnapshot::Texture2D,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut out_nodes: Vec<NodeSnapshot> = Vec::with_capacity(nodes.len());
+    for dn in nodes {
+        let snap = if let Some(group) = dn.group.as_deref() {
+            let (body_nodes, body_wires) =
+                snapshot_level(&group.nodes, &group.wires, registry, Some(&group.interface))?;
+            NodeSnapshot {
+                id: dn.id,
+                node_handle: dn.handle.clone(),
+                type_id: GROUP_TYPE_ID.to_string(),
+                title: dn.handle.clone().unwrap_or_else(|| "Group".to_string()),
+                inputs: iface_ports(&group.interface.inputs),
+                outputs: iface_ports(&group.interface.outputs),
+                parameters: Vec::new(),
+                editor_pos: dn.editor_pos,
+                breaks_dependency_cycle: false,
+                group: Some(Box::new(GroupSnapshot {
+                    nodes: body_nodes,
+                    wires: body_wires,
+                })),
+            }
+        } else if dn.type_id == GROUP_INPUT_TYPE_ID {
+            NodeSnapshot {
+                id: dn.id,
+                node_handle: None,
+                type_id: dn.type_id.clone(),
+                title: "Group Input".to_string(),
+                inputs: Vec::new(),
+                outputs: parent_interface.map(|i| iface_ports(&i.inputs)).unwrap_or_default(),
+                parameters: Vec::new(),
+                editor_pos: dn.editor_pos,
+                breaks_dependency_cycle: false,
+                group: None,
+            }
+        } else if dn.type_id == GROUP_OUTPUT_TYPE_ID {
+            NodeSnapshot {
+                id: dn.id,
+                node_handle: None,
+                type_id: dn.type_id.clone(),
+                title: "Group Output".to_string(),
+                inputs: parent_interface.map(|i| iface_ports(&i.outputs)).unwrap_or_default(),
+                outputs: Vec::new(),
+                parameters: Vec::new(),
+                editor_pos: dn.editor_pos,
+                breaks_dependency_cycle: false,
+                group: None,
+            }
+        } else {
+            let mut boxed = registry.construct(&dn.type_id)?;
+            if let Some(src) = dn.wgsl_source.as_deref() {
+                boxed.set_wgsl_source(src);
+            }
+            // Seed defaults, apply the doc's param overrides, let variadic nodes
+            // rebuild their port list, then read the resolved ports.
+            let mut params: ParamValues = ahash::AHashMap::default();
+            for pd in boxed.parameters() {
+                params.insert(pd.name, pd.default.clone());
+            }
+            let static_names: Vec<&'static str> = boxed.parameters().iter().map(|p| p.name).collect();
+            for (k, v) in &dn.params {
+                if let Some(&name) = static_names.iter().find(|n| **n == k.as_str()) {
+                    params.insert(name, v.clone().into());
+                }
+            }
+            boxed.reconfigure(&params);
+            node_snapshot_from_constructed(
+                boxed.as_ref(),
+                dn.id,
+                dn.handle.clone(),
+                &params,
+                &dn.exposed_params,
+                dn.editor_pos,
+            )
+        };
+        out_nodes.push(snap);
+    }
+    out_nodes.sort_by_key(|n| n.id);
+
+    let out_wires = wires
+        .iter()
+        .map(|w| WireSnapshot {
+            from_node: w.from_node,
+            from_port: w.from_port.clone(),
+            to_node: w.to_node,
+            to_port: w.to_port.clone(),
+        })
+        .collect();
+
+    Some((out_nodes, out_wires))
+}
+
+/// Build a [`NodeSnapshot`] from a constructed (and reconfigured) node plus its
+/// document-side identity. The port/param mapping mirrors [`GraphSnapshot::from_graph`]'s
+/// per-node logic for the structural (group-preserving) path.
+fn node_snapshot_from_constructed(
+    node: &dyn EffectNode,
+    id: u32,
+    handle: Option<String>,
+    params: &ParamValues,
+    exposed: &std::collections::BTreeSet<String>,
+    editor_pos: Option<(f32, f32)>,
+) -> NodeSnapshot {
+    let type_id = node.type_id().as_str().to_string();
+    let title = match node.display_title() {
+        Some(custom) => format!("{custom} (WGSL)"),
+        None => super::palette::friendly_label_for(&type_id)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| title_from_type_id(&type_id)),
+    };
+    let inputs = node
+        .inputs()
+        .iter()
+        .filter(|p| matches!(p.kind, PortKind::Input))
+        .map(|p| PortSnapshot {
+            name: p.name.to_string(),
+            kind: PortKindSnapshot::from(p.ty),
+        })
+        .collect();
+    let outputs = node
+        .outputs()
+        .iter()
+        .filter(|p| matches!(p.kind, PortKind::Output))
+        .map(|p| PortSnapshot {
+            name: p.name.to_string(),
+            kind: PortKindSnapshot::from(p.ty),
+        })
+        .collect();
+    let parameters = node
+        .parameters()
+        .iter()
+        .map(|pd| {
+            let current = params.get(pd.name).cloned().unwrap_or_else(|| pd.default.clone());
+            let summary = match &current {
+                ParamValue::Table(t) => Some(format!("{}×{}", t.row_count(), t.col_count())),
+                _ => None,
+            };
+            ParamSnapshot {
+                name: pd.name.to_string(),
+                label: pd.label.to_string(),
+                kind: param_snapshot_kind(pd.ty),
+                default_value: param_default_to_f32(&pd.default),
+                current_value: param_default_to_f32(&current),
+                range: pd.range,
+                enum_labels: if matches!(pd.ty, ParamType::Enum) {
+                    Some(pd.enum_values.iter().map(|s| (*s).to_string()).collect())
+                } else {
+                    None
+                },
+                exposed: exposed.contains(pd.name),
+                summary,
+            }
+        })
+        .collect();
+    NodeSnapshot {
+        id,
+        node_handle: handle,
+        type_id,
+        title,
+        inputs,
+        outputs,
+        parameters,
+        editor_pos,
+        breaks_dependency_cycle: node.breaks_dependency_cycle(),
+        group: None,
     }
 }
 
@@ -552,6 +782,99 @@ mod tests {
     use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
     use crate::node_graph::parameters::ParamDef;
     use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort};
+
+    #[test]
+    fn from_def_preserves_group_structure() {
+        use manifold_core::effect_graph_def::{
+            EFFECT_GRAPH_VERSION, GroupDef, GroupInterface, InterfacePortDef,
+        };
+        let mk = |id: u32, type_id: &str, handle: Option<&str>| EffectGraphNode {
+            id,
+            type_id: type_id.to_string(),
+            handle: handle.map(|h| h.to_string()),
+            params: Default::default(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        };
+        let w = |fln: u32, fp: &str, tn: u32, tp: &str| EffectGraphWire {
+            from_node: fln,
+            from_port: fp.to_string(),
+            to_node: tn,
+            to_port: tp.to_string(),
+        };
+        let iport = |name: &str| InterfacePortDef {
+            name: name.to_string(),
+            port_type: String::new(),
+        };
+        let body = GroupDef {
+            interface: GroupInterface {
+                inputs: vec![iport("src")],
+                outputs: vec![iport("out")],
+                params: vec![],
+            },
+            nodes: vec![
+                mk(0, GROUP_INPUT_TYPE_ID, None),
+                mk(1, "node.scale_offset_texture", Some("so")),
+                mk(2, GROUP_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![w(0, "src", 1, "in"), w(1, "out", 2, "out")],
+        };
+        let mut group_node = mk(10, GROUP_TYPE_ID, Some("tweak"));
+        group_node.group = Some(Box::new(body));
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![
+                mk(0, "system.source", Some("source")),
+                group_node,
+                mk(2, "system.final_output", Some("final")),
+            ],
+            wires: vec![w(0, "out", 10, "src"), w(10, "out", 2, "in")],
+        };
+
+        let snap = GraphSnapshot::from_def(&def).expect("structural snapshot built");
+
+        // The group node survived as a group, with interface ports + a body.
+        let g = snap
+            .nodes
+            .iter()
+            .find(|n| n.node_handle.as_deref() == Some("tweak"))
+            .expect("group node present in snapshot");
+        assert_eq!(g.type_id, GROUP_TYPE_ID);
+        assert!(g.inputs.iter().any(|p| p.name == "src"));
+        assert!(g.outputs.iter().any(|p| p.name == "out"));
+        let body = g.group.as_deref().expect("group body preserved");
+
+        // Inner node carries its REAL ports, resolved from the registry.
+        let so = body
+            .nodes
+            .iter()
+            .find(|n| n.node_handle.as_deref() == Some("so"))
+            .expect("inner node present");
+        assert!(so.inputs.iter().any(|p| p.name == "in"));
+        assert!(so.outputs.iter().any(|p| p.name == "out"));
+
+        // Boundary nodes got ports synthesized from the interface.
+        let gi = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == GROUP_INPUT_TYPE_ID)
+            .expect("group input present");
+        assert!(gi.outputs.iter().any(|p| p.name == "src"));
+        let go = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+            .expect("group output present");
+        assert!(go.inputs.iter().any(|p| p.name == "out"));
+    }
 
     struct StubNode {
         type_id: EffectNodeType,
