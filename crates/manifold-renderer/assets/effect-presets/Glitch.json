@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Glitch",
-  "description": "Glitch, decomposed into reusable field atoms: node.block_displace_field emits a per-block UV-offset field (RG) plus the raw per-block hash (R); node.scanline_jitter_field emits a per-row horizontal-offset field (R); node.mix(Add) sums the two offset fields; node.remap (Relative mode) warps the source by the summed offset; the RGB channel split is the inlined chromatic decomposition (node.radial_offset_field (Linear) → node.math(offset × -1000) → node.chromatic_displace) rather than the fused node.chromatic_aberration; the per-block invert accent is built explicitly — block hash → node.gain(amount) → node.smoothstep_texture(0.91, 0.92) → node.masked_mix over a node.invert; node.mix (Lerp, amount) crossfades the whole thing back over the source. Replaces the old fused node.glitch_displace (which bundled block displace + scanline jitter + invert mask in one pass) and the older node.glitch kernel. node.value fans the master `amount` to both fields, the invert gain, and the final crossfade; a second node.value fans `speed` to both fields so they animate in sync (as the legacy single speed did). Documented visual deltas vs legacy: the scanline row index is taken from the original UV rather than the block-displaced UV (the fields are now independent); the chromatic split uses a fixed angle (legacy rotates it per time-step) and a fixed rgb_shift offset (legacy scaled it by amount, which the final crossfade now handles); the invert threshold is a narrow smoothstep rather than a hard step (slight AA at block edges). Time read from FrameTime.seconds — no generator_input needed.",
+  "description": "Glitch, decomposed into reusable field atoms: node.block_displace_field emits a per-block UV-offset field (RG) plus the raw per-block hash (R); node.scanline_jitter_field emits a per-row horizontal-offset field (R); node.mix(Add) sums the two offset fields; node.remap (Relative mode) warps the source by the summed offset; the RGB channel split is the inlined chromatic decomposition (node.radial_offset_field (Linear) → node.chromatic_displace, where the rgb_shift card binds straight to chromatic_displace.amount with the ×-1000 sensitivity carried as the binding's scale) rather than the fused node.chromatic_aberration; the per-block invert accent is built explicitly — block hash → node.gain(amount) → node.smoothstep_texture(0.91, 0.92) → node.masked_mix over a node.invert; node.mix (Lerp, amount) crossfades the whole thing back over the source. Replaces the old fused node.glitch_displace (which bundled block displace + scanline jitter + invert mask in one pass) and the older node.glitch kernel. node.value fans the master `amount` to both fields, the invert gain, and the final crossfade; a second node.value fans `speed` to both fields so they animate in sync (as the legacy single speed did). Organized into three node groups for readability: `displacement` (the two offset fields summed and remapped onto the source, emitting the block hash as a side output), `rgb_split` (radial direction field + chromatic_displace), and `invert_accent` (the block-hash-gated invert flash). The groups flatten to a graph byte-identical in behavior to the ungrouped form; card bindings reach inner nodes by stable nodeId, so grouping never touches the performance surface. Documented visual deltas vs legacy: the scanline row index is taken from the original UV rather than the block-displaced UV (the fields are now independent); the chromatic split uses a fixed angle (legacy rotates it per time-step) and a fixed rgb_shift offset (legacy scaled it by amount, which the final crossfade now handles); the invert threshold is a narrow smoothstep rather than a hard step (slight AA at block edges). Time read from FrameTime.seconds — no generator_input needed.",
   "presetMetadata": {
     "id": "Glitch",
     "displayName": "Glitch",
@@ -84,8 +84,9 @@
         "id": "rgb_shift",
         "label": "RGB Shift",
         "defaultValue": 0.01,
-        "target": { "kind": "node", "nodeId": "split_scale", "param": "a" },
-        "convert": { "type": "Float" }
+        "target": { "kind": "node", "nodeId": "split", "param": "amount" },
+        "convert": { "type": "Float" },
+        "scale": -1000.0
       },
       {
         "id": "scanline",
@@ -130,101 +131,180 @@
     },
     {
       "id": 3,
-      "typeId": "node.block_displace_field",
-      "handle": "displace", "nodeId": "displace",
-      "params": {
-        "amount": { "type": "Float", "value": 0.0 },
-        "block_size": { "type": "Float", "value": 16.0 },
-        "speed": { "type": "Float", "value": 2.0 }
+      "typeId": "group",
+      "handle": "displacement", "nodeId": "displacement",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "source", "portType": "Texture2D" },
+            { "name": "amount", "portType": "Scalar(F32)" },
+            { "name": "speed", "portType": "Scalar(F32)" }
+          ],
+          "outputs": [
+            { "name": "warped", "portType": "Texture2D" },
+            { "name": "block_hash", "portType": "Texture2D" }
+          ]
+        },
+        "nodes": [
+          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 1,
+            "typeId": "node.block_displace_field",
+            "handle": "displace", "nodeId": "displace",
+            "params": {
+              "amount": { "type": "Float", "value": 0.0 },
+              "block_size": { "type": "Float", "value": 16.0 },
+              "speed": { "type": "Float", "value": 2.0 }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.scanline_jitter_field",
+            "handle": "scan", "nodeId": "scan",
+            "params": {
+              "amount": { "type": "Float", "value": 0.0 },
+              "scanline": { "type": "Float", "value": 0.3 },
+              "speed": { "type": "Float", "value": 2.0 }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.mix",
+            "handle": "combine_offset", "nodeId": "combine_offset",
+            "params": {
+              "amount": { "type": "Float", "value": 1.0 },
+              "mode": { "type": "Enum", "value": 2 }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.remap",
+            "handle": "warp", "nodeId": "warp",
+            "params": {
+              "wrap": { "type": "Enum", "value": 0 },
+              "mode": { "type": "Enum", "value": 1 }
+            }
+          },
+          { "id": 5, "typeId": "system.group_output" }
+        ],
+        "wires": [
+          { "fromNode": 0, "fromPort": "source", "toNode": 4, "toPort": "source" },
+          { "fromNode": 0, "fromPort": "amount", "toNode": 1, "toPort": "amount" },
+          { "fromNode": 0, "fromPort": "amount", "toNode": 2, "toPort": "amount" },
+          { "fromNode": 0, "fromPort": "speed", "toNode": 1, "toPort": "speed" },
+          { "fromNode": 0, "fromPort": "speed", "toNode": 2, "toPort": "speed" },
+          { "fromNode": 1, "fromPort": "offset", "toNode": 3, "toPort": "a" },
+          { "fromNode": 2, "fromPort": "offset", "toNode": 3, "toPort": "b" },
+          { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "uv_field" },
+          { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "warped" },
+          { "fromNode": 1, "fromPort": "hash", "toNode": 5, "toPort": "block_hash" }
+        ]
       }
     },
     {
       "id": 4,
-      "typeId": "node.scanline_jitter_field",
-      "handle": "scan", "nodeId": "scan",
-      "params": {
-        "amount": { "type": "Float", "value": 0.0 },
-        "scanline": { "type": "Float", "value": 0.3 },
-        "speed": { "type": "Float", "value": 2.0 }
+      "typeId": "group",
+      "handle": "rgb_split", "nodeId": "rgb_split",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "warped", "portType": "Texture2D" }
+          ],
+          "outputs": [
+            { "name": "split", "portType": "Texture2D" }
+          ]
+        },
+        "nodes": [
+          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 1,
+            "typeId": "node.radial_offset_field",
+            "handle": "split_field", "nodeId": "split_field",
+            "params": {
+              "mode": { "type": "Enum", "value": 1 },
+              "angle": { "type": "Float", "value": 0.0 },
+              "falloff": { "type": "Float", "value": 0.5 }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.chromatic_displace",
+            "handle": "split", "nodeId": "split",
+            "params": {
+              "amount": { "type": "Float", "value": -10.0 }
+            }
+          },
+          { "id": 3, "typeId": "system.group_output" }
+        ],
+        "wires": [
+          { "fromNode": 0, "fromPort": "warped", "toNode": 2, "toPort": "in" },
+          { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "velocity" },
+          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "split" }
+        ]
       }
     },
     {
       "id": 5,
-      "typeId": "node.mix",
-      "handle": "combine_offset", "nodeId": "combine_offset",
-      "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 2 }
-      }
-    },
-    {
-      "id": 6,
-      "typeId": "node.remap",
-      "handle": "warp", "nodeId": "warp",
-      "params": {
-        "wrap": { "type": "Enum", "value": 0 },
-        "mode": { "type": "Enum", "value": 1 }
-      }
-    },
-    {
-      "id": 7,
-      "typeId": "node.chromatic_displace",
-      "handle": "split", "nodeId": "split",
-      "params": {
-        "amount": { "type": "Float", "value": -10.0 }
-      }
-    },
-    {
-      "id": 14,
-      "typeId": "node.radial_offset_field",
-      "handle": "split_field", "nodeId": "split_field",
-      "params": {
-        "mode": { "type": "Enum", "value": 1 },
-        "angle": { "type": "Float", "value": 0.0 },
-        "falloff": { "type": "Float", "value": 0.5 }
-      }
-    },
-    {
-      "id": 15,
-      "typeId": "node.math",
-      "handle": "split_scale", "nodeId": "split_scale",
-      "params": {
-        "a": { "type": "Float", "value": 0.01 },
-        "b": { "type": "Float", "value": -1000.0 },
-        "op": { "type": "Enum", "value": 2 }
-      }
-    },
-    {
-      "id": 8,
-      "typeId": "node.gain",
-      "handle": "invert_gain", "nodeId": "invert_gain",
-      "params": {
-        "gain": { "type": "Float", "value": 1.0 }
-      }
-    },
-    {
-      "id": 9,
-      "typeId": "node.smoothstep_texture",
-      "handle": "invert_thresh", "nodeId": "invert_thresh",
-      "params": {
-        "low": { "type": "Float", "value": 0.91 },
-        "high": { "type": "Float", "value": 0.92 }
-      }
-    },
-    {
-      "id": 10,
-      "typeId": "node.invert",
-      "handle": "inv", "nodeId": "inv",
-      "params": {
-        "intensity": { "type": "Float", "value": 1.0 }
-      }
-    },
-    {
-      "id": 11,
-      "typeId": "node.masked_mix",
-      "handle": "accent", "nodeId": "accent",
-      "params": {
-        "amount": { "type": "Float", "value": 1.0 }
+      "typeId": "group",
+      "handle": "invert_accent", "nodeId": "invert_accent",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "split_image", "portType": "Texture2D" },
+            { "name": "block_hash", "portType": "Texture2D" },
+            { "name": "amount", "portType": "Scalar(F32)" }
+          ],
+          "outputs": [
+            { "name": "out", "portType": "Texture2D" }
+          ]
+        },
+        "nodes": [
+          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 1,
+            "typeId": "node.gain",
+            "handle": "invert_gain", "nodeId": "invert_gain",
+            "params": {
+              "gain": { "type": "Float", "value": 1.0 }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.smoothstep_texture",
+            "handle": "invert_thresh", "nodeId": "invert_thresh",
+            "params": {
+              "low": { "type": "Float", "value": 0.91 },
+              "high": { "type": "Float", "value": 0.92 }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.invert",
+            "handle": "inv", "nodeId": "inv",
+            "params": {
+              "intensity": { "type": "Float", "value": 1.0 }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.masked_mix",
+            "handle": "accent", "nodeId": "accent",
+            "params": {
+              "amount": { "type": "Float", "value": 1.0 }
+            }
+          },
+          { "id": 5, "typeId": "system.group_output" }
+        ],
+        "wires": [
+          { "fromNode": 0, "fromPort": "block_hash", "toNode": 1, "toPort": "in" },
+          { "fromNode": 0, "fromPort": "amount", "toNode": 1, "toPort": "gain" },
+          { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+          { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "mask" },
+          { "fromNode": 0, "fromPort": "split_image", "toNode": 3, "toPort": "in" },
+          { "fromNode": 0, "fromPort": "split_image", "toNode": 4, "toPort": "a" },
+          { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+          { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "out" }
+        ]
       }
     },
     {
@@ -239,27 +319,16 @@
     { "id": 13, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "source" },
     { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "amount" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "amount" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "gain" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 12, "toPort": "amount" },
     { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "speed" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "speed" },
-    { "fromNode": 3, "fromPort": "offset", "toNode": 5, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "offset", "toNode": 5, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "uv_field" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "source" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 7, "toPort": "velocity" },
-    { "fromNode": 15, "fromPort": "out", "toNode": 7, "toPort": "amount" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 11, "toPort": "a" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "b" },
-    { "fromNode": 3, "fromPort": "hash", "toNode": 8, "toPort": "in" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "mask" },
+    { "fromNode": 3, "fromPort": "warped", "toNode": 4, "toPort": "warped" },
+    { "fromNode": 3, "fromPort": "block_hash", "toNode": 5, "toPort": "block_hash" },
+    { "fromNode": 4, "fromPort": "split", "toNode": 5, "toPort": "split_image" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "amount" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 12, "toPort": "amount" },
     { "fromNode": 0, "fromPort": "out", "toNode": 12, "toPort": "a" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 12, "toPort": "b" },
     { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" }
   ]
 }
