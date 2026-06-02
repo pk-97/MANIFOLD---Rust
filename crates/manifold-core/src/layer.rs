@@ -303,6 +303,21 @@ impl Layer {
         crate::generator_definition_registry::param_id_to_index(gen_type, param_id)
     }
 
+    /// A [`crate::graph_host::GraphHost`] view over this layer's
+    /// generator, bundling the generator state with the layer's
+    /// `generator_graph` override (which the host needs for
+    /// `preset_metadata`-aware slot resolution and for the graph editing
+    /// commands). `None` if the layer has no generator. Split-borrows the
+    /// three disjoint fields so the host can mutate all of them.
+    pub fn graph_host_mut(&mut self) -> Option<crate::graph_host::GeneratorHost<'_>> {
+        let params = self.gen_params.as_mut()?;
+        Some(crate::graph_host::GeneratorHost {
+            params,
+            graph: &mut self.generator_graph,
+            graph_version: &mut self.generator_graph_version,
+        })
+    }
+
     /// Ensure both clip ordering caches are up-to-date.
     /// From Unity Layer.cs EnsureClipOrderingCaches (lines 457-473).
     pub fn ensure_clip_ordering_caches(&mut self) {

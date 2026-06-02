@@ -718,6 +718,33 @@ impl Project {
         None
     }
 
+    /// Run `f` against the [`crate::graph_host::GraphHost`] that a
+    /// [`crate::graph_target::GraphTarget`] resolves to, returning its
+    /// result (`None` if the target doesn't resolve). The one entry point
+    /// editing commands use to operate on an effect instance or a layer's
+    /// generator without forking: effect targets resolve to the
+    /// `EffectInstance` (master / layer / clip scope), generator targets to
+    /// a `GeneratorHost` bundling the layer's generator state + graph
+    /// override. A closure, not a returned `&mut dyn`, because the
+    /// generator host is a temporary borrowing two disjoint layer fields.
+    pub fn with_graph_host_mut<R>(
+        &mut self,
+        target: &crate::graph_target::GraphTarget,
+        f: impl FnOnce(&mut dyn crate::graph_host::GraphHost) -> R,
+    ) -> Option<R> {
+        match target {
+            crate::graph_target::GraphTarget::Effect(eid) => {
+                let fx = self.find_effect_by_id_mut(eid)?;
+                Some(f(fx))
+            }
+            crate::graph_target::GraphTarget::Generator(lid) => {
+                let (_, layer) = self.timeline.find_layer_by_id_mut(lid.as_str())?;
+                let mut host = layer.graph_host_mut()?;
+                Some(f(&mut host))
+            }
+        }
+    }
+
     /// The id of the layer that owns the effect `effect_id`, if any.
     ///
     /// Returns the layer for a layer-scoped effect, the layer containing the
