@@ -9,6 +9,7 @@ pub mod effect_registration;
 pub mod effect_type_id;
 pub mod effect_type_registry;
 pub mod effects;
+pub mod flatten;
 pub mod generator;
 pub mod generator_definition_registry;
 pub mod generator_metadata_submissions;

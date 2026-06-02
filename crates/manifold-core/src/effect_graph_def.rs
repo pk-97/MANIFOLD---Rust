@@ -52,6 +52,25 @@ pub const EFFECT_GRAPH_VERSION: u32 = 1;
 /// AI-authored presets all live at this version.
 pub const EFFECT_GRAPH_VERSION_WITH_METADATA: u32 = 2;
 
+/// Type-id sentinel for `system.group_input` — the inward boundary of a node
+/// group. Its declared output ports mirror the group's
+/// [`GroupInterface::inputs`]; inner nodes wire *from* it. Folded away by the
+/// flattener ([`crate::flatten`]); never instantiated as a runtime node in the
+/// embedded-group path, exactly as `system.source` is folded by the
+/// effect-boundary splice one layer further out.
+pub const GROUP_INPUT_TYPE_ID: &str = "system.group_input";
+
+/// Type-id sentinel for `system.group_output` — the outward boundary of a node
+/// group. Its declared input ports mirror the group's
+/// [`GroupInterface::outputs`]; inner nodes wire *into* it. Folded by the
+/// flattener.
+pub const GROUP_OUTPUT_TYPE_ID: &str = "system.group_output";
+
+/// Marker `type_id` for a node that carries an embedded group body in
+/// [`EffectGraphNode::group`]. The flattener replaces every such node with its
+/// inlined, handle-prefixed body before the runtime ever sees the document.
+pub const GROUP_TYPE_ID: &str = "group";
+
 /// Top-level shape for one effect's per-instance graph.
 ///
 /// Same schema used by bundled preset libraries
@@ -161,6 +180,17 @@ pub struct EffectGraphNode {
     /// through to canvas-sized allocation.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub output_canvas_scales: BTreeMap<String, [u32; 2]>,
+    /// When `Some`, this node is a **group instance**: its `type_id` is
+    /// [`GROUP_TYPE_ID`], its outward ports are `group.interface.{inputs,
+    /// outputs}`, and its [`params`](Self::params) override the group's
+    /// [`GroupParamDef`]s by name. The flattener
+    /// ([`crate::flatten::flatten_groups`]) inlines the body — prefixing every
+    /// inner handle with this node's [`handle`](Self::handle) — so by load time
+    /// the document is flat and nothing downstream knows groups existed. Boxed
+    /// because [`GroupDef`] contains `EffectGraphNode`s (a recursive type).
+    /// `None` for every ordinary node, which is nearly all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<Box<GroupDef>>,
 }
 
 /// One wire inside an [`EffectGraphDef`]. Endpoint ids reference
@@ -172,6 +202,64 @@ pub struct EffectGraphWire {
     pub from_port: String,
     pub to_node: u32,
     pub to_port: String,
+}
+
+/// One declared port on a group's outward interface — the "label on the box"
+/// that lets a human or AI wire a group without opening it. `port_type` is
+/// **advisory** at flatten time (a readability / editor aid); the authoritative
+/// type-check runs post-flatten against the inner node's real port, through the
+/// renderer's existing wire validation. String form matches the renderer's
+/// `PortType` debug tags — `"Texture2D"`, `"Scalar(F32)"`, `"Array(...)"`,
+/// `"Material"`, etc.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterfacePortDef {
+    pub name: String,
+    pub port_type: String,
+}
+
+/// One exposed parameter on a group's interface. A single inner target for now;
+/// fan-out to several inner params (matching how [`BindingDef`] fans out) is a
+/// later, additive change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupParamDef {
+    /// External param name shown on the group, e.g. `"amount"`.
+    pub name: String,
+    /// Handle of the inner node this param drives, as written in the body
+    /// (before the flattener prefixes it with the group instance's handle).
+    pub target_handle: String,
+    /// Param name on that inner node.
+    pub target_param: String,
+    /// Value applied when a group instance doesn't override `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<SerializedParamValue>,
+}
+
+/// The outward-facing contract of a group: everything that crosses its
+/// boundary. `inputs` / `outputs` name the ports an outer wire can attach to;
+/// `params` name the knobs an outer instance can set. Mirrored inside the body
+/// by [`GROUP_INPUT_TYPE_ID`] / [`GROUP_OUTPUT_TYPE_ID`] nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupInterface {
+    pub inputs: Vec<InterfacePortDef>,
+    pub outputs: Vec<InterfacePortDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<GroupParamDef>,
+}
+
+/// An embedded group body. `nodes` / `wires` reuse the ordinary node and wire
+/// types, so a body node may itself be a group — nesting falls out for free and
+/// the flattener recurses. The body's boundary is expressed with
+/// [`GROUP_INPUT_TYPE_ID`] / [`GROUP_OUTPUT_TYPE_ID`] nodes whose port names
+/// match [`GroupInterface::inputs`] / [`GroupInterface::outputs`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupDef {
+    pub interface: GroupInterface,
+    pub nodes: Vec<EffectGraphNode>,
+    pub wires: Vec<EffectGraphWire>,
 }
 
 /// Tagged-enum wire form of the renderer's `ParamValue`. Tagged because
@@ -559,12 +647,153 @@ mod tests {
                 title: None,
                 output_formats: BTreeMap::new(),
                 output_canvas_scales: BTreeMap::new(),
+                group: None,
             }],
             wires: Vec::new(),
         };
         let json = serde_json::to_string(&def).unwrap();
         let back: EffectGraphDef = serde_json::from_str(&json).unwrap();
         assert_eq!(def, back);
+    }
+
+    #[test]
+    fn group_node_document_round_trips() {
+        // A minimal soft-focus group: GroupInput.src fans to mix.a, mix.out
+        // feeds GroupOutput.out, and `amount` is exposed onto the inner mix.t.
+        let mut amount_override = BTreeMap::new();
+        amount_override.insert(
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 0.7 },
+        );
+        let body = GroupDef {
+            interface: GroupInterface {
+                inputs: vec![InterfacePortDef {
+                    name: "src".to_string(),
+                    port_type: "Texture2D".to_string(),
+                }],
+                outputs: vec![InterfacePortDef {
+                    name: "out".to_string(),
+                    port_type: "Texture2D".to_string(),
+                }],
+                params: vec![GroupParamDef {
+                    name: "amount".to_string(),
+                    target_handle: "mix".to_string(),
+                    target_param: "t".to_string(),
+                    default: Some(SerializedParamValue::Float { value: 0.5 }),
+                }],
+            },
+            nodes: vec![
+                EffectGraphNode {
+                    id: 0,
+                    type_id: GROUP_INPUT_TYPE_ID.to_string(),
+                    handle: None,
+                    params: BTreeMap::new(),
+                    exposed_params: BTreeSet::new(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    title: None,
+                    output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
+                    group: None,
+                },
+                EffectGraphNode {
+                    id: 1,
+                    type_id: "node.mix".to_string(),
+                    handle: Some("mix".to_string()),
+                    params: BTreeMap::new(),
+                    exposed_params: BTreeSet::new(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    title: None,
+                    output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
+                    group: None,
+                },
+                EffectGraphNode {
+                    id: 2,
+                    type_id: GROUP_OUTPUT_TYPE_ID.to_string(),
+                    handle: None,
+                    params: BTreeMap::new(),
+                    exposed_params: BTreeSet::new(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    title: None,
+                    output_formats: BTreeMap::new(),
+                    output_canvas_scales: BTreeMap::new(),
+                    group: None,
+                },
+            ],
+            wires: vec![
+                EffectGraphWire {
+                    from_node: 0,
+                    from_port: "src".to_string(),
+                    to_node: 1,
+                    to_port: "a".to_string(),
+                },
+                EffectGraphWire {
+                    from_node: 1,
+                    from_port: "out".to_string(),
+                    to_node: 2,
+                    to_port: "out".to_string(),
+                },
+            ],
+        };
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: Some("With Group".to_string()),
+            description: None,
+            preset_metadata: None,
+            nodes: vec![EffectGraphNode {
+                id: 10,
+                type_id: GROUP_TYPE_ID.to_string(),
+                handle: Some("soft_focus".to_string()),
+                params: amount_override,
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: Some(Box::new(body)),
+            }],
+            wires: Vec::new(),
+        };
+        let json = serde_json::to_string(&def).unwrap();
+        // camelCase keys surface for human/AI readability.
+        assert!(json.contains("\"group\""));
+        assert!(json.contains("\"interface\""));
+        assert!(json.contains("\"portType\""));
+        assert!(json.contains("\"targetHandle\""));
+        let back: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(def, back);
+    }
+
+    #[test]
+    fn group_field_skipped_when_none() {
+        // The backward-compat guarantee: an ordinary node emits no `group`
+        // key, so every existing flat document re-serializes byte-identically.
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                type_id: "node.blur".to_string(),
+                handle: None,
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: Vec::new(),
+        };
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(!json.contains("\"group\""));
     }
 
     /// V1 documents on disk (no `presetMetadata`, version=1) must parse
