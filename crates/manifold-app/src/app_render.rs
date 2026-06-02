@@ -14,41 +14,23 @@ use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use manifold_editing::commands::effects::BindingMappingEdit;
 
-/// The resolved store the mapping drawer edits — one per editor-watched
-/// graph target. Effect params (stock or user-exposed) route through
-/// `EditUserParamBindingCommand` (which itself picks user-binding vs note);
-/// generator params route through `EditGenParamMappingCommand` (note only).
-/// This is the single fork that keeps the drawer's twelve actions from
-/// each growing an effect/generator branch.
-#[derive(Clone)]
-enum MappingTarget {
-    Effect(manifold_core::EffectId),
-    Generator(manifold_core::LayerId),
-}
-
-/// Build the right reshape-edit command for the watched target. Both
-/// commands address by stable id + apply a partial [`BindingMappingEdit`].
+/// Build the reshape-edit command for the watched graph target — one
+/// [`manifold_editing::commands::effects::EditParamMappingCommand`] for
+/// both effects and generators. It picks the user-binding store vs the
+/// reshape-note store internally, by stable id, so the effect/generator
+/// fork that used to live here is gone.
 fn build_mapping_command(
-    target: &MappingTarget,
+    target: &manifold_core::GraphTarget,
     param_id: &str,
     edit: manifold_editing::commands::effects::BindingMappingEdit,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
-    match target {
-        MappingTarget::Effect(eid) => Box::new(
-            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                eid.clone(),
-                param_id.to_string(),
-                edit,
-            ),
+    Box::new(
+        manifold_editing::commands::effects::EditParamMappingCommand::new(
+            target.clone(),
+            param_id.to_string(),
+            edit,
         ),
-        MappingTarget::Generator(lid) => Box::new(
-            manifold_editing::commands::effects::EditGenParamMappingCommand::new(
-                lid.clone(),
-                param_id.to_string(),
-                edit,
-            ),
-        ),
-    }
+    )
 }
 
 /// Drag-commit variant: the command carries the EXPLICIT pre-drag reverse
@@ -56,40 +38,27 @@ fn build_mapping_command(
 /// the preview-mutated ones — mirroring `ChangeEffectParamCommand`'s
 /// explicit `old_value`.
 fn build_mapping_command_with_reverse(
-    target: &MappingTarget,
+    target: &manifold_core::GraphTarget,
     param_id: &str,
     new: manifold_editing::commands::effects::BindingMappingEdit,
     reverse: manifold_editing::commands::effects::BindingMappingEdit,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
-    match target {
-        MappingTarget::Effect(eid) => Box::new(
-            manifold_editing::commands::effects::EditUserParamBindingCommand::new_with_reverse(
-                eid.clone(),
-                param_id.to_string(),
-                new,
-                reverse,
-            ),
+    Box::new(
+        manifold_editing::commands::effects::EditParamMappingCommand::new_with_reverse(
+            target.clone(),
+            param_id.to_string(),
+            new,
+            reverse,
         ),
-        MappingTarget::Generator(lid) => Box::new(
-            manifold_editing::commands::effects::EditGenParamMappingCommand::new_with_reverse(
-                lid.clone(),
-                param_id.to_string(),
-                new,
-                reverse,
-            ),
-        ),
-    }
+    )
 }
 
 impl Application {
-    /// The mapping drawer's store target for the editor's watched graph.
-    fn mapping_target(&self) -> Option<MappingTarget> {
-        match self.watched_graph_target.as_ref()? {
-            manifold_core::GraphTarget::Effect(eid) => Some(MappingTarget::Effect(eid.clone())),
-            manifold_core::GraphTarget::Generator(lid) => {
-                Some(MappingTarget::Generator(lid.clone()))
-            }
-        }
+    /// The mapping drawer's store target for the editor's watched graph —
+    /// the [`manifold_core::GraphTarget`] the command then resolves to a
+    /// `GraphHost`.
+    fn mapping_target(&self) -> Option<manifold_core::GraphTarget> {
+        self.watched_graph_target.clone()
     }
 
     /// Read the watched param's CURRENT reshape `(min, max, scale, offset)`
@@ -137,7 +106,12 @@ impl Application {
     /// Reuses the edit command's own apply logic (it picks user-binding vs
     /// note + seeds copy-on-write), so the preview can never diverge from
     /// the commit.
-    fn preview_mapping(&mut self, target: &MappingTarget, param_id: &str, edit: BindingMappingEdit) {
+    fn preview_mapping(
+        &mut self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        edit: BindingMappingEdit,
+    ) {
         build_mapping_command(target, param_id, edit.clone()).execute(&mut self.local_project);
         let target = target.clone();
         let pid = param_id.to_string();
@@ -149,7 +123,12 @@ impl Application {
     /// Commit / single-shot: send the reshape edit as one undoable command.
     /// Self-captures the reverse (correct for single-shot — nothing mutated
     /// the store first).
-    fn commit_mapping(&mut self, target: &MappingTarget, param_id: &str, edit: BindingMappingEdit) {
+    fn commit_mapping(
+        &mut self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        edit: BindingMappingEdit,
+    ) {
         self.send_content_cmd(ContentCommand::Execute(build_mapping_command(
             target, param_id, edit,
         )));
@@ -160,7 +139,7 @@ impl Application {
     /// preview-mutated ones.
     fn commit_mapping_with_reverse(
         &mut self,
-        target: &MappingTarget,
+        target: &manifold_core::GraphTarget,
         param_id: &str,
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
