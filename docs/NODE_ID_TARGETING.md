@@ -1,46 +1,52 @@
 # Node-Id Targeting — bindings reference identity, not name
 
-## STATUS / RESUME (2026-06-02)
+## STATUS: COMPLETE (2026-06-02)
 
-Work lives on branch **`node-groups`** in worktree `/Users/peterkiemann/MANIFOLD-node-groups` (off
-trunk `node-graph-system` — do NOT land until the cutover is complete + fixture-validated). Rule:
-**no silent fallback, one atomic cutover, one versioned unit-tested load migration** (see memory
-`feedback_no_silent_fallbacks_or_interim_stopgaps`).
+Landed on `node-graph-system` (commits `ba0c9f4f` → `265b7b68`). The cutover is done: bindings
+address inner nodes by stable `NodeId`, the handle is display-only, and the handle-resolution path is
+gone. No runtime fallback anywhere; the only legacy handling is a versioned, unit-tested **load
+migration**.
 
-**DONE + tested (commits ba0c9f4f → d5b9c698), all ADDITIVE / behavior-preserving:**
-- `NodeId(Arc<str>)` newtype in `id.rs` (same macro as LayerId/EffectId).
-- `node_id` on `EffectGraphNode`, minted once at creation (group_edit group node + sentinels;
-  `AddGraphNodeCommand` mints + reuses across undo/redo via `minted_node_id`), preserved by
-  `flatten` (it clones nodes) and through every construction site.
-- Runtime: `NodeInstance.node_id` set by `graph_loader::instantiate_def`; `from_graph` preserves it;
-  `Graph::instance_by_node_id` is the global unambiguous lookup (node ids are unique uuids) — the
-  successor to `node_id_by_handle`. Nothing calls it yet.
+**The one convention that ties it together:** *a node's `node_id` defaults to its handle.* The
+bundled-preset stamp uses it (`nodeId == authoring handle`), the load-time override normalization uses
+it, and the tolerant `BindingTarget` deserialize uses it — so a handle-targeted binding from an old
+document lands on exactly the node that normalizes to the same id.
 
-**REMAINING = the atomic cutover (the hard half):** Resolution moves off handle to node_id, handle
-becomes display-only, the handle-resolution path is deleted. Sites (mapped, ~40 `node_handle`
-refs + more):
-- core `BindingTarget::HandleNode { handle, param }` → `Node { node_id, param }` (JSON
-  `kind:"node"`, `nodeId`). `effect_graph_def.rs:527`.
-- renderer `ParamTarget::HandleNode { handle }` → node-id variant; `from_static` / `from_user`
-  (`param_binding.rs`) resolve via `graph.instance_by_node_id`, dropping the `handles` arg.
-  Callers in `effect_chain_graph.rs` (~646, 663, 965).
-- `loaded_preset_view.rs::binding_def_to_runtime` (~118) maps the new target.
-- `into_graph` binding-convert validation + exposure seeding (`persistence.rs` ~595, ~650) match the
-  new target.
-- core `UserParamBinding.node_handle: String` → `node_id: NodeId` (`effects.rs:239`); ripples to
-  `content_thread.rs:1294`, `app_render.rs` expose/mapping-drawer (~2097/3005/3047/3062/3145/3188),
-  `commands/effects.rs` + `commands/graph.rs` expose flow, and `NodeSnapshot` (add `node_id` so the
-  editor's expose checkbox can write it).
-- the `EffectNodeAliasMetadata` handle-rename mechanism (`project.rs:621`) becomes obsolete — node_id
-  is the stable identity, so the alias path can be removed (not kept as a fallback).
-- **Preset stamp:** one-shot pass over the 46 `assets/{effect,generator}-presets/*.json` — stamp
-  `nodeId` on each node + rewrite each binding target to `node`/`nodeId` matching by current handle.
-  Cleanest as a throwaway bin (run once, commit) so it's deterministic.
-- **Migration:** version bump; old-format files (handle targets, no node_id) upgrade once at load via
-  v1 schema types → resolve handle→node_id deterministically → store. Unit-test with synthetic
-  old-format defs HERE; then **run the `Liveschool` + `Burn` fixture tests from the MAIN checkout**
-  (those `.manifold` files are gitignored / absent in this worktree) before landing on trunk.
-- Final: group-a-bound-node test (the bug this fixes), full sweep, land on trunk.
+**What shipped:**
+- Foundation (additive): `NodeId(Arc<str>)`; `node_id` on every `EffectGraphNode` (minted at creation,
+  preserved by `flatten`); runtime `NodeInstance.node_id` + `Graph::instance_by_node_id`.
+- Resolution: `BindingTarget::Node{node_id,param}`; `ParamTarget::Node{node_id,param}`;
+  `from_static`/`from_user` resolve via a per-effect `(NodeId,NodeInstanceId)` `node_map`;
+  `loaded_preset_view`, `persistence::into_graph`, `json_graph_generator`, `snapshot.node_id`.
+- Per-instance: `UserParamBinding.node_id` (+ load-only `legacy_node_handle` shim that captures the old
+  `nodeHandle` key for migration, skip-serialized once cleared).
+- Editor expose flow: `ToggleNodeParamExpose` / `ToggleEffectParamExpose` carry node_id; def-side
+  exposure helpers key by node_id; readable `user.<handle>.<param>.<n>` ids still minted from the
+  handle. PanelAction / `GraphEditorNodeView` / `resolve_canvas_binding` carry/match node_id.
+- Removed the obsolete `EffectNodeAliasMetadata` / `legacy_node_aliases` / `node_aliases` /
+  `resolve_user_param_binding_node_handles` handle-rename machinery.
+- Presets: all 46 stamped (`nodeId == handle`, minimal-diff string edit). `check-presets` 46/46.
+
+**Load migration (versioned, deterministic, no fallback):**
+1. `BindingTarget` Deserialize accepts legacy `handleNode` → `Node{node_id == handle}`; serialize only
+   ever emits `node`/`composite`.
+2. `Project::normalize_override_node_ids` (core `on_after_deserialize`) stamps `node_id == handle` on
+   every override-def node with an empty id (master/layer/clip `graph` + `generator_graph`, recursing
+   into groups). Idempotent.
+3. `migrate_user_param_bindings_to_node_id` (renderer, at project open) copies the resolved id onto
+   each `UserParamBinding` whose `legacy_node_handle` is set — pure read off the normalized graph /
+   stamped preset.
+
+**Tests:** flatten `grouping_prefixes_handle_but_preserves_node_id` (the bug); core
+`normalize_override_node_ids` + `legacy_handle_node_target_deserializes_as_node_keyed_by_handle`;
+renderer `binding_migration` (graph:None / override / already-migrated / unresolved). Verified
+`graphTests.manifold` (V2 zip, 22 `handleNode` targets in overrides) deserializes and every binding
+target resolves. manifold-core 219/219; full workspace sweep is the final gate.
+
+**Why the override case mattered:** the first real regression (`graphTests.manifold`) had override
+preset bindings in `handleNode` form but **zero** user bindings — so the renderer migration's
+"any user binding needs migrating?" gate would have skipped it. That's why node-id normalization is a
+core `on_after_deserialize` step (runs on every load), not folded into the renderer user-binding pass.
 
 ## Why
 

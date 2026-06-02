@@ -386,6 +386,14 @@ pub struct ToggleEffectParamExposeCommand {
     reverse: ReverseState,
 }
 
+// The `Unexposed` variant captures the full removed `UserParamBinding`
+// plus every pruned driver / Ableton mapping / envelope so undo can
+// restore the pre-unexpose state verbatim — that makes it much larger
+// than `Exposed`. Boxing the payload would only shrink the enum on the
+// undo stack (capped at 200 entries, never a render hot path), so the
+// indirection isn't worth it. Same call as the sibling `NodeExposeReverse`
+// in `commands/graph.rs`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Default)]
 enum ReverseState {
     /// Pre-execute or no-op state (the operation produced no change
