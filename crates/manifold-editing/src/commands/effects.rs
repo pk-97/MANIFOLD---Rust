@@ -1,10 +1,26 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
+use manifold_core::EffectId;
 use manifold_core::effects::{
     EffectInstance, ParamConvert, ParamEnvelope, ParamId, ParamSlot, ParameterDriver,
     UserParamBinding,
 };
 use manifold_core::project::Project;
+
+// ── Addressing model ──────────────────────────────────────────────────
+//
+// Two distinct targeting concepts, deliberately kept apart:
+//
+// * Single-effect edits (toggle, param value, expose, binding mapping) address
+//   ONE instance by its stable [`EffectId`] and resolve it via
+//   `Project::find_effect_by_id_mut`, which searches master + every layer +
+//   every clip. So a card edit reaches the right instance regardless of where
+//   it lives — no positional index, no ambient "active layer" read.
+//
+// * List / structural ops (add, remove, reorder, group-reorder) address an
+//   effect *list* by [`EffectTarget`] (master or a layer) — there is no single
+//   instance yet for an insert, so an id can't name the destination. That is
+//   `EffectTarget`'s sole remaining role.
 
 /// Add an effect to a target's effect chain.
 #[derive(Debug)]
@@ -142,25 +158,18 @@ impl Command for ReorderEffectCommand {
     }
 }
 
-/// Toggle an effect's enabled state.
+/// Toggle an effect's enabled state. Addressed by stable [`EffectId`].
 #[derive(Debug)]
 pub struct ToggleEffectCommand {
-    target: EffectTarget,
-    effect_index: usize,
+    effect_id: EffectId,
     old_enabled: bool,
     new_enabled: bool,
 }
 
 impl ToggleEffectCommand {
-    pub fn new(
-        target: EffectTarget,
-        effect_index: usize,
-        old_enabled: bool,
-        new_enabled: bool,
-    ) -> Self {
+    pub fn new(effect_id: EffectId, old_enabled: bool, new_enabled: bool) -> Self {
         Self {
-            target,
-            effect_index,
+            effect_id,
             old_enabled,
             new_enabled,
         }
@@ -169,23 +178,15 @@ impl ToggleEffectCommand {
 
 impl Command for ToggleEffectCommand {
     fn execute(&mut self, project: &mut Project) {
-        let idx = self.effect_index;
-        let new_val = self.new_enabled;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(idx) {
-                effect.enabled = new_val;
-            }
-        });
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
+            effect.enabled = self.new_enabled;
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let idx = self.effect_index;
-        let old_val = self.old_enabled;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(idx) {
-                effect.enabled = old_val;
-            }
-        });
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
+            effect.enabled = self.old_enabled;
+        }
     }
 
     fn description(&self) -> &str {
@@ -246,8 +247,7 @@ impl Command for ReorderEffectGroupCommand {
 /// Step 16 of `docs/EFFECT_RUNTIME_UNIFICATION.md` §11.
 #[derive(Debug)]
 pub struct ChangeEffectParamCommand {
-    target: EffectTarget,
-    effect_index: usize,
+    effect_id: EffectId,
     param_id: ParamId,
     old_value: f32,
     new_value: f32,
@@ -255,15 +255,13 @@ pub struct ChangeEffectParamCommand {
 
 impl ChangeEffectParamCommand {
     pub fn new(
-        target: EffectTarget,
-        effect_index: usize,
+        effect_id: EffectId,
         param_id: impl Into<ParamId>,
         old_value: f32,
         new_value: f32,
     ) -> Self {
         Self {
-            target,
-            effect_index,
+            effect_id,
             param_id: param_id.into(),
             old_value,
             new_value,
@@ -273,29 +271,23 @@ impl ChangeEffectParamCommand {
 
 impl Command for ChangeEffectParamCommand {
     fn execute(&mut self, project: &mut Project) {
-        let eidx = self.effect_index;
         let id = self.param_id.clone();
         let val = self.new_value;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(eidx)
-                && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
-            {
-                effect.set_base_param(idx, val);
-            }
-        });
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
+            && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
+        {
+            effect.set_base_param(idx, val);
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let eidx = self.effect_index;
         let id = self.param_id.clone();
         let val = self.old_value;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(eidx)
-                && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
-            {
-                effect.set_base_param(idx, val);
-            }
-        });
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
+            && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
+        {
+            effect.set_base_param(idx, val);
+        }
     }
 
     fn description(&self) -> &str {
@@ -369,8 +361,7 @@ pub fn generate_user_param_id(
 /// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7.6.
 #[derive(Debug)]
 pub struct ToggleEffectParamExposeCommand {
-    target: EffectTarget,
-    effect_index: usize,
+    effect_id: EffectId,
     /// Identifies the inner-graph addressing being toggled. The
     /// command keys both directions (Expose creates a binding here;
     /// Unexpose removes the binding matching this addressing).
@@ -429,16 +420,14 @@ enum ReverseState {
 
 impl ToggleEffectParamExposeCommand {
     pub fn new(
-        target: EffectTarget,
-        effect_index: usize,
+        effect_id: EffectId,
         node_handle: String,
         inner_param: String,
         expose: bool,
         inner_meta: InnerParamMeta,
     ) -> Self {
         Self {
-            target,
-            effect_index,
+            effect_id,
             node_handle,
             inner_param,
             expose,
@@ -450,18 +439,13 @@ impl ToggleEffectParamExposeCommand {
 
 impl Command for ToggleEffectParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let eidx = self.effect_index;
         let node_handle = self.node_handle.clone();
         let inner_param = self.inner_param.clone();
         let expose = self.expose;
         let meta = self.inner_meta.clone();
-        // `with_effects_mut` returns `Option<R>` from the closure; thread
-        // the computed reverse-state out so we can stash it on the
-        // command for undo. None when the target itself is missing.
-        let reverse_out = with_effects_mut(project, &self.target, |effects, _groups| {
-            let Some(effect) = effects.get_mut(eidx) else {
-                return ReverseState::None;
-            };
+        // Resolve the instance by id (master / layer / clip). `None` when the
+        // id doesn't resolve — leaves `reverse` as `None`, a clean no-op.
+        let reverse_out = project.find_effect_by_id_mut(&self.effect_id).map(|effect| {
             // Locate any existing binding for this (handle, inner_param).
             let existing_position = effect
                 .user_param_bindings
@@ -583,13 +567,15 @@ impl Command for ToggleEffectParamExposeCommand {
             // Capture the effect type here so the envelope match below
             // can key on `(target_effect_type, param_id)` — envelopes
             // address an effect by its type id within the layer's
-            // chain, not by index.
-            let effect_type = with_effects_mut(project, &self.target, |effects, _| {
-                effects.get(eidx).map(|fx| fx.effect_type().clone())
-            })
-            .flatten();
-            if let (Some(effect_type), EffectTarget::Layer { layer_id }) = (effect_type, &self.target)
-                && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+            // chain, not by index. Envelope storage is layer-only, so the
+            // owning layer is resolved by id; a master effect resolves to
+            // `None` and this whole block no-ops (master has no envelopes).
+            let effect_type = project
+                .find_effect_by_id(&self.effect_id)
+                .map(|fx| fx.effect_type().clone());
+            let owning_layer = project.layer_id_for_effect(&self.effect_id);
+            if let (Some(effect_type), Some(layer_id)) = (effect_type, owning_layer)
+                && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&layer_id)
             {
                 let envs = layer.envelopes_mut();
                 let mut taken = Vec::new();
@@ -606,7 +592,6 @@ impl Command for ToggleEffectParamExposeCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let eidx = self.effect_index;
         let reverse = std::mem::take(&mut self.reverse);
         // Pull the envelope tail off the reverse state up-front;
         // restoring them happens against the layer, not the effect,
@@ -618,10 +603,7 @@ impl Command for ToggleEffectParamExposeCommand {
             } => removed_envelopes.clone(),
             _ => Vec::new(),
         };
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            let Some(effect) = effects.get_mut(eidx) else {
-                return;
-            };
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             match reverse {
                 ReverseState::None => {}
                 ReverseState::Exposed { user_param_id } => {
@@ -677,13 +659,13 @@ impl Command for ToggleEffectParamExposeCommand {
                     }
                 }
             }
-        });
-        // Envelope restore — same Layer-vs-Master split as the prune
-        // path. Master targets had nothing to capture, so this branch
-        // no-ops uniformly there.
+        }
+        // Envelope restore — the owning layer is resolved by id. Master
+        // effects had nothing to capture (no envelope storage) and resolve
+        // to `None`, so this branch no-ops uniformly there.
         if !envelopes_to_restore.is_empty()
-            && let EffectTarget::Layer { layer_id } = &self.target
-            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+            && let Some(layer_id) = project.layer_id_for_effect(&self.effect_id)
+            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&layer_id)
         {
             layer.envelopes_mut().extend(envelopes_to_restore);
         }
@@ -708,8 +690,7 @@ impl Command for ToggleEffectParamExposeCommand {
 /// requested state, or when `param_index` is out of bounds.
 #[derive(Debug)]
 pub struct ToggleStaticParamExposeCommand {
-    target: EffectTarget,
-    effect_index: usize,
+    effect_id: EffectId,
     param_index: usize,
     new_exposed: bool,
     /// Captured on first execute(). `None` when the call was a no-op.
@@ -717,15 +698,9 @@ pub struct ToggleStaticParamExposeCommand {
 }
 
 impl ToggleStaticParamExposeCommand {
-    pub fn new(
-        target: EffectTarget,
-        effect_index: usize,
-        param_index: usize,
-        new_exposed: bool,
-    ) -> Self {
+    pub fn new(effect_id: EffectId, param_index: usize, new_exposed: bool) -> Self {
         Self {
-            target,
-            effect_index,
+            effect_id,
             param_index,
             new_exposed,
             prev_exposed: None,
@@ -735,11 +710,9 @@ impl ToggleStaticParamExposeCommand {
 
 impl Command for ToggleStaticParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let eidx = self.effect_index;
         let pidx = self.param_index;
         let new_v = self.new_exposed;
-        let prev = with_effects_mut(project, &self.target, |effects, _groups| {
-            let effect = effects.get_mut(eidx)?;
+        self.prev_exposed = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
             let slot = effect.param_values.get_mut(pidx)?;
             if slot.exposed == new_v {
                 return None;
@@ -748,22 +721,18 @@ impl Command for ToggleStaticParamExposeCommand {
             slot.exposed = new_v;
             Some(was)
         });
-        self.prev_exposed = prev.flatten();
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(prev) = self.prev_exposed else {
             return;
         };
-        let eidx = self.effect_index;
         let pidx = self.param_index;
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(eidx)
-                && let Some(slot) = effect.param_values.get_mut(pidx)
-            {
-                slot.exposed = prev;
-            }
-        });
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
+            && let Some(slot) = effect.param_values.get_mut(pidx)
+        {
+            slot.exposed = prev;
+        }
     }
 
     fn description(&self) -> &str {
@@ -866,31 +835,24 @@ impl BindingMappingEdit {
 /// waiting for the slot value to change.
 ///
 /// Mirrors [`ToggleEffectParamExposeCommand`] field-for-field on
-/// addressing (`target` + `effect_index` + `with_effects_mut`).
+/// addressing (`effect_id` + `find_effect_by_id_mut`).
 #[derive(Debug)]
 pub struct EditUserParamBindingCommand {
-    target: EffectTarget,
-    effect_index: usize,
+    effect_id: EffectId,
     /// Stable id of the binding being edited. NEVER mutated.
     binding_id: String,
     /// Post-edit values for the touched fields.
     new: BindingMappingEdit,
     /// Pre-edit values for the touched fields, captured on first
-    /// execute(). `None` until then (and stays `None` if the target /
+    /// execute(). `None` until then (and stays `None` if the effect /
     /// binding doesn't resolve — a no-op).
     reverse: Option<BindingMappingEdit>,
 }
 
 impl EditUserParamBindingCommand {
-    pub fn new(
-        target: EffectTarget,
-        effect_index: usize,
-        binding_id: String,
-        new: BindingMappingEdit,
-    ) -> Self {
+    pub fn new(effect_id: EffectId, binding_id: String, new: BindingMappingEdit) -> Self {
         Self {
-            target,
-            effect_index,
+            effect_id,
             binding_id,
             new,
             reverse: None,
@@ -900,11 +862,9 @@ impl EditUserParamBindingCommand {
 
 impl Command for EditUserParamBindingCommand {
     fn execute(&mut self, project: &mut Project) {
-        let eidx = self.effect_index;
         let binding_id = self.binding_id.clone();
         let new = self.new.clone();
-        let reverse_out = with_effects_mut(project, &self.target, |effects, _groups| {
-            let effect = effects.get_mut(eidx)?;
+        self.reverse = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
             let binding = effect
                 .user_param_bindings
                 .iter_mut()
@@ -920,29 +880,23 @@ impl Command for EditUserParamBindingCommand {
                 effect.user_param_bindings_version.wrapping_add(1);
             Some(reverse)
         });
-        // `with_effects_mut` returns `Option<Option<_>>`; flatten the
-        // missing-target / missing-binding cases into a single `None`.
-        self.reverse = reverse_out.flatten();
     }
 
     fn undo(&mut self, project: &mut Project) {
         let Some(reverse) = self.reverse.clone() else {
             return;
         };
-        let eidx = self.effect_index;
         let binding_id = self.binding_id.clone();
-        with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(eidx)
-                && let Some(binding) = effect
-                    .user_param_bindings
-                    .iter_mut()
-                    .find(|b| b.id == binding_id)
-            {
-                reverse.apply_to(binding);
-                effect.user_param_bindings_version =
-                    effect.user_param_bindings_version.wrapping_add(1);
-            }
-        });
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
+            && let Some(binding) = effect
+                .user_param_bindings
+                .iter_mut()
+                .find(|b| b.id == binding_id)
+        {
+            reverse.apply_to(binding);
+            effect.user_param_bindings_version =
+                effect.user_param_bindings_version.wrapping_add(1);
+        }
     }
 
     fn description(&self) -> &str {
@@ -975,14 +929,15 @@ mod tests {
     }
 
     /// Build a project with one master effect carrying one user
-    /// binding. Returns the project plus the binding id.
-    fn project_with_one_user_binding() -> (Project, String) {
+    /// binding. Returns the project, the effect id, and the binding id.
+    fn project_with_one_user_binding() -> (Project, EffectId, String) {
         let mut project = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let effect_id = fx.id.clone();
         let binding_id = "user.uv_transform.rotation.1".to_string();
         fx.user_param_bindings.push(sample_user_binding(&binding_id));
         project.settings.master_effects.push(fx);
-        (project, binding_id)
+        (project, effect_id, binding_id)
     }
 
     fn master_binding<'a>(project: &'a Project, id: &str) -> &'a UserParamBinding {
@@ -995,7 +950,7 @@ mod tests {
 
     #[test]
     fn edit_mapping_roundtrip_execute_undo_redo() {
-        let (mut project, binding_id) = project_with_one_user_binding();
+        let (mut project, effect_id, binding_id) = project_with_one_user_binding();
         let v0 = project.settings.master_effects[0].user_param_bindings_version;
 
         let edit = BindingMappingEdit {
@@ -1007,12 +962,7 @@ mod tests {
             scale: Some(0.017453293),
             offset: Some(1.5),
         };
-        let mut cmd = EditUserParamBindingCommand::new(
-            EffectTarget::Master,
-            0,
-            binding_id.clone(),
-            edit,
-        );
+        let mut cmd = EditUserParamBindingCommand::new(effect_id, binding_id.clone(), edit);
 
         // ── execute: every touched field changes ──
         cmd.execute(&mut project);
@@ -1062,18 +1012,13 @@ mod tests {
     fn edit_mapping_only_touches_some_fields() {
         // A partial edit (only invert + curve) must leave label / min /
         // max untouched, and undo must restore exactly those two.
-        let (mut project, binding_id) = project_with_one_user_binding();
+        let (mut project, effect_id, binding_id) = project_with_one_user_binding();
         let edit = BindingMappingEdit {
             invert: Some(true),
             curve: Some(MacroCurve::Exponential),
             ..Default::default()
         };
-        let mut cmd = EditUserParamBindingCommand::new(
-            EffectTarget::Master,
-            0,
-            binding_id.clone(),
-            edit,
-        );
+        let mut cmd = EditUserParamBindingCommand::new(effect_id, binding_id.clone(), edit);
         cmd.execute(&mut project);
         let b = master_binding(&project, &binding_id);
         assert!(b.invert);
@@ -1095,11 +1040,10 @@ mod tests {
         // Addressing a binding id that doesn't exist must not panic and
         // must leave the effect untouched; undo with no captured reverse
         // is a clean no-op.
-        let (mut project, _binding_id) = project_with_one_user_binding();
+        let (mut project, effect_id, _binding_id) = project_with_one_user_binding();
         let v0 = project.settings.master_effects[0].user_param_bindings_version;
         let mut cmd = EditUserParamBindingCommand::new(
-            EffectTarget::Master,
-            0,
+            effect_id,
             "user.does.not.exist.1".to_string(),
             BindingMappingEdit {
                 invert: Some(true),

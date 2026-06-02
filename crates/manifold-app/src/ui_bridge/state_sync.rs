@@ -1149,91 +1149,105 @@ pub fn sync_inspector_data(
 }
 
 /// Build the single [`ParamCardConfig`] for whatever the graph editor is
-/// currently editing — an effect instance (via `current_editor_target`) or a
-/// layer generator (via `watched_graph_target == Generator`). The editor's
-/// left lane renders the REAL card from this: the same [`ParamCardConfig`] the
-/// inspector builds, sourced from the same `EffectInstance` /
-/// `GeneratorParamState`, so the editor card is the actual instrument card and
-/// not a separate mirror. Returns `None` when nothing is being edited or the
-/// target can't be resolved (degenerate open state → the lane shows nothing).
+/// currently editing, resolved by identity from `watched_graph_target` — an
+/// effect instance (`Effect(EffectId)`, found anywhere via
+/// [`effect_card_config_by_id`]) or a layer generator (`Generator(LayerId)`).
+/// The editor's left lane renders the REAL card from this: the same
+/// [`ParamCardConfig`] the inspector builds, sourced from the same
+/// `EffectInstance` / `GeneratorParamState`, so the editor card is the actual
+/// instrument card and not a separate mirror. Returns `None` when nothing is
+/// being edited or the target can't be resolved (degenerate open state → the
+/// lane shows nothing).
 ///
-/// Effect target takes precedence: it's set only for effect editors, while a
-/// generator editor leaves `current_editor_target` `None` and identifies
-/// itself through `watched_graph_target`. This keeps the editor a single
-/// surface that doesn't fork its data model on Effect vs Generator.
+/// One `GraphTarget` covers both arms, so the editor is a single surface that
+/// doesn't fork its data model on Effect vs Generator.
 pub(crate) fn editor_card_config(
     project: &Project,
-    current_editor_target: Option<&(
-        manifold_editing::commands::effect_target::EffectTarget,
-        usize,
-    )>,
     watched_graph_target: Option<&manifold_core::GraphTarget>,
     selection: &SelectionState,
 ) -> Option<(ParamCardConfig, Vec<manifold_core::effects::ParamSlot>)> {
-    use manifold_editing::commands::effect_target::EffectTarget;
-
-    if let Some((target, ei)) = current_editor_target {
-        let ei = *ei;
-        let (config, values) = match target {
-            EffectTarget::Master => {
-                let effects = &project.settings.master_effects;
-                // Match on `effect_index` rather than positional `.get(ei)` for
-                // the config: `effects_to_configs` filter_maps, so a skipped
-                // instance would shift positions and hand back the wrong card.
-                let config = effects_to_configs(effects, &[], OscScope::Master)
-                    .into_iter()
-                    .find(|c| c.effect_index == ei)?;
-                let values = effects.get(ei)?.param_values.clone();
-                (config, values)
-            }
-            EffectTarget::Layer { layer_id } => {
-                let (_, layer) = project.timeline.find_layer_by_id(layer_id.as_str())?;
-                let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                let effects = layer.effects.as_deref().unwrap_or(&[]);
-                let config =
-                    effects_to_configs(effects, envs, OscScope::Layer(layer.layer_id.as_str()))
-                        .into_iter()
-                        .find(|c| c.effect_index == ei)?;
-                let values = effects.get(ei)?.param_values.clone();
-                (config, values)
-            }
-        };
-        // CLIP-SAFETY (CARD-TARGET-UNIFICATION): a Clip-scoped effect collapses
-        // to its Layer in `current_editor_target` (EffectTarget has no Clip
-        // variant), so the (tab, active_layer) override would address a DIFFERENT
-        // effect than the one the editor was opened on. Only show + drive the
-        // card when the resolved instance's id matches the editor's watched
-        // effect id; otherwise bail to an empty lane so a card edit can never
-        // corrupt an unrelated layer effect. Full clip support arrives with the
-        // id-based step-3 migration (docs/CARD_TARGET_UNIFICATION.md).
-        if let Some(manifold_core::GraphTarget::Effect(watched_id)) = watched_graph_target
-            && &config.effect_id != watched_id
-        {
-            return None;
+    match watched_graph_target? {
+        manifold_core::GraphTarget::Effect(eid) => effect_card_config_by_id(project, eid),
+        manifold_core::GraphTarget::Generator(lid) => {
+            let (_, layer) = project.timeline.find_layer_by_id(lid.as_str())?;
+            let gp = layer
+                .gen_params()
+                .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)?;
+            let clip_string_params = selection
+                .primary_selected_clip_id
+                .as_ref()
+                .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                .or_else(|| layer.clips.first())
+                .and_then(|c| c.string_params.as_ref());
+            let config = gen_params_to_config(
+                gp,
+                layer.layer_id.as_str(),
+                clip_string_params,
+                layer.generator_graph.as_ref(),
+            );
+            Some((config, gp.param_values.clone()))
         }
+    }
+}
+
+/// Build the editor card config for the effect with stable id `eid`, found
+/// anywhere in the project — master, a layer's chain, or a clip's chain. The
+/// effect's OSC scope + envelope set come from its container: master effects use
+/// `/master/` with no envelopes; layer- and clip-scoped effects use the owning
+/// layer's `/layer/{id}/` scope + envelope list. Returns `None` when no effect
+/// carries the id.
+///
+/// Resolving by id (not by a positional `(target, index)`) is what lets clip
+/// effects open + drive the editor card correctly — the old positional scheme
+/// had no clip variant and had to bail to an empty lane.
+fn effect_card_config_by_id(
+    project: &Project,
+    eid: &manifold_core::EffectId,
+) -> Option<(ParamCardConfig, Vec<manifold_core::effects::ParamSlot>)> {
+    if project.settings.master_effects.iter().any(|fx| &fx.id == eid) {
+        let config = effects_to_configs(&project.settings.master_effects, &[], OscScope::Master)
+            .into_iter()
+            .find(|c| &c.effect_id == eid)?;
+        let values = project
+            .settings
+            .master_effects
+            .iter()
+            .find(|fx| &fx.id == eid)?
+            .param_values
+            .clone();
         return Some((config, values));
     }
-
-    if let Some(manifold_core::GraphTarget::Generator(lid)) = watched_graph_target {
-        let (_, layer) = project.timeline.find_layer_by_id(lid.as_str())?;
-        let gp = layer
-            .gen_params()
-            .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)?;
-        let clip_string_params = selection
-            .primary_selected_clip_id
-            .as_ref()
-            .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
-            .or_else(|| layer.clips.first())
-            .and_then(|c| c.string_params.as_ref());
-        let config = gen_params_to_config(
-            gp,
-            layer.layer_id.as_str(),
-            clip_string_params,
-            layer.generator_graph.as_ref(),
-        );
-        return Some((config, gp.param_values.clone()));
+    for layer in &project.timeline.layers {
+        let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+        if let Some(effects) = layer.effects.as_deref()
+            && effects.iter().any(|fx| &fx.id == eid)
+        {
+            let config = effects_to_configs(effects, envs, OscScope::Layer(layer.layer_id.as_str()))
+                .into_iter()
+                .find(|c| &c.effect_id == eid)?;
+            let values = effects
+                .iter()
+                .find(|fx| &fx.id == eid)?
+                .param_values
+                .clone();
+            return Some((config, values));
+        }
+        for clip in &layer.clips {
+            if clip.effects.iter().any(|fx| &fx.id == eid) {
+                let config =
+                    effects_to_configs(&clip.effects, envs, OscScope::Layer(layer.layer_id.as_str()))
+                        .into_iter()
+                        .find(|c| &c.effect_id == eid)?;
+                let values = clip
+                    .effects
+                    .iter()
+                    .find(|fx| &fx.id == eid)?
+                    .param_values
+                    .clone();
+                return Some((config, values));
+            }
+        }
     }
-
     None
 }
 

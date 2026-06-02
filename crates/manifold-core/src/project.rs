@@ -716,6 +716,35 @@ impl Project {
         None
     }
 
+    /// The id of the layer that owns the effect `effect_id`, if any.
+    ///
+    /// Returns the layer for a layer-scoped effect, the layer containing the
+    /// clip for a clip-scoped effect, and `None` for a master effect (master
+    /// has no owning layer). Used by id-addressed commands that must reach
+    /// layer-only storage the effect itself doesn't hold — most notably
+    /// `ParamEnvelope`s, which live on `Layer::envelopes` keyed by
+    /// `(effect_type, param_id)`, never on the `EffectInstance`.
+    pub fn layer_id_for_effect(
+        &self,
+        effect_id: &crate::id::EffectId,
+    ) -> Option<crate::id::LayerId> {
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref()
+                && effects.iter().any(|fx| &fx.id == effect_id)
+            {
+                return Some(layer.layer_id.clone());
+            }
+            if layer
+                .clips
+                .iter()
+                .any(|clip| clip.effects.iter().any(|fx| &fx.id == effect_id))
+            {
+                return Some(layer.layer_id.clone());
+            }
+        }
+        None
+    }
+
     /// Port of Unity Project.ImportedPercussionClipPlacements property.
     /// Returns a mutable reference to the clip placements slice inside percussion_import.
     /// Initializes percussion_import if absent (matches Unity's lazy-init pattern).

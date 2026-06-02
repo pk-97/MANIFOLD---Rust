@@ -1,9 +1,13 @@
-use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::project::Project;
+use manifold_core::{EffectId, LayerId};
 
-/// Routes effect commands to layer/master effect lists.
-/// Per-clip effects removed (Ableton model: effects on layer/master only).
+/// Identifies an effect *list* for structural / list operations (add, remove,
+/// reorder, grouping). It names a destination list, not an instance — an insert
+/// has no instance to address yet — which is why these ops can't use an
+/// [`EffectId`]. Single-effect edits (toggle, param, expose, binding) address
+/// the instance directly by [`EffectId`] via `Project::find_effect_by_id_mut`
+/// and do NOT use this type. See the addressing-model note in `effects.rs`.
 #[derive(Debug, Clone)]
 pub enum EffectTarget {
     Layer { layer_id: LayerId },
@@ -56,13 +60,10 @@ where
 }
 
 /// Routes driver commands to effect drivers vs generator param drivers.
+/// The `Effect` arm addresses its instance by stable [`EffectId`] (master /
+/// layer / clip), consistent with every other single-effect edit.
 #[derive(Debug, Clone)]
 pub enum DriverTarget {
-    Effect {
-        effect_target: EffectTarget,
-        effect_index: usize,
-    },
-    GeneratorParam {
-        layer_id: LayerId,
-    },
+    Effect { effect_id: EffectId },
+    GeneratorParam { layer_id: LayerId },
 }

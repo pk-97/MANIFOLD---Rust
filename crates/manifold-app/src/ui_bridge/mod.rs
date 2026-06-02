@@ -74,10 +74,12 @@ pub fn dispatch(
     range_snapshot: &mut Option<(f32, f32)>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
-    // CARD-TARGET-UNIFICATION: `Some` when the graph editor dispatches a card
-    // action (identity-based targeting); `None` for the inspector/perform path
-    // (ambient targeting, unchanged). Only consulted by `dispatch_inspector`.
-    editor_override: Option<&EditorDispatchTarget>,
+    // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
+    // card actions: the edit targets that effect/generator by stable identity,
+    // regardless of the main window's active selection. `None` for the
+    // inspector / perform path, which resolves its own active context. Only
+    // consulted by `dispatch_inspector`.
+    editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
@@ -281,7 +283,7 @@ pub fn dispatch(
             target_snapshot,
             range_snapshot,
             active_inspector_drag,
-            editor_override,
+            editor_target,
         ),
 
         // ── Layer operations ──────────────────────────────────────
@@ -653,57 +655,86 @@ pub(crate) fn resolve_effects_mut<'a>(
     }
 }
 
-// CARD-TARGET-UNIFICATION (fork site A — the identity-based path).
-// The graph editor is the first dispatch host to target by identity instead of
-// by the ambient inspector tab + active layer. When it dispatches a card action
-// it supplies this override; `dispatch_inspector` then resolves "which effect /
-// generator" from the editor's own target rather than `last_effect_tab()` +
-// `active_layer`. `None` => the inspector / perform path, byte-identical to
-// before. Step 3 (docs/CARD_TARGET_UNIFICATION.md) migrates the inspector onto
-// the same scheme and deletes the ambient resolution; until then this is an
-// additive override and the perform path is untouched.
-//
-// Why a (tab, layer) pair is the full identity the resolvers need: every
-// Effect* arm resolves through `last_effect_tab()` + `active_layer`, and the
-// envelope/target sub-family is layer-stored keyed by (effect_type, param_id) —
-// so forcing tab + layer makes those arms read the editor's layer, and the
-// effect *type* is derived downstream from `effects[ei]` (ei rides the action
-// payload). Master effects carry no layer envelope, so a Master override
-// correctly no-ops envelope edits, matching today's behaviour.
-#[derive(Debug, Clone)]
-pub(crate) struct EditorDispatchTarget {
-    pub tab: InspectorTab,
-    pub active_layer: Option<LayerId>,
+/// Resolve "which effect instance" a single-effect card edit targets, as a
+/// stable [`EffectId`].
+///
+/// Two callers, one rule:
+/// - **Graph editor** (`editor_target == Some(Effect(id))`): the edited card IS
+///   one effect, named by identity. Its id wins outright — the positional `idx`
+///   from the action payload is ignored, and the resolution reaches master /
+///   layer / clip effects uniformly (so clip-scoped effects edit correctly).
+/// - **Inspector / perform path** (`editor_target == None`, or a `Generator`
+///   target that an effect arm never sees): resolve the host's OWN active
+///   context — the inspector tab + active layer + selected clip — to the effect
+///   list, then read `effects[idx].id`. This is legitimate context, not the
+///   ambient-mis-targeting bug: the inspector edits exactly what it is showing.
+pub(crate) fn resolve_effect_id(
+    editor_target: Option<&manifold_core::GraphTarget>,
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    project: &Project,
+    idx: usize,
+) -> Option<manifold_core::EffectId> {
+    if let Some(manifold_core::GraphTarget::Effect(eid)) = editor_target {
+        return Some(eid.clone());
+    }
+    resolve_effects_ref(tab, project, active_layer, selection)?
+        .get(idx)
+        .map(|fx| fx.id.clone())
 }
 
-/// Build the editor's dispatch override from its identity fields, or `None` when
-/// no editor target is resolvable (→ ambient resolution, perform path).
-/// Effect editors carry the `EffectTarget` directly in `current_editor_target`;
-/// generators are identified by `watched_graph_target` and resolve via the
-/// active layer alone (`current_editor_target` is `None` for them).
-pub(crate) fn editor_dispatch_target(
-    current_editor_target: Option<&(EffectTarget, usize)>,
-    watched_graph_target: Option<&manifold_core::GraphTarget>,
-) -> Option<EditorDispatchTarget> {
-    if let Some((target, _ei)) = current_editor_target {
-        return Some(match target {
-            EffectTarget::Master => EditorDispatchTarget {
-                tab: InspectorTab::Master,
-                active_layer: None,
-            },
-            EffectTarget::Layer { layer_id } => EditorDispatchTarget {
-                tab: InspectorTab::Layer,
-                active_layer: Some(layer_id.clone()),
-            },
-        });
+/// The `(inspector tab, active layer)` the dispatch arms that still resolve
+/// positionally — the **modulation** family (drivers, layer-stored envelopes,
+/// trims, envelope targets) — must use so a card edit dispatched from the graph
+/// editor targets the editor's WATCHED effect, not the main window's current
+/// selection.
+///
+/// The single-effect *value / expose / mapping* arms already address by stable
+/// `EffectId` (via [`resolve_effect_id`]) and ignore this. But the modulation
+/// arms key on `(tab, active_layer)` + the effect's position, and the editor is
+/// a separate window whose watched effect routinely diverges from the main
+/// window's selection. This expresses the editor's identity in the positional
+/// terms those arms still speak (a Stage-C cleanup would have every action carry
+/// its own id and retire this):
+///
+/// - **Generator** target → the generator's layer.
+/// - **Effect** target → the effect's *container*: `Master` for a master
+///   effect, its owning `Layer` for a layer-scoped effect, or `Clip` for a
+///   clip-scoped effect. The `Clip` mapping is deliberate: layer envelopes are
+///   keyed by `(effect_type, param_id)` and cannot represent a clip effect
+///   without colliding with a same-type layer effect, and positional resolution
+///   can't reach it — so the modulation arms (whose `Clip` branch is `None`)
+///   safely no-op, while the value/mapping arms still address it by id.
+/// - **`None`** (inspector / perform path) → the inspector's own ambient
+///   context, byte-identical to before.
+pub(crate) fn editor_dispatch_context(
+    editor_target: Option<&manifold_core::GraphTarget>,
+    project: &Project,
+    inspector_tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+) -> (InspectorTab, Option<LayerId>) {
+    match editor_target {
+        Some(manifold_core::GraphTarget::Generator(lid)) => {
+            (InspectorTab::Layer, Some(lid.clone()))
+        }
+        Some(manifold_core::GraphTarget::Effect(eid)) => {
+            if project.settings.master_effects.iter().any(|fx| &fx.id == eid) {
+                (InspectorTab::Master, None)
+            } else if let Some(lid) = project.timeline.layers.iter().find_map(|l| {
+                l.effects
+                    .as_deref()
+                    .filter(|e| e.iter().any(|fx| &fx.id == eid))
+                    .map(|_| l.layer_id.clone())
+            }) {
+                (InspectorTab::Layer, Some(lid))
+            } else {
+                // Clip-scoped or unresolved: layer modulation no-ops safely.
+                (InspectorTab::Clip, active_layer.clone())
+            }
+        }
+        None => (inspector_tab, active_layer.clone()),
     }
-    if let Some(manifold_core::GraphTarget::Generator(lid)) = watched_graph_target {
-        return Some(EditorDispatchTarget {
-            tab: InspectorTab::Layer,
-            active_layer: Some(lid.clone()),
-        });
-    }
-    None
 }
 
 /// Build the display label for the LED exit path dropdown button.

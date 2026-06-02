@@ -874,10 +874,10 @@ impl Application {
         self.graph_editor = None;
         self.graph_canvas = None;
         // Clear the Phase 4 caches alongside — `watched_graph_target`
-        // is the gate for the palette being active, and stale caches
-        // would let the user trigger commands against a dead effect or
-        // generator if they reopened the window on a different one.
-        self.current_editor_target = None;
+        // is the gate for the palette being active and the sole identity
+        // for every editor-card edit, so a stale value would let the user
+        // trigger commands against a dead effect or generator if they
+        // reopened the window on a different one.
         self.watched_graph_target = None;
         self.watched_catalog_default = None;
         // Tell the content thread to stop snapshotting any graph —

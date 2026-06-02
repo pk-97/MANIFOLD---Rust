@@ -705,8 +705,8 @@ fn toggle_effect_undo_roundtrip() {
         .master_effects
         .push(EffectInstance::new(EffectTypeId::BLOOM));
 
-    let target = EffectTarget::Master;
-    let mut cmd = ToggleEffectCommand::new(target, 0, true, false);
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let mut cmd = ToggleEffectCommand::new(effect_id, true, false);
 
     cmd.execute(&mut project);
     assert!(!project.settings.master_effects[0].enabled);
@@ -726,7 +726,8 @@ fn change_effect_param_undo_roundtrip() {
     }
 
     // Step 16: id-keyed addressing (was positional `0`).
-    let mut cmd = ChangeEffectParamCommand::new(EffectTarget::Master, 0, "amount", 0.5, 0.9);
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let mut cmd = ChangeEffectParamCommand::new(effect_id.clone(), "amount", 0.5, 0.9);
 
     cmd.execute(&mut project);
     assert!((project.settings.master_effects[0].param_values[0].value - 0.9).abs() < 0.001);
@@ -736,7 +737,7 @@ fn change_effect_param_undo_roundtrip() {
 
     // Targets `threshold` (index 1) — confirm id-based addressing
     // routes to the right slot, not just index 0.
-    let mut cmd2 = ChangeEffectParamCommand::new(EffectTarget::Master, 0, "threshold", 0.3, 0.7);
+    let mut cmd2 = ChangeEffectParamCommand::new(effect_id, "threshold", 0.3, 0.7);
     cmd2.execute(&mut project);
     assert!((project.settings.master_effects[0].param_values[1].value - 0.7).abs() < 0.001);
     cmd2.undo(&mut project);
@@ -754,7 +755,8 @@ fn change_effect_param_unknown_id_is_no_op() {
     fx.base_param_values = Some(vec![0.5, 0.3]);
     project.settings.master_effects.push(fx);
 
-    let mut cmd = ChangeEffectParamCommand::new(EffectTarget::Master, 0, "phantom_param", 0.5, 0.9);
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let mut cmd = ChangeEffectParamCommand::new(effect_id, "phantom_param", 0.5, 0.9);
 
     cmd.execute(&mut project);
     // Unchanged — no slot was matched.
@@ -806,7 +808,8 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
         .expect("user binding resolves to a slot");
     assert_eq!(tail_idx, 2, "user binding lands past the 2-param static prefix");
 
-    let mut cmd = ChangeEffectParamCommand::new(EffectTarget::Master, 0, user_id, 0.0, 0.42);
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let mut cmd = ChangeEffectParamCommand::new(effect_id, user_id, 0.0, 0.42);
     cmd.execute(&mut project);
     let v = project.settings.master_effects[0].param_values[tail_idx].value;
     assert!((v - 0.42).abs() < 0.001, "execute writes the user-tail slot");
@@ -1033,10 +1036,8 @@ fn add_driver_effect_undo_roundtrip() {
         .master_effects
         .push(make_effect(&EffectTypeId::BLOOM));
 
-    let target = DriverTarget::Effect {
-        effect_target: EffectTarget::Master,
-        effect_index: 0,
-    };
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = DriverTarget::Effect { effect_id };
     let driver = ParameterDriver {
         param_id: std::borrow::Cow::Borrowed("amount"),
         beat_division: BeatDivision::Quarter,
@@ -1086,10 +1087,8 @@ fn toggle_driver_enabled_undo_roundtrip() {
         project.settings.master_effects.push(fx);
     }
 
-    let target = DriverTarget::Effect {
-        effect_target: EffectTarget::Master,
-        effect_index: 0,
-    };
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = DriverTarget::Effect { effect_id };
     let mut cmd = ToggleDriverEnabledCommand::new(target, 0, true, false);
 
     cmd.execute(&mut project);
@@ -1112,10 +1111,8 @@ fn change_driver_waveform_undo_roundtrip() {
         project.settings.master_effects.push(fx);
     }
 
-    let target = DriverTarget::Effect {
-        effect_target: EffectTarget::Master,
-        effect_index: 0,
-    };
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = DriverTarget::Effect { effect_id };
     let mut cmd =
         ChangeDriverWaveformCommand::new(target, 0, DriverWaveform::Sine, DriverWaveform::Square);
 
@@ -1146,10 +1143,8 @@ fn change_trim_undo_roundtrip() {
         project.settings.master_effects.push(fx);
     }
 
-    let target = DriverTarget::Effect {
-        effect_target: EffectTarget::Master,
-        effect_index: 0,
-    };
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = DriverTarget::Effect { effect_id };
     let mut cmd = ChangeTrimCommand::new(target, 0, 0.0, 1.0, 0.2, 0.8);
 
     cmd.execute(&mut project);
@@ -1480,9 +1475,9 @@ fn expose_effect_param_command_undo_roundtrip() {
     fx.base_param_values = Some(vec![0.5, 1.0]);
     project.settings.master_effects.push(fx);
 
+    let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         true, // expose
@@ -1555,9 +1550,9 @@ fn expose_already_exposed_is_idempotent_noop() {
     });
     project.settings.master_effects.push(fx);
 
+    let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -1604,9 +1599,9 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     fx.base_param_values.as_mut().unwrap()[2] = 0.42;
     project.settings.master_effects.push(fx);
 
+    let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         false, // unexpose
@@ -1643,9 +1638,9 @@ fn unexpose_when_not_exposed_is_noop() {
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     project.settings.master_effects.push(fx);
 
+    let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         false,
@@ -1767,9 +1762,9 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
     ]);
     project.settings.master_effects.push(fx);
 
+    let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         false, // unexpose
@@ -1854,9 +1849,9 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
     }]);
     project.settings.master_effects.push(fx);
 
+    let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         false,
@@ -1885,7 +1880,6 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
 #[test]
 fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
     let mut project = make_test_project();
-    let layer_id = project.timeline.layers[0].layer_id.clone();
     let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.append_user_binding(UserParamBinding {
@@ -1917,11 +1911,11 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
     ));
     project.timeline.layers[0].effects = Some(vec![fx]);
 
+    let effect_id = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+        .id
+        .clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Layer {
-            layer_id: layer_id.clone(),
-        },
-        0,
+        effect_id,
         "uv_transform".to_string(),
         "translate".to_string(),
         false,

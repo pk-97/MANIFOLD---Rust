@@ -1,5 +1,5 @@
 use crate::command::Command;
-use crate::commands::effect_target::{DriverTarget, with_effects_mut};
+use crate::commands::effect_target::DriverTarget;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
@@ -10,19 +10,9 @@ where
     F: FnOnce(&mut Vec<ParameterDriver>) -> R,
 {
     match target {
-        DriverTarget::Effect {
-            effect_target,
-            effect_index,
-        } => {
-            let eidx = *effect_index;
-            with_effects_mut(project, effect_target, |effects, _groups| {
-                if let Some(effect) = effects.get_mut(eidx) {
-                    let drivers = effect.drivers_mut();
-                    f(drivers)
-                } else {
-                    f(&mut Vec::new()) // fallback — shouldn't happen
-                }
-            })
+        DriverTarget::Effect { effect_id } => {
+            let effect = project.find_effect_by_id_mut(effect_id)?;
+            Some(f(effect.drivers_mut()))
         }
         DriverTarget::GeneratorParam { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;

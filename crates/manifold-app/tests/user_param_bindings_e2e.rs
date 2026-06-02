@@ -35,7 +35,6 @@ use manifold_core::effect_definition_registry;
 use manifold_core::effects::{ParameterDriver, ParamConvert};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::command::Command;
-use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::{InnerParamMeta, ToggleEffectParamExposeCommand};
 
 fn meta_for_uv_translate() -> InnerParamMeta {
@@ -64,11 +63,11 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     // create_default lands param_values at registry defaults; verify.
     assert_eq!(fx.param_values.len(), 2, "Mirror has 2 static params");
     project.settings.master_effects.push(fx);
+    let effect_id = project.settings.master_effects[0].id.clone();
 
     // 1. Expose UVTransform.translate via the command.
     let mut expose = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id.clone(),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -200,10 +199,10 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
     let mut project = Project::default();
     let fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
     project.settings.master_effects.push(fx);
+    let effect_id = project.settings.master_effects[0].id.clone();
 
     let mut expose = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id.clone(),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -215,8 +214,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
         .clone();
 
     let mut unexpose = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id.clone(),
         "uv_transform".to_string(),
         "translate".to_string(),
         false,
@@ -230,8 +228,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
     );
 
     let mut expose_again = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id.clone(),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -259,10 +256,10 @@ fn second_expose_under_same_handle_increments_n() {
     let mut project = Project::default();
     let fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
     project.settings.master_effects.push(fx);
+    let effect_id = project.settings.master_effects[0].id.clone();
 
     let mut a = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id.clone(),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -271,8 +268,7 @@ fn second_expose_under_same_handle_increments_n() {
     a.execute(&mut project);
 
     let mut b = ToggleEffectParamExposeCommand::new(
-        EffectTarget::Master,
-        0,
+        effect_id.clone(),
         "uv_transform".to_string(),
         "scale".to_string(),
         true,

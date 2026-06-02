@@ -44,26 +44,27 @@ pub(super) fn dispatch_inspector(
     target_snapshot: &mut Option<f32>,
     range_snapshot: &mut Option<(f32, f32)>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
-    editor_override: Option<&super::EditorDispatchTarget>,
+    editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
 
-    // CARD-TARGET-UNIFICATION (fork site B — the ambient/legacy resolution).
-    // Every effect/generator arm below resolves "which effect/generator" from
-    // `tab` + `active_layer`. When the graph editor supplies an `editor_override`
-    // we resolve from the EDITOR's identity instead, so a card edit inside the
-    // editor targets the effect/generator the editor was opened on — not the main
-    // window's current selection. `None` => unchanged ambient behaviour. Computed
-    // once here; the per-arm `let tab = effective_tab;` and the shadowed
-    // `active_layer` below feed it into every resolver. Step 3 deletes the
-    // ambient branch and makes identity the only path.
-    let effective_tab: InspectorTab = editor_override
-        .map(|o| o.tab)
-        .unwrap_or_else(|| ui.inspector.last_effect_tab());
-    let effective_active_layer: Option<LayerId> = match editor_override {
-        Some(o) => o.active_layer.clone(),
-        None => active_layer.clone(),
-    };
+    // The single-effect VALUE / expose / mapping arms address their instance by
+    // stable `EffectId` via `super::resolve_effect_id(editor_target, …)` and
+    // ignore `effective_tab` / `active_layer` when the editor supplies an
+    // identity. The MODULATION arms (drivers, layer-stored envelopes, trims,
+    // envelope targets) still resolve positionally through `(tab, active_layer)`
+    // + the effect's row index, so they need a tab/layer that points at the
+    // editor's WATCHED effect — not the main window's selection — when a card
+    // action is dispatched from the editor. `editor_dispatch_context` expresses
+    // the editor's identity in those positional terms (Master / its Layer /
+    // Clip), and is byte-identical to the inspector's own context on the
+    // perform path (`editor_target == None`).
+    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
+        editor_target,
+        project,
+        ui.inspector.last_effect_tab(),
+        active_layer,
+    );
     // Shadow the &mut param: no arm in this function mutates `active_layer`, so an
     // immutable shadow is sound and routes every downstream resolver through the
     // effective layer.
@@ -526,42 +527,49 @@ pub(super) fn dispatch_inspector(
             } else {
                 vec![*fx_idx]
             };
-            // Read current state to determine target + build commands
-            let target = super::resolve_effect_target(tab, active_layer, project);
-            let new_enabled = {
-                let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
-                effects_ref
-                    .and_then(|e| e.get(*fx_idx))
-                    .map(|fx| !fx.enabled)
-                    .unwrap_or(true)
-            };
+            // New state = inverse of the clicked card, applied to every selected.
+            let new_enabled = super::resolve_effect_id(
+                editor_target,
+                tab,
+                active_layer,
+                selection,
+                project,
+                *fx_idx,
+            )
+            .and_then(|eid| project.find_effect_by_id(&eid).map(|fx| !fx.enabled))
+            .unwrap_or(true);
+            // Resolve every affected card to its stable id + current state. The
+            // editor toggles its single watched effect (id wins over `idx`); the
+            // inspector resolves each selected index against its own context.
+            let targets: Vec<(manifold_core::EffectId, bool)> = indices
+                .iter()
+                .filter_map(|&idx| {
+                    let eid = super::resolve_effect_id(
+                        editor_target,
+                        tab,
+                        active_layer,
+                        selection,
+                        project,
+                        idx,
+                    )?;
+                    let enabled = project.find_effect_by_id(&eid)?.enabled;
+                    Some((eid, enabled))
+                })
+                .collect();
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-            {
-                let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
-                if let Some(effects) = effects_ref {
-                    for &idx in &indices {
-                        if let Some(fx) = effects.get(idx)
-                            && fx.enabled != new_enabled
-                        {
-                            commands.push(Box::new(ToggleEffectCommand::new(
-                                target.clone(),
-                                idx,
-                                fx.enabled,
-                                new_enabled,
-                            )));
-                        }
-                    }
+            for (eid, old_enabled) in &targets {
+                if *old_enabled != new_enabled {
+                    commands.push(Box::new(ToggleEffectCommand::new(
+                        eid.clone(),
+                        *old_enabled,
+                        new_enabled,
+                    )));
                 }
             }
-            // Apply locally for immediate visual feedback
-            {
-                let (effects_mut, _) = resolve_effects_mut(tab, project, active_layer, selection);
-                if let Some(effects) = effects_mut {
-                    for &idx in &indices {
-                        if let Some(fx) = effects.get_mut(idx) {
-                            fx.enabled = new_enabled;
-                        }
-                    }
+            // Apply locally for immediate visual feedback.
+            for (eid, _) in &targets {
+                if let Some(fx) = project.find_effect_by_id_mut(eid) {
+                    fx.enabled = new_enabled;
                 }
             }
             if !commands.is_empty() {
@@ -632,21 +640,23 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectParamRightClick(fx_idx, param_id, default_val) => {
             let tab = effective_tab;
-            let (effects_mut, target) = resolve_effects_mut(tab, project, active_layer, selection);
-            if let Some(effects) = effects_mut
-                && let Some(fx) = effects.get_mut(*fx_idx)
+            let eid = super::resolve_effect_id(
+                editor_target,
+                tab,
+                active_layer,
+                selection,
+                project,
+                *fx_idx,
+            );
+            if let Some(eid) = eid
+                && let Some(fx) = project.find_effect_by_id_mut(&eid)
                 && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
             {
                 let old = fx.get_base_param(slot);
                 if (old - *default_val).abs() > f32::EPSILON {
                     fx.set_base_param(slot, *default_val);
-                    let cmd = ChangeEffectParamCommand::new(
-                        target,
-                        *fx_idx,
-                        param_id.clone(),
-                        old,
-                        *default_val,
-                    );
+                    let cmd =
+                        ChangeEffectParamCommand::new(eid, param_id.clone(), old, *default_val);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
@@ -655,34 +665,39 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectParamSnapshot(fx_idx, param_id) => {
             let tab = effective_tab;
-            let effects = resolve_effects_ref(tab, project, active_layer, selection);
-            if let Some(fx) = effects.and_then(|e| e.get(*fx_idx))
+            let eid = super::resolve_effect_id(
+                editor_target,
+                tab,
+                active_layer,
+                selection,
+                project,
+                *fx_idx,
+            );
+            if let Some(eid) = eid
+                && let Some(fx) = project.find_effect_by_id(&eid)
                 && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
             {
                 let val = fx.get_base_param(slot);
                 *drag_snapshot = Some(val);
                 *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EffectParam {
-                    tab,
-                    layer_id: active_layer.clone().unwrap_or_default(),
-                    effect_idx: *fx_idx,
+                    effect_id: eid,
                     param_id: param_id.clone(),
                     value: val,
-                    clip_id: if tab == InspectorTab::Clip {
-                        selection.primary_selected_clip_id.clone()
-                    } else {
-                        None
-                    },
                 });
             }
             DispatchResult::handled()
         }
         PanelAction::EffectParamChanged(fx_idx, param_id, val) => {
             let tab = effective_tab;
-            {
-                let (effects_mut, _target) =
-                    resolve_effects_mut(tab, project, active_layer, selection);
-                if let Some(effects) = effects_mut
-                    && let Some(fx) = effects.get_mut(*fx_idx)
+            if let Some(eid) = super::resolve_effect_id(
+                editor_target,
+                tab,
+                active_layer,
+                selection,
+                project,
+                *fx_idx,
+            ) {
+                if let Some(fx) = project.find_effect_by_id_mut(&eid)
                     && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
                 {
                     fx.set_base_param(slot, *val);
@@ -692,26 +707,12 @@ pub(super) fn dispatch_inspector(
                 {
                     *value = *val;
                 }
-                let fi = *fx_idx;
                 let pid = param_id.clone();
                 let v = *val;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                let clip_id = selection.primary_selected_clip_id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
-                        let effects: Option<&mut Vec<EffectInstance>> = match tab {
-                            InspectorTab::Master => Some(&mut p.settings.master_effects),
-                            InspectorTab::Layer => p
-                                .timeline
-                                .find_layer_by_id_mut(&layer_id)
-                                .map(|(_, l)| l.effects_mut()),
-                            InspectorTab::Clip => clip_id.as_ref().and_then(|cid| {
-                                p.timeline.find_clip_by_id_mut(cid).map(|c| &mut c.effects)
-                            }),
-                        };
-                        if let Some(effects) = effects
-                            && let Some(fx) = effects.get_mut(fi)
+                        if let Some(fx) = p.find_effect_by_id_mut(&eid)
                             && let Some(slot) = fx.param_id_to_value_index(pid.as_ref())
                         {
                             fx.set_base_param(slot, v);
@@ -724,16 +725,22 @@ pub(super) fn dispatch_inspector(
         PanelAction::EffectParamCommit(fx_idx, param_id) => {
             if let Some(old_val) = drag_snapshot.take() {
                 let tab = effective_tab;
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                if let Some(fx) = effects.and_then(|e| e.get(*fx_idx))
+                let eid = super::resolve_effect_id(
+                    editor_target,
+                    tab,
+                    active_layer,
+                    selection,
+                    project,
+                    *fx_idx,
+                );
+                if let Some(eid) = eid
+                    && let Some(fx) = project.find_effect_by_id(&eid)
                     && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
                 {
                     let new_val = fx.get_base_param(slot);
                     if (old_val - new_val).abs() > f32::EPSILON {
-                        let target = super::resolve_effect_target(tab, active_layer, project);
                         let cmd = ChangeEffectParamCommand::new(
-                            target,
-                            *fx_idx,
+                            eid,
                             param_id.clone(),
                             old_val,
                             new_val,
@@ -749,14 +756,17 @@ pub(super) fn dispatch_inspector(
         // ── Effect modulation ──────────────────────────────────────
         PanelAction::EffectDriverToggle(ei, param_id) => {
             let tab = effective_tab;
-            let effect_target = super::resolve_effect_target(tab, active_layer, project);
-            let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
-            if let Some(effects) = effects_ref
-                && let Some(fx) = effects.get(*ei)
-            {
+            let Some(effect_id) =
+                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
+            else {
+                return DispatchResult::structural();
+            };
+            // Read the driver state off the SAME instance the command targets, by
+            // id — never `effects[ei]` from ambient context — so an editor-card
+            // driver edit can't split (command->watched effect, di->some other).
+            if let Some(fx) = project.find_effect_by_id(&effect_id) {
                 let driver_target = DriverTarget::Effect {
-                    effect_target,
-                    effect_index: *ei,
+                    effect_id: effect_id.clone(),
                 };
                 let driver_idx = fx.drivers.as_ref().and_then(|ds| {
                     ds.iter().position(|d| d.param_id == *param_id)
@@ -830,15 +840,28 @@ pub(super) fn dispatch_inspector(
                         envs.push(ParamEnvelope::new_for_effect(et.clone(), param_id.clone()));
                     }
                 }
-                // Sync to content thread so the next snapshot doesn't overwrite
+                // Sync to content thread so the next snapshot doesn't overwrite.
+                // Tab-gated to match the LOCAL write above (and every other
+                // envelope arm): layer-stored envelopes are keyed by
+                // (effect_type, param_id) and only apply to layer-scoped
+                // effects, so Clip / Master must no-op. Without this gate a
+                // clip-watched editor (which `editor_dispatch_context` maps to
+                // Clip) would push a (clip_effect_type, param) envelope onto the
+                // active layer and collide with a same-type layer effect.
                 let et2 = et;
                 let pid_for_content = param_id.clone();
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                            let envs = layer.envelopes_mut();
+                        let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                            InspectorTab::Layer => p
+                                .timeline
+                                .find_layer_by_id_mut(&layer_id)
+                                .map(|(_, l)| l.envelopes_mut()),
+                            InspectorTab::Clip | InspectorTab::Master => None,
+                        };
+                        if let Some(envs) = envs {
                             let env_idx = envs.iter().position(|e| {
                                 e.target_effect_type == et2 && e.param_id == pid_for_content
                             });
@@ -855,13 +878,15 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectDriverConfig(ei, param_id, cfg) => {
             let tab = effective_tab;
-            let effect_target = super::resolve_effect_target(tab, active_layer, project);
-            let target = DriverTarget::Effect {
-                effect_target,
-                effect_index: *ei,
+            let Some(effect_id) =
+                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
+            else {
+                return DispatchResult::handled();
             };
-            let effects = resolve_effects_ref(tab, project, active_layer, selection);
-            if let Some(fx) = effects.and_then(|e| e.get(*ei))
+            let target = DriverTarget::Effect {
+                effect_id: effect_id.clone(),
+            };
+            if let Some(fx) = project.find_effect_by_id(&effect_id)
                 && let Some(di) = fx
                     .drivers
                     .as_ref()
@@ -1019,48 +1044,35 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectTrimChanged(ei, param_id, min, max) => {
             let tab = effective_tab;
+            let Some(effect_id) =
+                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
+            else {
+                return DispatchResult::handled();
+            };
+            if let Some(fx) = project.find_effect_by_id_mut(&effect_id)
+                && let Some(driver) = fx
+                    .drivers_mut()
+                    .iter_mut()
+                    .find(|d| d.param_id == *param_id)
             {
-                let (effects_mut, _) = resolve_effects_mut(tab, project, active_layer, selection);
-                if let Some(effects) = effects_mut
-                    && let Some(fx) = effects.get_mut(*ei)
-                    && let Some(driver) = fx
-                        .drivers_mut()
-                        .iter_mut()
-                        .find(|d| d.param_id == *param_id)
-                {
-                    driver.trim_min = *min;
-                    driver.trim_max = *max;
-                }
-                let fi = *ei;
-                let pid = param_id.clone();
-                let mn = *min;
-                let mx = *max;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                let clip_id = selection.primary_selected_clip_id.clone();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        let effects: Option<&mut Vec<EffectInstance>> = match tab {
-                            InspectorTab::Master => Some(&mut p.settings.master_effects),
-                            InspectorTab::Layer => p
-                                .timeline
-                                .find_layer_by_id_mut(&layer_id)
-                                .map(|(_, l)| l.effects_mut()),
-                            InspectorTab::Clip => clip_id.as_ref().and_then(|cid| {
-                                p.timeline.find_clip_by_id_mut(cid).map(|c| &mut c.effects)
-                            }),
-                        };
-                        if let Some(effects) = effects
-                            && let Some(fx) = effects.get_mut(fi)
-                            && let Some(driver) =
-                                fx.drivers_mut().iter_mut().find(|d| d.param_id == pid)
-                        {
-                            driver.trim_min = mn;
-                            driver.trim_max = mx;
-                        }
-                    })),
-                );
+                driver.trim_min = *min;
+                driver.trim_max = *max;
             }
+            let pid = param_id.clone();
+            let mn = *min;
+            let mx = *max;
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some(fx) = p.find_effect_by_id_mut(&effect_id)
+                        && let Some(driver) =
+                            fx.drivers_mut().iter_mut().find(|d| d.param_id == pid)
+                    {
+                        driver.trim_min = mn;
+                        driver.trim_max = mx;
+                    }
+                })),
+            );
             DispatchResult::handled()
         }
         PanelAction::EffectTargetChanged(ei, param_id, norm) => {
@@ -1121,8 +1133,10 @@ pub(super) fn dispatch_inspector(
         // ── Modulation undo: snapshot/commit ────────────────────────
         PanelAction::EffectTrimSnapshot(ei, param_id) => {
             let tab = effective_tab;
-            let effects = resolve_effects_ref(tab, project, active_layer, selection);
-            if let Some(fx) = effects.and_then(|e| e.get(*ei))
+            let effect_id =
+                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei);
+            if let Some(eid) = effect_id
+                && let Some(fx) = project.find_effect_by_id(&eid)
                 && let Some(driver) = fx
                     .drivers
                     .as_ref()
@@ -1135,9 +1149,16 @@ pub(super) fn dispatch_inspector(
         PanelAction::EffectTrimCommit(ei, param_id) => {
             if let Some((old_min, old_max)) = trim_snapshot.take() {
                 let tab = effective_tab;
-                let effect_target = super::resolve_effect_target(tab, active_layer, project);
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                if let Some(fx) = effects.and_then(|e| e.get(*ei))
+                let effect_id = super::resolve_effect_id(
+                    editor_target,
+                    tab,
+                    active_layer,
+                    selection,
+                    project,
+                    *ei,
+                );
+                if let Some(eid) = effect_id
+                    && let Some(fx) = project.find_effect_by_id(&eid)
                     && let Some(di) = fx
                         .drivers
                         .as_ref()
@@ -1149,10 +1170,7 @@ pub(super) fn dispatch_inspector(
                     if (old_min - new_min).abs() > f32::EPSILON
                         || (old_max - new_max).abs() > f32::EPSILON
                     {
-                        let target = DriverTarget::Effect {
-                            effect_target,
-                            effect_index: *ei,
-                        };
+                        let target = DriverTarget::Effect { effect_id: eid };
                         let cmd =
                             ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));

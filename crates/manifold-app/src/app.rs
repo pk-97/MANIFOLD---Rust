@@ -67,12 +67,9 @@ pub(crate) enum ActiveInspectorDrag {
         value: f32,
     },
     EffectParam {
-        tab: manifold_ui::InspectorTab,
-        layer_id: LayerId,
-        effect_idx: usize,
+        effect_id: manifold_core::EffectId,
         param_id: manifold_core::effects::ParamId,
         value: f32,
-        clip_id: Option<manifold_core::ClipId>,
     },
     GenParam {
         layer_id: LayerId,
@@ -107,28 +104,11 @@ impl ActiveInspectorDrag {
                 }
             }
             Self::EffectParam {
-                tab,
-                layer_id,
-                effect_idx,
+                effect_id,
                 param_id,
                 value,
-                clip_id,
             } => {
-                let effects: Option<&mut Vec<manifold_core::effects::EffectInstance>> = match tab {
-                    manifold_ui::InspectorTab::Master => Some(&mut project.settings.master_effects),
-                    manifold_ui::InspectorTab::Layer => project
-                        .timeline
-                        .find_layer_by_id_mut(layer_id)
-                        .and_then(|(_, l)| l.effects.as_mut()),
-                    manifold_ui::InspectorTab::Clip => clip_id.as_ref().and_then(|cid| {
-                        project
-                            .timeline
-                            .find_clip_by_id_mut(cid)
-                            .map(|c| &mut c.effects)
-                    }),
-                };
-                if let Some(effects) = effects
-                    && let Some(effect) = effects.get_mut(*effect_idx)
+                if let Some(effect) = project.find_effect_by_id_mut(effect_id)
                     && let Some(slot) = effect.param_id_to_value_index(param_id.as_ref())
                     && slot < effect.param_values.len()
                 {
@@ -314,20 +294,12 @@ pub struct Application {
     /// Sideways mapping drawer for the editor card's Author-context rows. Same
     /// `MappingPopover` the canvas uses for on-node rows, but anchored beside the
     /// left-lane card row and opened by its right-edge chevron. Edits emit the
-    /// existing `EffectMapping*` actions, dispatched against
-    /// `current_editor_target` like the canvas popover.
+    /// existing `EffectMapping*` actions, dispatched against the editor's
+    /// `watched_graph_target` (by effect id) like the canvas popover.
     pub(crate) editor_mapping_popover: crate::mapping_popover::MappingPopover,
     /// Built-once list of atoms shown in the spawn popup (node browser).
     /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
-    /// Identifies which `EffectInstance` the editor is currently
-    /// configuring. Set when `OpenGraphEditor(ei)` fires; cleared on
-    /// editor-window close. The editor's right-sidebar reads this to
-    /// look up that effect's `user_param_bindings`.
-    pub(crate) current_editor_target: Option<(
-        manifold_editing::commands::effect_target::EffectTarget,
-        usize,
-    )>,
     /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
     /// (Effect target) or `OpenGeneratorGraphEditor` (Generator target);
     /// cleared when the editor closes. Every graph mutation command
@@ -541,7 +513,6 @@ impl Application {
                 });
                 atoms
             },
-            current_editor_target: None,
             watched_graph_target: None,
             watched_catalog_default: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
@@ -966,30 +937,30 @@ impl Application {
             TextInputField::EffectParam(effect_idx, param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>() {
                     let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    // Resolve effect instance to get type + old value
+                    // Resolve effect instance to get its stable id + type + old value
                     let effect_info = match tab {
                         manifold_ui::InspectorTab::Master => self
                             .local_project
                             .settings
                             .master_effects
                             .get(effect_idx)
-                            .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx))),
+                            .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
                         manifold_ui::InspectorTab::Layer => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
                             .and_then(|(_, l)| l.effects.as_ref())
                             .and_then(|e| e.get(effect_idx))
-                            .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx))),
+                            .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
                         manifold_ui::InspectorTab::Clip => self
                             .selection
                             .primary_selected_clip_id
                             .as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                             .and_then(|c| c.effects.get(effect_idx))
-                            .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx))),
+                            .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
                     };
-                    if let Some((effect_type, old_val)) = effect_info {
+                    if let Some((effect_id, effect_type, old_val)) = effect_info {
                         // Clamp to param range from registry
                         let new_val = if let Some(def) =
                             manifold_core::effect_definition_registry::try_get(effect_type)
@@ -1009,28 +980,14 @@ impl Application {
                                     param_idx,
                                 )
                         {
-                            let target = match tab {
-                                manifold_ui::InspectorTab::Master => {
-                                    manifold_editing::commands::effect_target::EffectTarget::Master
-                                }
-                                manifold_ui::InspectorTab::Layer
-                                | manifold_ui::InspectorTab::Clip => {
-                                    let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                                    manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                        layer_id,
-                                    }
-                                }
-                            };
                             let cmd =
                                 manifold_editing::commands::effects::ChangeEffectParamCommand::new(
-                                    target, effect_idx, param_id, old_val, new_val,
+                                    effect_id, param_id, old_val, new_val,
                                 );
-                            if let Some(project) = Some(&mut self.local_project) {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
-                            }
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                Box::new(cmd);
+                            boxed.execute(&mut self.local_project);
+                            self.send_content_cmd(ContentCommand::Execute(boxed));
                         }
                     }
                 }
@@ -2212,7 +2169,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         range,
                                     )) = crate::app_render::resolve_canvas_binding(
                                         self.content_state.active_graph_snapshot.as_deref(),
-                                        self.current_editor_target.as_ref(),
+                                        self.watched_graph_target.as_ref(),
                                         &self.local_project,
                                         node_id,
                                         &inner_param,

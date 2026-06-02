@@ -251,9 +251,9 @@ pub enum PanelAction {
     // Emitted by the graph-editor mapping sidebar when the user edits a
     // `UserParamBinding`'s card-slider mapping (display label, min/max
     // range, invert flag, response curve). The app layer resolves the
-    // watched effect target + index from `current_editor_target` and
-    // routes to `EditUserParamBindingCommand`, addressing the binding by
-    // its stable `binding_id` (never mutated).
+    // watched effect by id from `watched_graph_target` and routes to
+    // `EditUserParamBindingCommand`, addressing the binding by its stable
+    // `binding_id` (never mutated).
     //
     // The min/max range uses the snapshot/changed/commit triad so a drag
     // coalesces into ONE undo entry: snapshot captures the pre-drag
