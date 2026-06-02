@@ -234,6 +234,21 @@ pub enum AbletonMappingTarget {
     },
 }
 
+impl AbletonMappingTarget {
+    /// The stable [`ParamId`] this target addresses, for the three
+    /// host-param variants. `None` for `MacroSlot`, which is addressed by
+    /// slot index, not a param id, and stores a single mapping rather than
+    /// a per-param vec.
+    pub fn param_id(&self) -> Option<&ParamId> {
+        match self {
+            Self::MasterEffect { param_id, .. }
+            | Self::LayerEffect { param_id, .. }
+            | Self::GenParam { param_id, .. } => Some(param_id),
+            Self::MacroSlot { .. } => None,
+        }
+    }
+}
+
 // ── Set context ───────────────────────────────────────────────────
 
 /// Per-track structural signature: the ordered list of device class names.
