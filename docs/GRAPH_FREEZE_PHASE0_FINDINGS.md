@@ -1,0 +1,73 @@
+# Graph Freeze Compiler — Phase 0 Findings + Architecture Direction
+
+**Status:** Phase 0 complete (2026-06-02). Branch `freeze-compiler` (worktree off `c5c4b850`). Method: a headless GPU bench (`cargo run --release -p manifold-renderer --bin freeze-profile`) + a 44-preset static fusion-headroom sweep. No app, no GUI. Companion: `docs/GRAPH_COMPILER.md` (shelved transcript), `docs/CHANNEL_TYPE_SYSTEM.md` §16, memory `project_graph_freeze_compiler_direction`.
+
+The §1–§4 measurements are settled. The §5 architecture is a **proposed direction informed by Phase 0**, for the Phase 2 design checkpoint (Peter's call before implementation) — not committed.
+
+**Goal (Peter, 2026-06-02): a state-of-the-art graph compiler optimised for performance, covering BOTH the texture-pixel and buffer/array domains as first-class peers.**
+
+## 1. The bench (texture domain)
+
+`src/bin/freeze_profile.rs` builds each stateless effect preset's graph, drives the graph runtime headlessly through `Executor::execute_frame_with_gpu`, and times GPU work per frame with `commit_and_wait_completed` (wall-time ≈ GPU time). Avg over 120 frames after 8 warmup.
+
+| Preset | steps | 1080p ms | 4K ms | 4K ms/step |
+|---|---|---|---|---|
+| **ColorGrade** | 9 | 0.85 | **2.74** | 0.304 |
+| Glitch | 16 | 1.13 | 4.54 | 0.284 |
+| VoronoiPrism | 16 | 1.08 | 4.34 | 0.271 |
+| Dither | 4 | 0.71 | 2.39 | 0.598 |
+| QuadMirror | 7 | 0.47 | 2.20 | 0.314 |
+| HdrBoost | 7 | 0.35 | 1.33 | 0.191 |
+| ChromaticAberration | 6 | 0.37 | 1.33 | 0.222 |
+| EdgeStretch | 5 | 0.35 | 1.25 | 0.249 |
+| Kaleidoscope | 5 | 0.34 | 1.21 | 0.241 |
+| Infrared | 14 | 0.31 | 1.00 | 0.071 |
+| InvertColors | 3 | 0.16 | 0.48 | 0.160 |
+
+(Stateful effects and generators deferred — they need the `execute_frame_with_state` / `JsonGraphGenerator` drive. The buffer-domain bench is Phase 0-b, see §4.)
+
+## 2. Finding 1 — per-element cost is a bandwidth tax (~0.3 ms/full-canvas pass at 4K)
+
+`ms/step` clusters at **0.25–0.3 ms at 4K** for full-canvas passes regardless of the math (ColorGrade 0.304, Glitch 0.284, VoronoiPrism 0.271, QuadMirror 0.314…), scaling ~3.3× down at 1080p. That math-independence is the signature of a **bandwidth-bound round-trip**: each pass reads + writes a full 4K RGBA16F texture (~67 MB), dominating arithmetic. The 5× thesis confirmed — the cost is intermediate round-trips, not compute. **This applies identically to the buffer domain**: an intermediate `Array<Particle>` or `Array<f32>` written then re-read is the same VRAM round-trip. Fusion keeps intermediates in registers either way.
+
+Outliers confirm the model: Infrared's 0.071 (tiny W×1 LUT writes, not full canvas); Dither's 0.598 (two full-res texture reads + pattern).
+
+## 3. Finding 2 — ColorGrade is the first target (~3–6× on the effect)
+
+2.74 ms at 4K across 7 fusable pointwise dispatches (gain → saturation → hue_saturation → contrast → colorize → mix → clamp). Fusing 7 → 1 removes ~6 round-trips ≈ ~2 ms → **~0.5–0.9 ms, a 3–6× speedup**. Pure pointwise, no gather, no buffer — the simplest end-to-end proof, so it stays the Phase 4 bake.
+
+## 4. Finding 3 — TWO co-equal fusion domains
+
+The compiler must fuse per-element pure-op chains in **both** domains. They are the same problem with a different element-space:
+
+### 4a. Texture-pixel domain (effects)
+Element = pixel. Fusable: **pointwise** (own-pixel), **multi-input coincident-UV** (`mix`/`compose`/`dither` read 2+ textures at the same pixel), **single dependent gather** (`remap`/UV-warp/`color_lut` — one sample at a computed coord, coord-math + blend inline around it), **bounded small fixed multi-tap** (chromatic's 3 taps).
+
+The strict single-input criterion the sweep used undercounts: it finds long runs only in ColorGrade. The richer model above unlocks the **largest effect family** — Kaleidoscope, Mirror, QuadMirror, EdgeStretch, Transform, ChromaticAberration (all "0 headroom" strict, all ~1-kernel-fusable) — plus the `mix`-blocked ones (Glitch, HdrBoost).
+
+### 4b. Buffer/array-element domain (generators, sims) — **co-equal, channel-system-powered**
+Element = array sample (particle / vertex / curve point / FFT bin / detection). Fusable: per-element pure ops on `Array<Channels>` — `array_math` element-wise chains, per-particle force ops (`apply_force → euler_step → anti_clump → wrap`), per-vertex transforms (cos/sin/scale/offset). These round-trip the buffer through VRAM exactly like pixel chains and collapse into one element-indexed compute kernel.
+
+This is where **most of the library's cost lives** — the sweep showed generators/sims are buffer-dominated (DigitalPlants ~9 `array_math`, Duocylinder 8, every particle sim's force chain). Texture-only fusion leaves all of it slow.
+
+**The channel system is the enabler here, and this is what it was designed for (CHANNEL_TYPE_SYSTEM.md §16):** the compiler reads a wire's `_SPECS` to emit the intermediate WGSL struct mechanically (§16.3.1), drops untouched channels (dead-channel elim, §16.3.2), and erases `rename`/`reorder`/`select` plumbing to nothing (§16.3.4). The texture domain barely needs channels (a pixel is always `vec4`); the buffer domain is **load-bearing** on them. Peter's earlier "the channel system is key here" intuition and this "buffer fusion is equally important" steer are the same insight.
+
+True boundaries (both domains): large/variable multi-tap (blur, convolution, Sobel, LIC; buffer neighbor/reduce), stateful feedback, resolution/length change (resample, downsample, compaction/realloc), domain crossings (§5), FFI/DNN.
+
+## 5. Proposed architecture — one unified fusion compiler (draft, Phase 2 review)
+
+A single region-growing fusion pass, **parametrized by domain**, not two separate compilers:
+
+1. **Classify** each node by `(domain, element-space, purity)`. Domain ∈ {Texture2D, Array, Texture3D}. Element-space = the iteration extent (canvas resolution; array length; volume dims).
+2. **Grow maximal regions**: a fusable region is a connected subgraph of per-element *pure* ops in the **same domain at the same element-space**, bounded by cross-element ops, state, resolution/length changes, and domain crossings.
+3. **Domain-crossing bridges are the seams**: `scatter_particles` (Array→Texture), `sample_texture_at_particles` (Texture→Array), `resolve_accumulator`, `render_3d_mesh`. Each stays its own dispatch; the regions on either side fuse internally.
+4. **Emit one fused kernel per region** — texture: one dispatch over the pixel grid; buffer: one dispatch over the element index; intermediates live in registers. Same `wgsl_body` inliner + the existing naga → spirv-opt backend for both; the only per-domain difference is the iteration-space wrapper and the intermediate type (`vec4` vs the channel struct from §4b).
+5. **`wgsl_body` calling convention is domain-parametric**: pixel op = `fn(color: vec4<f32>, uv) -> vec4<f32>`; element op = `fn(elem: T, index) -> T` (or per-channel). Codegen wraps the body in the right iteration space.
+
+This is Halide-shaped (separate the per-element algorithm from the schedule/fusion) applied **uniformly across texture, buffer, and volume domains** — which is the "state of the art" bar. The freeze/closed-world step (un-exposed params → constants → DCE → fuse → specialize) and the verification harness (oracle: render/run two ways, diff) apply to both domains unchanged.
+
+## 6. Status & next
+
+- **Phase 0: complete.** Bandwidth-round-trip thesis confirmed (both domains); ColorGrade first target (~3–6×); the breadth lever (fusion-model richness) and the second co-equal domain (buffer/array, channel-powered) identified.
+- **Phase 1 (verification harness)** + **Phase 2 (`wgsl_body` convention)** next. The convention must be domain-parametric from day one (§5.5) — that is the keystone checkpoint, Peter's call before implementation.
+- Reproduce: `cargo run --release -p manifold-renderer --bin freeze-profile`.
