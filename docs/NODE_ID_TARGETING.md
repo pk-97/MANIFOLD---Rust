@@ -1,5 +1,47 @@
 # Node-Id Targeting — bindings reference identity, not name
 
+## STATUS / RESUME (2026-06-02)
+
+Work lives on branch **`node-groups`** in worktree `/Users/peterkiemann/MANIFOLD-node-groups` (off
+trunk `node-graph-system` — do NOT land until the cutover is complete + fixture-validated). Rule:
+**no silent fallback, one atomic cutover, one versioned unit-tested load migration** (see memory
+`feedback_no_silent_fallbacks_or_interim_stopgaps`).
+
+**DONE + tested (commits ba0c9f4f → d5b9c698), all ADDITIVE / behavior-preserving:**
+- `NodeId(Arc<str>)` newtype in `id.rs` (same macro as LayerId/EffectId).
+- `node_id` on `EffectGraphNode`, minted once at creation (group_edit group node + sentinels;
+  `AddGraphNodeCommand` mints + reuses across undo/redo via `minted_node_id`), preserved by
+  `flatten` (it clones nodes) and through every construction site.
+- Runtime: `NodeInstance.node_id` set by `graph_loader::instantiate_def`; `from_graph` preserves it;
+  `Graph::instance_by_node_id` is the global unambiguous lookup (node ids are unique uuids) — the
+  successor to `node_id_by_handle`. Nothing calls it yet.
+
+**REMAINING = the atomic cutover (the hard half):** Resolution moves off handle to node_id, handle
+becomes display-only, the handle-resolution path is deleted. Sites (mapped, ~40 `node_handle`
+refs + more):
+- core `BindingTarget::HandleNode { handle, param }` → `Node { node_id, param }` (JSON
+  `kind:"node"`, `nodeId`). `effect_graph_def.rs:527`.
+- renderer `ParamTarget::HandleNode { handle }` → node-id variant; `from_static` / `from_user`
+  (`param_binding.rs`) resolve via `graph.instance_by_node_id`, dropping the `handles` arg.
+  Callers in `effect_chain_graph.rs` (~646, 663, 965).
+- `loaded_preset_view.rs::binding_def_to_runtime` (~118) maps the new target.
+- `into_graph` binding-convert validation + exposure seeding (`persistence.rs` ~595, ~650) match the
+  new target.
+- core `UserParamBinding.node_handle: String` → `node_id: NodeId` (`effects.rs:239`); ripples to
+  `content_thread.rs:1294`, `app_render.rs` expose/mapping-drawer (~2097/3005/3047/3062/3145/3188),
+  `commands/effects.rs` + `commands/graph.rs` expose flow, and `NodeSnapshot` (add `node_id` so the
+  editor's expose checkbox can write it).
+- the `EffectNodeAliasMetadata` handle-rename mechanism (`project.rs:621`) becomes obsolete — node_id
+  is the stable identity, so the alias path can be removed (not kept as a fallback).
+- **Preset stamp:** one-shot pass over the 46 `assets/{effect,generator}-presets/*.json` — stamp
+  `nodeId` on each node + rewrite each binding target to `node`/`nodeId` matching by current handle.
+  Cleanest as a throwaway bin (run once, commit) so it's deterministic.
+- **Migration:** version bump; old-format files (handle targets, no node_id) upgrade once at load via
+  v1 schema types → resolve handle→node_id deterministically → store. Unit-test with synthetic
+  old-format defs HERE; then **run the `Liveschool` + `Burn` fixture tests from the MAIN checkout**
+  (those `.manifold` files are gitignored / absent in this worktree) before landing on trunk.
+- Final: group-a-bound-node test (the bug this fixes), full sweep, land on trunk.
+
 ## Why
 
 Card sliders bind to an inner graph node by its **handle** string. A binding resolves the handle to a
