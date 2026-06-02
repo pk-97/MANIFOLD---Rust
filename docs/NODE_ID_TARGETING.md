@@ -27,13 +27,17 @@ document lands on exactly the node that normalizes to the same id.
   `resolve_user_param_binding_node_handles` handle-rename machinery.
 - Presets: all 46 stamped (`nodeId == handle`, minimal-diff string edit). `check-presets` 46/46.
 
-**Load migration (versioned, deterministic, no fallback):**
+**Load migration (versioned, deterministic, no fallback) — the convention applied at four points:**
 1. `BindingTarget` Deserialize accepts legacy `handleNode` → `Node{node_id == handle}`; serialize only
    ever emits `node`/`composite`.
-2. `Project::normalize_override_node_ids` (core `on_after_deserialize`) stamps `node_id == handle` on
+2. `graph_loader::instantiate_def` (the **runtime chokepoint** every def→graph path funnels through —
+   effect splice AND generator `into_graph`) defaults a node's runtime `node_id` to its handle when the
+   document carries none. This is what makes resolution hold for ANY def, including hand-authored JSON
+   loaded via `from_json_str` that never went through `Project` normalization.
+3. `Project::normalize_override_node_ids` (core `on_after_deserialize`) stamps `node_id == handle` on
    every override-def node with an empty id (master/layer/clip `graph` + `generator_graph`, recursing
-   into groups). Idempotent.
-3. `migrate_user_param_bindings_to_node_id` (renderer, at project open) copies the resolved id onto
+   into groups) — for doc-level persistence + editor snapshots. Idempotent.
+4. `migrate_user_param_bindings_to_node_id` (renderer, at project open) copies the resolved id onto
    each `UserParamBinding` whose `legacy_node_handle` is set — pure read off the normalized graph /
    stamped preset.
 
@@ -41,7 +45,15 @@ document lands on exactly the node that normalizes to the same id.
 `normalize_override_node_ids` + `legacy_handle_node_target_deserializes_as_node_keyed_by_handle`;
 renderer `binding_migration` (graph:None / override / already-migrated / unresolved). Verified
 `graphTests.manifold` (V2 zip, 22 `handleNode` targets in overrides) deserializes and every binding
-target resolves. manifold-core 219/219; full workspace sweep is the final gate.
+target resolves. manifold-core 219/219; renderer lib 945/2 (both failures pre-existing).
+
+**Full-sweep triage (vs base `f3627fe1`):** the cutover introduced exactly ONE regression —
+`generator_binding_scale_folds_into_inner_param` (un-stamped `from_json_str` JSON couldn't resolve;
+fixed by point 2 above). Every other sweep failure reproduces at base with byte-identical messages and
+is untouched by this diff (zero `.wgsl` / factory / harness changes): FluidSim Ableton mapping + param
+counts, DoF prewarm, WireframeDepthGraph first-frame `copy_texture` 42×42→256 panic (the open legacy
+effect), GeneratorFactory inventory in the parity binary, lut1d / watercolor parity, wgsl
+`WEIGHTING_MODE` / `simplex3d`. Landed `ba0c9f4f` → `53f64832`.
 
 **Why the override case mattered:** the first real regression (`graphTests.manifold`) had override
 preset bindings in `handleNode` form but **zero** user bindings — so the renderer migration's
