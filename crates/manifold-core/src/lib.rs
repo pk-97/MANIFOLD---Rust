@@ -17,6 +17,7 @@ pub mod generator_registration;
 pub mod generator_type_id;
 pub mod generator_type_registry;
 pub mod graph_target;
+pub mod group_edit;
 pub mod id;
 pub mod layer;
 pub mod macro_bank;
