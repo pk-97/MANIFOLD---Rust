@@ -60,7 +60,16 @@ The §1/§1b tables above (v1) timed CPU wall-clock around `commit_and_wait`, wh
 
 **Dead-linear at ~0.344 ms/pass** — each added pointwise pass costs the same fixed amount regardless of math: the bandwidth round-trip (read + write a 4K RGBA16F canvas), proven by controlled experiment rather than inferred from an average.
 
-**Grounded ColorGrade fusion math (no longer an estimate):** its 7 fusable pointwise passes ≈ 7 × 0.344 ≈ 2.41 ms of the 2.60 ms total (the ~0.19 ms remainder is source/output). Fusing 7→1 keeps one read + all math in registers + one write ≈ 0.344 ms, saving ~6 × 0.344 ≈ 2.06 ms → **ColorGrade 4K ≈ 0.5 ms, ≈ 4.8× faster.** Measured per-pass, measured total.
+**Grounded ColorGrade fusion math (no longer an estimate):** its 7 fusable pointwise passes ≈ 7 × 0.344 ≈ 2.41 ms of the 2.60 ms total (the ~0.19 ms remainder is source/output). Fusing 7→1 keeps one read + all math in registers + one write ≈ 0.344 ms.
+
+**Now MEASURED, not projected (§1e).** A hand-fused single-kernel ColorGrade — every atom transcribed verbatim, validated bit-faithful against the unfused preset through the oracle — was timed against the shipped graph on the same run:
+
+| res | unfused (9 steps) | hand-fused (1 kernel) | speedup |
+|---|---|---|---|
+| 1080p | 0.555 ms | 0.068 ms | **8.1×** |
+| 2160p | 2.649 ms | **0.358 ms** | **7.4×** |
+
+The fused 4K time (0.358 ms) lands on the single-pass bandwidth cost (0.354 ms synthetic) — exactly one round-trip, as the thesis predicted. **7.4× is above the ~4.8× I'd projected**, and it directly answers the §11.E worry: the unfused baseline already gets the GPU's free cross-dispatch overlap, and fusion *still* wins 7.4× — the overlap fusion forfeits does NOT erode the bandwidth win for a 7-deep pointwise chain. §11.E's texture-domain perf flag is resolved by measurement. (Build: `freeze::reference::dispatch_fused_colorgrade`; correctness gate: `freeze::proof::fused_colorgrade_matches_unfused_within_tolerance`; bench: `freeze-profile`.)
 
 ### 1d. FluidSim cost decomposition — measured, not inferred
 

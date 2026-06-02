@@ -11,11 +11,13 @@
 //! two renders (unfused = exact oracle, fused = candidate) to a tiny verdict.
 
 pub mod diff;
+pub mod reference;
 
 pub use diff::{DiffResult, TextureDiff};
 
-/// First end-to-end fusion proof — a hand-fused Gain chain validated against
-/// the unfused chain through the oracle (correct fusion clears, wrong fusion
-/// fails). Test-only; the eventual codegen reuses this render-two-ways shape.
+/// First end-to-end fusion proof — hand-fused Gain and ColorGrade chains
+/// validated against the unfused chains through the oracle (correct fusion
+/// clears, wrong fusion fails). Test-only; the eventual codegen reuses this
+/// render-two-ways shape and the [`reference`] kernels as its targets.
 #[cfg(test)]
 mod proof;

@@ -17,14 +17,19 @@
 //! perturbation, and gives the eventual codegen a known-good reference target.
 
 use super::TextureDiff;
+use super::reference::{ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade};
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitives::Gain;
-use crate::node_graph::{Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId, Source};
+use crate::node_graph::{
+    EffectGraphDefExt, Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId,
+    PrimitiveRegistry, Source,
+};
 use crate::render_target::RenderTarget;
 use half::f16;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{
     GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
@@ -40,6 +45,21 @@ fn frame_time() -> FrameTime {
         delta: Seconds(1.0 / 60.0),
         frame_count: 0,
     }
+}
+
+fn find_node(graph: &Graph, type_id: &str) -> NodeInstanceId {
+    graph
+        .nodes()
+        .find(|n| n.node.type_id().as_str() == type_id)
+        .map(|n| n.id)
+        .unwrap_or_else(|| panic!("ColorGrade graph missing a `{type_id}` node"))
+}
+
+fn set_f(graph: &mut Graph, type_id: &str, param: &str, v: f32) {
+    let id = find_node(graph, type_id);
+    graph
+        .set_param(id, param, ParamValue::Float(v))
+        .unwrap_or_else(|e| panic!("set {type_id}.{param}: {e:?}"));
 }
 
 fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
@@ -250,6 +270,87 @@ fn oracle_catches_wrong_fusion() {
     assert!(
         !r.passes(0.01),
         "a 1.5×-off fusion must fail the verdict (over_fraction={})",
+        r.over_fraction()
+    );
+}
+
+/// The real target: the shipped ColorGrade preset (9 nodes, 7 pointwise atoms
+/// fanning source into both a grade chain and a mix) hand-fused into one
+/// kernel and validated against the unfused preset at non-trivial params.
+#[test]
+fn fused_colorgrade_matches_unfused_within_tolerance() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input(&device, w, h);
+
+    // One source of truth for the params; drives both sides.
+    let params = ColorGradeParams {
+        gain: 1.15,
+        sat_s: 1.3,
+        hue_deg: 25.0,
+        sat_h: 1.2,
+        val_h: 1.0,
+        contrast: 1.2,
+        col_amount: 0.4,
+        col_hue: 210.0,
+        col_sat: 0.8,
+        col_focus: 0.6,
+        mix_amount: 1.0, // full chain output (a-branch crossfaded out)
+        mix_mode: 0,
+        clamp_min: 0.0,
+        clamp_max: 65000.0,
+        _pad0: 0.0,
+        _pad1: 0.0,
+    };
+
+    // Unfused: load the SHIPPED preset, set the same params, render it.
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/effect-presets/ColorGrade.json"
+    ))
+    .expect("read ColorGrade.json");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse ColorGrade.json");
+    let mut graph = def.into_graph(&registry).expect("build ColorGrade graph");
+    set_f(&mut graph, "node.gain", "gain", params.gain);
+    set_f(&mut graph, "node.saturation", "saturation", params.sat_s);
+    set_f(&mut graph, "node.hue_saturation", "hue", params.hue_deg);
+    set_f(&mut graph, "node.hue_saturation", "saturation", params.sat_h);
+    set_f(&mut graph, "node.hue_saturation", "value", params.val_h);
+    set_f(&mut graph, "node.contrast", "contrast", params.contrast);
+    set_f(&mut graph, "node.colorize", "amount", params.col_amount);
+    set_f(&mut graph, "node.colorize", "hue", params.col_hue);
+    set_f(&mut graph, "node.colorize", "saturation", params.col_sat);
+    set_f(&mut graph, "node.colorize", "focus", params.col_focus);
+    set_f(&mut graph, "node.mix", "amount", params.mix_amount);
+
+    let plan = compile(&graph).expect("compile ColorGrade");
+    let src_res = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
+    let out_res = resource_for_output(&plan, find_node(&graph, "node.clamp_texture"), "out");
+    let unfused = render_graph(&device, &mut graph, &plan, src_res, &input, out_res);
+
+    // Fused: one kernel.
+    let pipeline = colorgrade_pipeline(&device);
+    let fused = RenderTarget::new(&device, w, h, FMT, "freeze-cg-fused");
+    {
+        let mut enc = device.create_encoder("freeze-cg-fused");
+        dispatch_fused_colorgrade(&mut enc, &pipeline, &input, &fused.texture, &params);
+        enc.commit_and_wait_completed();
+    }
+
+    let differ = TextureDiff::new(&device);
+    // Looser than Gain: 7 stages of f16 round-trips through HSV + smoothstep
+    // discontinuities (hue wrap, colorize edges) drift more, and a handful of
+    // boundary texels can land on opposite sides of a step. Tolerate ≤0.5% of
+    // texels failing both bounds (§11.D discontinuity-aware metric).
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005),
+        "fused ColorGrade must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
         r.over_fraction()
     );
 }

@@ -208,8 +208,141 @@ fn main() {
     println!("Fusing a pointwise run of length L recovers ~(L-1) × ms/step per frame.");
 
     profile_synthetic_pointwise(&device);
+    profile_fused_colorgrade(&registry, &device);
     profile_generators(&registry, &device);
     profile_fluidsim_particle_sweep(&registry, &device);
+}
+
+/// The headline fusion number: time the SHIPPED ColorGrade preset (unfused, 9
+/// graph steps) against the hand-fused single kernel
+/// ([`reference::dispatch_fused_colorgrade`]), both as real GPU time on the
+/// same run. This answers the §11.E question the synthetic per-pass number
+/// can't: the unfused baseline gets the GPU's free cross-dispatch overlap that
+/// fusion forfeits, so the real speedup may sit below the naive
+/// steps-×-ms/step projection. Measured, not projected.
+fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
+    use manifold_renderer::node_graph::freeze::reference::{
+        ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade,
+    };
+
+    println!(
+        "\n--- ColorGrade: unfused graph (9 steps) vs hand-fused 1 kernel, real GPU time ---"
+    );
+    println!("{:<8} {:>13} {:>13} {:>10}", "res", "unfused ms", "fused ms", "speedup");
+    println!("{}", "-".repeat(48));
+
+    let source_type_id = Source::new().type_id().as_str().to_string();
+    let json = match std::fs::read_to_string(format!("{EFFECT_PRESETS_DIR}/ColorGrade.json")) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("skip fused-colorgrade: read {e}");
+            return;
+        }
+    };
+    let def: EffectGraphDef = match serde_json::from_str(&json) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("skip fused-colorgrade: parse {e}");
+            return;
+        }
+    };
+    let pipeline = colorgrade_pipeline(device);
+    // Non-trivial params so the chain does real work (timing is essentially
+    // value-independent, but this is representative).
+    let params = ColorGradeParams {
+        gain: 1.15,
+        sat_s: 1.3,
+        hue_deg: 25.0,
+        sat_h: 1.2,
+        val_h: 1.0,
+        contrast: 1.2,
+        col_amount: 0.4,
+        col_hue: 210.0,
+        col_sat: 0.8,
+        col_focus: 0.6,
+        mix_amount: 1.0,
+        mix_mode: 0,
+        clamp_min: 0.0,
+        clamp_max: 65000.0,
+        _pad0: 0.0,
+        _pad1: 0.0,
+    };
+    let frame_time = FrameTime {
+        beats: Beats(1.0),
+        seconds: Seconds(1.0),
+        delta: Seconds(1.0 / 60.0),
+        frame_count: 0,
+    };
+
+    for &(w, h) in RESOLUTIONS {
+        // --- unfused: the shipped graph through the executor ---
+        let mut graph = match def.clone().into_graph(registry) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skip fused-colorgrade@{w}x{h}: build {e}");
+                continue;
+            }
+        };
+        let plan = match compile(&graph) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skip fused-colorgrade@{w}x{h}: compile {e}");
+                continue;
+            }
+        };
+        let Some(source_id) = graph
+            .nodes()
+            .find(|n| n.node.type_id().as_str() == source_type_id)
+            .map(|n| n.id)
+        else {
+            eprintln!("skip fused-colorgrade@{w}x{h}: no Source");
+            continue;
+        };
+        let Some(source_res) = resource_for_output(&plan, source_id, "out") else {
+            continue;
+        };
+        let input_rt = RenderTarget::new(device, w, h, FORMAT, "cg-unfused-input");
+        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        backend.pre_bind_texture_2d(source_res, input_rt);
+        let mut exec = Executor::new(Box::new(backend));
+        for _ in 0..WARMUP {
+            let mut enc = device.create_encoder("cg-unfused-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            }
+            enc.commit_and_wait_completed();
+        }
+        let mut un_secs = 0.0_f64;
+        for _ in 0..FRAMES {
+            let mut enc = device.create_encoder("cg-unfused-timed");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            }
+            un_secs += enc.commit_and_wait_completed_timed();
+        }
+        let unfused_ms = un_secs * 1000.0 / f64::from(FRAMES);
+
+        // --- fused: one kernel (input content is irrelevant to timing) ---
+        let input = RenderTarget::new(device, w, h, FORMAT, "cg-fused-input");
+        let output = RenderTarget::new(device, w, h, FORMAT, "cg-fused-output");
+        for _ in 0..WARMUP {
+            let mut enc = device.create_encoder("cg-fused-warmup");
+            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, &params);
+            enc.commit_and_wait_completed();
+        }
+        let mut f_secs = 0.0_f64;
+        for _ in 0..FRAMES {
+            let mut enc = device.create_encoder("cg-fused-timed");
+            dispatch_fused_colorgrade(&mut enc, &pipeline, &input.texture, &output.texture, &params);
+            f_secs += enc.commit_and_wait_completed_timed();
+        }
+        let fused_ms = f_secs * 1000.0 / f64::from(FRAMES);
+
+        let speedup = if fused_ms > 0.0 { unfused_ms / fused_ms } else { 0.0 };
+        println!("{:>5}p {:>13.3} {:>13.3} {:>9.2}x", h, unfused_ms, fused_ms, speedup);
+    }
 }
 
 /// Synthetic per-pass measurement: `Source → Gain×N → FinalOutput` at 4K,
