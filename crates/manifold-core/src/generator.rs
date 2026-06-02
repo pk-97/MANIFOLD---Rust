@@ -1,4 +1,6 @@
-use crate::effects::{ParamDef, ParamEnvelope, ParamId, ParamSlot, ParamSource, ParameterDriver};
+use crate::effects::{
+    ParamDef, ParamEnvelope, ParamId, ParamMapping, ParamSlot, ParamSource, ParameterDriver,
+};
 use crate::generator_type_id::GeneratorTypeId;
 use crate::types::{BeatDivision, DriverWaveform};
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,26 @@ pub struct GeneratorParamState {
     pub envelopes: Option<Vec<ParamEnvelope>>,
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
 
+    /// Per-instance reshape notes — the generator mirror of
+    /// `EffectInstance.param_mappings`. Each [`ParamMapping`] reshapes one
+    /// generator card param (keyed by `param_id`) without touching its
+    /// value slot; the renderer applies the note downstream via the
+    /// generator's `apply_param_notes` (the `Generator` trait method).
+    /// Stored here — NOT folded into the per-layer `generator_graph`
+    /// override — so a small reshape never materializes a whole graph
+    /// copy, exactly like the effect side. Empty for every project that
+    /// hasn't reshaped a generator knob; skipped on serialize when empty,
+    /// so existing fixtures round-trip byte-identically.
+    pub param_mappings: Vec<ParamMapping>,
+
+    /// Monotonically bumped on every `param_mappings` mutation. The
+    /// generator render path watches this (via `apply_param_notes`) and
+    /// rebuilds the affected binding reshapes + clears its cache when it
+    /// advances. Not serialized; resets to 0 on load, and the renderer's
+    /// `u32::MAX` first-seen sentinel forces loaded notes to apply on the
+    /// first frame.
+    pub param_mappings_version: u32,
+
     /// Legacy flat field from V1.0.0 (before genParams nesting).
     pub legacy_param_version: Option<i32>,
 }
@@ -55,6 +77,9 @@ impl Serialize for GeneratorParamState {
             field_count += 1;
         }
         if self.ableton_mappings.is_some() {
+            field_count += 1;
+        }
+        if !self.param_mappings.is_empty() {
             field_count += 1;
         }
         if self.legacy_param_version.is_some() {
@@ -87,6 +112,11 @@ impl Serialize for GeneratorParamState {
         }
         if let Some(m) = &self.ableton_mappings {
             s.serialize_field("abletonMappings", m)?;
+        }
+        // Skipped when empty so a project that never reshaped a generator
+        // knob emits no `paramMappings` field (byte-identical on disk).
+        if !self.param_mappings.is_empty() {
+            s.serialize_field("paramMappings", &self.param_mappings)?;
         }
         if let Some(v) = self.legacy_param_version {
             s.serialize_field("genParamVersion", &v)?;
@@ -149,6 +179,8 @@ impl<'de> Deserialize<'de> for GeneratorParamState {
             envelopes: Option<Vec<ParamEnvelope>>,
             #[serde(default)]
             ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+            #[serde(default)]
+            param_mappings: Option<Vec<ParamMapping>>,
             #[serde(default, rename = "genParamVersion")]
             legacy_param_version: Option<i32>,
         }
@@ -169,6 +201,8 @@ impl<'de> Deserialize<'de> for GeneratorParamState {
             drivers: raw.drivers,
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
+            param_mappings: raw.param_mappings.unwrap_or_default(),
+            param_mappings_version: 0,
             legacy_param_version: raw.legacy_param_version,
         })
     }
@@ -187,6 +221,36 @@ impl GeneratorParamState {
     #[inline]
     pub fn generator_type(&self) -> &GeneratorTypeId {
         &self.generator_type
+    }
+
+    /// The per-instance reshape note for `param_id`, if one exists.
+    /// Mirror of `EffectInstance::param_mapping`.
+    pub fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
+        self.param_mappings.iter().find(|m| m.param_id == id)
+    }
+
+    /// Insert or replace the reshape note for its `param_id`, bumping
+    /// `param_mappings_version` so the generator render path re-applies it.
+    pub fn upsert_param_mapping(&mut self, mapping: ParamMapping) {
+        match self
+            .param_mappings
+            .iter_mut()
+            .find(|m| m.param_id == mapping.param_id)
+        {
+            Some(slot) => *slot = mapping,
+            None => self.param_mappings.push(mapping),
+        }
+        self.param_mappings_version = self.param_mappings_version.wrapping_add(1);
+    }
+
+    /// Remove the reshape note for `param_id`, bumping the version. No-op
+    /// if absent.
+    pub fn remove_param_mapping(&mut self, id: &str) {
+        let before = self.param_mappings.len();
+        self.param_mappings.retain(|m| m.param_id != id);
+        if self.param_mappings.len() != before {
+            self.param_mappings_version = self.param_mappings_version.wrapping_add(1);
+        }
     }
 
     pub fn ensure_base_values(&mut self) {
@@ -704,5 +768,43 @@ mod tests {
             0.42,
             "tail base write landed too"
         );
+    }
+
+    #[test]
+    fn gen_param_mappings_empty_emits_no_field_and_note_round_trips() {
+        // Byte-identical back-compat: a generator that never reshaped a
+        // knob must serialize WITHOUT a `paramMappings` field.
+        let mut gp = GeneratorParamState::new(GeneratorTypeId::BLACK_HOLE);
+        let json = serde_json::to_string(&gp).unwrap();
+        assert!(
+            !json.contains("paramMappings"),
+            "empty param_mappings must not emit a field; got: {json}"
+        );
+
+        // A note round-trips; upsert bumps the version.
+        let v0 = gp.param_mappings_version;
+        gp.upsert_param_mapping(ParamMapping {
+            param_id: "speed".to_string(),
+            label: Some("Velocity".to_string()),
+            min: 0.0,
+            max: 5.0,
+            invert: true,
+            curve: crate::macro_bank::MacroCurve::SCurve,
+            scale: 2.0,
+            offset: 0.1,
+        });
+        assert_eq!(gp.param_mappings_version, v0 + 1);
+        let json = serde_json::to_string(&gp).unwrap();
+        assert!(json.contains("paramMappings"));
+        let back: GeneratorParamState = serde_json::from_str(&json).unwrap();
+        let note = back.param_mapping("speed").expect("note survives round-trip");
+        assert_eq!(note.label.as_deref(), Some("Velocity"));
+        assert!(note.invert);
+        assert_eq!(note.scale, 2.0);
+        // version resets to 0 on load (not serialized).
+        assert_eq!(back.param_mappings_version, 0);
+
+        gp.remove_param_mapping("speed");
+        assert!(gp.param_mapping("speed").is_none());
     }
 }

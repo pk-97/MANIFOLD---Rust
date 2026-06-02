@@ -547,6 +547,38 @@ impl ResolvedBinding {
         )
     }
 
+    /// Recompute this binding's downstream reshape in place from a
+    /// per-instance reshape note (if present) or the recipe's affine
+    /// (`recipe_scale`/`recipe_offset`). The generator render path calls
+    /// this to apply / revert reshape notes on a live binding without
+    /// rebuilding the graph — the generator mirror of the effect chain's
+    /// static-prefix rebuild. A note present → full reshape; absent →
+    /// the recipe affine (byte-identical to a note-free generator).
+    /// Never touches `source_index` / `target` / `convert`, so the slot a
+    /// modulation surface writes is unaffected.
+    pub(crate) fn set_reshape_from_note(
+        &mut self,
+        note: Option<&manifold_core::effects::ParamMapping>,
+        recipe_scale: f32,
+        recipe_offset: f32,
+    ) {
+        self.reshape = match note {
+            Some(n) => (n.invert
+                || n.curve != manifold_core::macro_bank::MacroCurve::Linear
+                || n.scale != 1.0
+                || n.offset != 0.0)
+                .then_some(Reshape {
+                    min: n.min,
+                    max: n.max,
+                    invert: n.invert,
+                    curve: n.curve,
+                    scale: n.scale,
+                    offset: n.offset,
+                }),
+            None => scale_offset_reshape(recipe_scale, recipe_offset),
+        };
+    }
+
     /// Apply this binding's value to the graph.
     ///
     /// `handle` is required iff `target` is [`ResolvedTarget::Composite`].

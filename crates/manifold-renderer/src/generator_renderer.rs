@@ -462,6 +462,17 @@ impl GeneratorRenderer {
                         .generator
                         .set_string_params(Some(&layer_state.merged_string_params));
                 }
+                // Apply the layer's per-instance reshape notes before
+                // rendering. Version-gated inside the generator, so a
+                // note-free layer pays one integer compare per frame; a
+                // note edit rebuilds the affected reshapes + clears the
+                // apply-cache so it takes effect immediately. Downstream
+                // only — never touches the value slots modulation writes.
+                if let Some(gp) = layer.gen_params() {
+                    layer_state
+                        .generator
+                        .apply_param_notes(&gp.param_mappings, gp.param_mappings_version);
+                }
                 let new_progress =
                     layer_state
                         .generator
