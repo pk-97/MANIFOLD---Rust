@@ -1,11 +1,29 @@
 # Card Target Unification — deferred migration (do NOT leave half-done)
 
-**Status: OPEN.** The fork is created when the editor's identity-based
-dispatch lands (card-rebuild step A.2); at that point a
-`// CARD-TARGET-UNIFICATION:` tag is placed at each fork site (the editor's
-new id-dispatch and the inspector's legacy ambient resolution). This migration
-is not done until `rg -rn "CARD-TARGET-UNIFICATION" crates` returns empty AND
-the done-criteria below all hold.
+**Status: TARGETING-COMPLETE (Stage A+B landed, commit `2bea306a`, 2026-06-02).**
+Single-effect edits now address by stable `EffectId`; the done-criteria greps
+below are all empty. Remaining: **Stage B+** (generator editable bindings),
+**Stage B++** (unify the editable mapping across ALL card params), and **Stage C**
+(the `Effect*`/`Gen*` enum collapse). When C lands too, delete this doc + drop the
+`project_card_target_unification` memory.
+
+How it landed (differs from the original draft below in two ways worth recording):
+(1) the editor dispatches by its `watched_graph_target` identity (no
+`EditorDispatchTarget` shadow), and the inspector resolves its own context — both
+via `ui_bridge::resolve_effect_id`. (2) The single-effect VALUE / expose / mapping
+/ driver arms address by id, but the still-positional MODULATION arms (layer-stored
+envelopes/targets/trims) ride `ui_bridge::editor_dispatch_context`, which re-derives
+the editor effect's *container* (Master / its Layer / Clip) — clip maps to a safe
+no-op because layer envelopes are keyed by `effect_type` and can't represent a clip
+effect without colliding with a same-type layer effect. Driver/trim arms read `fx`
+by id (no command/index split). Verified across three adversarial workflow passes.
+NOTED-BUT-DEFERRED (pre-existing, not introduced): the Ableton content closures
+resolve the layer effect by `effect_type().find`, which misroutes when a layer holds
+two same-type mapped effects — orthogonal to this migration.
+
+---
+
+(Original spec below, kept for the design rationale.)
 
 This is the load-bearing follow-up to the graph-editor card rebuild. The
 editor card was deliberately moved to identity-based targeting FIRST (it's

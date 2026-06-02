@@ -38,6 +38,23 @@ pub trait Generator: Send {
     /// data override this; all others inherit the no-op default.
     fn set_string_params(&mut self, _params: Option<&BTreeMap<String, String>>) {}
 
+    /// Apply the host's per-instance reshape notes
+    /// (`GeneratorParamState.param_mappings`) to this generator's bindings.
+    /// Called once per frame before `render()` with the layer's current
+    /// notes + their version. The default is a no-op (Rust generators and
+    /// note-free graphs ignore it); `JsonGraphGenerator` overrides it to
+    /// rebuild the affected binding reshapes + clear its apply-cache, but
+    /// only when `version` advances past the last seen one — so a note-free
+    /// generator pays a single integer compare per frame. The reshape is a
+    /// downstream override at the render boundary; it never touches the
+    /// value slot the modulation surface writes.
+    fn apply_param_notes(
+        &mut self,
+        _notes: &[manifold_core::effects::ParamMapping],
+        _version: u32,
+    ) {
+    }
+
     /// Downcast hook. Default impl is sufficient for any concrete
     /// generator that implements `Generator` directly. Mirrors the
     /// `ClipRenderer::as_any` pattern — used by regression tests that

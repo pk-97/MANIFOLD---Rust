@@ -1352,9 +1352,12 @@ fn effects_to_configs(
                         osc_address,
                         ableton_display,
                         ableton_range,
-                        // Static-tier effect params have no UserParamBinding to
-                        // remap — no mapping-drawer chevron.
-                        mappable: false,
+                        // Stock effect params are now remappable too: the
+                        // mapping drawer edits a per-instance `ParamMapping`
+                        // note (seeded copy-on-write from the recipe), so the
+                        // Author-card chevron shows on every exposed row, not
+                        // just user-exposed bindings.
+                        mappable: true,
                     }
                 })
                 .collect();
@@ -1669,9 +1672,11 @@ fn gen_params_to_config(
                             osc_address,
                             ableton_display,
                             ableton_range,
-                            // Generator params are direct values, not remappable
-                            // bindings — no mapping-drawer chevron.
-                            mappable: false,
+                            // Generator params are now remappable too: the
+                            // mapping drawer edits a per-instance ParamMapping
+                            // note on GeneratorParamState, so the Author-card
+                            // chevron shows on every exposed generator row.
+                            mappable: true,
                         }
                     })
                     .collect();
@@ -1724,9 +1729,11 @@ fn gen_params_to_config(
                             osc_address,
                             ableton_display,
                             ableton_range,
-                            // Generator params are direct values, not remappable
-                            // bindings — no mapping-drawer chevron.
-                            mappable: false,
+                            // Generator params are now remappable too: the
+                            // mapping drawer edits a per-instance ParamMapping
+                            // note on GeneratorParamState, so the Author-card
+                            // chevron shows on every exposed generator row.
+                            mappable: true,
                         }
                     })
                     .collect();

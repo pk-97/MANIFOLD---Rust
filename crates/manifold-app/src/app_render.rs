@@ -12,18 +12,162 @@ use manifold_ui::panels::PanelAction;
 use crate::app::Application;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
+use manifold_editing::commands::effects::BindingMappingEdit;
+
+/// The resolved store the mapping drawer edits — one per editor-watched
+/// graph target. Effect params (stock or user-exposed) route through
+/// `EditUserParamBindingCommand` (which itself picks user-binding vs note);
+/// generator params route through `EditGenParamMappingCommand` (note only).
+/// This is the single fork that keeps the drawer's twelve actions from
+/// each growing an effect/generator branch.
+#[derive(Clone)]
+enum MappingTarget {
+    Effect(manifold_core::EffectId),
+    Generator(manifold_core::LayerId),
+}
+
+/// Build the right reshape-edit command for the watched target. Both
+/// commands address by stable id + apply a partial [`BindingMappingEdit`].
+fn build_mapping_command(
+    target: &MappingTarget,
+    param_id: &str,
+    edit: manifold_editing::commands::effects::BindingMappingEdit,
+) -> Box<dyn manifold_editing::command::Command + Send> {
+    match target {
+        MappingTarget::Effect(eid) => Box::new(
+            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
+                eid.clone(),
+                param_id.to_string(),
+                edit,
+            ),
+        ),
+        MappingTarget::Generator(lid) => Box::new(
+            manifold_editing::commands::effects::EditGenParamMappingCommand::new(
+                lid.clone(),
+                param_id.to_string(),
+                edit,
+            ),
+        ),
+    }
+}
+
+/// Drag-commit variant: the command carries the EXPLICIT pre-drag reverse
+/// (captured at drag start) so undo restores the true pre-drag values, not
+/// the preview-mutated ones — mirroring `ChangeEffectParamCommand`'s
+/// explicit `old_value`.
+fn build_mapping_command_with_reverse(
+    target: &MappingTarget,
+    param_id: &str,
+    new: manifold_editing::commands::effects::BindingMappingEdit,
+    reverse: manifold_editing::commands::effects::BindingMappingEdit,
+) -> Box<dyn manifold_editing::command::Command + Send> {
+    match target {
+        MappingTarget::Effect(eid) => Box::new(
+            manifold_editing::commands::effects::EditUserParamBindingCommand::new_with_reverse(
+                eid.clone(),
+                param_id.to_string(),
+                new,
+                reverse,
+            ),
+        ),
+        MappingTarget::Generator(lid) => Box::new(
+            manifold_editing::commands::effects::EditGenParamMappingCommand::new_with_reverse(
+                lid.clone(),
+                param_id.to_string(),
+                new,
+                reverse,
+            ),
+        ),
+    }
+}
 
 impl Application {
-    /// The `EffectId` the graph editor is currently watching, if it is open on
-    /// an effect instance (not a generator, and not closed). The editor's
-    /// left-lane card edits + sideways mapping drawer all resolve their target
-    /// through this id — never a positional index — so master / layer / clip
-    /// effects are addressed uniformly.
-    fn watched_effect_id(&self) -> Option<manifold_core::EffectId> {
-        match self.watched_graph_target.as_ref() {
-            Some(manifold_core::GraphTarget::Effect(eid)) => Some(eid.clone()),
-            _ => None,
+    /// The mapping drawer's store target for the editor's watched graph.
+    fn mapping_target(&self) -> Option<MappingTarget> {
+        match self.watched_graph_target.as_ref()? {
+            manifold_core::GraphTarget::Effect(eid) => Some(MappingTarget::Effect(eid.clone())),
+            manifold_core::GraphTarget::Generator(lid) => {
+                Some(MappingTarget::Generator(lid.clone()))
+            }
         }
+    }
+
+    /// Read the watched param's CURRENT reshape `(min, max, scale, offset)`
+    /// for the drawer seed + drag change-detection. Resolves the same three
+    /// sources the runtime does — user-binding inline, reshape note, or a
+    /// fresh identity seed from the registry ParamDef — for whichever kind
+    /// the editor watches. `None` if the param doesn't resolve.
+    fn watched_reshape(&self, param_id: &str) -> Option<(f32, f32, f32, f32)> {
+        match self.watched_graph_target.as_ref()? {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                if let Some(b) = fx.user_param_bindings.iter().find(|b| b.id == param_id) {
+                    return Some((b.min, b.max, b.scale, b.offset));
+                }
+                if let Some(n) = fx.param_mapping(param_id) {
+                    return Some((n.min, n.max, n.scale, n.offset));
+                }
+                let def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
+                let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
+                Some((pd.min, pd.max, 1.0, 0.0))
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let gp = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?
+                    .gen_params()?;
+                if let Some(n) = gp.param_mapping(param_id) {
+                    return Some((n.min, n.max, n.scale, n.offset));
+                }
+                let def =
+                    manifold_core::generator_definition_registry::try_get(gp.generator_type())?;
+                let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
+                Some((pd.min, pd.max, 1.0, 0.0))
+            }
+        }
+    }
+
+    /// Live-drag preview: apply the partial edit to the watched param's
+    /// reshape store on BOTH the local project (immediate card UI) and the
+    /// content thread (smooth canvas + survives the next snapshot sync),
+    /// WITHOUT recording undo — the commit records the single undo entry.
+    /// Reuses the edit command's own apply logic (it picks user-binding vs
+    /// note + seeds copy-on-write), so the preview can never diverge from
+    /// the commit.
+    fn preview_mapping(&mut self, target: &MappingTarget, param_id: &str, edit: BindingMappingEdit) {
+        build_mapping_command(target, param_id, edit.clone()).execute(&mut self.local_project);
+        let target = target.clone();
+        let pid = param_id.to_string();
+        self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
+            build_mapping_command(&target, &pid, edit).execute(p);
+        })));
+    }
+
+    /// Commit / single-shot: send the reshape edit as one undoable command.
+    /// Self-captures the reverse (correct for single-shot — nothing mutated
+    /// the store first).
+    fn commit_mapping(&mut self, target: &MappingTarget, param_id: &str, edit: BindingMappingEdit) {
+        self.send_content_cmd(ContentCommand::Execute(build_mapping_command(
+            target, param_id, edit,
+        )));
+    }
+
+    /// Drag commit: one undoable command carrying the explicit pre-drag
+    /// reverse, so undo restores the pre-drag values rather than the
+    /// preview-mutated ones.
+    fn commit_mapping_with_reverse(
+        &mut self,
+        target: &MappingTarget,
+        param_id: &str,
+        new: BindingMappingEdit,
+        reverse: BindingMappingEdit,
+    ) {
+        self.send_content_cmd(ContentCommand::Execute(build_mapping_command_with_reverse(
+            target, param_id, new, reverse,
+        )));
     }
 
     pub(crate) fn tick_and_render(&mut self) {
@@ -1026,18 +1170,11 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingRangeSnapshot { binding_id } => {
-                    // Capture the binding's pre-drag (min, max) so the
-                    // commit can record one undo command for the whole
-                    // range drag.
-                    if let Some(eid) = self.watched_effect_id() {
-                        self.mapping_range_snapshot =
-                            self.local_project.find_effect_by_id(&eid).and_then(|fx| {
-                                fx.user_param_bindings
-                                    .iter()
-                                    .find(|b| &b.id == binding_id)
-                                    .map(|b| (b.min, b.max))
-                            });
-                    }
+                    // Pre-drag (min, max) so the commit can record one undo
+                    // for the whole range drag. Store-aware (user binding /
+                    // note / seed) and kind-aware (effect / generator).
+                    self.mapping_range_snapshot =
+                        self.watched_reshape(binding_id).map(|(mn, mx, _, _)| (mn, mx));
                     continue;
                 }
                 PanelAction::EffectMappingRangeChanged {
@@ -1045,132 +1182,85 @@ impl Application {
                     min,
                     max,
                 } => {
-                    // Live drag: write the local project AND the content
-                    // thread so the next snapshot sync doesn't clobber
-                    // the in-progress drag. No undo command yet — that's
-                    // the commit's job.
-                    if let Some(eid) = self.watched_effect_id() {
-                        let bid = binding_id.clone();
-                        let (mn, mx) = (*min, *max);
-                        if let Some(fx) = self.local_project.find_effect_by_id_mut(&eid)
-                            && let Some(b) =
-                                fx.user_param_bindings.iter_mut().find(|b| b.id == bid)
-                        {
-                            b.min = mn;
-                            b.max = mx;
-                            fx.user_param_bindings_version =
-                                fx.user_param_bindings_version.wrapping_add(1);
-                        }
-                        let bid2 = binding_id.clone();
-                        self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
-                            if let Some(fx) = p.find_effect_by_id_mut(&eid)
-                                && let Some(b) =
-                                    fx.user_param_bindings.iter_mut().find(|b| b.id == bid2)
-                            {
-                                b.min = mn;
-                                b.max = mx;
-                                fx.user_param_bindings_version =
-                                    fx.user_param_bindings_version.wrapping_add(1);
-                            }
-                        })));
+                    if let Some(t) = self.mapping_target() {
+                        self.preview_mapping(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
+                                min: Some(*min),
+                                max: Some(*max),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
                 PanelAction::EffectMappingRangeCommit { binding_id } => {
-                    // Drag release: record ONE EditUserParamBindingCommand
-                    // spanning the whole drag, using the snapshotted
-                    // pre-drag (min, max) as the reverse and the binding's
-                    // current (min, max) as the new value.
-                    if let (Some((old_min, old_max)), Some(eid)) = (
-                        self.mapping_range_snapshot.take(),
-                        self.watched_effect_id(),
-                    ) {
-                        let new = self.local_project.find_effect_by_id(&eid).and_then(|fx| {
-                            fx.user_param_bindings
-                                .iter()
-                                .find(|b| &b.id == binding_id)
-                                .map(|b| (b.min, b.max))
-                        });
-                        if let Some((new_min, new_max)) = new
-                            && ((old_min - new_min).abs() > f32::EPSILON
-                                || (old_max - new_max).abs() > f32::EPSILON)
-                        {
-                            let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                    let snap = self.mapping_range_snapshot.take();
+                    if let (Some((old_min, old_max)), Some(t)) = (snap, self.mapping_target())
+                        && let Some((new_min, new_max, _, _)) = self.watched_reshape(binding_id)
+                        && ((old_min - new_min).abs() > f32::EPSILON
+                            || (old_max - new_max).abs() > f32::EPSILON)
+                    {
+                        self.commit_mapping_with_reverse(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
                                 min: Some(new_min),
                                 max: Some(new_max),
                                 ..Default::default()
-                            };
-                            let cmd =
-                                manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                                    eid,
-                                    binding_id.clone(),
-                                    edit,
-                                );
-                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                        }
+                            },
+                            BindingMappingEdit {
+                                min: Some(old_min),
+                                max: Some(old_max),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
                 PanelAction::EffectMappingLabel { binding_id, label } => {
-                    if let Some(eid) = self.watched_effect_id() {
-                        let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                            label: Some(label.clone()),
-                            ..Default::default()
-                        };
-                        let cmd =
-                            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                                eid,
-                                binding_id.clone(),
-                                edit,
-                            );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    if let Some(t) = self.mapping_target() {
+                        self.commit_mapping(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
+                                label: Some(label.clone()),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
                 PanelAction::EffectMappingInvert { binding_id, invert } => {
-                    if let Some(eid) = self.watched_effect_id() {
-                        let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                            invert: Some(*invert),
-                            ..Default::default()
-                        };
-                        let cmd =
-                            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                                eid,
-                                binding_id.clone(),
-                                edit,
-                            );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    if let Some(t) = self.mapping_target() {
+                        self.commit_mapping(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
+                                invert: Some(*invert),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
                 PanelAction::EffectMappingCurve { binding_id, curve } => {
-                    if let Some(eid) = self.watched_effect_id() {
-                        let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                            curve: Some(*curve),
-                            ..Default::default()
-                        };
-                        let cmd =
-                            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                                eid,
-                                binding_id.clone(),
-                                edit,
-                            );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    if let Some(t) = self.mapping_target() {
+                        self.commit_mapping(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
+                                curve: Some(*curve),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
                 PanelAction::EffectMappingAffineSnapshot { binding_id } => {
-                    // Capture the binding's pre-drag (scale, offset) so the
-                    // commit records one undo command for the whole drag.
-                    if let Some(eid) = self.watched_effect_id() {
-                        self.mapping_affine_snapshot =
-                            self.local_project.find_effect_by_id(&eid).and_then(|fx| {
-                                fx.user_param_bindings
-                                    .iter()
-                                    .find(|b| &b.id == binding_id)
-                                    .map(|b| (b.scale, b.offset))
-                            });
-                    }
+                    self.mapping_affine_snapshot =
+                        self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
                     continue;
                 }
                 PanelAction::EffectMappingAffineChanged {
@@ -1178,66 +1268,41 @@ impl Application {
                     scale,
                     offset,
                 } => {
-                    // Live drag: write the local project AND the content
-                    // thread so the next snapshot sync doesn't clobber the
-                    // in-progress drag. No undo command yet.
-                    if let Some(eid) = self.watched_effect_id() {
-                        let bid = binding_id.clone();
-                        let (sc, of) = (*scale, *offset);
-                        if let Some(fx) = self.local_project.find_effect_by_id_mut(&eid)
-                            && let Some(b) =
-                                fx.user_param_bindings.iter_mut().find(|b| b.id == bid)
-                        {
-                            b.scale = sc;
-                            b.offset = of;
-                            fx.user_param_bindings_version =
-                                fx.user_param_bindings_version.wrapping_add(1);
-                        }
-                        let bid2 = binding_id.clone();
-                        self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
-                            if let Some(fx) = p.find_effect_by_id_mut(&eid)
-                                && let Some(b) =
-                                    fx.user_param_bindings.iter_mut().find(|b| b.id == bid2)
-                            {
-                                b.scale = sc;
-                                b.offset = of;
-                                fx.user_param_bindings_version =
-                                    fx.user_param_bindings_version.wrapping_add(1);
-                            }
-                        })));
+                    if let Some(t) = self.mapping_target() {
+                        self.preview_mapping(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
+                                scale: Some(*scale),
+                                offset: Some(*offset),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
                 PanelAction::EffectMappingAffineCommit { binding_id } => {
-                    // Drag release: record ONE EditUserParamBindingCommand
-                    // spanning the whole scale/offset drag.
-                    if let (Some((old_scale, old_offset)), Some(eid)) = (
-                        self.mapping_affine_snapshot.take(),
-                        self.watched_effect_id(),
-                    ) {
-                        let new = self.local_project.find_effect_by_id(&eid).and_then(|fx| {
-                            fx.user_param_bindings
-                                .iter()
-                                .find(|b| &b.id == binding_id)
-                                .map(|b| (b.scale, b.offset))
-                        });
-                        if let Some((new_scale, new_offset)) = new
-                            && ((old_scale - new_scale).abs() > f32::EPSILON
-                                || (old_offset - new_offset).abs() > f32::EPSILON)
-                        {
-                            let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                    let snap = self.mapping_affine_snapshot.take();
+                    if let (Some((old_scale, old_offset)), Some(t)) = (snap, self.mapping_target())
+                        && let Some((_, _, new_scale, new_offset)) =
+                            self.watched_reshape(binding_id)
+                        && ((old_scale - new_scale).abs() > f32::EPSILON
+                            || (old_offset - new_offset).abs() > f32::EPSILON)
+                    {
+                        self.commit_mapping_with_reverse(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
                                 scale: Some(new_scale),
                                 offset: Some(new_offset),
                                 ..Default::default()
-                            };
-                            let cmd =
-                                manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                                    eid,
-                                    binding_id.clone(),
-                                    edit,
-                                );
-                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                        }
+                            },
+                            BindingMappingEdit {
+                                scale: Some(old_scale),
+                                offset: Some(old_offset),
+                                ..Default::default()
+                            },
+                        );
                     }
                     continue;
                 }
@@ -2018,42 +2083,104 @@ impl Application {
     /// span), and anchors the popover on the chevron rect. Effect-only — a
     /// generator target or an unresolvable id just no-ops.
     fn open_editor_card_mapping(&mut self, param_id: &str) {
-        let Some(eid) = self.watched_effect_id() else {
-            return;
-        };
-        let Some(b) = self
-            .local_project
-            .find_effect_by_id(&eid)
-            .and_then(|fx| fx.user_param_bindings.iter().find(|b| b.id == param_id))
-        else {
-            return;
-        };
-        // Clone the binding's mapping out so the project borrow ends before we
-        // touch the snapshot / tree / popover.
-        let (binding_id, label, min, max, invert, curve, scale, offset) = (
-            b.id.clone(),
-            b.label.clone(),
-            b.min,
-            b.max,
-            b.invert,
-            b.curve,
-            b.scale,
-            b.offset,
-        );
-        let (node_handle, inner_param) = (b.node_handle.clone(), b.inner_param.clone());
-
-        // Declared inner-param range → the trim track's full span.
-        let range = self
-            .content_state
-            .active_graph_snapshot
-            .as_deref()
-            .and_then(|snap| {
-                snap.nodes
+        // Resolve the param's current mapping values + the trim-track
+        // range from whichever store the editor watches — an effect
+        // (user-binding inline / stock note / fresh seed) or a generator
+        // (note / fresh seed). The drawer edits all of them through the
+        // same command. `None` → don't open.
+        let resolved = match self.watched_graph_target.clone() {
+            Some(manifold_core::GraphTarget::Effect(eid)) => {
+                let Some(fx) = self.local_project.find_effect_by_id(&eid) else {
+                    return;
+                };
+                if let Some(b) = fx.user_param_bindings.iter().find(|b| b.id == param_id) {
+                    let (node_handle, inner_param) = (b.node_handle.clone(), b.inner_param.clone());
+                    let range = self
+                        .content_state
+                        .active_graph_snapshot
+                        .as_deref()
+                        .and_then(|snap| {
+                            snap.nodes
+                                .iter()
+                                .find(|n| n.node_handle.as_deref() == Some(node_handle.as_str()))
+                                .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
+                                .and_then(|p| p.range)
+                        });
+                    (
+                        b.id.clone(), b.label.clone(), b.min, b.max, b.invert, b.curve, b.scale,
+                        b.offset, range,
+                    )
+                } else {
+                    let Some((pd_name, pd_min, pd_max)) =
+                        manifold_core::effect_definition_registry::try_get(fx.effect_type())
+                            .and_then(|def| {
+                                def.id_to_index.get(param_id).map(|&i| {
+                                    let pd = &def.param_defs[i];
+                                    (pd.name.clone(), pd.min, pd.max)
+                                })
+                            })
+                    else {
+                        // Not a known stock param (and not a user binding).
+                        return;
+                    };
+                    match fx.param_mapping(param_id) {
+                        Some(note) => (
+                            param_id.to_string(),
+                            note.label.clone().unwrap_or(pd_name),
+                            note.min, note.max, note.invert, note.curve, note.scale, note.offset,
+                            Some((pd_min, pd_max)),
+                        ),
+                        None => (
+                            param_id.to_string(),
+                            pd_name,
+                            pd_min, pd_max, false, manifold_core::macro_bank::MacroCurve::Linear,
+                            1.0, 0.0,
+                            Some((pd_min, pd_max)),
+                        ),
+                    }
+                }
+            }
+            Some(manifold_core::GraphTarget::Generator(lid)) => {
+                let Some(gp) = self
+                    .local_project
+                    .timeline
+                    .layers
                     .iter()
-                    .find(|n| n.node_handle.as_deref() == Some(node_handle.as_str()))
-                    .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
-                    .and_then(|p| p.range)
-            });
+                    .find(|l| l.layer_id == lid)
+                    .and_then(|l| l.gen_params())
+                else {
+                    return;
+                };
+                let Some((pd_name, pd_min, pd_max)) =
+                    manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                        .and_then(|def| {
+                            def.id_to_index.get(param_id).map(|&i| {
+                                let pd = &def.param_defs[i];
+                                (pd.name.clone(), pd.min, pd.max)
+                            })
+                        })
+                else {
+                    return;
+                };
+                match gp.param_mapping(param_id) {
+                    Some(note) => (
+                        param_id.to_string(),
+                        note.label.clone().unwrap_or(pd_name),
+                        note.min, note.max, note.invert, note.curve, note.scale, note.offset,
+                        Some((pd_min, pd_max)),
+                    ),
+                    None => (
+                        param_id.to_string(),
+                        pd_name,
+                        pd_min, pd_max, false, manifold_core::macro_bank::MacroCurve::Linear, 1.0,
+                        0.0,
+                        Some((pd_min, pd_max)),
+                    ),
+                }
+            }
+            None => return,
+        };
+        let (binding_id, label, min, max, invert, curve, scale, offset, range) = resolved;
 
         // Anchor on the chevron (UI-space rect → canvas-space Rect).
         let Some(ed) = self.graph_editor.as_ref() else {

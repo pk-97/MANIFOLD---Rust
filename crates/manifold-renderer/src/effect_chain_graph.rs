@@ -59,8 +59,8 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
-    NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding, ResourceId, Slot, Source,
-    SpliceResult, StateStore, apply_binding_defaults, apply_bindings, compile,
+    NodeInstanceId, ParamBinding, ParamValue, PrimitiveRegistry, ResolvedBinding, ResourceId, Slot,
+    Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings, compile,
     splice_def_into_chain,
 };
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
@@ -354,6 +354,19 @@ struct EffectSlot {
     /// `ctx_target_node` field + `apply_ctx_params_at` hardcoded match
     /// were deleted in the same change.
     generator_input_node: Option<NodeInstanceId>,
+    /// The static spec bindings (clone of the preset's `ParamBinding`s)
+    /// paired with each binding's `source_index`, retained so the static
+    /// prefix can be rebuilt in place when a per-instance reshape note
+    /// changes — without a full chain/graph rebuild. Resolution is
+    /// deterministic against the stable `handles` map, so a rebuild
+    /// reproduces the same `n_static` length.
+    static_specs: Vec<(ParamBinding, usize)>,
+    /// Last seen `EffectInstance.param_mappings_version`. When the live
+    /// effect's version differs, the per-frame apply path rebuilds the
+    /// static prefix of [`Self::bindings`] from [`Self::static_specs`] +
+    /// the current notes before applying — the note analogue of the
+    /// `user_bindings_version` user-tail rehydrate.
+    param_mappings_version: u32,
 }
 
 impl ChainGraph {
@@ -617,13 +630,24 @@ impl ChainGraph {
                 .unwrap_or(view.bindings.len());
             let mut bindings: Vec<ResolvedBinding> =
                 Vec::with_capacity(view.bindings.len() + fx.user_param_bindings.len());
+            // Retain the static specs + source_index so the static prefix
+            // can be rebuilt in place when a per-instance reshape note
+            // changes (see the `param_mappings_version` watch in `run`).
+            let mut static_specs: Vec<(ParamBinding, usize)> =
+                Vec::with_capacity(view.bindings.len());
             for b in view.bindings.iter() {
                 let source_index = outer_param_index
                     .get(b.id.as_ref())
                     .copied()
                     .unwrap_or(0);
-                match ResolvedBinding::from_static(b, &handles, source_index) {
-                    Some(rb) => bindings.push(rb),
+                // Per-instance reshape note for this stock param, if the
+                // user has reshaped it. `None` is byte-identical to before.
+                let note = fx.param_mapping(b.id.as_ref());
+                match ResolvedBinding::from_static(b, &handles, source_index, note) {
+                    Some(rb) => {
+                        bindings.push(rb);
+                        static_specs.push((b.clone(), source_index));
+                    }
                     None => record_chain_error(
                         &mut errors,
                         ChainError::StaticBindingHandleMissing {
@@ -662,6 +686,7 @@ impl ChainGraph {
             // symmetric user-binding default-seed gap.
             apply_binding_defaults(&bindings, &mut graph, None);
             let user_bindings_version = fx.user_param_bindings_version;
+            let param_mappings_version = fx.param_mappings_version;
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
@@ -673,6 +698,8 @@ impl ChainGraph {
                 user_bindings_version,
                 binding_cache,
                 generator_input_node: generator_input_id,
+                static_specs,
+                param_mappings_version,
             });
             prev_node = output.0;
             prev_out_port = output.1;
@@ -921,6 +948,38 @@ impl ChainGraph {
                 // cache entries refer to a different binding list and
                 // would skip-write on stale-prev compare.
                 slot.binding_cache.clear_tail(slot.n_static);
+            }
+            // Re-build the static prefix if a per-instance reshape note
+            // changed. A mapping-drawer edit bumps `param_mappings_version`
+            // without touching topology, so rebuild the static bindings
+            // from the retained specs + current notes. The user tail
+            // ([n_static..]) is untouched (notes are stock-param-only in
+            // this pass). Clearing the whole cache forces the new reshape
+            // to re-apply next frame even though the raw slot value didn't
+            // move — the cache keys on the raw value, which a reshape edit
+            // leaves unchanged, so without this the edit would be skipped.
+            if fx.param_mappings_version != slot.param_mappings_version {
+                let mut new_static: Vec<ResolvedBinding> =
+                    Vec::with_capacity(slot.static_specs.len());
+                for (b, source_index) in &slot.static_specs {
+                    if let Some(rb) = ResolvedBinding::from_static(
+                        b,
+                        &slot.handles,
+                        *source_index,
+                        fx.param_mapping(b.id.as_ref()),
+                    ) {
+                        new_static.push(rb);
+                    }
+                }
+                // Resolution is deterministic against the stable handles,
+                // so the rebuilt prefix length matches the original. Guard
+                // against the impossible mismatch rather than corrupt the
+                // user-tail offsets.
+                if new_static.len() == slot.n_static {
+                    slot.bindings.splice(0..slot.n_static, new_static);
+                    slot.binding_cache.clear();
+                }
+                slot.param_mappings_version = fx.param_mappings_version;
             }
             apply_bindings(
                 &slot.bindings,
@@ -1619,12 +1678,94 @@ mod user_binding_tests {
     use manifold_core::EffectTypeId;
     use manifold_core::effect_definition_registry;
     use manifold_core::effects::{
-        EffectInstance, ParamSlot, UserParamBinding, ParamConvert,
+        EffectInstance, ParamMapping, ParamSlot, UserParamBinding, ParamConvert,
     };
-    
+
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
         effect_definition_registry::create_default(&ty)
+    }
+
+    /// A bare scale-only reshape note for `param_id` (no invert/curve, so
+    /// the normalize step is skipped and min/max are irrelevant). This is
+    /// the smallest non-identity note — `inner = slot * scale`.
+    fn scale_note(param_id: &str, scale: f32) -> ParamMapping {
+        ParamMapping {
+            param_id: param_id.to_string(),
+            label: None,
+            min: 0.0,
+            max: 1.0,
+            invert: false,
+            curve: Default::default(),
+            scale,
+            offset: 0.0,
+        }
+    }
+
+    fn affine_scale(cg: &ChainGraph, slot: &EffectSlot) -> ParamValue {
+        let (_, affine_id) = slot
+            .handles
+            .iter()
+            .find(|(h, _)| h.as_ref() == "affine")
+            .expect("StylizedFeedback graph registers `affine` handle");
+        cg.graph
+            .get_node(*affine_id)
+            .and_then(|n| n.params.get("scale").cloned())
+            .expect("affine_transform exposes a `scale` param")
+    }
+
+    /// Core model proof: a per-instance reshape NOTE on a STOCK param
+    /// (`zoom` → `affine.scale`, recipe scale = identity) reshapes what
+    /// the inner node sees, while the param's VALUE SLOT stays
+    /// byte-identical — the load-bearing invariant for the live rig
+    /// (Ableton / drivers / OSC / envelopes write that slot, untouched).
+    #[test]
+    fn stock_param_note_reshapes_inner_node_without_touching_the_slot() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        // Mirror the per-frame apply `run()` performs: push the live
+        // `param_values` through the slot's bindings into the graph.
+        fn apply(cg: &mut ChainGraph, values: &[ParamSlot]) {
+            let slot = &mut cg.effect_nodes[0];
+            apply_bindings(&slot.bindings, &mut cg.graph, None, values, &mut slot.binding_cache);
+        }
+
+        // Control: same effect, zoom = 0.3, NO note → inner sees 0.3.
+        let mut control = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
+        let mut cg0 =
+            ChainGraph::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256)
+                .expect("control chain builds");
+        apply(&mut cg0, &control.param_values);
+        let slot0 = &cg0.effect_nodes[0];
+        assert_eq!(
+            affine_scale(&cg0, slot0),
+            ParamValue::Float(0.3),
+            "without a note, the stock zoom slot value passes straight through",
+        );
+
+        // With a ×2 note on `zoom`: inner sees 0.6, slot still reads 0.3.
+        let mut fx = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        fx.param_values[1] = ParamSlot::exposed(0.3);
+        fx.upsert_param_mapping(scale_note("zoom", 2.0));
+        let mut cg =
+            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256)
+                .expect("noted chain builds");
+        apply(&mut cg, &fx.param_values);
+        let slot = &cg.effect_nodes[0];
+        assert_eq!(
+            affine_scale(&cg, slot),
+            ParamValue::Float(0.6),
+            "a ×2 reshape note must scale what the inner node sees (0.3 → 0.6)",
+        );
+        // The invariant: the value slot the modulation surface writes is
+        // byte-identical with and without the note.
+        assert_eq!(
+            fx.param_values[1].value, 0.3,
+            "the reshape note must NEVER rewrite the value slot — that slot \
+             is what Ableton / drivers / OSC / envelopes address every frame",
+        );
     }
 
     fn stylized_with_translate_exposed(translate_value: f32) -> EffectInstance {

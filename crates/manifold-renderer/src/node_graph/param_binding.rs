@@ -328,10 +328,20 @@ impl ResolvedBinding {
     /// this binding reads from. Callers building the 1:1 static prefix
     /// pass the binding's enumerate position; a future caller wiring
     /// fan-out would pass the matching outer slot's position.
+    ///
+    /// `note` is the host instance's per-instance reshape override for
+    /// this param ([`manifold_core::effects::ParamMapping`]), looked up by
+    /// the caller via `EffectInstance::param_mapping(b.id)`. `None` (the
+    /// common case) keeps the recipe's affine fold — byte-identical to
+    /// before per-instance notes existed. `Some` replaces it with the
+    /// full editable reshape (range / invert / curve / scale / offset).
+    /// The note never touches the value slot; it only changes what the
+    /// inner node sees, applied downstream in [`Self::apply`].
     pub fn from_static(
         b: &ParamBinding,
         handles: &[(Cow<'static, str>, NodeInstanceId)],
         source_index: usize,
+        note: Option<&manifold_core::effects::ParamMapping>,
     ) -> Option<Self> {
         let target = match &b.target {
             ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
@@ -350,20 +360,52 @@ impl ResolvedBinding {
             },
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
-        // Funnel through the shared affine constructor — the same one the
-        // generator path uses — so the scale/offset → reshape derivation has
-        // exactly one definition and can't drift between the two paths.
-        Some(Self::assemble_affine(
-            b.id.clone(),
-            Cow::Borrowed(b.label),
-            b.default_value,
-            target,
-            b.convert,
-            BindingSource::Static,
-            source_index,
-            b.scale,
-            b.offset,
-        ))
+        match note {
+            // Per-instance reshape note: build the full reshape, carried
+            // only when non-identity so a freshly-seeded (identity) note
+            // still pays nothing and stays byte-identical. Static bindings
+            // never angle-wrap (their ranges are author-set), matching the
+            // pre-note static behavior.
+            Some(n) => {
+                let reshape = (n.invert
+                    || n.curve != manifold_core::macro_bank::MacroCurve::Linear
+                    || n.scale != 1.0
+                    || n.offset != 0.0)
+                    .then_some(Reshape {
+                        min: n.min,
+                        max: n.max,
+                        invert: n.invert,
+                        curve: n.curve,
+                        scale: n.scale,
+                        offset: n.offset,
+                    });
+                Some(Self::assemble(
+                    b.id.clone(),
+                    Cow::Borrowed(b.label),
+                    b.default_value,
+                    target,
+                    b.convert,
+                    BindingSource::Static,
+                    source_index,
+                    reshape,
+                    false,
+                ))
+            }
+            // No note: funnel through the shared affine constructor — the
+            // same one the generator path uses — so the recipe's
+            // scale/offset → reshape derivation has exactly one definition.
+            None => Some(Self::assemble_affine(
+                b.id.clone(),
+                Cow::Borrowed(b.label),
+                b.default_value,
+                target,
+                b.convert,
+                BindingSource::Static,
+                source_index,
+                b.scale,
+                b.offset,
+            )),
+        }
     }
 
     /// Resolve a per-instance user binding against the splice's
@@ -503,6 +545,38 @@ impl ResolvedBinding {
             scale_offset_reshape(scale, offset),
             false,
         )
+    }
+
+    /// Recompute this binding's downstream reshape in place from a
+    /// per-instance reshape note (if present) or the recipe's affine
+    /// (`recipe_scale`/`recipe_offset`). The generator render path calls
+    /// this to apply / revert reshape notes on a live binding without
+    /// rebuilding the graph — the generator mirror of the effect chain's
+    /// static-prefix rebuild. A note present → full reshape; absent →
+    /// the recipe affine (byte-identical to a note-free generator).
+    /// Never touches `source_index` / `target` / `convert`, so the slot a
+    /// modulation surface writes is unaffected.
+    pub(crate) fn set_reshape_from_note(
+        &mut self,
+        note: Option<&manifold_core::effects::ParamMapping>,
+        recipe_scale: f32,
+        recipe_offset: f32,
+    ) {
+        self.reshape = match note {
+            Some(n) => (n.invert
+                || n.curve != manifold_core::macro_bank::MacroCurve::Linear
+                || n.scale != 1.0
+                || n.offset != 0.0)
+                .then_some(Reshape {
+                    min: n.min,
+                    max: n.max,
+                    invert: n.invert,
+                    curve: n.curve,
+                    scale: n.scale,
+                    offset: n.offset,
+                }),
+            None => scale_offset_reshape(recipe_scale, recipe_offset),
+        };
     }
 
     /// Apply this binding's value to the graph.
@@ -841,7 +915,7 @@ mod tests {
         // Identity scale/offset → no reshape, so every un-folded preset
         // binding stays byte-identical.
         let plain = static_amount_binding();
-        let rb = ResolvedBinding::from_static(&plain, &handles, 0).unwrap();
+        let rb = ResolvedBinding::from_static(&plain, &handles, 0, None).unwrap();
         assert!(
             rb.reshape.is_none(),
             "identity scale/offset must carry no reshape"
@@ -851,7 +925,7 @@ mod tests {
         // consumer must see 85·π/180 rad, byte-identical to the old node.
         let mut folded = static_amount_binding();
         folded.scale = std::f32::consts::PI / 180.0;
-        let rb = ResolvedBinding::from_static(&folded, &handles, 0).unwrap();
+        let rb = ResolvedBinding::from_static(&folded, &handles, 0, None).unwrap();
         let reshape = rb.reshape.expect("non-identity scale carries a reshape");
         let expected = 85.0_f32 * std::f32::consts::PI / 180.0;
         assert!(
@@ -1031,7 +1105,7 @@ mod tests {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
         let feedback = g.add_node(Box::new(AffineTransform::new()));
-        let rb = ResolvedBinding::from_static(&static_amount_binding(), &handles_for(feedback), 0)
+        let rb = ResolvedBinding::from_static(&static_amount_binding(), &handles_for(feedback), 0, None)
             .expect("handle present");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
@@ -1051,7 +1125,7 @@ mod tests {
         let mut g = Graph::new();
         let _feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
         let nope: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
-        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0).is_none());
+        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0, None).is_none());
     }
 
     #[test]
