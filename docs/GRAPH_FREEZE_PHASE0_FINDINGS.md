@@ -24,7 +24,21 @@ The §1–§4 measurements are settled. The §5 architecture is a **proposed dir
 | Infrared | 14 | 0.31 | 1.00 | 0.071 |
 | InvertColors | 3 | 0.16 | 0.48 | 0.160 |
 
-(Stateful effects and generators deferred — they need the `execute_frame_with_state` / `JsonGraphGenerator` drive. The buffer-domain bench is Phase 0-b, see §4.)
+(Stateful effects need `execute_frame_with_state`; omitted from the effect pass.)
+
+### 1b. Generators (buffer/particle domain) — Phase 0-b
+
+Driven through the production `Generator::render` path, avg over 60 frames:
+
+| Generator | 1080p ms | 4K ms | scaling | domain |
+|---|---|---|---|---|
+| Plasma | 0.25 | 0.64 | pixel | single-dispatch baseline |
+| StarField | 1.16 | 5.24 | **pixel** (4.5×) | texture (per-pixel cellular/voronoi) |
+| OilyFluid | 3.65 | 15.06 | **pixel** (4.1×) | texture (grid fluid: feedback/blur/advect at canvas res) |
+| DigitalPlants | 2.43 | 2.79 | **flat** (1.1×) | **buffer** (array_math + 160k instanced render) |
+| FluidSimulation | 11.34 | 14.17 | **flat** (1.25×) | **buffer/particle** (heaviest preset measured) |
+
+**Key diagnostic — resolution scaling separates the domains.** Cost that stays ~flat from 1080p→4K is *element/buffer-bound* (cost = per-particle / per-instance compute, not pixels); cost that scales ~linearly with pixel count is *texture-bound*. So **FluidSimulation** (11→14 ms, flat) and **DigitalPlants** (2.4→2.8, flat) are the real **buffer-domain** fusion targets — their cost is the per-particle / per-instance chains. **OilyFluid**, despite the name, is *texture*-bound (a grid fluid that scales 4× with resolution), so its win is texture-domain (the color-grade tail + per-pixel composites), not buffer. FluidSimulation at 11–14 ms is the single heaviest preset in the library and it's buffer-bound — concrete confirmation that buffer fusion is not optional. (Per-stage attribution within a generator needs finer instrumentation than this total-frame bench; deferred — the generator hides its plan behind `JsonGraphGenerator`.)
 
 ## 2. Finding 1 — per-element cost is a bandwidth tax (~0.3 ms/full-canvas pass at 4K)
 

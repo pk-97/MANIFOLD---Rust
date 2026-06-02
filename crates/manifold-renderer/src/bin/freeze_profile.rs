@@ -1,29 +1,32 @@
 //! `freeze-profile` — Phase 0 GPU profiling bench for the freeze/fusion
 //! compiler initiative.
 //!
-//! Loads effect presets, builds + compiles each graph at performance
-//! resolution, and drives the graph runtime headlessly through the
-//! `Executor`, timing GPU work per frame via `commit_and_wait_completed`
-//! (the wait makes the GPU work synchronous, so wall-time ≈ GPU time).
+//! Two passes:
+//! - **Effects (texture domain):** build each stateless effect preset's
+//!   graph, drive it through `Executor::execute_frame_with_gpu`, time per
+//!   frame with `commit_and_wait_completed` (wall-time ≈ GPU time). Reports
+//!   dispatch (step) count, ms/frame, and ms/step — the per-node texture
+//!   round-trip cost a fusion pass collapses.
+//! - **Generators (buffer/particle domain):** drive each generator preset
+//!   through the production `Generator::render` path (state-aware), time
+//!   per frame the same way. Reports ms/frame. This is where per-particle
+//!   integrate chains live — the buffer-domain fusion target.
 //!
-//! Reports per-preset: dispatch (step) count, avg GPU ms/frame, and
-//! implied ms/dispatch — the per-node texture round-trip cost a fusion
-//! pass would collapse. A fusable run of length L recovers ~(L-1) ×
-//! ms/step per frame.
+//! Stateful effects (Bloom, Watercolor, Feedback, AutoGain, DoF, Wireframe)
+//! need `execute_frame_with_state` and are omitted from the effect pass.
+//! Each generator (preset, resolution) is wrapped in `catch_unwind` so one
+//! failing preset can't abort an unattended run.
 //!
-//! v1 profiles STATELESS effect presets only (they have a `Source` and
-//! drive cleanly through `execute_frame_with_gpu`). Stateful effects
-//! (Bloom, Watercolor, Feedback, AutoGain, DoF, WireframeDepth) need the
-//! `execute_frame_with_state` path and are deferred. Generators (the
-//! buffer/particle path) need the `JsonGraphGenerator` drive — deferred.
-//!
-//! Run: `cargo run -p manifold-renderer --bin freeze-profile --release`
+//! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
 
 use std::time::Instant;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_renderer::generator::Generator;
+use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::{
     EffectGraphDefExt, EffectNode, ExecutionPlan, Executor, FrameTime, MetalBackend,
@@ -34,6 +37,8 @@ use manifold_renderer::render_target::RenderTarget;
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const WARMUP: u32 = 8;
 const FRAMES: u32 = 120;
+const GEN_WARMUP: u32 = 5;
+const GEN_FRAMES: u32 = 60;
 
 const RESOLUTIONS: &[(u32, u32)] = &[(1920, 1080), (3840, 2160)];
 
@@ -51,6 +56,17 @@ const PRESETS: &[&str] = &[
     "QuadMirror",
     "EdgeStretch",
     "VoronoiPrism",
+];
+
+/// Generator presets spanning particle sims (OilyFluid, FluidSimulation),
+/// an array_math geometry gen (DigitalPlants), a cellular gen (StarField),
+/// and a single-dispatch baseline (Plasma).
+const GEN_PRESETS: &[&str] = &[
+    "Plasma",
+    "StarField",
+    "DigitalPlants",
+    "OilyFluid",
+    "FluidSimulation",
 ];
 
 fn preset_path(name: &str) -> String {
@@ -81,7 +97,8 @@ fn main() {
     let device = GpuDevice::new();
     let source_type_id = Source::new().type_id().as_str().to_string();
 
-    println!("freeze-profile — graph-runtime GPU cost per preset (avg over {FRAMES} frames)\n");
+    println!("freeze-profile — graph-runtime GPU cost (avg over {FRAMES} frames)\n");
+    println!("--- effects (texture domain) ---");
     println!(
         "{:<16} {:>6} {:>7} {:>11} {:>11}",
         "preset", "res", "steps", "ms/frame", "ms/step"
@@ -135,7 +152,6 @@ fn main() {
                 continue;
             };
 
-            // Canvas-sized input; content is irrelevant for timing.
             let input_rt = RenderTarget::new(&device, w, h, FORMAT, "freeze-profile-input");
             let mut backend = MetalBackend::new(&device, w, h, FORMAT);
             backend.pre_bind_texture_2d(source_res, input_rt);
@@ -182,4 +198,93 @@ fn main() {
 
     println!("\nms/step ≈ per-dispatch texture round-trip cost a fusion pass collapses.");
     println!("Fusing a pointwise run of length L recovers ~(L-1) × ms/step per frame.");
+
+    profile_generators(&registry, &device);
+}
+
+/// Profile generator presets (the BUFFER / particle domain) via the
+/// production `Generator::render` path (state-aware), timing one frame
+/// with `commit_and_wait_completed`. Each (preset, resolution) is wrapped
+/// in `catch_unwind` so one failing preset can't abort the sweep.
+fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
+    println!("\n--- generators (buffer/particle domain), avg over {GEN_FRAMES} frames ---");
+    println!("{:<16} {:>6} {:>11}", "generator", "res", "ms/frame");
+    println!("{}", "-".repeat(36));
+
+    for name in GEN_PRESETS {
+        let path = format!("crates/manifold-renderer/assets/generator-presets/{name}.json");
+        let bytes = match std::fs::read_to_string(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skip {name}: read {e}");
+                continue;
+            }
+        };
+        let def: EffectGraphDef = match serde_json::from_str(&bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skip {name}: parse {e}");
+                continue;
+            }
+        };
+
+        for &(w, h) in RESOLUTIONS {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut generator = JsonGraphGenerator::from_def_with_device(
+                    def.clone(),
+                    registry,
+                    device,
+                    w,
+                    h,
+                    FORMAT,
+                )
+                .map_err(|e| e.to_string())?;
+                let target = RenderTarget::new(device, w, h, FORMAT, "freeze-profile-gen");
+                let mk_ctx = |t: f64| GeneratorContext {
+                    time: t,
+                    beat: t * 2.0,
+                    dt: 1.0_f32 / 60.0,
+                    width: w,
+                    height: h,
+                    output_width: w,
+                    output_height: h,
+                    aspect: w as f32 / h as f32,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                    params: [0.0; MAX_GEN_PARAMS],
+                    param_count: 0,
+                };
+
+                for i in 0..GEN_WARMUP {
+                    let mut enc = device.create_encoder("freeze-profile-gen-warmup");
+                    {
+                        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                        generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0));
+                    }
+                    enc.commit_and_wait_completed();
+                }
+
+                let start = Instant::now();
+                for i in 0..GEN_FRAMES {
+                    let mut enc = device.create_encoder("freeze-profile-gen-timed");
+                    {
+                        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                        generator.render(
+                            &mut gpu,
+                            &target.texture,
+                            &mk_ctx(f64::from(GEN_WARMUP + i) / 60.0),
+                        );
+                    }
+                    enc.commit_and_wait_completed();
+                }
+                Ok::<f64, String>(start.elapsed().as_secs_f64() * 1000.0 / f64::from(GEN_FRAMES))
+            }));
+
+            match result {
+                Ok(Ok(ms)) => println!("{:<16} {:>5}p {:>11.3}", name, h, ms),
+                Ok(Err(e)) => println!("{:<16} {:>5}p   load-err: {e}", name, h),
+                Err(_) => println!("{:<16} {:>5}p   FAILED (panicked)", name, h),
+            }
+        }
+    }
 }
