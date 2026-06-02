@@ -1,7 +1,9 @@
 # Node Groups — Canvas Build (continuation handoff)
 
-Status: **in progress.** This is the live continuation doc for the editor-canvas work, written
-2026-06-02 right before a context compaction. The clean-context instance starts here.
+Status: **BUILT — awaiting Peter's visual pass.** The canvas is implemented end to end
+(render + navigate + select + group/ungroup + edit-inside-a-group). Built 2026-06-02 across four
+test-gated commits on branch `node-groups`. What remains is Peter's eyeball pass and Layer-4 polish
+(group interface editing). The build log lives at the bottom under "Build state (2026-06-02)".
 
 Companion docs: `NODE_GROUPS_DESIGN.md` (backend), `NODE_GROUPS_UI_DESIGN.md` (full UX spec). This
 doc is the *build state + how to finish it debug-friendly*, not the design rationale.
@@ -140,3 +142,61 @@ ports/group, exposed-param-as-interface-param, colour/tint, auto-frame on enter,
 - Commit per layer with `git -C "<worktree>"`; commit-message backticks must be escaped/quoted.
 - Recipes (save group to disk, link/unlink, versioning) are a LATER layer on top of this — out of
   scope. This is embedded-group editing only.
+
+---
+
+## Build state (2026-06-02)
+
+Four commits on `node-groups`, each test-gated + clippy-clean:
+
+1. `node groups canvas (2/N): render groups + scope navigation` — group nodes render as teal
+   containers with an enter chevron; `scope: Vec<u32>` drives which level shows; double-click a group
+   to descend, Esc / breadcrumb to come back; `resolve_level` / `hash_level` / `is_double_click` pure
+   + unit-tested; debug overlay on backtick; `GROUP_CANVAS_LOG` traces gestures. `GraphSnapshot`
+   re-exports `GroupSnapshot`. `set_snapshot` resolves the scoped level and hashes it.
+2. `node groups canvas (3/N): multi-select + Ctrl+G / Ctrl+Shift+G` — `selected` is now an
+   `AHashSet`; left-drag = marquee (Shift additive; pan stays on middle-mouse); Ctrl+G collapses the
+   selection into a `group_N` (collision-free handle, dropped at the centroid); Ctrl+Shift+G dissolves
+   a selected group. New `GroupSelection` / `Ungroup` PanelActions route to the existing
+   `GroupNodesCommand` / `UngroupNodeCommand` at the canvas's live scope.
+3. `node groups canvas (4/N): edit inside a group (scope-aware commands)` — Add / Remove / Connect /
+   Disconnect / Move / SetGraphNodeParam gained an optional `.with_scope(path)` (empty = root, so
+   every existing call site is untouched). Each `descend_level()`s into the addressed group body.
+   `app_render` attaches `canvas.scope_path()` per frame.
+
+Tests covering this work (all green): 7 canvas (`graph_canvas::tests`), 26 editing
+(`commands::graph::tests`, incl. `scoped_move_targets_group_body` / `scoped_add_node_lands_in_group_body`),
+11 snapshot (`node_graph::snapshot::tests`).
+
+**Keys (as built):** double-click group = enter · Esc = up one level · breadcrumb click = jump ·
+Ctrl+G = group · Ctrl+Shift+G = ungroup · backtick = debug overlay · Delete = remove selected.
+`GROUP_CANVAS_LOG=1` in the env traces every gesture to stderr.
+
+### Decisions made during the build (flag for Peter)
+
+- **No on-launch fixture preset.** A grouped preset would need either a new registered effect type
+  (invasive) or wrapping a shipped preset's interior in a group — which prefixes its inner handles and
+  breaks that preset's card bindings (SoftFocusGraph binds `blur`/`mix` directly). So the demo is
+  self-made: open any effect editor → marquee-select → Ctrl+G. Layer-1 render correctness is covered
+  by tests instead of an eyeball fixture.
+- **Marquee took left-drag-empty; pan is middle-mouse.** This matches TD/Blender/Resolume, but on a
+  trackpad with no middle button, panning needs a mouse. If that's wrong for Peter's rig, a Space-drag
+  pan is a quick follow-up.
+
+### Workspace sweep note (2026-06-02)
+
+The full `cargo test --workspace` surfaced only **environmental + pre-existing** failures, none from
+this work (my diff has zero WGSL/shader/GPU/primitive/generator lines):
+- Missing `tests/fixtures/*.manifold` (gitignored, absent in the worktree) → `command_roundtrips`,
+  `undo_roundtrip`, `load_project` (Burn V5), `engine_tick`.
+- Documented known-reds: WireframeDepthGraph copy-texture mismatch (`bundled_presets`), DepthOfField
+  prewarm (`plugin_prewarm`).
+- Pre-existing parity/param reds in untouched paths: `lut1d` / `watercolor` / `smoke` parity,
+  manifold-ui FluidSim param counts (20≠21), `wgsl_validation`. All reproduce in isolation.
+
+### Still open (Layer 4 — Peter's call after the visual pass)
+
+- Group interface editing on the canvas: add/rename interface ports by dragging on Group Input/Output,
+  rename the group, expose an inner param as a group interface param, tint/colour, auto-frame on enter.
+- Multi-node drag (moving a whole selection by its header moves one node today).
+- Recipes (save/link/version) — a separate layer entirely.
