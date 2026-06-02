@@ -380,25 +380,23 @@ impl JsonGraphGenerator {
             .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
 
         // Resolve the captured binding specs against the live graph's
-        // handle map into the SHARED `ResolvedBinding` type — the same
+        // node-id map into the SHARED `ResolvedBinding` type — the same
         // one the effect chain uses — so the per-frame apply runs through
         // `apply_bindings` (skip-on-unchanged cache + structured error
         // logging) instead of a bespoke generator-only loop. Bindings
-        // whose handle / param doesn't resolve are warned + dropped.
+        // whose node id / param doesn't resolve are warned + dropped.
         use manifold_core::effect_graph_def::BindingTarget;
-        let handle_map: ahash::AHashMap<&str, NodeInstanceId> =
-            graph.handles().collect();
         let bindings: Vec<ResolvedBinding> = binding_specs
             .iter()
             .filter_map(|b| match &b.target {
-                BindingTarget::HandleNode { handle, param } => {
-                    let node_id = *handle_map.get(handle.as_str())?;
+                BindingTarget::Node { node_id, param } => {
+                    let inst_id = graph.instance_by_node_id(node_id)?;
                     let source_index = match outer_param_index.get(b.id.as_str()) {
                         Some(idx) => *idx,
                         None => {
                             log::warn!(
                                 "JsonGraphGenerator: binding id `{}` (target \
-                                 `{handle}.{param}`) has no matching outer-card param \
+                                 node `{node_id}`.`{param}`) has no matching outer-card param \
                                  — the binding will always emit its default ({}). \
                                  Add a `params` entry with id=`{}` or remove the binding.",
                                 b.id, b.default_value, b.id,
@@ -410,7 +408,7 @@ impl JsonGraphGenerator {
                     // target node's `ParamDef` list (same trick as
                     // `ResolvedBinding::from_user`) so the resolved target
                     // carries a stable name with no per-binding leak.
-                    let inst = graph.get_node(node_id)?;
+                    let inst = graph.get_node(inst_id)?;
                     let static_param = inst
                         .node
                         .parameters()
@@ -420,7 +418,7 @@ impl JsonGraphGenerator {
                         .or_else(|| {
                             log::warn!(
                                 "JsonGraphGenerator: binding id `{}` targets \
-                                 `{handle}.{param}` but that param doesn't exist on the \
+                                 node `{node_id}`.`{param}` but that param doesn't exist on the \
                                  node — dropping binding.",
                                 b.id,
                             );
@@ -440,7 +438,7 @@ impl JsonGraphGenerator {
                         std::borrow::Cow::Owned(b.label.clone()),
                         b.default_value,
                         ResolvedTarget::Node {
-                            node: node_id,
+                            node: inst_id,
                             param: static_param,
                         },
                         b.convert,
@@ -470,10 +468,10 @@ impl JsonGraphGenerator {
         let string_bindings: Vec<StringBindingResolution> = string_binding_specs
             .iter()
             .filter_map(|b| match &b.target {
-                BindingTarget::HandleNode { handle, param } => {
-                    let node_id = *handle_map.get(handle.as_str())?;
+                BindingTarget::Node { node_id, param } => {
+                    let inst_id = graph.instance_by_node_id(node_id)?;
                     Some(StringBindingResolution {
-                        target_node: node_id,
+                        target_node: inst_id,
                         target_param: param.clone(),
                         source_key: b.id.clone(),
                         default: b.default_value.clone(),

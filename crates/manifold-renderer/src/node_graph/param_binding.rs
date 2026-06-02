@@ -55,6 +55,7 @@
 
 use std::borrow::Cow;
 
+use manifold_core::NodeId;
 use manifold_core::effects::ParamSlot;
 
 use crate::node_graph::composites::CompositeHandle;
@@ -115,21 +116,15 @@ pub enum ParamTarget {
     /// where one outer name resolves to one or more inner-node
     /// parameters via the handle.
     Composite { outer_name: Cow<'static, str> },
-    /// Spec-time inner-node reference by handle name. Lives in the
+    /// Spec-time inner-node reference by stable [`NodeId`]. Lives in the
     /// `&'static [ParamBinding]` arrays carried by a
     /// [`LoadedPresetView`] before any graph exists. Resolved into
-    /// [`ResolvedTarget::Node`] at chain build time once the splice
-    /// has produced its handles map. See
-    /// [`ResolvedBinding::from_static`].
-    HandleNode {
-        handle: &'static str,
-        param: &'static str,
-    },
-    /// Direct route to a single node parameter — used when the
-    /// `node_id` is known at spec authoring time (rare in practice;
-    /// most static bindings declare `HandleNode` instead).
+    /// [`ResolvedTarget::Node`] at chain build time once the splice has
+    /// produced its `(NodeId, NodeInstanceId)` map. The id is invariant
+    /// under group / ungroup / move / flatten — unlike the node's
+    /// handle, which flatten prefixes. See [`ResolvedBinding::from_static`].
     Node {
-        node: NodeInstanceId,
+        node_id: NodeId,
         param: &'static str,
     },
     /// Escape hatch for routing that's neither composite nor a single
@@ -318,11 +313,27 @@ fn scale_offset_reshape(scale: f32, offset: f32) -> Option<Reshape> {
     })
 }
 
+/// Resolve a stable [`NodeId`] to the runtime [`NodeInstanceId`] it
+/// produced at splice time, via the effect's `(NodeId, NodeInstanceId)`
+/// map. The map is built once per chain build from the spliced nodes —
+/// node ids are unique, so the first (only) match wins. `None` when the
+/// id isn't in the map (the targeted node was deleted or refactored
+/// out).
+fn resolve_node_id(
+    node_map: &[(NodeId, NodeInstanceId)],
+    node_id: &NodeId,
+) -> Option<NodeInstanceId> {
+    node_map
+        .iter()
+        .find(|(nid, _)| nid == node_id)
+        .map(|(_, id)| *id)
+}
+
 impl ResolvedBinding {
-    /// Resolve a spec [`ParamBinding`] against the splice's handle
-    /// map. `HandleNode` targets become `Node`; other variants pass
-    /// through. Returns `None` when the binding's handle name isn't
-    /// in `handles` — caller logs and drops the orphan binding.
+    /// Resolve a spec [`ParamBinding`] against the splice's node-id
+    /// map. `Node` targets resolve their [`NodeId`] to the runtime node;
+    /// other variants pass through. Returns `None` when the binding's
+    /// id isn't in `node_map` — caller logs and drops the orphan binding.
     ///
     /// `source_index` is the position in `EffectInstance.param_values`
     /// this binding reads from. Callers building the 1:1 static prefix
@@ -339,7 +350,7 @@ impl ResolvedBinding {
     /// inner node sees, applied downstream in [`Self::apply`].
     pub fn from_static(
         b: &ParamBinding,
-        handles: &[(Cow<'static, str>, NodeInstanceId)],
+        node_map: &[(NodeId, NodeInstanceId)],
         source_index: usize,
         note: Option<&manifold_core::effects::ParamMapping>,
     ) -> Option<Self> {
@@ -347,17 +358,10 @@ impl ResolvedBinding {
             ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
                 outer_name: outer_name.clone(),
             },
-            ParamTarget::HandleNode { handle, param } => {
-                let node = handles
-                    .iter()
-                    .find(|(h, _)| h.as_ref() == *handle)
-                    .map(|(_, id)| *id)?;
+            ParamTarget::Node { node_id, param } => {
+                let node = resolve_node_id(node_map, node_id)?;
                 ResolvedTarget::Node { node, param }
             }
-            ParamTarget::Node { node, param } => ResolvedTarget::Node {
-                node: *node,
-                param,
-            },
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
         match note {
@@ -408,13 +412,13 @@ impl ResolvedBinding {
         }
     }
 
-    /// Resolve a per-instance user binding against the splice's
-    /// handle map. Returns `None` if the binding's `node_handle`
-    /// isn't in `handles` (effect refactor dropped the node, or alias
-    /// resolver didn't catch the rename) or the binding's
-    /// `inner_param` doesn't match any [`crate::node_graph::ParamDef`]
-    /// on the resolved node. Caller logs and skips — orphan bindings
-    /// remain in the project file but render inert until they re-bind.
+    /// Resolve a per-instance user binding against the splice's node-id
+    /// map. Returns `None` if the binding's `node_id` isn't in
+    /// `node_map` (the targeted node was deleted or refactored out) or
+    /// the binding's `inner_param` doesn't match any
+    /// [`crate::node_graph::ParamDef`] on the resolved node. Caller logs
+    /// and skips — orphan bindings remain in the project file but render
+    /// inert until they re-bind.
     ///
     /// `source_index` is the position in `EffectInstance.param_values`
     /// this binding reads from — for the user tail, that's
@@ -423,13 +427,10 @@ impl ResolvedBinding {
     pub fn from_user(
         core: &manifold_core::effects::UserParamBinding,
         graph: &Graph,
-        handles: &[(Cow<'static, str>, NodeInstanceId)],
+        node_map: &[(NodeId, NodeInstanceId)],
         source_index: usize,
     ) -> Option<Self> {
-        let target_node = handles
-            .iter()
-            .find(|(h, _)| h.as_ref() == core.node_handle.as_str())
-            .map(|(_, id)| *id)?;
+        let target_node = resolve_node_id(node_map, &core.node_id)?;
         let inst = graph.get_node(target_node)?;
         // Pull the `&'static str` off the inner node's `ParamDef`
         // list so the resolved target carries a stable, allocation-free
@@ -911,11 +912,11 @@ mod tests {
     #[test]
     fn from_static_folds_scale_offset_into_reshape() {
         let feedback = NodeInstanceId(7);
-        let handles = handles_for(feedback);
+        let node_map = node_map_for(feedback);
         // Identity scale/offset → no reshape, so every un-folded preset
         // binding stays byte-identical.
         let plain = static_amount_binding();
-        let rb = ResolvedBinding::from_static(&plain, &handles, 0, None).unwrap();
+        let rb = ResolvedBinding::from_static(&plain, &node_map, 0, None).unwrap();
         assert!(
             rb.reshape.is_none(),
             "identity scale/offset must carry no reshape"
@@ -925,7 +926,7 @@ mod tests {
         // consumer must see 85·π/180 rad, byte-identical to the old node.
         let mut folded = static_amount_binding();
         folded.scale = std::f32::consts::PI / 180.0;
-        let rb = ResolvedBinding::from_static(&folded, &handles, 0, None).unwrap();
+        let rb = ResolvedBinding::from_static(&folded, &node_map, 0, None).unwrap();
         let reshape = rb.reshape.expect("non-identity scale carries a reshape");
         let expected = 85.0_f32 * std::f32::consts::PI / 180.0;
         assert!(
@@ -1069,8 +1070,8 @@ mod tests {
             id: Cow::Borrowed("amount"),
             label: "Amount",
             default_value: 0.5,
-            target: ParamTarget::HandleNode {
-                handle: "feedback",
+            target: ParamTarget::Node {
+                node_id: NodeId::new("feedback"),
                 param: "scale",
             },
             convert: ParamConvert::Float,
@@ -1079,8 +1080,19 @@ mod tests {
         }
     }
 
-    fn handles_for(feedback: NodeInstanceId) -> Vec<(Cow<'static, str>, NodeInstanceId)> {
-        vec![(Cow::Borrowed("feedback"), feedback)]
+    /// The node-id resolution map: pairs the runtime node with the stable
+    /// id `"feedback"` the bindings target.
+    fn node_map_for(feedback: NodeInstanceId) -> Vec<(NodeId, NodeInstanceId)> {
+        vec![(NodeId::new("feedback"), feedback)]
+    }
+
+    /// Add an `AffineTransform` under handle `"feedback"` AND stamp its
+    /// stable node id to match — mirrors what `instantiate_def` does, so
+    /// the node-id resolvers can find it.
+    fn add_feedback_node(g: &mut Graph) -> NodeInstanceId {
+        let id = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        g.set_node_id(id, NodeId::new("feedback"));
+        id
     }
 
     fn resolved_feedback_amount(feedback: NodeInstanceId) -> ResolvedBinding {
@@ -1101,12 +1113,12 @@ mod tests {
     }
 
     #[test]
-    fn from_static_resolves_handlenode_to_node() {
+    fn from_static_resolves_node_id_to_node() {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
-        let rb = ResolvedBinding::from_static(&static_amount_binding(), &handles_for(feedback), 0, None)
-            .expect("handle present");
+        let feedback = add_feedback_node(&mut g);
+        let rb = ResolvedBinding::from_static(&static_amount_binding(), &node_map_for(feedback), 0, None)
+            .expect("node id present");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
@@ -1119,23 +1131,24 @@ mod tests {
     }
 
     #[test]
-    fn from_static_returns_none_when_handle_missing() {
-        // Missing handle in the splice map → orphan binding, dropped
+    fn from_static_returns_none_when_node_id_missing() {
+        // Missing node id in the splice map → orphan binding, dropped
         // at chain build time.
         let mut g = Graph::new();
-        let _feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
-        let nope: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
+        let _feedback = add_feedback_node(&mut g);
+        let nope: Vec<(NodeId, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0, None).is_none());
     }
 
     #[test]
-    fn from_user_resolves_handle_and_pulls_static_param_name() {
+    fn from_user_resolves_node_id_and_pulls_static_param_name() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = add_feedback_node(&mut g);
         let core = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
-            node_handle: "feedback".to_string(),
+            node_id: NodeId::new("feedback"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
@@ -1147,7 +1160,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         };
-        let rb = ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0)
+        let rb = ResolvedBinding::from_user(&core, &g, &node_map_for(feedback), 0)
             .expect("user binding hydrates");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
@@ -1160,13 +1173,14 @@ mod tests {
     }
 
     #[test]
-    fn from_user_returns_none_for_unknown_handle() {
+    fn from_user_returns_none_for_unknown_node_id() {
         let mut g = Graph::new();
-        let _feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let _feedback = add_feedback_node(&mut g);
         let core = manifold_core::effects::UserParamBinding {
             id: "user.nope".to_string(),
             label: "Nope".to_string(),
-            node_handle: "no_such_node".to_string(),
+            node_id: NodeId::new("no_such_node"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1178,18 +1192,19 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         };
-        let handles: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
-        assert!(ResolvedBinding::from_user(&core, &g, &handles, 0).is_none());
+        let node_map: Vec<(NodeId, NodeInstanceId)> = vec![];
+        assert!(ResolvedBinding::from_user(&core, &g, &node_map, 0).is_none());
     }
 
     #[test]
     fn from_user_returns_none_for_unknown_inner_param() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = add_feedback_node(&mut g);
         let core = manifold_core::effects::UserParamBinding {
             id: "user.feedback.bogus.1".to_string(),
             label: "Bogus".to_string(),
-            node_handle: "feedback".to_string(),
+            node_id: NodeId::new("feedback"),
+            legacy_node_handle: None,
             inner_param: "bogus_param".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1201,7 +1216,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         };
-        assert!(ResolvedBinding::from_user(&core, &g, &handles_for(feedback), 0).is_none());
+        assert!(ResolvedBinding::from_user(&core, &g, &node_map_for(feedback), 0).is_none());
     }
 
     // ---- apply() routing tests ----
@@ -1408,13 +1423,14 @@ mod tests {
     #[test]
     fn apply_bindings_walks_static_then_user_in_one_slice() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = add_feedback_node(&mut g);
 
         let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
-            node_handle: "feedback".to_string(),
+            node_id: NodeId::new("feedback"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
@@ -1426,7 +1442,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
 
         // values slice: [static.amount, user.zoom] = [0.5, 1.05]
@@ -1445,12 +1461,13 @@ mod tests {
     #[test]
     fn apply_bindings_user_tail_falls_back_to_binding_default() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = add_feedback_node(&mut g);
         let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
-            node_handle: "feedback".to_string(),
+            node_id: NodeId::new("feedback"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
@@ -1462,7 +1479,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
 
         // values shorter than bindings: user tail falls back to
@@ -1481,12 +1498,13 @@ mod tests {
     #[test]
     fn binding_value_finds_id_in_either_tier() {
         let mut g = Graph::new();
-        let feedback = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = add_feedback_node(&mut g);
         let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
-            node_handle: "feedback".to_string(),
+            node_id: NodeId::new("feedback"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: 0.9,
             max: 1.1,
@@ -1498,7 +1516,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback), 1).unwrap();
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
         let values = [ParamSlot::exposed(0.5), ParamSlot::exposed(1.07)];
         assert_eq!(binding_value(&bindings, &values, "amount"), Some(0.5));

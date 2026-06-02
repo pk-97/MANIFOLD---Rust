@@ -167,8 +167,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "amount"
         },
         "convert": {
@@ -180,8 +180,8 @@
         "label": "Density",
         "defaultValue": 260.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "density"
         },
         "convert": {
@@ -193,8 +193,8 @@
         "label": "Width",
         "defaultValue": 1.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "width"
         },
         "convert": {
@@ -206,8 +206,8 @@
         "label": "Z Scale",
         "defaultValue": 1.35,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "z_scale"
         },
         "convert": {
@@ -219,8 +219,8 @@
         "label": "Smooth",
         "defaultValue": 0.9,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "smooth"
         },
         "convert": {
@@ -232,8 +232,8 @@
         "label": "Subject",
         "defaultValue": 0.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "subject"
         },
         "convert": {
@@ -245,8 +245,8 @@
         "label": "Blend",
         "defaultValue": 6.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "blend"
         },
         "convert": {
@@ -258,8 +258,8 @@
         "label": "Wire Resolution",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "wire_res"
         },
         "convert": {
@@ -271,8 +271,8 @@
         "label": "Mesh Rate",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "mesh_rate"
         },
         "convert": {
@@ -284,8 +284,8 @@
         "label": "Flow",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "flow"
         },
         "convert": {
@@ -297,8 +297,8 @@
         "label": "Lock",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "lock"
         },
         "convert": {
@@ -310,8 +310,8 @@
         "label": "Edge Follow",
         "defaultValue": 0.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "wireframe_depth",
+          "kind": "node",
+          "nodeId": "wireframe_depth",
           "param": "edge_follow"
         },
         "convert": {
@@ -333,12 +333,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.wireframe_depth",
-      "handle": "wireframe_depth",
+      "handle": "wireframe_depth", "nodeId": "wireframe_depth",
       "params": {
         "amount": {
           "type": "Float",
@@ -393,7 +393,7 @@
     {
       "id": 2,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

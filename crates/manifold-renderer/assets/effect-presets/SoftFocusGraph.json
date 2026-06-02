@@ -37,8 +37,8 @@
         "label": "Radius",
         "defaultValue": 6.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "blur",
+          "kind": "node",
+          "nodeId": "blur",
           "param": "radius"
         },
         "convert": {
@@ -50,8 +50,8 @@
         "label": "Amount",
         "defaultValue": 0.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "mix",
+          "kind": "node",
+          "nodeId": "mix",
           "param": "amount"
         },
         "convert": {
@@ -68,12 +68,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.blur",
-      "handle": "blur",
+      "handle": "blur", "nodeId": "blur",
       "params": {
         "mode": {
           "type": "Enum",
@@ -88,7 +88,7 @@
     {
       "id": 2,
       "typeId": "node.mix",
-      "handle": "mix",
+      "handle": "mix", "nodeId": "mix",
       "params": {
         "amount": {
           "type": "Float",
@@ -103,7 +103,7 @@
     {
       "id": 3,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

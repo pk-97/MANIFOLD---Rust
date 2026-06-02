@@ -109,39 +109,39 @@
     ],
     "bindings": [
       { "id": "rotate_x_speed", "label": "Rotate X Speed", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "angle_x_mul", "param": "b" },
+        "target": { "kind": "node", "nodeId": "angle_x_mul", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "rotate_y_speed", "label": "Rotate Y Speed", "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "angle_y_mul", "param": "b" },
+        "target": { "kind": "node", "nodeId": "angle_y_mul", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "rotate_z_speed", "label": "Rotate Z Speed", "defaultValue": 0.2,
-        "target": { "kind": "handleNode", "handle": "angle_z_mul", "param": "b" },
+        "target": { "kind": "node", "nodeId": "angle_z_mul", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "line", "label": "Line", "defaultValue": 0.003,
-        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
         "convert": { "type": "Float" } },
       { "id": "shape", "label": "Shape", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "shape_mux", "param": "in_0" },
+        "target": { "kind": "node", "nodeId": "shape_mux", "param": "in_0" },
         "convert": { "type": "Float" } },
       { "id": "show_verts", "label": "Show Vertices", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "show_verts" },
+        "target": { "kind": "node", "nodeId": "render", "param": "show_verts" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "vert_size", "label": "Vertex Size", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "vert_size" },
+        "target": { "kind": "node", "nodeId": "render", "param": "vert_size" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "project", "param": "proj_scale" },
+        "target": { "kind": "node", "nodeId": "project", "param": "proj_scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "clip_trigger_value", "param": "value" },
+        "target": { "kind": "node", "nodeId": "clip_trigger_value", "param": "value" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
     {
-      "id": 1, "typeId": "node.math", "handle": "angle_x_mul",
+      "id": 1, "typeId": "node.math", "handle": "angle_x_mul", "nodeId": "angle_x_mul",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.5 },
@@ -149,7 +149,7 @@
       }
     },
     {
-      "id": 2, "typeId": "node.math", "handle": "angle_y_mul",
+      "id": 2, "typeId": "node.math", "handle": "angle_y_mul", "nodeId": "angle_y_mul",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.3 },
@@ -157,7 +157,7 @@
       }
     },
     {
-      "id": 3, "typeId": "node.math", "handle": "angle_z_mul",
+      "id": 3, "typeId": "node.math", "handle": "angle_z_mul", "nodeId": "angle_z_mul",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.2 },
@@ -165,39 +165,39 @@
       }
     },
     {
-      "id": 4, "typeId": "node.value", "handle": "clip_trigger_value",
+      "id": 4, "typeId": "node.value", "handle": "clip_trigger_value", "nodeId": "clip_trigger_value",
       "params": {
         "value": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 5, "typeId": "node.clip_trigger_cycle", "handle": "shape_cycle",
+      "id": 5, "typeId": "node.clip_trigger_cycle", "handle": "shape_cycle", "nodeId": "shape_cycle",
       "params": {
         "modulus": { "type": "Int", "value": 5 }
       }
     },
     {
-      "id": 6, "typeId": "node.mux_scalar", "handle": "shape_mux",
+      "id": 6, "typeId": "node.mux_scalar", "handle": "shape_mux", "nodeId": "shape_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 7, "typeId": "node.polytope_vertices", "handle": "polytope_verts",
+      "id": 7, "typeId": "node.polytope_vertices", "handle": "polytope_verts", "nodeId": "polytope_verts",
       "params": {
         "shape": { "type": "Enum", "value": 0 }
       }
     },
     {
-      "id": 8, "typeId": "node.polytope_edges", "handle": "polytope_edges",
+      "id": 8, "typeId": "node.polytope_edges", "handle": "polytope_edges", "nodeId": "polytope_edges",
       "params": {
         "shape": { "type": "Enum", "value": 0 }
       }
     },
-    { "id": 9, "typeId": "node.rotate_3d", "handle": "rotate" },
+    { "id": 9, "typeId": "node.rotate_3d", "handle": "rotate", "nodeId": "rotate" },
     {
-      "id": 10, "typeId": "node.project_3d", "handle": "project",
+      "id": 10, "typeId": "node.project_3d", "handle": "project", "nodeId": "project",
       "params": {
         "mode":       { "type": "Enum",  "value": 0 },
         "proj_scale": { "type": "Float", "value": 1.0 },
@@ -205,7 +205,7 @@
       }
     },
     {
-      "id": 11, "typeId": "node.render_lines", "handle": "render",
+      "id": 11, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.003 },
         "closed_loop":       { "type": "Bool",  "value": false },
@@ -221,7 +221,7 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 12, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 12, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },

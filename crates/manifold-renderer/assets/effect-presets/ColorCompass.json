@@ -36,8 +36,8 @@
         "label": "Intensity",
         "defaultValue": 5.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "intensity_value",
+          "kind": "node",
+          "nodeId": "intensity_value",
           "param": "value"
         },
         "convert": {
@@ -49,8 +49,8 @@
         "label": "Reactivity",
         "defaultValue": 0.05,
         "target": {
-          "kind": "handleNode",
-          "handle": "reactivity_value",
+          "kind": "node",
+          "nodeId": "reactivity_value",
           "param": "value"
         },
         "convert": {
@@ -67,12 +67,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.color_sample",
-      "handle": "sample_n",
+      "handle": "sample_n", "nodeId": "sample_n",
       "params": {
         "uv": {
           "type": "Vec2",
@@ -87,7 +87,7 @@
     {
       "id": 2,
       "typeId": "node.color_sample",
-      "handle": "sample_s",
+      "handle": "sample_s", "nodeId": "sample_s",
       "params": {
         "uv": {
           "type": "Vec2",
@@ -102,7 +102,7 @@
     {
       "id": 3,
       "typeId": "node.color_sample",
-      "handle": "sample_e",
+      "handle": "sample_e", "nodeId": "sample_e",
       "params": {
         "uv": {
           "type": "Vec2",
@@ -117,7 +117,7 @@
     {
       "id": 4,
       "typeId": "node.color_sample",
-      "handle": "sample_w",
+      "handle": "sample_w", "nodeId": "sample_w",
       "params": {
         "uv": {
           "type": "Vec2",
@@ -132,7 +132,7 @@
     {
       "id": 5,
       "typeId": "node.math",
-      "handle": "math_dy",
+      "handle": "math_dy", "nodeId": "math_dy",
       "params": {
         "op": {
           "type": "Enum",
@@ -143,7 +143,7 @@
     {
       "id": 6,
       "typeId": "node.math",
-      "handle": "math_dx",
+      "handle": "math_dx", "nodeId": "math_dx",
       "params": {
         "op": {
           "type": "Enum",
@@ -154,7 +154,7 @@
     {
       "id": 7,
       "typeId": "node.value",
-      "handle": "intensity_value",
+      "handle": "intensity_value", "nodeId": "intensity_value",
       "params": {
         "value": {
           "type": "Float",
@@ -165,7 +165,7 @@
     {
       "id": 8,
       "typeId": "node.math",
-      "handle": "math_int_x",
+      "handle": "math_int_x", "nodeId": "math_int_x",
       "params": {
         "op": {
           "type": "Enum",
@@ -176,7 +176,7 @@
     {
       "id": 9,
       "typeId": "node.math",
-      "handle": "math_int_y",
+      "handle": "math_int_y", "nodeId": "math_int_y",
       "params": {
         "op": {
           "type": "Enum",
@@ -187,7 +187,7 @@
     {
       "id": 10,
       "typeId": "node.value",
-      "handle": "reactivity_value",
+      "handle": "reactivity_value", "nodeId": "reactivity_value",
       "params": {
         "value": {
           "type": "Float",
@@ -198,22 +198,22 @@
     {
       "id": 11,
       "typeId": "node.smoothing",
-      "handle": "smoothing_x"
+      "handle": "smoothing_x", "nodeId": "smoothing_x"
     },
     {
       "id": 12,
       "typeId": "node.smoothing",
-      "handle": "smoothing_y"
+      "handle": "smoothing_y", "nodeId": "smoothing_y"
     },
     {
       "id": 13,
       "typeId": "node.affine_transform",
-      "handle": "affine"
+      "handle": "affine", "nodeId": "affine"
     },
     {
       "id": 14,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

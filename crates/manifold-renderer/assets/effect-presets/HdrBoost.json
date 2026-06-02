@@ -59,28 +59,28 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "highlight_boost", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "highlight_boost", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "gain",
         "label": "Gain",
         "defaultValue": 1.5,
-        "target": { "kind": "handleNode", "handle": "ev_exp", "param": "a" },
+        "target": { "kind": "node", "nodeId": "ev_exp", "param": "a" },
         "convert": { "type": "Float" }
       },
       {
         "id": "threshold",
         "label": "Threshold",
         "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "prefilter", "param": "level" },
+        "target": { "kind": "node", "nodeId": "prefilter", "param": "level" },
         "convert": { "type": "Float" }
       },
       {
         "id": "knee",
         "label": "Knee",
         "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "prefilter", "param": "softness" },
+        "target": { "kind": "node", "nodeId": "prefilter", "param": "softness" },
         "convert": { "type": "Float" }
       }
     ],
@@ -90,11 +90,11 @@
     ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
     {
       "id": 1,
       "typeId": "node.threshold",
-      "handle": "prefilter",
+      "handle": "prefilter", "nodeId": "prefilter",
       "params": {
         "level": { "type": "Float", "value": 0.15 },
         "softness": { "type": "Float", "value": 0.3 }
@@ -103,7 +103,7 @@
     {
       "id": 2,
       "typeId": "node.math",
-      "handle": "ev_exp",
+      "handle": "ev_exp", "nodeId": "ev_exp",
       "params": {
         "a": { "type": "Float", "value": 1.5 },
         "op": { "type": "Enum", "value": 13 }
@@ -112,7 +112,7 @@
     {
       "id": 3,
       "typeId": "node.math",
-      "handle": "ev_minus1",
+      "handle": "ev_minus1", "nodeId": "ev_minus1",
       "params": {
         "b": { "type": "Float", "value": 1.0 },
         "op": { "type": "Enum", "value": 1 }
@@ -121,7 +121,7 @@
     {
       "id": 4,
       "typeId": "node.gain",
-      "handle": "boost",
+      "handle": "boost", "nodeId": "boost",
       "params": {
         "gain": { "type": "Float", "value": 1.83 }
       }
@@ -129,13 +129,13 @@
     {
       "id": 5,
       "typeId": "node.mix",
-      "handle": "highlight_boost",
+      "handle": "highlight_boost", "nodeId": "highlight_boost",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 2 }
       }
     },
-    { "id": 6, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 6, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },

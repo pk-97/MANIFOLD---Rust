@@ -37,8 +37,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "kaleidoscope",
+          "kind": "node",
+          "nodeId": "kaleidoscope",
           "param": "amount"
         },
         "convert": {
@@ -50,8 +50,8 @@
         "label": "Segments",
         "defaultValue": 6.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "fold",
+          "kind": "node",
+          "nodeId": "fold",
           "param": "segments"
         },
         "convert": {
@@ -74,12 +74,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.radial_fold_uv",
-      "handle": "fold",
+      "handle": "fold", "nodeId": "fold",
       "params": {
         "segments": { "type": "Float", "value": 6.0 },
         "cx": { "type": "Float", "value": 0.5 },
@@ -89,7 +89,7 @@
     {
       "id": 2,
       "typeId": "node.remap",
-      "handle": "remapped",
+      "handle": "remapped", "nodeId": "remapped",
       "params": {
         "wrap": { "type": "Enum", "value": 0 }
       }
@@ -97,7 +97,7 @@
     {
       "id": 3,
       "typeId": "node.mix",
-      "handle": "kaleidoscope",
+      "handle": "kaleidoscope", "nodeId": "kaleidoscope",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -106,7 +106,7 @@
     {
       "id": 4,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

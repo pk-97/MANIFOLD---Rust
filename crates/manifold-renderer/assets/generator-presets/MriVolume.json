@@ -101,89 +101,89 @@
     ],
     "bindings": [
       { "id": "folder", "label": "Folder", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "axis_manual", "param": "value" },
+        "target": { "kind": "node", "nodeId": "axis_manual", "param": "value" },
         "convert": { "type": "Float" } },
       { "id": "position", "label": "Position", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "axial", "param": "position" },
+        "target": { "kind": "node", "nodeId": "axial", "param": "position" },
         "convert": { "type": "Float" } },
       { "id": "position", "label": "Position", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "sagittal", "param": "position" },
+        "target": { "kind": "node", "nodeId": "sagittal", "param": "position" },
         "convert": { "type": "Float" } },
       { "id": "position", "label": "Position", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "coronal", "param": "position" },
+        "target": { "kind": "node", "nodeId": "coronal", "param": "position" },
         "convert": { "type": "Float" } },
       { "id": "center", "label": "Center", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "win_low", "param": "a" },
+        "target": { "kind": "node", "nodeId": "win_low", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "center", "label": "Center", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "win_high", "param": "a" },
+        "target": { "kind": "node", "nodeId": "win_high", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "width", "label": "Width", "defaultValue": 0.8,
-        "target": { "kind": "handleNode", "handle": "half_width", "param": "a" },
+        "target": { "kind": "node", "nodeId": "half_width", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "axial", "param": "uv_scale" },
+        "target": { "kind": "node", "nodeId": "axial", "param": "uv_scale" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "sagittal", "param": "uv_scale" },
+        "target": { "kind": "node", "nodeId": "sagittal", "param": "uv_scale" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "coronal", "param": "uv_scale" },
+        "target": { "kind": "node", "nodeId": "coronal", "param": "uv_scale" },
         "convert": { "type": "Float" } },
       { "id": "invert", "label": "Invert", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "invert", "param": "intensity" },
+        "target": { "kind": "node", "nodeId": "invert", "param": "intensity" },
         "convert": { "type": "Float" } },
       { "id": "sharpen", "label": "Sharpen", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "sharpen", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "sharpen", "param": "amount" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "axis_mux", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "axis_mux", "param": "selector" },
         "convert": { "type": "Float" } }
     ],
     "stringBindings": [
       { "id": "axial_folder", "label": "Axial Folder", "defaultValue": "assets/mri-data/volumes/edlow_100um_synthesized/axial",
-        "target": { "kind": "handleNode", "handle": "axial", "param": "folder" } },
+        "target": { "kind": "node", "nodeId": "axial", "param": "folder" } },
       { "id": "sagittal_folder", "label": "Sagittal Folder", "defaultValue": "assets/mri-data/volumes/edlow_100um_synthesized/sagittal",
-        "target": { "kind": "handleNode", "handle": "sagittal", "param": "folder" } },
+        "target": { "kind": "node", "nodeId": "sagittal", "param": "folder" } },
       { "id": "coronal_folder", "label": "Coronal Folder", "defaultValue": "assets/mri-data/volumes/edlow_100um_synthesized/coronal",
-        "target": { "kind": "handleNode", "handle": "coronal", "param": "folder" } }
+        "target": { "kind": "node", "nodeId": "coronal", "param": "folder" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
 
-    { "id": 1, "typeId": "node.image_folder", "handle": "axial" },
-    { "id": 2, "typeId": "node.image_folder", "handle": "sagittal" },
-    { "id": 3, "typeId": "node.image_folder", "handle": "coronal" },
+    { "id": 1, "typeId": "node.image_folder", "handle": "axial", "nodeId": "axial" },
+    { "id": 2, "typeId": "node.image_folder", "handle": "sagittal", "nodeId": "sagittal" },
+    { "id": 3, "typeId": "node.image_folder", "handle": "coronal", "nodeId": "coronal" },
 
     {
-      "id": 4, "typeId": "node.clip_trigger_index", "handle": "axis_cycle",
+      "id": 4, "typeId": "node.clip_trigger_index", "handle": "axis_cycle", "nodeId": "axis_cycle",
       "params": {
         "modulus": { "type": "Float", "value": 3.0 }
       }
     },
     {
-      "id": 5, "typeId": "node.value", "handle": "axis_manual",
+      "id": 5, "typeId": "node.value", "handle": "axis_manual", "nodeId": "axis_manual",
       "params": {
         "value": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 6, "typeId": "node.mux_scalar", "handle": "axis_mux",
+      "id": 6, "typeId": "node.mux_scalar", "handle": "axis_mux", "nodeId": "axis_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 7, "typeId": "node.mux_texture", "handle": "tex_mux",
+      "id": 7, "typeId": "node.mux_texture", "handle": "tex_mux", "nodeId": "tex_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 }
       }
     },
 
     {
-      "id": 8, "typeId": "node.math", "handle": "half_width",
+      "id": 8, "typeId": "node.math", "handle": "half_width", "nodeId": "half_width",
       "params": {
         "a":  { "type": "Float", "value": 0.8 },
         "b":  { "type": "Float", "value": 0.5 },
@@ -191,7 +191,7 @@
       }
     },
     {
-      "id": 9, "typeId": "node.math", "handle": "win_low",
+      "id": 9, "typeId": "node.math", "handle": "win_low", "nodeId": "win_low",
       "params": {
         "a":  { "type": "Float", "value": 0.5 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -199,7 +199,7 @@
       }
     },
     {
-      "id": 10, "typeId": "node.math", "handle": "win_high",
+      "id": 10, "typeId": "node.math", "handle": "win_high", "nodeId": "win_high",
       "params": {
         "a":  { "type": "Float", "value": 0.5 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -208,26 +208,26 @@
     },
 
     {
-      "id": 11, "typeId": "node.sharpen", "handle": "sharpen",
+      "id": 11, "typeId": "node.sharpen", "handle": "sharpen", "nodeId": "sharpen",
       "params": {
         "amount": { "type": "Float", "value": 1.0 }
       }
     },
     {
-      "id": 12, "typeId": "node.smoothstep_texture", "handle": "window",
+      "id": 12, "typeId": "node.smoothstep_texture", "handle": "window", "nodeId": "window",
       "params": {
         "low":  { "type": "Float", "value": 0.1 },
         "high": { "type": "Float", "value": 0.9 }
       }
     },
     {
-      "id": 13, "typeId": "node.invert", "handle": "invert",
+      "id": 13, "typeId": "node.invert", "handle": "invert", "nodeId": "invert",
       "params": {
         "intensity": { "type": "Float", "value": 0.0 }
       }
     },
 
-    { "id": 14, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 14, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "trigger_count" },

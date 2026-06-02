@@ -44,14 +44,14 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "dither", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "dither", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "pattern",
         "label": "Pattern",
         "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "pattern", "param": "algorithm" },
+        "target": { "kind": "node", "nodeId": "pattern", "param": "algorithm" },
         "convert": { "type": "EnumRound" }
       }
     ],
@@ -61,11 +61,11 @@
     ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
     {
       "id": 1,
       "typeId": "node.dither_pattern",
-      "handle": "pattern",
+      "handle": "pattern", "nodeId": "pattern",
       "params": {
         "algorithm": { "type": "Enum", "value": 0 }
       }
@@ -73,12 +73,12 @@
     {
       "id": 2,
       "typeId": "node.dither",
-      "handle": "dither",
+      "handle": "dither", "nodeId": "dither",
       "params": {
         "amount": { "type": "Float", "value": 0.0 }
       }
     },
-    { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 3, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },

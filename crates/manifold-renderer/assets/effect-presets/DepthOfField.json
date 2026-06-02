@@ -21,62 +21,62 @@
     ],
     "bindings": [
       { "id": "amount", "label": "Amount", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "composite", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "composite", "param": "amount" },
         "convert": { "type": "Float" } },
       { "id": "mode", "label": "Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mask_mux", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mask_mux", "param": "selector" },
         "convert": { "type": "Float" } },
 
       { "id": "focus", "label": "Focus", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "tilt_mask", "param": "cy" },
+        "target": { "kind": "node", "nodeId": "tilt_mask", "param": "cy" },
         "convert": { "type": "Float" } },
       { "id": "focus", "label": "Focus", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "radial_mask", "param": "cy" },
+        "target": { "kind": "node", "nodeId": "radial_mask", "param": "cy" },
         "convert": { "type": "Float" } },
       { "id": "focus", "label": "Focus", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "neg_focus", "param": "a" },
+        "target": { "kind": "node", "nodeId": "neg_focus", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "focus_x", "label": "Focus X", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "radial_mask", "param": "cx" },
+        "target": { "kind": "node", "nodeId": "radial_mask", "param": "cx" },
         "convert": { "type": "Float" } },
 
       { "id": "width", "label": "Width", "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "tilt_mask", "param": "half_height" },
+        "target": { "kind": "node", "nodeId": "tilt_mask", "param": "half_height" },
         "convert": { "type": "Float" } },
       { "id": "width", "label": "Width", "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "radial_mask", "param": "radius_x" },
+        "target": { "kind": "node", "nodeId": "radial_mask", "param": "radius_x" },
         "convert": { "type": "Float" } },
       { "id": "width", "label": "Width", "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "radial_mask", "param": "radius_y" },
+        "target": { "kind": "node", "nodeId": "radial_mask", "param": "radius_y" },
         "convert": { "type": "Float" } },
       { "id": "width", "label": "Width", "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "inv_width", "param": "a" },
+        "target": { "kind": "node", "nodeId": "inv_width", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "blur", "label": "Blur", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "coc_strength", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "coc_strength", "param": "scale" },
         "convert": { "type": "Float" } },
 
       { "id": "angle", "label": "Angle", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "rad_math", "param": "a" },
+        "target": { "kind": "node", "nodeId": "rad_math", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "quality", "label": "Quality", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "blur_h", "param": "quality" },
+        "target": { "kind": "node", "nodeId": "blur_h", "param": "quality" },
         "convert": { "type": "EnumRound" } },
       { "id": "quality", "label": "Quality", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "blur_v", "param": "quality" },
+        "target": { "kind": "node", "nodeId": "blur_v", "param": "quality" },
         "convert": { "type": "EnumRound" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
-    { "id": 99, "typeId": "system.final_output", "handle": "final_output" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    { "id": 99, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" },
 
     {
-      "id": 10, "typeId": "node.math", "handle": "neg_focus",
+      "id": 10, "typeId": "node.math", "handle": "neg_focus", "nodeId": "neg_focus",
       "params": {
         "a":  { "type": "Float", "value": 0.5 },
         "b":  { "type": "Float", "value": -1.0 },
@@ -84,14 +84,14 @@
       }
     },
     {
-      "id": 11, "typeId": "node.math", "handle": "inv_width",
+      "id": 11, "typeId": "node.math", "handle": "inv_width", "nodeId": "inv_width",
       "params": {
         "a":  { "type": "Float", "value": 0.15 },
         "op": { "type": "Enum", "value": 9 }
       }
     },
     {
-      "id": 12, "typeId": "node.math", "handle": "rad_math",
+      "id": 12, "typeId": "node.math", "handle": "rad_math", "nodeId": "rad_math",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.01745329 },
@@ -100,7 +100,7 @@
     },
 
     {
-      "id": 20, "typeId": "node.box_mask", "handle": "tilt_mask",
+      "id": 20, "typeId": "node.box_mask", "handle": "tilt_mask", "nodeId": "tilt_mask",
       "params": {
         "cx":          { "type": "Float", "value": 0.5 },
         "cy":          { "type": "Float", "value": 0.5 },
@@ -111,7 +111,7 @@
       }
     },
     {
-      "id": 21, "typeId": "node.ellipse_mask", "handle": "radial_mask",
+      "id": 21, "typeId": "node.ellipse_mask", "handle": "radial_mask", "nodeId": "radial_mask",
       "params": {
         "cx":       { "type": "Float", "value": 0.5 },
         "cy":       { "type": "Float", "value": 0.5 },
@@ -123,31 +123,31 @@
     },
 
     {
-      "id": 22, "typeId": "node.depth_estimate_midas", "handle": "depth_dnn",
+      "id": 22, "typeId": "node.depth_estimate_midas", "handle": "depth_dnn", "nodeId": "depth_dnn",
       "params": {
         "analysis_max_dim": { "type": "Float", "value": 360.0 },
         "update_interval":  { "type": "Float", "value": 2.0 }
       }
     },
     {
-      "id": 23, "typeId": "node.scale_offset_texture", "handle": "depth_centered",
+      "id": 23, "typeId": "node.scale_offset_texture", "handle": "depth_centered", "nodeId": "depth_centered",
       "params": {
         "scale":  { "type": "Float", "value": 1.0 },
         "offset": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 24, "typeId": "node.abs_texture", "handle": "depth_abs"
+      "id": 24, "typeId": "node.abs_texture", "handle": "depth_abs", "nodeId": "depth_abs"
     },
     {
-      "id": 25, "typeId": "node.scale_offset_texture", "handle": "depth_normalize",
+      "id": 25, "typeId": "node.scale_offset_texture", "handle": "depth_normalize", "nodeId": "depth_normalize",
       "params": {
         "scale":  { "type": "Float", "value": 1.0 },
         "offset": { "type": "Float", "value": -0.5 }
       }
     },
     {
-      "id": 26, "typeId": "node.smoothstep_texture", "handle": "depth_to_mask",
+      "id": 26, "typeId": "node.smoothstep_texture", "handle": "depth_to_mask", "nodeId": "depth_to_mask",
       "params": {
         "low":  { "type": "Float", "value": 1.0 },
         "high": { "type": "Float", "value": 0.0 }
@@ -155,27 +155,27 @@
     },
 
     {
-      "id": 30, "typeId": "node.mux_texture", "handle": "mask_mux",
+      "id": 30, "typeId": "node.mux_texture", "handle": "mask_mux", "nodeId": "mask_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 }
       }
     },
 
     {
-      "id": 31, "typeId": "node.invert", "handle": "to_coc",
+      "id": 31, "typeId": "node.invert", "handle": "to_coc", "nodeId": "to_coc",
       "params": {
         "intensity": { "type": "Float", "value": 1.0 }
       }
     },
     {
-      "id": 32, "typeId": "node.scale_offset_texture", "handle": "coc_strength",
+      "id": 32, "typeId": "node.scale_offset_texture", "handle": "coc_strength", "nodeId": "coc_strength",
       "params": {
         "scale":  { "type": "Float", "value": 0.5 },
         "offset": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 33, "typeId": "node.clamp_texture", "handle": "coc_clamp",
+      "id": 33, "typeId": "node.clamp_texture", "handle": "coc_clamp", "nodeId": "coc_clamp",
       "params": {
         "min": { "type": "Float", "value": 0.0 },
         "max": { "type": "Float", "value": 1.0 }
@@ -183,7 +183,7 @@
     },
 
     {
-      "id": 40, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_h",
+      "id": 40, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_h", "nodeId": "blur_h",
       "params": {
         "axis":           { "type": "Enum",  "value": 0 },
         "max_radius":     { "type": "Float", "value": 6.0 },
@@ -192,7 +192,7 @@
       }
     },
     {
-      "id": 41, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_v",
+      "id": 41, "typeId": "node.gaussian_blur_variable_width", "handle": "blur_v", "nodeId": "blur_v",
       "params": {
         "axis":           { "type": "Enum",  "value": 1 },
         "max_radius":     { "type": "Float", "value": 6.0 },
@@ -202,7 +202,7 @@
     },
 
     {
-      "id": 50, "typeId": "node.masked_mix", "handle": "composite",
+      "id": 50, "typeId": "node.masked_mix", "handle": "composite", "nodeId": "composite",
       "params": {
         "amount": { "type": "Float", "value": 1.0 }
       }

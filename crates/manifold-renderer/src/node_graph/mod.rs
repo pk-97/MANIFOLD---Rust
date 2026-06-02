@@ -13,6 +13,7 @@ mod bindings;
 pub mod camera;
 pub mod light;
 pub mod material;
+mod binding_migration;
 mod boundary_nodes;
 mod bundled_presets;
 pub mod catalog_gen;
@@ -55,6 +56,7 @@ pub use boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
     Source,
 };
+pub use binding_migration::migrate_user_param_bindings_to_node_id;
 pub use bundled_presets::{
     bundled_preset_def, bundled_preset_json, bundled_preset_type_ids,
 };

@@ -1137,6 +1137,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::ToggleNodeParamExpose {
+                    node_id,
                     node_handle,
                     inner_param,
                     expose,
@@ -1154,6 +1155,7 @@ impl Application {
                         let cmd =
                             manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
                                 target.clone(),
+                                node_id.clone(),
                                 node_handle.clone(),
                                 inner_param.clone(),
                                 *expose,
@@ -2094,7 +2096,7 @@ impl Application {
                     return;
                 };
                 if let Some(b) = fx.user_param_bindings.iter().find(|b| b.id == param_id) {
-                    let (node_handle, inner_param) = (b.node_handle.clone(), b.inner_param.clone());
+                    let (node_id, inner_param) = (b.node_id.clone(), b.inner_param.clone());
                     let range = self
                         .content_state
                         .active_graph_snapshot
@@ -2102,7 +2104,7 @@ impl Application {
                         .and_then(|snap| {
                             snap.nodes
                                 .iter()
-                                .find(|n| n.node_handle.as_deref() == Some(node_handle.as_str()))
+                                .find(|n| n.node_id == node_id)
                                 .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
                                 .and_then(|p| p.range)
                         });
@@ -3002,6 +3004,7 @@ fn build_graph_editor_view(
         .collect();
     Some(GraphEditorNodeView {
         runtime_node_id: node.id,
+        node_id: node.node_id.clone(),
         node_handle: node.node_handle.clone(),
         title: node.title.clone(),
         parameters,
@@ -3042,9 +3045,12 @@ pub(crate) fn resolve_canvas_binding(
     Option<(f32, f32)>,
 )> {
     let snap = snapshot?;
-    // node_id → node_handle (anonymous nodes can't carry bindings).
+    // Canvas runtime id → the node's stable NodeId (anonymous boundary
+    // nodes have an empty id and can't carry bindings).
     let node = snap.nodes.iter().find(|n| n.id == node_id)?;
-    let handle = node.node_handle.as_deref()?;
+    if node.node_id.is_empty() {
+        return None;
+    }
     // Declared inner-param range, for the trim track span.
     let range = node
         .parameters
@@ -3059,7 +3065,7 @@ pub(crate) fn resolve_canvas_binding(
     let b = fx
         .user_param_bindings
         .iter()
-        .find(|b| b.node_handle == handle && b.inner_param == inner_param)?;
+        .find(|b| b.node_id == node.node_id && b.inner_param == inner_param)?;
     Some((
         b.id.clone(),
         b.label.clone(),

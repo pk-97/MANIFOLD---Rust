@@ -383,9 +383,6 @@ pub struct PresetMetadata {
     /// Backward-compat table for renamed outer-slider parameter ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_aliases: Vec<AliasEntry>,
-    /// Backward-compat table for renamed inner-graph node handles.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub node_aliases: Vec<AliasEntry>,
     /// Backward-compat table for enum-value remaps (e.g. Mirror's mode
     /// indices shifted across a refactor).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -525,9 +522,14 @@ pub struct StringBindingDef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum BindingTarget {
-    /// Route to an inner-graph node identified by its stable handle
-    /// (set via `Graph::add_node_named`).
-    HandleNode { handle: String, param: String },
+    /// Route to an inner-graph node identified by its stable
+    /// [`NodeId`] — minted once at node creation, invariant under
+    /// group / ungroup / move / flatten. The handle that used to
+    /// address nodes here changes at flatten time (a grouped node's
+    /// handle gets prefixed `blur` → `softgroup/blur`), which is why
+    /// addressing moved to the id. Resolved to a runtime node at
+    /// chain-build time via `Graph::instance_by_node_id`.
+    Node { node_id: NodeId, param: String },
     /// Route through a composite handle's exposed-param map. Used by
     /// composite-shaped effects where one outer slider fans out to
     /// multiple inner-node parameters.
@@ -859,8 +861,8 @@ mod tests {
                 id: "amount".to_string(),
                 label: "Amount".to_string(),
                 default_value: 1.0,
-                target: BindingTarget::HandleNode {
-                    handle: "masked_mix".to_string(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("masked_mix_id"),
                     param: "amount".to_string(),
                 },
                 convert: ParamConvert::Float,
@@ -872,7 +874,6 @@ mod tests {
                 param_id: "amount".to_string(),
             },
             param_aliases: Vec::new(),
-            node_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),
@@ -901,13 +902,13 @@ mod tests {
     /// LLMs) can write them by hand.
     #[test]
     fn binding_target_serializes_with_kind_tag() {
-        let t = BindingTarget::HandleNode {
-            handle: "feedback".to_string(),
+        let t = BindingTarget::Node {
+            node_id: NodeId::new("feedback_id"),
             param: "amount".to_string(),
         };
         let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("\"kind\":\"handleNode\""));
-        assert!(json.contains("\"handle\":\"feedback\""));
+        assert!(json.contains("\"kind\":\"node\""));
+        assert!(json.contains("\"nodeId\":\"feedback_id\""));
         assert!(json.contains("\"param\":\"amount\""));
     }
 

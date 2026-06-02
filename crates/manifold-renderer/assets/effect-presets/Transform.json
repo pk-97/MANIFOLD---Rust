@@ -57,8 +57,8 @@
         "label": "X",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "transform",
+          "kind": "node",
+          "nodeId": "transform",
           "param": "translate_x"
         },
         "convert": {
@@ -70,8 +70,8 @@
         "label": "Y",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "transform",
+          "kind": "node",
+          "nodeId": "transform",
           "param": "translate_y"
         },
         "convert": {
@@ -83,8 +83,8 @@
         "label": "Zoom",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "transform",
+          "kind": "node",
+          "nodeId": "transform",
           "param": "scale"
         },
         "convert": {
@@ -96,8 +96,8 @@
         "label": "Rotation",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "transform",
+          "kind": "node",
+          "nodeId": "transform",
           "param": "rotation"
         },
         "convert": {
@@ -119,12 +119,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.affine_transform",
-      "handle": "transform",
+      "handle": "transform", "nodeId": "transform",
       "params": {
         "rotation": {
           "type": "Float",
@@ -147,7 +147,7 @@
     {
       "id": 2,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

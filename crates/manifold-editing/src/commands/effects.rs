@@ -362,9 +362,16 @@ pub fn generate_user_param_id(
 #[derive(Debug)]
 pub struct ToggleEffectParamExposeCommand {
     effect_id: EffectId,
-    /// Identifies the inner-graph addressing being toggled. The
-    /// command keys both directions (Expose creates a binding here;
-    /// Unexpose removes the binding matching this addressing).
+    /// Stable [`NodeId`] of the inner node — the addressing identity the
+    /// command keys both directions on (Expose creates a binding
+    /// targeting this id; Unexpose removes the binding matching it).
+    /// Invariant under grouping, so the toggle stays correct after the
+    /// node's handle changes.
+    node_id: manifold_core::NodeId,
+    /// Current display handle of the node, used only to mint a readable
+    /// `user_param_id` (`user.<handle>.<param>.<n>`) at expose time. Not
+    /// an addressing role — the id is frozen once minted, and resolution
+    /// keys off [`Self::node_id`].
     node_handle: String,
     inner_param: String,
     /// Direction of the toggle. Set at command build time from the
@@ -421,6 +428,7 @@ enum ReverseState {
 impl ToggleEffectParamExposeCommand {
     pub fn new(
         effect_id: EffectId,
+        node_id: manifold_core::NodeId,
         node_handle: String,
         inner_param: String,
         expose: bool,
@@ -428,6 +436,7 @@ impl ToggleEffectParamExposeCommand {
     ) -> Self {
         Self {
             effect_id,
+            node_id,
             node_handle,
             inner_param,
             expose,
@@ -439,6 +448,7 @@ impl ToggleEffectParamExposeCommand {
 
 impl Command for ToggleEffectParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
+        let node_id = self.node_id.clone();
         let node_handle = self.node_handle.clone();
         let inner_param = self.inner_param.clone();
         let expose = self.expose;
@@ -446,11 +456,11 @@ impl Command for ToggleEffectParamExposeCommand {
         // Resolve the instance by id (master / layer / clip). `None` when the
         // id doesn't resolve — leaves `reverse` as `None`, a clean no-op.
         let reverse_out = project.find_effect_by_id_mut(&self.effect_id).map(|effect| {
-            // Locate any existing binding for this (handle, inner_param).
+            // Locate any existing binding for this (node_id, inner_param).
             let existing_position = effect
                 .user_param_bindings
                 .iter()
-                .position(|b| b.node_handle == node_handle && b.inner_param == inner_param);
+                .position(|b| b.node_id == node_id && b.inner_param == inner_param);
 
             if expose {
                 // Idempotent: if already exposed, no-op.
@@ -462,7 +472,8 @@ impl Command for ToggleEffectParamExposeCommand {
                 let binding = UserParamBinding {
                     id: id.clone(),
                     label: meta.label.clone(),
-                    node_handle: node_handle.clone(),
+                    node_id: node_id.clone(),
+                    legacy_node_handle: None,
                     inner_param: inner_param.clone(),
                     min: meta.min,
                     max: meta.max,
@@ -1201,7 +1212,8 @@ mod tests {
         UserParamBinding {
             id: id.to_string(),
             label: "Original Label".to_string(),
-            node_handle: "uv_transform".to_string(),
+            node_id: manifold_core::NodeId::new("uv_transform"),
+            legacy_node_handle: None,
             inner_param: "rotation".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1263,7 +1275,7 @@ mod tests {
         assert_eq!(b.scale, 0.017453293);
         assert_eq!(b.offset, 1.5);
         // Routing/identity fields untouched.
-        assert_eq!(b.node_handle, "uv_transform");
+        assert_eq!(b.node_id, "uv_transform");
         assert_eq!(b.inner_param, "rotation");
         assert_eq!(b.default_value, 0.25);
         // Version bumped so the renderer rebuilds the user-binding tail.

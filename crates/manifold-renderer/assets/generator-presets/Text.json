@@ -106,42 +106,42 @@
     ],
     "bindings": [
       { "id": "size", "label": "Size", "defaultValue": 0.25,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "size" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "size" },
         "convert": { "type": "Float" } },
       { "id": "position_x", "label": "Position X", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "pos_x" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "pos_x" },
         "convert": { "type": "Float" } },
       { "id": "position_y", "label": "Position Y", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "pos_y" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "pos_y" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "h_align", "label": "H Align", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "h_align" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "h_align" },
         "convert": { "type": "Float" } },
       { "id": "v_align", "label": "V Align", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "v_align" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "v_align" },
         "convert": { "type": "Float" } },
       { "id": "letter_spacing", "label": "Letter Spacing", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "letter_spacing" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "letter_spacing" },
         "convert": { "type": "Float" } },
       { "id": "line_spacing", "label": "Line Spacing", "defaultValue": 1.2,
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "line_spacing" },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "line_spacing" },
         "convert": { "type": "Float" } }
     ],
     "stringBindings": [
       { "id": "text", "label": "Text", "defaultValue": "HELLO",
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "text" } },
+        "target": { "kind": "node", "nodeId": "render_text", "param": "text" } },
       { "id": "fontFamily", "label": "Font", "defaultValue": "",
-        "target": { "kind": "handleNode", "handle": "render_text", "param": "fontFamily" } }
+        "target": { "kind": "node", "nodeId": "render_text", "param": "fontFamily" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "typeId": "node.render_text", "handle": "render_text" },
-    { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+    { "id": 1, "typeId": "node.render_text", "handle": "render_text", "nodeId": "render_text" },
+    { "id": 2, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }

@@ -297,7 +297,7 @@ pub enum LoadError {
     /// IntRound → Float/Int, BoolThreshold → Bool, EnumRound → Enum).
     BindingConvertTypeMismatch {
         binding_id: String,
-        handle: String,
+        node_id: String,
         param: String,
         convert: &'static str,
         target_param_type: &'static str,
@@ -368,13 +368,13 @@ impl std::fmt::Display for LoadError {
             ),
             Self::BindingConvertTypeMismatch {
                 binding_id,
-                handle,
+                node_id,
                 param,
                 convert,
                 target_param_type,
             } => write!(
                 f,
-                "binding '{binding_id}' → {handle}.{param}: convert '{convert}' produces a \
+                "binding '{binding_id}' → node {node_id}.{param}: convert '{convert}' produces a \
                  value the target param's declared type '{target_param_type}' can't accept. \
                  Pick a convert variant that matches: Float / IntRound → Float or Int targets, \
                  BoolThreshold → Bool targets, EnumRound → Enum targets."
@@ -600,13 +600,13 @@ impl EffectGraphDefExt for EffectGraphDef {
             use manifold_core::effect_graph_def::BindingTarget;
             use crate::node_graph::param_binding::convert_param_value;
             for binding in &meta.bindings {
-                let BindingTarget::HandleNode { handle, param } = &binding.target else {
+                let BindingTarget::Node { node_id, param } = &binding.target else {
                     continue;
                 };
-                let Some(node_id) = graph.node_id_by_handle(handle) else {
+                let Some(inst_id) = graph.instance_by_node_id(node_id) else {
                     continue;
                 };
-                let target_ty = graph.get_node(node_id).and_then(|inst| {
+                let target_ty = graph.get_node(inst_id).and_then(|inst| {
                     inst.node
                         .parameters()
                         .iter()
@@ -624,7 +624,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                 if !param_value_matches_type(&probe, target_ty) {
                     return Err(LoadError::BindingConvertTypeMismatch {
                         binding_id: binding.id.clone(),
-                        handle: handle.clone(),
+                        node_id: node_id.to_string(),
                         param: param.clone(),
                         convert: param_convert_name(binding.convert),
                         target_param_type: param_type_name(target_ty),
@@ -655,10 +655,10 @@ impl EffectGraphDefExt for EffectGraphDef {
         {
             use manifold_core::effect_graph_def::BindingTarget;
             for binding in &meta.bindings {
-                if let BindingTarget::HandleNode { handle, param } = &binding.target
-                    && let Some(node_id) = graph.node_id_by_handle(handle)
+                if let BindingTarget::Node { node_id, param } = &binding.target
+                    && let Some(inst_id) = graph.instance_by_node_id(node_id)
                 {
-                    let static_name = graph.get_node(node_id).and_then(|inst| {
+                    let static_name = graph.get_node(inst_id).and_then(|inst| {
                         inst.node
                             .parameters()
                             .iter()
@@ -666,7 +666,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                             .map(|p| p.name)
                     });
                     if let Some(name_static) = static_name {
-                        let _ = graph.set_param_exposed(node_id, name_static, true);
+                        let _ = graph.set_param_exposed(inst_id, name_static, true);
                     }
                 }
             }
@@ -1420,8 +1420,8 @@ mod tests {
                 id: "bad".into(),
                 label: "Bad".into(),
                 default_value: 0.0,
-                target: BindingTarget::HandleNode {
-                    handle: "math_node".into(),
+                target: BindingTarget::Node {
+                    node_id: manifold_core::NodeId::new("math_n1"),
                     param: "a".into(),
                 },
                 // EnumRound writes Enum into a Float-typed slot —
@@ -1433,7 +1433,6 @@ mod tests {
             }],
             skip_mode: Default::default(),
             param_aliases: vec![],
-            node_aliases: vec![],
             value_aliases: vec![],
             string_params: vec![],
             string_bindings: vec![],
@@ -1445,7 +1444,7 @@ mod tests {
             preset_metadata,
             nodes: vec![NodeDocument {
                 id: 0,
-                node_id: manifold_core::NodeId::default(),
+                node_id: manifold_core::NodeId::new("math_n1"),
                 type_id: "node.math".to_string(),
                 handle: Some("math_node".into()),
                 params: BTreeMap::new(),
@@ -1463,13 +1462,13 @@ mod tests {
         match err {
             LoadError::BindingConvertTypeMismatch {
                 binding_id,
-                handle,
+                node_id,
                 param,
                 convert,
                 target_param_type,
             } => {
                 assert_eq!(binding_id, "bad");
-                assert_eq!(handle, "math_node");
+                assert_eq!(node_id, "math_n1");
                 assert_eq!(param, "a");
                 assert_eq!(convert, "EnumRound");
                 assert_eq!(target_param_type, "Float");

@@ -1287,15 +1287,25 @@ impl ContentThread {
         if let Some(meta) = def.preset_metadata.as_ref() {
             use manifold_core::effect_graph_def::BindingTarget;
             use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+            // node_id → display handle, for the editor's per-row join. The
+            // routing carries the handle (the editor keys node rows by
+            // handle within a single snapshot); the binding addresses by
+            // id, resolved here against the def's own nodes.
+            let handle_by_id: std::collections::HashMap<&str, &str> = def
+                .nodes
+                .iter()
+                .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
+                .collect();
             snap.outer_routings = meta
                 .bindings
                 .iter()
                 .filter_map(|b| match &b.target {
-                    BindingTarget::HandleNode { handle, param } => {
+                    BindingTarget::Node { node_id, param } => {
+                        let handle = handle_by_id.get(node_id.as_str())?;
                         Some(OuterParamRouting {
                             outer_label: b.label.clone(),
                             outer_param_id: b.id.clone(),
-                            node_handle: handle.clone(),
+                            node_handle: handle.to_string(),
                             inner_param: param.clone(),
                             source: OuterParamSource::Static,
                         })

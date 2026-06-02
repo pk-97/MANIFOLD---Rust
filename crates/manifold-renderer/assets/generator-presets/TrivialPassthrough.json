@@ -3,9 +3,9 @@
   "name": "TrivialPassthrough",
   "description": "D1 smoke-test generator: writes the per-pixel UV coordinate as RG color. Validates the system.generator_input boundary node, the JSON loader, and the generator-presets directory wiring. Tier 1 work will replace this with the actual procedural-texture decompositions.",
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
-    { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+    { "id": 1, "typeId": "node.uv_field", "handle": "uv", "nodeId": "uv" },
+    { "id": 2, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }

@@ -115,10 +115,12 @@ fn binding_def_to_runtime(def: &BindingDef) -> ParamBinding {
 
 fn target_def_to_runtime(def: &BindingTarget) -> ParamTarget {
     match def {
-        BindingTarget::HandleNode { handle, param } => {
-            let handle: &'static str = Box::leak(handle.clone().into_boxed_str());
+        BindingTarget::Node { node_id, param } => {
             let param: &'static str = Box::leak(param.clone().into_boxed_str());
-            ParamTarget::HandleNode { handle, param }
+            ParamTarget::Node {
+                node_id: node_id.clone(),
+                param,
+            }
         }
         BindingTarget::Composite { outer_name } => ParamTarget::Composite {
             outer_name: Cow::Owned(outer_name.clone()),
@@ -163,11 +165,24 @@ pub fn snapshot_for_view(view: &LoadedPresetView) -> Option<GraphSnapshot> {
 /// (composite/custom variants don't surface a handle and are
 /// skipped).
 pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRouting> {
+    // node_id → display handle. The routing carries the *handle* because
+    // the editor keys its per-node rows by handle within a single
+    // snapshot (where handles are unique); the binding addresses by id,
+    // resolved here against the canonical def's nodes.
+    let handle_by_id: std::collections::HashMap<&str, &str> = view
+        .canonical_def
+        .nodes
+        .iter()
+        .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
+        .collect();
     let mut out = Vec::with_capacity(view.bindings.len());
     for binding in view.bindings {
-        let (handle, inner_param) = match &binding.target {
-            ParamTarget::HandleNode { handle, param } => (*handle, *param),
+        let (node_id, inner_param) = match &binding.target {
+            ParamTarget::Node { node_id, param } => (node_id, *param),
             _ => continue,
+        };
+        let Some(handle) = handle_by_id.get(node_id.as_str()) else {
+            continue;
         };
         out.push(OuterParamRouting {
             outer_label: binding.label.to_string(),

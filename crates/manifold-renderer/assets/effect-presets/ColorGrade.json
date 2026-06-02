@@ -114,63 +114,63 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "grade_mix", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "grade_mix", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "gain",
         "label": "Gain",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "gain", "param": "gain" },
+        "target": { "kind": "node", "nodeId": "gain", "param": "gain" },
         "convert": { "type": "Float" }
       },
       {
         "id": "saturation",
         "label": "Saturation",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "saturation", "param": "saturation" },
+        "target": { "kind": "node", "nodeId": "saturation", "param": "saturation" },
         "convert": { "type": "Float" }
       },
       {
         "id": "hue",
         "label": "Hue",
         "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "hue", "param": "hue" },
+        "target": { "kind": "node", "nodeId": "hue", "param": "hue" },
         "convert": { "type": "Float" }
       },
       {
         "id": "contrast",
         "label": "Contrast",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "contrast", "param": "contrast" },
+        "target": { "kind": "node", "nodeId": "contrast", "param": "contrast" },
         "convert": { "type": "Float" }
       },
       {
         "id": "colorize",
         "label": "Colorize",
         "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "colorize", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "colorize", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "tint_hue",
         "label": "Tint Hue",
         "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "colorize", "param": "hue" },
+        "target": { "kind": "node", "nodeId": "colorize", "param": "hue" },
         "convert": { "type": "Float" }
       },
       {
         "id": "tint_saturation",
         "label": "Tint Saturation",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "colorize", "param": "saturation" },
+        "target": { "kind": "node", "nodeId": "colorize", "param": "saturation" },
         "convert": { "type": "Float" }
       },
       {
         "id": "tint_focus",
         "label": "Tint Focus",
         "defaultValue": 0.75,
-        "target": { "kind": "handleNode", "handle": "colorize", "param": "focus" },
+        "target": { "kind": "node", "nodeId": "colorize", "param": "focus" },
         "convert": { "type": "Float" }
       }
     ],
@@ -185,11 +185,11 @@
     ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
     {
       "id": 1,
       "typeId": "node.gain",
-      "handle": "gain",
+      "handle": "gain", "nodeId": "gain",
       "params": {
         "gain": { "type": "Float", "value": 1.0 }
       }
@@ -197,7 +197,7 @@
     {
       "id": 2,
       "typeId": "node.saturation",
-      "handle": "saturation",
+      "handle": "saturation", "nodeId": "saturation",
       "params": {
         "saturation": { "type": "Float", "value": 1.0 }
       }
@@ -205,7 +205,7 @@
     {
       "id": 3,
       "typeId": "node.hue_saturation",
-      "handle": "hue",
+      "handle": "hue", "nodeId": "hue",
       "params": {
         "hue": { "type": "Float", "value": 0.0 },
         "saturation": { "type": "Float", "value": 1.0 },
@@ -215,7 +215,7 @@
     {
       "id": 4,
       "typeId": "node.contrast",
-      "handle": "contrast",
+      "handle": "contrast", "nodeId": "contrast",
       "params": {
         "contrast": { "type": "Float", "value": 1.0 }
       }
@@ -223,7 +223,7 @@
     {
       "id": 5,
       "typeId": "node.colorize",
-      "handle": "colorize",
+      "handle": "colorize", "nodeId": "colorize",
       "params": {
         "amount": { "type": "Float", "value": 0.0 },
         "hue": { "type": "Float", "value": 0.0 },
@@ -234,7 +234,7 @@
     {
       "id": 6,
       "typeId": "node.mix",
-      "handle": "grade_mix",
+      "handle": "grade_mix", "nodeId": "grade_mix",
       "params": {
         "amount": { "type": "Float", "value": 0.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -243,13 +243,13 @@
     {
       "id": 7,
       "typeId": "node.clamp_texture",
-      "handle": "clamp",
+      "handle": "clamp", "nodeId": "clamp",
       "params": {
         "min": { "type": "Float", "value": 0.0 },
         "max": { "type": "Float", "value": 65000.0 }
       }
     },
-    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 8, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },

@@ -27,8 +27,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "quad_mirror",
+          "kind": "node",
+          "nodeId": "quad_mirror",
           "param": "amount"
         },
         "convert": {
@@ -45,12 +45,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.centered_uv",
-      "handle": "center",
+      "handle": "center", "nodeId": "center",
       "params": {
         "cx": { "type": "Float", "value": 0.5 },
         "cy": { "type": "Float", "value": 0.5 },
@@ -61,12 +61,12 @@
     {
       "id": 2,
       "typeId": "node.abs_texture",
-      "handle": "fold"
+      "handle": "fold", "nodeId": "fold"
     },
     {
       "id": 3,
       "typeId": "node.scale_offset_texture",
-      "handle": "mirror_uv",
+      "handle": "mirror_uv", "nodeId": "mirror_uv",
       "params": {
         "scale": { "type": "Float", "value": -2.0 },
         "offset": { "type": "Float", "value": 1.0 }
@@ -75,7 +75,7 @@
     {
       "id": 4,
       "typeId": "node.remap",
-      "handle": "remapped",
+      "handle": "remapped", "nodeId": "remapped",
       "params": {
         "wrap": { "type": "Enum", "value": 0 }
       }
@@ -83,7 +83,7 @@
     {
       "id": 5,
       "typeId": "node.mix",
-      "handle": "quad_mirror",
+      "handle": "quad_mirror", "nodeId": "quad_mirror",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -92,7 +92,7 @@
     {
       "id": 6,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

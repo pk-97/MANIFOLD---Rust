@@ -125,49 +125,49 @@
     ],
     "bindings": [
       { "id": "freq_x_rate", "label": "Freq X Rate", "defaultValue": 0.13,
-        "target": { "kind": "handleNode", "handle": "lfo_x", "param": "angular_rate" },
+        "target": { "kind": "node", "nodeId": "lfo_x", "param": "angular_rate" },
         "convert": { "type": "Float" } },
       { "id": "freq_y_rate", "label": "Freq Y Rate", "defaultValue": 0.09,
-        "target": { "kind": "handleNode", "handle": "lfo_y", "param": "angular_rate" },
+        "target": { "kind": "node", "nodeId": "lfo_y", "param": "angular_rate" },
         "convert": { "type": "Float" } },
       { "id": "phase_rate",  "label": "Phase Rate",  "defaultValue": 0.07,
-        "target": { "kind": "handleNode", "handle": "lfo_phase", "param": "angular_rate" },
+        "target": { "kind": "node", "nodeId": "lfo_phase", "param": "angular_rate" },
         "convert": { "type": "Float" } },
       { "id": "line",        "label": "Line",        "defaultValue": 0.002,
-        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
         "convert": { "type": "Float" } },
       { "id": "show_verts",  "label": "Show Vertices","defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "show_verts" },
+        "target": { "kind": "node", "nodeId": "render", "param": "show_verts" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "vert_size",   "label": "Vertex Size", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "vert_size" },
+        "target": { "kind": "node", "nodeId": "render", "param": "vert_size" },
         "convert": { "type": "Float" } },
       { "id": "animate",     "label": "Animate",     "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "animate" },
+        "target": { "kind": "node", "nodeId": "render", "param": "animate" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "speed",       "label": "Speed",       "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "speed" },
+        "target": { "kind": "node", "nodeId": "render", "param": "speed" },
         "convert": { "type": "Float" } },
       { "id": "window",      "label": "Window",      "defaultValue": 0.1,
-        "target": { "kind": "handleNode", "handle": "render", "param": "window" },
+        "target": { "kind": "node", "nodeId": "render", "param": "window" },
         "convert": { "type": "Float" } },
       { "id": "scale",       "label": "Scale",       "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "pack", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "pack", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_x", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mux_x", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_y", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mux_y", "param": "selector" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
 
     {
-      "id": 1, "typeId": "node.lfo", "handle": "lfo_x",
+      "id": 1, "typeId": "node.lfo", "handle": "lfo_x", "nodeId": "lfo_x",
       "params": {
         "rate_mode":    { "type": "Enum",  "value": 1 },
         "shape":        { "type": "Enum",  "value": 0 },
@@ -177,7 +177,7 @@
       }
     },
     {
-      "id": 2, "typeId": "node.lfo", "handle": "lfo_y",
+      "id": 2, "typeId": "node.lfo", "handle": "lfo_y", "nodeId": "lfo_y",
       "params": {
         "rate_mode":    { "type": "Enum",  "value": 1 },
         "shape":        { "type": "Enum",  "value": 0 },
@@ -187,7 +187,7 @@
       }
     },
     {
-      "id": 3, "typeId": "node.lfo", "handle": "lfo_phase",
+      "id": 3, "typeId": "node.lfo", "handle": "lfo_phase", "nodeId": "lfo_phase",
       "params": {
         "rate_mode":    { "type": "Enum",  "value": 1 },
         "shape":        { "type": "Enum",  "value": 2 },
@@ -197,19 +197,19 @@
       }
     },
 
-    { "id": 4, "typeId": "node.frequency_ratio", "handle": "ratio" },
+    { "id": 4, "typeId": "node.frequency_ratio", "handle": "ratio", "nodeId": "ratio" },
 
     {
-      "id": 5, "typeId": "node.mux_scalar", "handle": "mux_x",
+      "id": 5, "typeId": "node.mux_scalar", "handle": "mux_x", "nodeId": "mux_x",
       "params": { "selector": { "type": "Float", "value": 0.0 } }
     },
     {
-      "id": 6, "typeId": "node.mux_scalar", "handle": "mux_y",
+      "id": 6, "typeId": "node.mux_scalar", "handle": "mux_y", "nodeId": "mux_y",
       "params": { "selector": { "type": "Float", "value": 0.0 } }
     },
 
     {
-      "id": 7, "typeId": "node.generate_range", "handle": "t",
+      "id": 7, "typeId": "node.generate_range", "handle": "t", "nodeId": "t",
       "params": {
         "start":        { "type": "Float", "value": 0.0 },
         "end":          { "type": "Float", "value": 6.28318530718 },
@@ -218,80 +218,80 @@
     },
 
     {
-      "id": 8, "typeId": "node.math", "handle": "a_lo",
+      "id": 8, "typeId": "node.math", "handle": "a_lo", "nodeId": "a_lo",
       "params": { "op": { "type": "Enum", "value": 10 } }
     },
     {
-      "id": 9, "typeId": "node.math", "handle": "a_hi",
+      "id": 9, "typeId": "node.math", "handle": "a_hi", "nodeId": "a_hi",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 10, "typeId": "node.math", "handle": "a_lerp",
+      "id": 10, "typeId": "node.math", "handle": "a_lerp", "nodeId": "a_lerp",
       "params": { "op": { "type": "Enum", "value": 1 } }
     },
 
     {
-      "id": 11, "typeId": "node.array_math", "handle": "t_lo_x",
+      "id": 11, "typeId": "node.array_math", "handle": "t_lo_x", "nodeId": "t_lo_x",
       "params": { "op": { "type": "Enum", "value": 6 } }
     },
     {
-      "id": 12, "typeId": "node.array_math", "handle": "x_lo",
+      "id": 12, "typeId": "node.array_math", "handle": "x_lo", "nodeId": "x_lo",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 13, "typeId": "node.array_math", "handle": "t_hi_x",
+      "id": 13, "typeId": "node.array_math", "handle": "t_hi_x", "nodeId": "t_hi_x",
       "params": { "op": { "type": "Enum", "value": 6 } }
     },
     {
-      "id": 14, "typeId": "node.array_math", "handle": "x_hi",
+      "id": 14, "typeId": "node.array_math", "handle": "x_hi", "nodeId": "x_hi",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 15, "typeId": "node.array_math", "handle": "x_mix",
+      "id": 15, "typeId": "node.array_math", "handle": "x_mix", "nodeId": "x_mix",
       "params": { "op": { "type": "Enum", "value": 13 } }
     },
 
     {
-      "id": 16, "typeId": "node.math", "handle": "b_lo",
+      "id": 16, "typeId": "node.math", "handle": "b_lo", "nodeId": "b_lo",
       "params": { "op": { "type": "Enum", "value": 10 } }
     },
     {
-      "id": 17, "typeId": "node.math", "handle": "b_hi",
+      "id": 17, "typeId": "node.math", "handle": "b_hi", "nodeId": "b_hi",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 18, "typeId": "node.math", "handle": "b_lerp",
+      "id": 18, "typeId": "node.math", "handle": "b_lerp", "nodeId": "b_lerp",
       "params": { "op": { "type": "Enum", "value": 1 } }
     },
 
     {
-      "id": 19, "typeId": "node.array_math", "handle": "t_lo_y",
+      "id": 19, "typeId": "node.array_math", "handle": "t_lo_y", "nodeId": "t_lo_y",
       "params": { "op": { "type": "Enum", "value": 6 } }
     },
     {
-      "id": 20, "typeId": "node.array_math", "handle": "y_lo",
+      "id": 20, "typeId": "node.array_math", "handle": "y_lo", "nodeId": "y_lo",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 21, "typeId": "node.array_math", "handle": "t_hi_y",
+      "id": 21, "typeId": "node.array_math", "handle": "t_hi_y", "nodeId": "t_hi_y",
       "params": { "op": { "type": "Enum", "value": 6 } }
     },
     {
-      "id": 22, "typeId": "node.array_math", "handle": "y_hi",
+      "id": 22, "typeId": "node.array_math", "handle": "y_hi", "nodeId": "y_hi",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 23, "typeId": "node.array_math", "handle": "y_mix",
+      "id": 23, "typeId": "node.array_math", "handle": "y_mix", "nodeId": "y_mix",
       "params": { "op": { "type": "Enum", "value": 13 } }
     },
 
     {
-      "id": 24, "typeId": "node.pack_curve_xy", "handle": "pack",
+      "id": 24, "typeId": "node.pack_curve_xy", "handle": "pack", "nodeId": "pack",
       "params": { "scale": { "type": "Float", "value": 1.0 } }
     },
 
     {
-      "id": 25, "typeId": "node.render_lines", "handle": "render",
+      "id": 25, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.002 },
         "closed_loop":       { "type": "Bool",  "value": true  },
@@ -308,7 +308,7 @@
       }
     },
 
-    { "id": 26, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 26, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "index"   },

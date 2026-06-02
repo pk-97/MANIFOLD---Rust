@@ -27,8 +27,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "invert",
+          "kind": "node",
+          "nodeId": "invert",
           "param": "intensity"
         },
         "convert": {
@@ -45,12 +45,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.invert",
-      "handle": "invert",
+      "handle": "invert", "nodeId": "invert",
       "params": {
         "intensity": {
           "type": "Float",
@@ -61,7 +61,7 @@
     {
       "id": 2,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

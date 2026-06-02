@@ -63,21 +63,21 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "gate", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "gate", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "rate",
         "label": "Rate",
         "defaultValue": 6.0,
-        "target": { "kind": "handleNode", "handle": "gate", "param": "rate" },
+        "target": { "kind": "node", "nodeId": "gate", "param": "rate" },
         "convert": { "type": "EnumRound" }
       },
       {
         "id": "mode",
         "label": "Mode",
         "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "flash", "param": "mode" },
+        "target": { "kind": "node", "nodeId": "flash", "param": "mode" },
         "convert": { "type": "EnumRound" }
       }
     ],
@@ -87,11 +87,11 @@
     }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
     {
       "id": 1,
       "typeId": "node.beat_gate",
-      "handle": "gate",
+      "handle": "gate", "nodeId": "gate",
       "params": {
         "rate": { "type": "Enum", "value": 6 },
         "amount": { "type": "Float", "value": 0.0 },
@@ -102,13 +102,13 @@
     {
       "id": 2,
       "typeId": "node.flash",
-      "handle": "flash",
+      "handle": "flash", "nodeId": "flash",
       "params": {
         "amount": { "type": "Float", "value": 0.0 },
         "mode": { "type": "Enum", "value": 0 }
       }
     },
-    { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 3, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },

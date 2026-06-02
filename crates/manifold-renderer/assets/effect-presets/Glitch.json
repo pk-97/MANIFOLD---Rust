@@ -70,35 +70,35 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "amount_value", "param": "value" },
+        "target": { "kind": "node", "nodeId": "amount_value", "param": "value" },
         "convert": { "type": "Float" }
       },
       {
         "id": "block_size",
         "label": "Block Size",
         "defaultValue": 16.0,
-        "target": { "kind": "handleNode", "handle": "displace", "param": "block_size" },
+        "target": { "kind": "node", "nodeId": "displace", "param": "block_size" },
         "convert": { "type": "Float" }
       },
       {
         "id": "rgb_shift",
         "label": "RGB Shift",
         "defaultValue": 0.01,
-        "target": { "kind": "handleNode", "handle": "split_scale", "param": "a" },
+        "target": { "kind": "node", "nodeId": "split_scale", "param": "a" },
         "convert": { "type": "Float" }
       },
       {
         "id": "scanline",
         "label": "Scanline",
         "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "scan", "param": "scanline" },
+        "target": { "kind": "node", "nodeId": "scan", "param": "scanline" },
         "convert": { "type": "Float" }
       },
       {
         "id": "speed",
         "label": "Speed",
         "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "speed_value", "param": "value" },
+        "target": { "kind": "node", "nodeId": "speed_value", "param": "value" },
         "convert": { "type": "Float" }
       }
     ],
@@ -111,11 +111,11 @@
     ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
     {
       "id": 1,
       "typeId": "node.value",
-      "handle": "amount_value",
+      "handle": "amount_value", "nodeId": "amount_value",
       "params": {
         "value": { "type": "Float", "value": 0.0 }
       }
@@ -123,7 +123,7 @@
     {
       "id": 2,
       "typeId": "node.value",
-      "handle": "speed_value",
+      "handle": "speed_value", "nodeId": "speed_value",
       "params": {
         "value": { "type": "Float", "value": 2.0 }
       }
@@ -131,7 +131,7 @@
     {
       "id": 3,
       "typeId": "node.block_displace_field",
-      "handle": "displace",
+      "handle": "displace", "nodeId": "displace",
       "params": {
         "amount": { "type": "Float", "value": 0.0 },
         "block_size": { "type": "Float", "value": 16.0 },
@@ -141,7 +141,7 @@
     {
       "id": 4,
       "typeId": "node.scanline_jitter_field",
-      "handle": "scan",
+      "handle": "scan", "nodeId": "scan",
       "params": {
         "amount": { "type": "Float", "value": 0.0 },
         "scanline": { "type": "Float", "value": 0.3 },
@@ -151,7 +151,7 @@
     {
       "id": 5,
       "typeId": "node.mix",
-      "handle": "combine_offset",
+      "handle": "combine_offset", "nodeId": "combine_offset",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 2 }
@@ -160,7 +160,7 @@
     {
       "id": 6,
       "typeId": "node.remap",
-      "handle": "warp",
+      "handle": "warp", "nodeId": "warp",
       "params": {
         "wrap": { "type": "Enum", "value": 0 },
         "mode": { "type": "Enum", "value": 1 }
@@ -169,7 +169,7 @@
     {
       "id": 7,
       "typeId": "node.chromatic_displace",
-      "handle": "split",
+      "handle": "split", "nodeId": "split",
       "params": {
         "amount": { "type": "Float", "value": -10.0 }
       }
@@ -177,7 +177,7 @@
     {
       "id": 14,
       "typeId": "node.radial_offset_field",
-      "handle": "split_field",
+      "handle": "split_field", "nodeId": "split_field",
       "params": {
         "mode": { "type": "Enum", "value": 1 },
         "angle": { "type": "Float", "value": 0.0 },
@@ -187,7 +187,7 @@
     {
       "id": 15,
       "typeId": "node.math",
-      "handle": "split_scale",
+      "handle": "split_scale", "nodeId": "split_scale",
       "params": {
         "a": { "type": "Float", "value": 0.01 },
         "b": { "type": "Float", "value": -1000.0 },
@@ -197,7 +197,7 @@
     {
       "id": 8,
       "typeId": "node.gain",
-      "handle": "invert_gain",
+      "handle": "invert_gain", "nodeId": "invert_gain",
       "params": {
         "gain": { "type": "Float", "value": 1.0 }
       }
@@ -205,7 +205,7 @@
     {
       "id": 9,
       "typeId": "node.smoothstep_texture",
-      "handle": "invert_thresh",
+      "handle": "invert_thresh", "nodeId": "invert_thresh",
       "params": {
         "low": { "type": "Float", "value": 0.91 },
         "high": { "type": "Float", "value": 0.92 }
@@ -214,7 +214,7 @@
     {
       "id": 10,
       "typeId": "node.invert",
-      "handle": "inv",
+      "handle": "inv", "nodeId": "inv",
       "params": {
         "intensity": { "type": "Float", "value": 1.0 }
       }
@@ -222,7 +222,7 @@
     {
       "id": 11,
       "typeId": "node.masked_mix",
-      "handle": "accent",
+      "handle": "accent", "nodeId": "accent",
       "params": {
         "amount": { "type": "Float", "value": 1.0 }
       }
@@ -230,13 +230,13 @@
     {
       "id": 12,
       "typeId": "node.mix",
-      "handle": "glitch",
+      "handle": "glitch", "nodeId": "glitch",
       "params": {
         "amount": { "type": "Float", "value": 0.0 },
         "mode": { "type": "Enum", "value": 0 }
       }
     },
-    { "id": 13, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 13, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "amount" },

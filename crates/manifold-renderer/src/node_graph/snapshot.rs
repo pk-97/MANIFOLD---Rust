@@ -86,9 +86,17 @@ pub enum OuterParamSource {
 pub struct NodeSnapshot {
     /// Stable instance id within the graph. Matches `NodeInstanceId.0`.
     pub id: u32,
+    /// Stable [`NodeId`] of this node — minted at creation, invariant
+    /// under group / ungroup / move / flatten. This is what the editor
+    /// writes when the user exposes an inner param (a
+    /// `UserParamBinding.node_id`), so the binding survives regrouping.
+    /// `Default` (empty) for anonymous boundary nodes that can't carry
+    /// bindings.
+    pub node_id: manifold_core::NodeId,
     /// Author-assigned stable string handle if this node was registered
-    /// via `Graph::add_node_named`. Used by V2 user-exposed parameter
-    /// bindings to address inner nodes across renderer refactors.
+    /// via `Graph::add_node_named`. A display / search name only — the
+    /// stable addressing identity is [`node_id`](Self::node_id), since
+    /// flatten prefixes the handle when a node is grouped.
     /// `None` for anonymous nodes (boundary Source/FinalOutput, etc.).
     pub node_handle: Option<String>,
     /// `EffectNodeType` string — `node.mix`, `effect.bloom`, etc.
@@ -415,6 +423,7 @@ impl GraphSnapshot {
                     .collect();
                 NodeSnapshot {
                     id: inst.id.0,
+                    node_id: inst.node_id.clone(),
                     node_handle: id_to_handle.get(&inst.id.0).cloned(),
                     type_id,
                     title,
@@ -565,6 +574,7 @@ fn snapshot_level(
                 snapshot_level(&group.nodes, &group.wires, registry, Some(&group.interface))?;
             NodeSnapshot {
                 id: dn.id,
+                node_id: dn.node_id.clone(),
                 node_handle: dn.handle.clone(),
                 type_id: GROUP_TYPE_ID.to_string(),
                 title: dn.handle.clone().unwrap_or_else(|| "Group".to_string()),
@@ -581,6 +591,7 @@ fn snapshot_level(
         } else if dn.type_id == GROUP_INPUT_TYPE_ID {
             NodeSnapshot {
                 id: dn.id,
+                node_id: dn.node_id.clone(),
                 node_handle: None,
                 type_id: dn.type_id.clone(),
                 title: "Group Input".to_string(),
@@ -594,6 +605,7 @@ fn snapshot_level(
         } else if dn.type_id == GROUP_OUTPUT_TYPE_ID {
             NodeSnapshot {
                 id: dn.id,
+                node_id: dn.node_id.clone(),
                 node_handle: None,
                 type_id: dn.type_id.clone(),
                 title: "Group Output".to_string(),
@@ -625,6 +637,7 @@ fn snapshot_level(
             node_snapshot_from_constructed(
                 boxed.as_ref(),
                 dn.id,
+                dn.node_id.clone(),
                 dn.handle.clone(),
                 &params,
                 &dn.exposed_params,
@@ -654,6 +667,7 @@ fn snapshot_level(
 fn node_snapshot_from_constructed(
     node: &dyn EffectNode,
     id: u32,
+    node_id: manifold_core::NodeId,
     handle: Option<String>,
     params: &ParamValues,
     exposed: &std::collections::BTreeSet<String>,
@@ -712,6 +726,7 @@ fn node_snapshot_from_constructed(
         .collect();
     NodeSnapshot {
         id,
+        node_id,
         node_handle: handle,
         type_id,
         title,

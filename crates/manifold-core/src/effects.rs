@@ -1,6 +1,6 @@
 use crate::effect_graph_def::EffectGraphDef;
 use crate::effect_type_id::EffectTypeId;
-use crate::id::{EffectGroupId, EffectId};
+use crate::id::{EffectGroupId, EffectId, NodeId};
 use crate::types::{BeatDivision, DriverWaveform};
 use crate::units::Beats;
 use serde::{Deserialize, Serialize};
@@ -209,11 +209,12 @@ pub struct ResolvedParam {
 /// §7.6). Each binding is per-instance: ticking "expose UVTransform.translate"
 /// on Mirror#0 doesn't affect Mirror#1.
 ///
-/// Stable addressing across renderer refactors comes from `node_handle` —
-/// an author-assigned `&'static str` registered alongside the inner node
-/// at construction time (`Graph::add_node_named("uv_transform", ...)`).
-/// Renames go through the same alias mechanism Phase 2 introduced for
-/// param ids, via [`crate::effect_registration::EffectNodeAliasMetadata`].
+/// Stable addressing comes from [`NodeId`] — the inner node's identity,
+/// minted once at node creation and invariant under group / ungroup /
+/// move / flatten. (The node's handle is a display name that flatten
+/// prefixes when the node is grouped, which is exactly why addressing
+/// can't key off it.) The renderer resolves this id to a runtime node
+/// via `Graph::instance_by_node_id` at chain-build time.
 ///
 /// Storage: each `UserParamBinding` reserves one slot at the tail of
 /// the parent `EffectInstance.param_values` (positions
@@ -233,10 +234,26 @@ pub struct UserParamBinding {
     /// Display label shown on the effect-card slider. Mutable; doesn't
     /// affect addressing.
     pub label: String,
-    /// Stable handle for the inner node within the effect's graph.
-    /// Set by the effect's `new()` via `Graph::add_node_named(handle, …)`.
-    /// Schema renames go through `EffectNodeAliasMetadata`.
-    pub node_handle: String,
+    /// Stable [`NodeId`] of the inner node this binding drives. Minted
+    /// at node creation, invariant under group / ungroup / move /
+    /// flatten. `#[serde(default)]` so pre-node-id projects load with an
+    /// empty id; the load migration backfills it from the resolved
+    /// graph (`migrate_user_param_bindings_to_node_id`).
+    #[serde(default)]
+    pub node_id: NodeId,
+    /// Load-migration shim. Pre-node-id projects addressed the target by
+    /// handle under the JSON key `nodeHandle`; that value is captured
+    /// here on load so the renderer-layer migration can resolve it to a
+    /// [`NodeId`] (against the instance's graph or its canonical preset),
+    /// then it's cleared. `skip_serializing_if` empty so it never
+    /// appears in freshly-saved files — the runtime resolver only ever
+    /// reads `node_id`, never this. Not a fallback; a one-shot upgrade.
+    #[serde(
+        default,
+        rename = "nodeHandle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_node_handle: Option<String>,
     /// Inner-node parameter name (matches `ParamDef::id` on the addressed node).
     pub inner_param: String,
     pub min: f32,
@@ -2993,7 +3010,8 @@ mod tests {
         UserParamBinding {
             id: id.to_string(),
             label: inner.to_string(),
-            node_handle: node.to_string(),
+            node_id: NodeId::new(node),
+            legacy_node_handle: None,
             inner_param: inner.to_string(),
             min: 0.0,
             max: 1.0,
@@ -3237,7 +3255,8 @@ mod tests {
         fx.append_user_binding(UserParamBinding {
             id: "user.uv.translate.1".to_string(),
             label: "Translate".to_string(),
-            node_handle: "uv_transform".to_string(),
+            node_id: NodeId::new("uv_transform"),
+            legacy_node_handle: None,
             inner_param: "translate".to_string(),
             min: -2.0,
             max: 2.0,

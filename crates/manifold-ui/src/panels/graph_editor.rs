@@ -103,9 +103,13 @@ pub struct GraphEditorNodeView {
     /// app-side handler can build a `SetGraphNodeParamCommand` keyed
     /// on the same stable id the canvas uses for selection.
     pub runtime_node_id: u32,
+    /// Stable [`manifold_core::NodeId`] of the node — the addressing
+    /// identity the expose action stores, invariant under grouping.
+    /// `Default` (empty) for anonymous boundary nodes.
+    pub node_id: manifold_core::NodeId,
     /// Stable handle if the node was registered with one. `None` for
     /// anonymous boundary nodes (Source / FinalOutput) — those have no
-    /// user-exposable params.
+    /// user-exposable params. Display / id-readability only.
     pub node_handle: Option<String>,
     /// Display title for the node (header label fallback).
     pub title: String,
@@ -170,6 +174,9 @@ enum RowState {
         /// Canvas-stable id of the underlying graph node. Used as the
         /// `node_id` carried by `SetGraphNodeParam`.
         node_runtime_id: u32,
+        /// Stable graph-node id — the addressing identity the expose
+        /// action stores.
+        node_id: manifold_core::NodeId,
         node_handle: String,
         inner_param: String,
         label: String,
@@ -561,6 +568,7 @@ impl GraphEditorPanel {
                     checkbox_node_id: cb_id,
                     value_cell_node_id,
                     node_runtime_id: node.runtime_node_id,
+                    node_id: node.node_id.clone(),
                     node_handle: handle.clone(),
                     inner_param: ps.name.clone(),
                     label: ps.label.clone(),
@@ -650,6 +658,7 @@ impl GraphEditorPanel {
                     checkbox_node_id,
                     value_cell_node_id,
                     node_runtime_id,
+                    node_id: row_node_id,
                     node_handle,
                     inner_param,
                     label,
@@ -681,6 +690,7 @@ impl GraphEditorPanel {
                         // the dispatch internally.
                         let _ = static_block_slot;
                         return vec![PanelAction::ToggleNodeParamExpose {
+                            node_id: row_node_id.clone(),
                             node_handle: node_handle.clone(),
                             inner_param: inner_param.clone(),
                             expose: !currently_exposed,

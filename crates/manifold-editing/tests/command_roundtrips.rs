@@ -788,7 +788,7 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_handle: "uv".to_string(),
+        node_id: manifold_core::NodeId::new("uv"), legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1478,6 +1478,7 @@ fn expose_effect_param_command_undo_roundtrip() {
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         true, // expose
@@ -1489,7 +1490,7 @@ fn expose_effect_param_command_undo_roundtrip() {
     assert_eq!(fx.user_param_bindings.len(), 1);
     let binding = &fx.user_param_bindings[0];
     assert_eq!(binding.id, "user.uv_transform.translate.1");
-    assert_eq!(binding.node_handle, "uv_transform");
+    assert_eq!(binding.node_id, "uv_transform");
     assert_eq!(binding.inner_param, "translate");
     assert_eq!(binding.label, "Translate");
     // param_values: [0.5 (amount), 1.0 (threshold), 0.0 (user binding default)].
@@ -1536,7 +1537,7 @@ fn expose_already_exposed_is_idempotent_noop() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_handle: "uv_transform".to_string(),
+        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1553,6 +1554,7 @@ fn expose_already_exposed_is_idempotent_noop() {
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         true,
@@ -1582,7 +1584,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_handle: "uv_transform".to_string(),
+        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1602,6 +1604,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         false, // unexpose
@@ -1641,6 +1644,7 @@ fn unexpose_when_not_exposed_is_noop() {
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         false,
@@ -1666,7 +1670,7 @@ fn generate_user_param_id_collision_probe() {
         UserParamBinding {
             id: "user.uv_transform.translate.1".to_string(),
             label: String::new(),
-            node_handle: "uv_transform".to_string(),
+            node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
             inner_param: "translate".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1681,7 +1685,7 @@ fn generate_user_param_id_collision_probe() {
         UserParamBinding {
             id: "user.uv_transform.translate.2".to_string(),
             label: String::new(),
-            node_handle: "uv_transform".to_string(),
+            node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
             inner_param: "translate".to_string(),
             min: 0.0,
             max: 1.0,
@@ -1717,7 +1721,7 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_handle: "uv_transform".to_string(),
+        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1765,6 +1769,7 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         false, // unexpose
@@ -1814,7 +1819,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_handle: "uv_transform".to_string(),
+        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1852,6 +1857,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         false,
@@ -1885,7 +1891,7 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
-        node_handle: "uv_transform".to_string(),
+        node_id: manifold_core::NodeId::new("uv_transform"), legacy_node_handle: None,
         inner_param: "translate".to_string(),
         min: -1.0,
         max: 1.0,
@@ -1916,6 +1922,7 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
         .clone();
     let mut cmd = ToggleEffectParamExposeCommand::new(
         effect_id,
+        manifold_core::NodeId::new("uv_transform"),
         "uv_transform".to_string(),
         "translate".to_string(),
         false,

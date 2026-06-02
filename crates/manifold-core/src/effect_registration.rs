@@ -87,37 +87,6 @@ pub struct EffectAliasMetadata {
 
 inventory::collect!(EffectAliasMetadata);
 
-/// Optional sidecar submission for effects whose **inner-graph node
-/// handles** have been renamed or removed across schema versions.
-/// Direct analogue of [`EffectAliasMetadata`]: parallel inventory,
-/// parallel slice shape, parallel resolver via [`resolve_param_alias`].
-///
-/// User-exposed parameter bindings address inner nodes by stable
-/// `node_handle` (set via `Graph::add_node_named` at the effect's
-/// construction). When an effect refactor renames a node — say
-/// `"feedback"` → `"feedback_a"` — the matching `EffectNodeAliasMetadata`
-/// entry lets saved projects recover their bindings:
-///
-/// ```ignore
-/// inventory::submit! {
-///     EffectNodeAliasMetadata {
-///         id: EffectTypeId::STYLIZED_FEEDBACK,
-///         aliases: &[("feedback", Some("feedback_a"))],
-///     }
-/// }
-/// ```
-///
-/// Discovered at registry-build time and merged into the matching
-/// [`EffectDef::legacy_node_aliases`]. The resolver in
-/// `Project::resolve_legacy_param_ids` walks every user binding's
-/// `node_handle` through this table.
-pub struct EffectNodeAliasMetadata {
-    pub id: EffectTypeId,
-    pub aliases: &'static [ParamAlias],
-}
-
-inventory::collect!(EffectNodeAliasMetadata);
-
 /// One value-space migration entry for a single param: legacy slot
 /// value `from` is rewritten to `to` at project load time. Used when
 /// dropping a `ParamConvert::EnumRemap` curation — old projects have
@@ -134,8 +103,7 @@ pub type ParamValueAlias = (i32, i32);
 /// Optional sidecar submission for effects whose **slot values** —
 /// not ids, not node handles — need translation when loading
 /// pre-migration project files. Companion to
-/// [`EffectAliasMetadata`] (id renames) and
-/// [`EffectNodeAliasMetadata`] (handle renames). Each entry is
+/// [`EffectAliasMetadata`] (id renames). Each entry is
 /// `(param_id, &[(legacy_value, current_value)])`.
 ///
 /// Canonical use case: Mirror's `mode` param. The legacy outer slider
@@ -194,7 +162,6 @@ impl EffectMetadata {
             id_to_index,
             param_ids,
             legacy_param_aliases: &[],
-            legacy_node_aliases: &[],
             legacy_value_aliases: &[],
         }
     }

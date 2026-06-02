@@ -101,36 +101,36 @@
     ],
     "bindings": [
       { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
-        "target": { "kind": "handleNode", "handle": "cells", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "cells", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
-        "target": { "kind": "handleNode", "handle": "center_offset", "param": "a" },
+        "target": { "kind": "node", "nodeId": "center_offset", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "density",     "label": "Density",     "defaultValue": 0.6,
-        "target": { "kind": "handleNode", "handle": "density_mask", "param": "low" },
+        "target": { "kind": "node", "nodeId": "density_mask", "param": "low" },
         "convert": { "type": "Float" } },
 
       { "id": "size",        "label": "Star Size",   "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "exponent_from_size", "param": "a" },
+        "target": { "kind": "node", "nodeId": "exponent_from_size", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "brightness",  "label": "Brightness",  "defaultValue": 1.5,
-        "target": { "kind": "handleNode", "handle": "final_brightness", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "final_brightness", "param": "scale" },
         "convert": { "type": "Float" } },
 
       { "id": "drift_speed", "label": "Drift Speed", "defaultValue": 0.15,
-        "target": { "kind": "handleNode", "handle": "drift_t", "param": "b" },
+        "target": { "kind": "node", "nodeId": "drift_t", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "drift_x",     "label": "Drift X",     "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "offset_x", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "offset_x", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "drift_y",     "label": "Drift Y",     "defaultValue": 0.1,
-        "target": { "kind": "handleNode", "handle": "offset_y", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "offset_y", "param": "scale" },
         "convert": { "type": "Float" } },
 
       { "id": "twinkle",     "label": "Twinkle",     "defaultValue": 0.6,
-        "target": { "kind": "handleNode", "handle": "apply_twinkle", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "apply_twinkle", "param": "amount" },
         "convert": { "type": "Float" } }
     ],
     "paramAliases": [
@@ -139,27 +139,27 @@
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "typeId": "system.final_output",    "handle": "final_output" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+    { "id": 1, "typeId": "system.final_output",    "handle": "final_output", "nodeId": "final_output" },
 
-    { "id": 2, "typeId": "node.math", "handle": "drift_t",
+    { "id": 2, "typeId": "node.math", "handle": "drift_t", "nodeId": "drift_t",
       "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.15 } } },
 
-    { "id": 3, "typeId": "node.affine_scalar", "handle": "offset_x",
+    { "id": 3, "typeId": "node.affine_scalar", "handle": "offset_x", "nodeId": "offset_x",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.3 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 4, "typeId": "node.affine_scalar", "handle": "offset_y",
+    { "id": 4, "typeId": "node.affine_scalar", "handle": "offset_y", "nodeId": "offset_y",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 5, "typeId": "node.voronoi_2d", "handle": "cells",
+    { "id": 5, "typeId": "node.voronoi_2d", "handle": "cells", "nodeId": "cells",
       "params": { "scale": { "type": "Float", "value": 24.0 }, "jitter": { "type": "Float", "value": 1.0 }, "out_scale": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 6, "typeId": "node.scale_offset_texture", "handle": "invert_distance",
+    { "id": 6, "typeId": "node.scale_offset_texture", "handle": "invert_distance", "nodeId": "invert_distance",
       "params": { "scale": { "type": "Float", "value": -1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 7, "typeId": "node.power_texture", "handle": "spike",
+    { "id": 7, "typeId": "node.power_texture", "handle": "spike", "nodeId": "spike",
       "params": { "exponent": { "type": "Float", "value": 22.0 } } },
 
-    { "id": 8, "typeId": "node.channel_mix", "handle": "cell_hash_to_r",
+    { "id": 8, "typeId": "node.channel_mix", "handle": "cell_hash_to_r", "nodeId": "cell_hash_to_r",
       "params": {
         "row0": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] },
         "row1": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
@@ -167,31 +167,31 @@
         "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }
       } },
 
-    { "id": 9, "typeId": "node.smoothstep_texture", "handle": "density_mask",
+    { "id": 9, "typeId": "node.smoothstep_texture", "handle": "density_mask", "nodeId": "density_mask",
       "params": { "low": { "type": "Float", "value": 0.6 }, "high": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 10, "typeId": "node.mix", "handle": "masked_stars",
+    { "id": 10, "typeId": "node.mix", "handle": "masked_stars", "nodeId": "masked_stars",
       "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 11, "typeId": "node.scale_offset_texture", "handle": "freq_per_cell",
+    { "id": 11, "typeId": "node.scale_offset_texture", "handle": "freq_per_cell", "nodeId": "freq_per_cell",
       "params": { "scale": { "type": "Float", "value": 3.5 }, "offset": { "type": "Float", "value": 1.5 } } },
 
-    { "id": 12, "typeId": "node.scale_offset_texture", "handle": "phase_per_cell",
+    { "id": 12, "typeId": "node.scale_offset_texture", "handle": "phase_per_cell", "nodeId": "phase_per_cell",
       "params": { "scale": { "type": "Float", "value": 6.2831853 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 13, "typeId": "node.trig_texture", "handle": "twinkle_sin",
+    { "id": 13, "typeId": "node.trig_texture", "handle": "twinkle_sin", "nodeId": "twinkle_sin",
       "params": { "mode": { "type": "Enum", "value": 0 }, "freq": { "type": "Float", "value": 1.0 }, "phase": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 14, "typeId": "node.scale_offset_texture", "handle": "twinkle_to_unit",
+    { "id": 14, "typeId": "node.scale_offset_texture", "handle": "twinkle_to_unit", "nodeId": "twinkle_to_unit",
       "params": { "scale": { "type": "Float", "value": 0.5 }, "offset": { "type": "Float", "value": 0.5 } } },
 
-    { "id": 15, "typeId": "node.mix", "handle": "apply_twinkle",
+    { "id": 15, "typeId": "node.mix", "handle": "apply_twinkle", "nodeId": "apply_twinkle",
       "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 0.6 } } },
 
-    { "id": 16, "typeId": "node.scale_offset_texture", "handle": "final_brightness",
+    { "id": 16, "typeId": "node.scale_offset_texture", "handle": "final_brightness", "nodeId": "final_brightness",
       "params": { "scale": { "type": "Float", "value": 1.5 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 17, "typeId": "node.channel_mix", "handle": "white_stars",
+    { "id": 17, "typeId": "node.channel_mix", "handle": "white_stars", "nodeId": "white_stars",
       "params": {
         "row0": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
         "row1": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
@@ -199,10 +199,10 @@
         "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }
       } },
 
-    { "id": 18, "typeId": "node.affine_scalar", "handle": "center_offset",
+    { "id": 18, "typeId": "node.affine_scalar", "handle": "center_offset", "nodeId": "center_offset",
       "params": { "a": { "type": "Float", "value": 24.0 }, "scale": { "type": "Float", "value": -0.5 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 19, "typeId": "node.affine_scalar", "handle": "exponent_from_size",
+    { "id": 19, "typeId": "node.affine_scalar", "handle": "exponent_from_size", "nodeId": "exponent_from_size",
       "params": { "a": { "type": "Float", "value": 0.3 }, "scale": { "type": "Float", "value": -28.0 }, "offset": { "type": "Float", "value": 30.0 } } }
   ],
   "wires": [

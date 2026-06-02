@@ -807,6 +807,13 @@ impl Command for RevertEffectGraphCommand {
 #[derive(Debug)]
 pub struct ToggleNodeParamExposeCommand {
     target: GraphTarget,
+    /// Stable [`NodeId`] of the inner node — the addressing identity for
+    /// every stored write this command makes (the def node's
+    /// `exposed_params`, the preset `BindingTarget::Node`, the
+    /// `UserParamBinding.node_id`). Invariant under grouping.
+    node_id: NodeId,
+    /// Current display handle, used only to mint readable
+    /// `user.<handle>.<param>.<n>` ids. Not an addressing role.
     node_handle: String,
     inner_param: String,
     expose: bool,
@@ -1001,6 +1008,7 @@ impl ToggleNodeParamExposeCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         target: GraphTarget,
+        node_id: NodeId,
         node_handle: String,
         inner_param: String,
         expose: bool,
@@ -1014,6 +1022,7 @@ impl ToggleNodeParamExposeCommand {
     ) -> Self {
         Self {
             target,
+            node_id,
             node_handle,
             inner_param,
             expose,
@@ -1034,7 +1043,7 @@ impl ToggleNodeParamExposeCommand {
 /// `None` if the def has no node with that handle.
 fn flip_graph_exposed(
     def: &mut EffectGraphDef,
-    node_handle: &str,
+    node_id: &NodeId,
     inner_param: &str,
     expose: bool,
 ) -> Option<bool> {
@@ -1045,13 +1054,13 @@ fn flip_graph_exposed(
     // `exposed_params` means "user explicitly unset" — which is what
     // the persistence + snapshot path needs for unchecks to stick.
     // Idempotent: re-running adds nothing new because the bindings
-    // map to the same handle/param pairs every time.
+    // map to the same node/param pairs every time.
     materialize_binding_exposures(def);
 
     let node = def
         .nodes
         .iter_mut()
-        .find(|n| n.handle.as_deref() == Some(node_handle))?;
+        .find(|n| &n.node_id == node_id)?;
     let was = node.exposed_params.contains(inner_param);
     if expose {
         node.exposed_params.insert(inner_param.to_string());
@@ -1073,24 +1082,20 @@ fn materialize_binding_exposures(def: &mut EffectGraphDef) {
     let Some(meta) = def.preset_metadata.as_ref() else {
         return;
     };
-    // Collect the (handle, param) pairs first; we can't borrow meta
+    // Collect the (node_id, param) pairs first; we can't borrow meta
     // immutably while mutating nodes.
-    let pairs: Vec<(String, String)> = meta
+    let pairs: Vec<(NodeId, String)> = meta
         .bindings
         .iter()
         .filter_map(|b| match &b.target {
-            BindingTarget::HandleNode { handle, param } => {
-                Some((handle.clone(), param.clone()))
+            BindingTarget::Node { node_id, param } => {
+                Some((node_id.clone(), param.clone()))
             }
             BindingTarget::Composite { .. } => None,
         })
         .collect();
-    for (handle, param) in pairs {
-        if let Some(node) = def
-            .nodes
-            .iter_mut()
-            .find(|n| n.handle.as_deref() == Some(handle.as_str()))
-        {
+    for (node_id, param) in pairs {
+        if let Some(node) = def.nodes.iter_mut().find(|n| n.node_id == node_id) {
             node.exposed_params.insert(param);
         }
     }
@@ -1101,15 +1106,11 @@ fn materialize_binding_exposures(def: &mut EffectGraphDef) {
 /// if the node is gone.
 fn restore_graph_exposed(
     def: &mut EffectGraphDef,
-    node_handle: &str,
+    node_id: &NodeId,
     inner_param: &str,
     prev_in_set: bool,
 ) {
-    if let Some(node) = def
-        .nodes
-        .iter_mut()
-        .find(|n| n.handle.as_deref() == Some(node_handle))
-    {
+    if let Some(node) = def.nodes.iter_mut().find(|n| &n.node_id == node_id) {
         if prev_in_set {
             node.exposed_params.insert(inner_param.to_string());
         } else {
@@ -1118,21 +1119,21 @@ fn restore_graph_exposed(
     }
 }
 
-/// Find the static-block param slot index for an (inner_node_handle,
-/// inner_param) pair, by scanning the preset metadata's bindings.
-/// Returns the position in `metadata.params` of the binding whose
-/// target is `(handle, param)`. `None` if the def has no metadata or
-/// no binding targets that (handle, param).
+/// Find the static-block param slot index for a `(node_id, inner_param)`
+/// pair, by scanning the preset metadata's bindings. Returns the
+/// position in `metadata.params` of the binding whose target is
+/// `(node_id, param)`. `None` if the def has no metadata or no binding
+/// targets that `(node_id, param)`.
 fn static_slot_for(
     def: &EffectGraphDef,
-    node_handle: &str,
+    node_id: &NodeId,
     inner_param: &str,
 ) -> Option<usize> {
     use manifold_core::effect_graph_def::BindingTarget;
     let meta = def.preset_metadata.as_ref()?;
     let binding_idx = meta.bindings.iter().position(|b| match &b.target {
-        BindingTarget::HandleNode { handle, param } => {
-            handle == node_handle && param == inner_param
+        BindingTarget::Node { node_id: nid, param } => {
+            nid == node_id && param == inner_param
         }
         BindingTarget::Composite { .. } => false,
     })?;
@@ -1144,6 +1145,7 @@ fn static_slot_for(
 
 impl Command for ToggleNodeParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
+        let node_id = self.node_id.clone();
         let node_handle = self.node_handle.clone();
         let inner_param = self.inner_param.clone();
         let expose = self.expose;
@@ -1164,12 +1166,13 @@ impl Command for ToggleNodeParamExposeCommand {
             &self.target,
             &self.catalog_default,
             |def| {
-                let prev_in_set = flip_graph_exposed(def, &node_handle, &inner_param, expose)
+                let prev_in_set = flip_graph_exposed(def, &node_id, &inner_param, expose)
                     .unwrap_or(false);
-                let static_slot = static_slot_for(def, &node_handle, &inner_param);
+                let static_slot = static_slot_for(def, &node_id, &inner_param);
                 let gen_spec = match &self.target {
                     GraphTarget::Generator(_) => Some(prepare_generator_mirror(
                         def,
+                        &node_id,
                         &node_handle,
                         &inner_param,
                         expose,
@@ -1211,6 +1214,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 };
                 let mut effect_mirror = mirror_effect_side(
                     effect,
+                    &node_id,
                     &node_handle,
                     &inner_param,
                     expose,
@@ -1313,7 +1317,7 @@ impl Command for ToggleNodeParamExposeCommand {
             return;
         };
 
-        let node_handle = self.node_handle.clone();
+        let node_id = self.node_id.clone();
         let inner_param = self.inner_param.clone();
 
         match mirror {
@@ -1356,7 +1360,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 // bookkeeping inline because the layer borrow
                 // covers it.
                 let _ = with_existing_target_graph_mut(project, &self.target, |def| {
-                    restore_graph_exposed(def, &node_handle, &inner_param, prev_in_set);
+                    restore_graph_exposed(def, &node_id, &inner_param, prev_in_set);
                 });
             }
             MirrorReverse::Generator(gen_mirror) => {
@@ -1367,7 +1371,7 @@ impl Command for ToggleNodeParamExposeCommand {
                         layer,
                         gen_mirror,
                         prev_in_set,
-                        &node_handle,
+                        &node_id,
                         &inner_param,
                     );
                 }
@@ -1387,6 +1391,7 @@ impl Command for ToggleNodeParamExposeCommand {
 #[allow(clippy::too_many_arguments)]
 fn mirror_effect_side(
     effect: &mut manifold_core::effects::EffectInstance,
+    node_id: &NodeId,
     node_handle: &str,
     inner_param: &str,
     expose: bool,
@@ -1417,7 +1422,7 @@ fn mirror_effect_side(
     let existing_position = effect
         .user_param_bindings
         .iter()
-        .position(|b| b.node_handle == node_handle && b.inner_param == inner_param);
+        .position(|b| &b.node_id == node_id && b.inner_param == inner_param);
 
     if expose {
         if existing_position.is_some() {
@@ -1431,7 +1436,8 @@ fn mirror_effect_side(
         let binding = UserParamBinding {
             id: id.clone(),
             label: inner_label.to_string(),
-            node_handle: node_handle.to_string(),
+            node_id: node_id.clone(),
+            legacy_node_handle: None,
             inner_param: inner_param.to_string(),
             min: inner_min,
             max: inner_max,
@@ -1626,6 +1632,7 @@ enum GeneratorMirrorSpec {
 #[allow(clippy::too_many_arguments)]
 fn prepare_generator_mirror(
     def: &mut EffectGraphDef,
+    node_id: &NodeId,
     node_handle: &str,
     inner_param: &str,
     expose: bool,
@@ -1654,21 +1661,20 @@ fn prepare_generator_mirror(
         bindings: Vec::new(),
         skip_mode: Default::default(),
         param_aliases: Vec::new(),
-        node_aliases: Vec::new(),
         value_aliases: Vec::new(),
         string_params: Vec::new(),
         string_bindings: Vec::new(),
     });
 
-    // Locate an existing binding for (handle, param). A bundled
+    // Locate an existing binding for (node_id, param). A bundled
     // binding stays in metadata across uncheck; a user-added binding
     // gets pulled along with its slot.
     let existing = meta
         .bindings
         .iter()
         .position(|b| match &b.target {
-            BindingTarget::HandleNode { handle, param } => {
-                handle == node_handle && param == inner_param
+            BindingTarget::Node { node_id: nid, param } => {
+                nid == node_id && param == inner_param
             }
             BindingTarget::Composite { .. } => false,
         });
@@ -1718,8 +1724,8 @@ fn prepare_generator_mirror(
             id: user_param_id.clone(),
             label: inner_label.to_string(),
             default_value: inner_default,
-            target: BindingTarget::HandleNode {
-                handle: node_handle.to_string(),
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
                 param: inner_param.to_string(),
             },
             convert: inner_convert,
@@ -1943,7 +1949,7 @@ fn unmirror_generator_side(
     layer: &mut manifold_core::layer::Layer,
     mirror: GeneratorMirrorReverse,
     prev_in_set: bool,
-    node_handle: &str,
+    node_id: &NodeId,
     inner_param: &str,
 ) {
     // Restore the graph-side metadata first so the slot it points
@@ -1982,7 +1988,7 @@ fn unmirror_generator_side(
         }
         // Exposure bit lives on the node's `exposed_params` set —
         // restore it inline since we already hold the graph borrow.
-        restore_graph_exposed(def, node_handle, inner_param, prev_in_set);
+        restore_graph_exposed(def, node_id, inner_param, prev_in_set);
         // Bump version so the renderer rebuilds against the
         // restored shape. `with_existing_target_graph_mut` does this
         // for the effect-side; we mirror it manually here.
@@ -2238,7 +2244,7 @@ mod tests {
     fn abc_graph() -> EffectGraphDef {
         let mk = |id: u32, handle: &str, ty: &str| EffectGraphNode {
             id,
-            node_id: manifold_core::NodeId::default(),
+            node_id: manifold_core::NodeId::new(handle),
             type_id: ty.to_string(),
             handle: Some(handle.to_string()),
             params: BTreeMap::new(),

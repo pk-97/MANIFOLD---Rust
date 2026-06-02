@@ -59,32 +59,32 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "infrared", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "infrared", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "palette",
         "label": "Palette",
         "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "palette_mux", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "palette_mux", "param": "selector" },
         "convert": { "type": "Float" }
       },
       {
         "id": "contrast",
         "label": "Contrast",
         "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "infrared", "param": "contrast" },
+        "target": { "kind": "node", "nodeId": "infrared", "param": "contrast" },
         "convert": { "type": "Float" }
       }
     ],
     "skipMode": { "kind": "onZero", "paramId": "amount" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
     {
       "id": 1,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_white_hot",
+      "handle": "pal_white_hot", "nodeId": "pal_white_hot",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [[0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]] }
@@ -93,7 +93,7 @@
     {
       "id": 2,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_black_hot",
+      "handle": "pal_black_hot", "nodeId": "pal_black_hot",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [[0.0, 1.0, 1.0, 1.0], [1.0, 0.0, 0.0, 0.0]] }
@@ -102,7 +102,7 @@
     {
       "id": 3,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_green_nv",
+      "handle": "pal_green_nv", "nodeId": "pal_green_nv",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [[0.0, 0.0, 0.0, 0.0], [1.0, 0.15, 1.0, 0.1]] }
@@ -111,7 +111,7 @@
     {
       "id": 4,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_iron_bow",
+      "handle": "pal_iron_bow", "nodeId": "pal_iron_bow",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [
@@ -127,7 +127,7 @@
     {
       "id": 5,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_rainbow",
+      "handle": "pal_rainbow", "nodeId": "pal_rainbow",
       "params": {
         "domain": { "type": "Float", "value": 1.0 },
         "stops": { "type": "Table", "rows": [
@@ -144,7 +144,7 @@
     {
       "id": 6,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_lava",
+      "handle": "pal_lava", "nodeId": "pal_lava",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [
@@ -159,7 +159,7 @@
     {
       "id": 7,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_arctic",
+      "handle": "pal_arctic", "nodeId": "pal_arctic",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [
@@ -174,7 +174,7 @@
     {
       "id": 8,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_magenta",
+      "handle": "pal_magenta", "nodeId": "pal_magenta",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [
@@ -189,7 +189,7 @@
     {
       "id": 9,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_electric",
+      "handle": "pal_electric", "nodeId": "pal_electric",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [
@@ -204,7 +204,7 @@
     {
       "id": 10,
       "typeId": "node.gradient_ramp",
-      "handle": "pal_toxic",
+      "handle": "pal_toxic", "nodeId": "pal_toxic",
       "params": {
         "domain": { "type": "Float", "value": 2.0 },
         "stops": { "type": "Table", "rows": [
@@ -219,7 +219,7 @@
     {
       "id": 11,
       "typeId": "node.mux_texture",
-      "handle": "palette_mux",
+      "handle": "palette_mux", "nodeId": "palette_mux",
       "params": {
         "num_inputs": { "type": "Int", "value": 10 },
         "selector": { "type": "Float", "value": 0.0 }
@@ -228,13 +228,13 @@
     {
       "id": 12,
       "typeId": "node.color_lut",
-      "handle": "infrared",
+      "handle": "infrared", "nodeId": "infrared",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "contrast": { "type": "Float", "value": 1.0 }
       }
     },
-    { "id": 13, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 13, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 1, "fromPort": "out", "toNode": 11, "toPort": "in_0" },

@@ -49,6 +49,7 @@
 
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::NodeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
@@ -212,7 +213,7 @@ pub enum ChainError {
         effect_id: EffectId,
         effect_type: EffectTypeId,
         binding_id: String,
-        node_handle: String,
+        node_id: String,
         inner_param: String,
         rehydrate: bool,
     },
@@ -248,7 +249,7 @@ impl std::fmt::Display for ChainError {
             Self::UserBindingResolveFailed {
                 effect_type,
                 binding_id,
-                node_handle,
+                node_id,
                 inner_param,
                 rehydrate,
                 ..
@@ -261,11 +262,11 @@ impl std::fmt::Display for ChainError {
                 write!(
                     f,
                     "{}: UserParamBinding `{}` could not resolve {when} \
-                     (node_handle=`{}`, inner_param=`{}`); slider will not apply \
+                     (node_id=`{}`, inner_param=`{}`); slider will not apply \
                      until the binding re-points to a live target",
                     effect_type.as_str(),
                     binding_id,
-                    node_handle,
+                    node_id,
                     inner_param,
                 )
             }
@@ -305,8 +306,16 @@ struct EffectSlot {
     /// Effect-local handles returned by `spec.splice` — names are
     /// scoped to this effect. `Cow<'static, str>` so canonical splices
     /// stay zero-allocation and user-edited divergent defs can hold
-    /// owned strings off disk.
+    /// owned strings off disk. Kept for state clearing (`clear_state`);
+    /// binding resolution keys off [`Self::node_map`] instead.
     handles: Vec<(std::borrow::Cow<'static, str>, NodeInstanceId)>,
+    /// `(NodeId, NodeInstanceId)` for every spliced node — the binding
+    /// resolution map. Built once at chain build by pairing each
+    /// spliced runtime node with its stable [`NodeId`]. Static and user
+    /// bindings resolve their target `NodeId` against this (see
+    /// [`ResolvedBinding::from_static`] / [`ResolvedBinding::from_user`]),
+    /// so a binding survives the node's handle changing under grouping.
+    node_map: Vec<(NodeId, NodeInstanceId)>,
     /// Unified resolved binding list — `bindings[0..n_static]` are
     /// spec bindings hydrated via [`ResolvedBinding::from_static`];
     /// `bindings[n_static..]` are user-exposed bindings hydrated via
@@ -358,7 +367,7 @@ struct EffectSlot {
     /// paired with each binding's `source_index`, retained so the static
     /// prefix can be rebuilt in place when a per-instance reshape note
     /// changes — without a full chain/graph rebuild. Resolution is
-    /// deterministic against the stable `handles` map, so a rebuild
+    /// deterministic against the stable `node_map`, so a rebuild
     /// reproduces the same `n_static` length.
     static_specs: Vec<(ParamBinding, usize)>,
     /// Last seen `EffectInstance.param_mappings_version`. When the live
@@ -598,6 +607,17 @@ impl ChainGraph {
                 handles,
                 generator_input_id,
             } = splice_result;
+            // Pair each spliced runtime node with its stable NodeId — the
+            // binding resolution map. Built from the splice's handle list
+            // (one entry per effect-local node) by reading each node's
+            // `node_id` off the live graph. Node ids are unique, so this
+            // is an unambiguous NodeId → NodeInstanceId map. Bindings
+            // resolve against it, not the handle list, so grouping a node
+            // (which prefixes its handle) leaves bindings intact.
+            let node_map: Vec<(NodeId, NodeInstanceId)> = handles
+                .iter()
+                .filter_map(|(_, id)| graph.get_node(*id).map(|inst| (inst.node_id.clone(), *id)))
+                .collect();
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
@@ -643,7 +663,7 @@ impl ChainGraph {
                 // Per-instance reshape note for this stock param, if the
                 // user has reshaped it. `None` is byte-identical to before.
                 let note = fx.param_mapping(b.id.as_ref());
-                match ResolvedBinding::from_static(b, &handles, source_index, note) {
+                match ResolvedBinding::from_static(b, &node_map, source_index, note) {
                     Some(rb) => {
                         bindings.push(rb);
                         static_specs.push((b.clone(), source_index));
@@ -660,7 +680,7 @@ impl ChainGraph {
             let n_static = bindings.len();
             for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
                 let source_index = n_static_slots + user_slot;
-                match ResolvedBinding::from_user(core, &graph, &handles, source_index) {
+                match ResolvedBinding::from_user(core, &graph, &node_map, source_index) {
                     Some(rb) => bindings.push(rb),
                     None => record_chain_error(
                         &mut errors,
@@ -668,7 +688,7 @@ impl ChainGraph {
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
                             binding_id: core.id.clone(),
-                            node_handle: core.node_handle.clone(),
+                            node_id: core.node_id.to_string(),
                             inner_param: core.inner_param.clone(),
                             rehydrate: false,
                         },
@@ -692,6 +712,7 @@ impl ChainGraph {
                 effect_type: fx.effect_type().clone(),
                 legacy_index: *legacy_index,
                 handles,
+                node_map,
                 bindings,
                 n_static,
                 n_static_slots,
@@ -920,7 +941,7 @@ impl ChainGraph {
                     match ResolvedBinding::from_user(
                         core,
                         &self.graph,
-                        &slot.handles,
+                        &slot.node_map,
                         source_index,
                     ) {
                         Some(rb) => slot.bindings.push(rb),
@@ -930,7 +951,7 @@ impl ChainGraph {
                                 effect_id: fx.id.clone(),
                                 effect_type: slot.effect_type.clone(),
                                 binding_id: core.id.clone(),
-                                node_handle: core.node_handle.clone(),
+                                node_id: core.node_id.to_string(),
                                 inner_param: core.inner_param.clone(),
                                 rehydrate: true,
                             },
@@ -964,7 +985,7 @@ impl ChainGraph {
                 for (b, source_index) in &slot.static_specs {
                     if let Some(rb) = ResolvedBinding::from_static(
                         b,
-                        &slot.handles,
+                        &slot.node_map,
                         *source_index,
                         fx.param_mapping(b.id.as_ref()),
                     ) {
@@ -1779,7 +1800,8 @@ mod user_binding_tests {
         fx.append_user_binding(UserParamBinding {
             id: "user.affine.translate_x.1".to_string(),
             label: "Translate X".to_string(),
-            node_handle: "affine".to_string(),
+            node_id: NodeId::new("affine"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: -1.0,
             max: 1.0,
@@ -1912,7 +1934,8 @@ mod user_binding_tests {
         fx.append_user_binding(UserParamBinding {
             id: "user.affine.translate_x.1".to_string(),
             label: "Translate X".to_string(),
-            node_handle: "affine".to_string(),
+            node_id: NodeId::new("affine"),
+            legacy_node_handle: None,
             inner_param: "translate_x".to_string(),
             min: -1.0,
             max: 1.0,
@@ -2287,7 +2310,8 @@ mod chain_error_tests {
         fx.append_user_binding(UserParamBinding {
             id: "user.broken.1".to_string(),
             label: "Broken".to_string(),
-            node_handle: "does_not_exist".to_string(),
+            node_id: NodeId::new("does_not_exist"),
+            legacy_node_handle: None,
             inner_param: "amount".to_string(),
             min: 0.0,
             max: 1.0,
@@ -2309,10 +2333,10 @@ mod chain_error_tests {
                 e,
                 ChainError::UserBindingResolveFailed {
                     binding_id,
-                    node_handle,
+                    node_id,
                     rehydrate: false,
                     ..
-                } if binding_id == "user.broken.1" && node_handle == "does_not_exist"
+                } if binding_id == "user.broken.1" && node_id == "does_not_exist"
             )
         });
         assert!(

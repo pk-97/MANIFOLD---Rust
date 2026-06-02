@@ -17,16 +17,16 @@
     ],
     "bindings": [
       { "id": "amount", "label": "Amount", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "wet_dry", "param": "wet_dry" },
+        "target": { "kind": "node", "nodeId": "wet_dry", "param": "wet_dry" },
         "convert": { "type": "Float" } },
       { "id": "ratio", "label": "Ratio", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "env", "param": "ratio" },
+        "target": { "kind": "node", "nodeId": "env", "param": "ratio" },
         "convert": { "type": "Float" } },
       { "id": "sensitivity", "label": "Sensitivity", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "env", "param": "sensitivity" },
+        "target": { "kind": "node", "nodeId": "env", "param": "sensitivity" },
         "convert": { "type": "Float" } },
       { "id": "target", "label": "Target", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "env", "param": "target" },
+        "target": { "kind": "node", "nodeId": "env", "param": "target" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" },
@@ -36,13 +36,13 @@
     ]
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.source",       "handle": "source" },
-    { "id": 99, "typeId": "system.final_output", "handle": "final_output" },
+    { "id": 0,  "typeId": "system.source",       "handle": "source", "nodeId": "source" },
+    { "id": 99, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" },
 
-    { "id": 10, "typeId": "node.luminance", "handle": "luminance" },
+    { "id": 10, "typeId": "node.luminance", "handle": "luminance", "nodeId": "luminance" },
 
     {
-      "id": 20, "typeId": "node.compressor_envelope", "handle": "env",
+      "id": 20, "typeId": "node.compressor_envelope", "handle": "env", "nodeId": "env",
       "params": {
         "ratio":       { "type": "Float", "value": 0.5 },
         "sensitivity": { "type": "Float", "value": 0.5 },
@@ -51,21 +51,21 @@
     },
 
     {
-      "id": 30, "typeId": "node.gain", "handle": "gain",
+      "id": 30, "typeId": "node.gain", "handle": "gain", "nodeId": "gain",
       "params": {
         "gain": { "type": "Float", "value": 1.0 }
       }
     },
 
     {
-      "id": 35, "typeId": "node.hdr_retention_mix", "handle": "hdr_retain",
+      "id": 35, "typeId": "node.hdr_retention_mix", "handle": "hdr_retain", "nodeId": "hdr_retain",
       "params": {
         "retention": { "type": "Float", "value": 1.0 }
       }
     },
 
     {
-      "id": 40, "typeId": "node.wet_dry", "handle": "wet_dry",
+      "id": 40, "typeId": "node.wet_dry", "handle": "wet_dry", "nodeId": "wet_dry",
       "params": {
         "wet_dry": { "type": "Float", "value": 0.5 }
       }

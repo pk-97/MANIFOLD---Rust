@@ -58,28 +58,28 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "wet_dry", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "wet_dry", "param": "amount" },
         "convert": { "type": "Float" }
       },
       {
         "id": "displace",
         "label": "Displace",
         "defaultValue": 0.001,
-        "target": { "kind": "handleNode", "handle": "flow_warp", "param": "weight" },
+        "target": { "kind": "node", "nodeId": "flow_warp", "param": "weight" },
         "convert": { "type": "Float" }
       },
       {
         "id": "blur",
         "label": "Blur",
         "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "diffuse", "param": "radius" },
+        "target": { "kind": "node", "nodeId": "diffuse", "param": "radius" },
         "convert": { "type": "Float" }
       },
       {
         "id": "decay",
         "label": "Decay",
         "defaultValue": 0.99,
-        "target": { "kind": "handleNode", "handle": "decay", "param": "gain" },
+        "target": { "kind": "node", "nodeId": "decay", "param": "gain" },
         "convert": { "type": "Float" }
       }
     ],
@@ -88,18 +88,18 @@
     }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
-    { "id": 1, "typeId": "node.feedback", "handle": "feedback" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    { "id": 1, "typeId": "node.feedback", "handle": "feedback", "nodeId": "feedback" },
     {
       "id": 2,
       "typeId": "node.gain",
-      "handle": "decay",
+      "handle": "decay", "nodeId": "decay",
       "params": { "gain": { "type": "Float", "value": 0.99 } }
     },
     {
       "id": 3,
       "typeId": "node.mix",
-      "handle": "max_composite",
+      "handle": "max_composite", "nodeId": "max_composite",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 3 }
@@ -108,7 +108,7 @@
     {
       "id": 4,
       "typeId": "node.flow_field_noise",
-      "handle": "flow",
+      "handle": "flow", "nodeId": "flow",
       "params": {
         "z_scale": { "type": "Float", "value": 0.01 },
         "warp_scale": { "type": "Float", "value": 0.0 },
@@ -118,7 +118,7 @@
     {
       "id": 5,
       "typeId": "node.uv_displace_by_flow",
-      "handle": "flow_warp",
+      "handle": "flow_warp", "nodeId": "flow_warp",
       "params": {
         "weight": { "type": "Float", "value": 0.001 },
         "bias": { "type": "Float", "value": 0.5 }
@@ -127,7 +127,7 @@
     {
       "id": 6,
       "typeId": "node.blur",
-      "handle": "diffuse",
+      "handle": "diffuse", "nodeId": "diffuse",
       "params": {
         "radius": { "type": "Float", "value": 2.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -136,7 +136,7 @@
     {
       "id": 7,
       "typeId": "node.slope_displace",
-      "handle": "slope",
+      "handle": "slope", "nodeId": "slope",
       "params": {
         "strength": { "type": "Float", "value": 5.0 },
         "step": { "type": "Float", "value": 5.0 },
@@ -146,7 +146,7 @@
     {
       "id": 8,
       "typeId": "node.blur",
-      "handle": "luma_blur",
+      "handle": "luma_blur", "nodeId": "luma_blur",
       "params": {
         "radius": { "type": "Float", "value": 10.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -155,7 +155,7 @@
     {
       "id": 9,
       "typeId": "node.scale_offset_texture",
-      "handle": "mask_map",
+      "handle": "mask_map", "nodeId": "mask_map",
       "params": {
         "scale": { "type": "Float", "value": 0.5 },
         "offset": { "type": "Float", "value": 0.5 }
@@ -164,13 +164,13 @@
     {
       "id": 10,
       "typeId": "node.masked_mix",
-      "handle": "dilute",
+      "handle": "dilute", "nodeId": "dilute",
       "params": { "amount": { "type": "Float", "value": 1.0 } }
     },
     {
       "id": 11,
       "typeId": "node.clamp_texture",
-      "handle": "guard",
+      "handle": "guard", "nodeId": "guard",
       "params": {
         "min": { "type": "Float", "value": 0.0 },
         "max": { "type": "Float", "value": 100.0 }
@@ -179,13 +179,13 @@
     {
       "id": 12,
       "typeId": "node.mix",
-      "handle": "wet_dry",
+      "handle": "wet_dry", "nodeId": "wet_dry",
       "params": {
         "amount": { "type": "Float", "value": 0.5 },
         "mode": { "type": "Enum", "value": 0 }
       }
     },
-    { "id": 13, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 13, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "a" },

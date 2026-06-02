@@ -34,13 +34,6 @@ pub struct EffectDef {
     /// Declarative legacy id migration table. See
     /// [`crate::effect_registration::ParamAlias`].
     pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
-    /// Declarative legacy **node-handle** migration table for V2
-    /// user-exposed parameter bindings. Same shape as
-    /// `legacy_param_aliases`, but addresses inner-graph node handles
-    /// (set via `Graph::add_node_named` at effect construction).
-    /// Submitted via [`crate::effect_registration::EffectNodeAliasMetadata`]
-    /// sidecar.
-    pub legacy_node_aliases: &'static [crate::effect_registration::ParamAlias],
     /// Declarative legacy **slot-value** migration table — translates
     /// pre-migration enum / numeric values when loading old projects.
     /// Each entry is `(param_id, &[(from, to)])`. Submitted via
@@ -71,14 +64,6 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
     for alias_meta in inventory::iter::<crate::effect_registration::EffectAliasMetadata> {
         if let Some(def) = m.get_mut(&alias_meta.id) {
             def.legacy_param_aliases = alias_meta.aliases;
-        }
-    }
-    // Same pattern for **node-handle** aliases — the V2 user-exposed
-    // parameter binding migration table. See
-    // `effect_registration::EffectNodeAliasMetadata`.
-    for alias_meta in inventory::iter::<crate::effect_registration::EffectNodeAliasMetadata> {
-        if let Some(def) = m.get_mut(&alias_meta.id) {
-            def.legacy_node_aliases = alias_meta.aliases;
         }
     }
     // Same pattern for **value** aliases — slot-value migration tables
@@ -349,7 +334,6 @@ pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> EffectDef {
         id_to_index,
         param_ids,
         legacy_param_aliases: leak_alias_table(&meta.param_aliases),
-        legacy_node_aliases: leak_alias_table(&meta.node_aliases),
         legacy_value_aliases: leak_value_alias_table(&meta.value_aliases),
     }
 }
@@ -766,8 +750,8 @@ mod tests {
                 id: "amount".to_string(),
                 label: "Amount".to_string(),
                 default_value: 0.5,
-                target: BindingTarget::HandleNode {
-                    handle: "bloom".to_string(),
+                target: BindingTarget::Node {
+                    node_id: crate::NodeId::new("bloom_node"),
                     param: "amount".to_string(),
                 },
                 convert: ParamConvert::Float,
@@ -782,7 +766,6 @@ mod tests {
                 old: "intensity".to_string(),
                 new: Some("amount".to_string()),
             }],
-            node_aliases: Vec::new(),
             value_aliases: vec![ValueAliasEntry {
                 param_id: "amount".to_string(),
                 mapping: vec![(0, 1)],
@@ -867,7 +850,6 @@ mod tests {
             bindings: Vec::new(),
             skip_mode: SkipModeDef::default(),
             param_aliases: Vec::new(),
-            node_aliases: Vec::new(),
             value_aliases: Vec::new(),
             string_params: Vec::new(),
             string_bindings: Vec::new(),

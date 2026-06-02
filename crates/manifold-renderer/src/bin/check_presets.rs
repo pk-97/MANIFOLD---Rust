@@ -153,8 +153,8 @@ fn check_bindings_resolve(def: &EffectGraphDef) -> Result<(), String> {
     for binding in &meta.bindings {
         if !param_ids.contains(binding.id.as_str()) {
             let target = match &binding.target {
-                BindingTarget::HandleNode { handle, param } => {
-                    format!("handleNode {handle}.{param}")
+                BindingTarget::Node { node_id, param } => {
+                    format!("node {node_id}.{param}")
                 }
                 other => format!("{other:?}"),
             };

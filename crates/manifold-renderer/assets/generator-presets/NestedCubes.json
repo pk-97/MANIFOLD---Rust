@@ -81,36 +81,36 @@
     ],
     "bindings": [
       { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "step_scale", "param": "a" },
+        "target": { "kind": "node", "nodeId": "step_scale", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "filter", "label": "Filter", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "cubes", "param": "filter" },
+        "target": { "kind": "node", "nodeId": "cubes", "param": "filter" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "cubes", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "cubes", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "scatter", "label": "Scatter", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "cubes", "param": "scatter" },
+        "target": { "kind": "node", "nodeId": "cubes", "param": "scatter" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "gate", "param": "enable" },
+        "target": { "kind": "node", "nodeId": "gate", "param": "enable" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "mode", "label": "Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "target_mux", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "target_mux", "param": "selector" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
     {
-      "id": 1, "typeId": "node.trigger_gate", "handle": "gate",
+      "id": 1, "typeId": "node.trigger_gate", "handle": "gate", "nodeId": "gate",
       "params": {
         "enable": { "type": "Bool", "value": true }
       }
     },
     {
-      "id": 2, "typeId": "node.math", "handle": "step_scale",
+      "id": 2, "typeId": "node.math", "handle": "step_scale", "nodeId": "step_scale",
       "params": {
         "a":  { "type": "Float", "value": 1.0 },
         "b":  { "type": "Float", "value": 90.0 },
@@ -118,7 +118,7 @@
       }
     },
     {
-      "id": 3, "typeId": "node.scalar_array_accumulator", "handle": "envelope_acc",
+      "id": 3, "typeId": "node.scalar_array_accumulator", "handle": "envelope_acc", "nodeId": "envelope_acc",
       "params": {
         "increment": { "type": "Float", "value": 90.0 },
         "capacity":  { "type": "Float", "value": 5.0 },
@@ -128,7 +128,7 @@
       }
     },
     {
-      "id": 4, "typeId": "node.cycle_table_row", "handle": "pose_cycle",
+      "id": 4, "typeId": "node.cycle_table_row", "handle": "pose_cycle", "nodeId": "pose_cycle",
       "params": {
         "table": { "type": "Table", "rows": [
           [0.0,  90.0, 180.0, 270.0, 360.0],
@@ -141,13 +141,13 @@
       }
     },
     {
-      "id": 5, "typeId": "node.mux_array", "handle": "target_mux",
+      "id": 5, "typeId": "node.mux_array", "handle": "target_mux", "nodeId": "target_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 }
       }
     },
     {
-      "id": 6, "typeId": "node.nested_cubes_geometry", "handle": "cubes",
+      "id": 6, "typeId": "node.nested_cubes_geometry", "handle": "cubes", "nodeId": "cubes",
       "params": {
         "filter":     { "type": "Float", "value": 2.0 },
         "scale":      { "type": "Float", "value": 1.0 },
@@ -155,7 +155,7 @@
         "decay_rate": { "type": "Float", "value": 10.0 }
       }
     },
-    { "id": 7, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 7, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "trigger_count", "toNode": 1, "toPort": "trigger_count" },

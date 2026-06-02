@@ -232,6 +232,11 @@ pub enum PanelAction {
     /// preset binding) and the undo restore path. Reading them in the
     /// UI thread keeps the renderer registry off the click hot path.
     ToggleNodeParamExpose {
+        /// Stable id of the inner node — the addressing identity the
+        /// expose command stores. Sourced from the node's snapshot.
+        node_id: manifold_core::NodeId,
+        /// Current display handle, carried only so the command can mint a
+        /// readable `user.<handle>.<param>.<n>` id.
         node_handle: String,
         inner_param: String,
         expose: bool,

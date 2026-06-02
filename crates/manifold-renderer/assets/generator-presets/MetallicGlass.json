@@ -26,81 +26,81 @@
     ],
     "bindings": [
       { "id": "feedback",    "label": "Feedback",        "defaultValue": 0.98,
-        "target": { "kind": "handleNode", "handle": "blend_lerp", "param": "amount" },
+        "target": { "kind": "node", "nodeId": "blend_lerp", "param": "amount" },
         "convert": { "type": "Float" } },
 
       { "id": "noise_scale", "label": "Noise Scale",     "defaultValue": 0.75,
-        "target": { "kind": "handleNode", "handle": "noise_scale_inv", "param": "a" },
+        "target": { "kind": "node", "nodeId": "noise_scale_inv", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "noise_speed", "label": "Noise Speed",     "defaultValue": 0.1,
-        "target": { "kind": "handleNode", "handle": "noise_z_calc", "param": "b" },
+        "target": { "kind": "node", "nodeId": "noise_z_calc", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "edge_str",    "label": "Edge Strength",   "defaultValue": 5.0,
-        "target": { "kind": "handleNode", "handle": "edge_gain", "param": "gain" },
+        "target": { "kind": "node", "nodeId": "edge_gain", "param": "gain" },
         "convert": { "type": "Float" } },
 
       { "id": "mirror",      "label": "Mirror",          "defaultValue": 45.0,
-        "target": { "kind": "handleNode", "handle": "mirror_deg_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "mirror_deg_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "displace",    "label": "Displace",        "defaultValue": 0.2,
-        "target": { "kind": "handleNode", "handle": "displace_mesh_node", "param": "displacement" },
+        "target": { "kind": "node", "nodeId": "displace_mesh_node", "param": "displacement" },
         "convert": { "type": "Float" } },
       { "id": "displace",    "label": "Displace",        "defaultValue": 0.2,
-        "target": { "kind": "handleNode", "handle": "height_for_normal_gain", "param": "gain" },
+        "target": { "kind": "node", "nodeId": "height_for_normal_gain", "param": "gain" },
         "convert": { "type": "Float" } },
 
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "pbr_material", "param": "roughness" },
+        "target": { "kind": "node", "nodeId": "pbr_material", "param": "roughness" },
         "convert": { "type": "Float" } },
       { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "handleNode", "handle": "roughness_from_edge", "param": "offset" },
+        "target": { "kind": "node", "nodeId": "roughness_from_edge", "param": "offset" },
         "convert": { "type": "Float" } },
 
       { "id": "light_int",   "label": "Light Intensity", "defaultValue": 1.5,
-        "target": { "kind": "handleNode", "handle": "key_light", "param": "intensity" },
+        "target": { "kind": "node", "nodeId": "key_light", "param": "intensity" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",    "label": "Camera Distance", "defaultValue": 2.5,
-        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "distance" },
+        "target": { "kind": "node", "nodeId": "cam_orbit_node", "param": "distance" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_orbit",   "label": "Camera Orbit",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "cam_orbit_deg_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "cam_orbit_deg_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_tilt",    "label": "Camera Tilt",     "defaultValue": -10.0,
-        "target": { "kind": "handleNode", "handle": "cam_tilt_deg_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "cam_tilt_deg_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_fov",     "label": "Camera FOV",      "defaultValue": 54.0,
-        "target": { "kind": "handleNode", "handle": "cam_fov_deg_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "cam_fov_deg_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "look_y",      "label": "Look Y",          "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "look_y" },
+        "target": { "kind": "node", "nodeId": "cam_orbit_node", "param": "look_y" },
         "convert": { "type": "Float" } }
     ]
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0,  "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
 
-    { "id": 1,  "typeId": "node.affine_scalar", "handle": "noise_scale_inv",
+    { "id": 1,  "typeId": "node.affine_scalar", "handle": "noise_scale_inv", "nodeId": "noise_scale_inv",
       "params": { "a": { "type": "Float", "value": 0.75 }, "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 2,  "typeId": "node.math", "handle": "noise_scale_recip",
+    { "id": 2,  "typeId": "node.math", "handle": "noise_scale_recip", "nodeId": "noise_scale_recip",
       "params": { "a": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
-    { "id": 41, "typeId": "node.affine_scalar", "handle": "noise_offset_calc",
+    { "id": 41, "typeId": "node.affine_scalar", "handle": "noise_offset_calc", "nodeId": "noise_offset_calc",
       "params": { "a": { "type": "Float", "value": 1.333 }, "scale": { "type": "Float", "value": -0.5 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 42, "typeId": "node.math", "handle": "mesh_size_x_calc",
+    { "id": 42, "typeId": "node.math", "handle": "mesh_size_x_calc", "nodeId": "mesh_size_x_calc",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 3,  "typeId": "node.math", "handle": "noise_z_calc",
+    { "id": 3,  "typeId": "node.math", "handle": "noise_z_calc", "nodeId": "noise_z_calc",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.1 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 4,  "typeId": "node.simplex_field_2d", "handle": "noise",
+    { "id": 4,  "typeId": "node.simplex_field_2d", "handle": "noise", "nodeId": "noise",
       "params": {
         "scale_x":  { "type": "Float", "value": 1.333 },
         "scale_y":  { "type": "Float", "value": 1.333 },
@@ -110,26 +110,26 @@
         "output_channel": { "type": "Enum", "value": 0 }
       } },
 
-    { "id": 5,  "typeId": "node.scale_offset_texture", "handle": "noise_scaled",
+    { "id": 5,  "typeId": "node.scale_offset_texture", "handle": "noise_scaled", "nodeId": "noise_scaled",
       "params": { "scale": { "type": "Float", "value": 0.3 }, "offset": { "type": "Float", "value": 0.5 } } },
 
-    { "id": 6,  "typeId": "node.feedback", "handle": "fb_color",
+    { "id": 6,  "typeId": "node.feedback", "handle": "fb_color", "nodeId": "fb_color",
       "outputFormats": { "out": "rgba16float" } },
 
-    { "id": 7,  "typeId": "node.mix", "handle": "noise_minus_prev",
+    { "id": 7,  "typeId": "node.mix", "handle": "noise_minus_prev", "nodeId": "noise_minus_prev",
       "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 5 } } },
 
-    { "id": 9,  "typeId": "node.mix", "handle": "blend_lerp",
+    { "id": 9,  "typeId": "node.mix", "handle": "blend_lerp", "nodeId": "blend_lerp",
       "params": { "amount": { "type": "Float", "value": 0.98 }, "mode": { "type": "Enum", "value": 0 } } },
 
-    { "id": 10, "typeId": "node.gaussian_blur", "handle": "blur_h",
+    { "id": 10, "typeId": "node.gaussian_blur", "handle": "blur_h", "nodeId": "blur_h",
       "params": { "kernel_size": { "type": "Enum", "value": 0 }, "axis": { "type": "Enum", "value": 0 }, "step": { "type": "Float", "value": 1.0 } } },
-    { "id": 11, "typeId": "node.gaussian_blur", "handle": "blur_v",
+    { "id": 11, "typeId": "node.gaussian_blur", "handle": "blur_v", "nodeId": "blur_v",
       "params": { "kernel_size": { "type": "Enum", "value": 0 }, "axis": { "type": "Enum", "value": 1 }, "step": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 12, "typeId": "node.brightness", "handle": "luma_for_height" },
+    { "id": 12, "typeId": "node.brightness", "handle": "luma_for_height", "nodeId": "luma_for_height" },
 
-    { "id": 13, "typeId": "node.levels", "handle": "height_levels",
+    { "id": 13, "typeId": "node.levels", "handle": "height_levels", "nodeId": "height_levels",
       "params": {
         "scale":  { "type": "Float", "value": 1.26 },
         "offset": { "type": "Float", "value": 0.29 },
@@ -138,21 +138,21 @@
         "gamma":  { "type": "Float", "value": 0.8 }
       } },
 
-    { "id": 17, "typeId": "node.affine_scalar", "handle": "mirror_deg_to_rad",
+    { "id": 17, "typeId": "node.affine_scalar", "handle": "mirror_deg_to_rad", "nodeId": "mirror_deg_to_rad",
       "params": { "a": { "type": "Float", "value": 45.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 18, "typeId": "node.mirror_axis", "handle": "mirrored",
+    { "id": 18, "typeId": "node.mirror_axis", "handle": "mirrored", "nodeId": "mirrored",
       "params": { "angle": { "type": "Float", "value": 0.785398 } } },
 
-    { "id": 19, "typeId": "node.brightness", "handle": "luma_for_sobel" },
+    { "id": 19, "typeId": "node.brightness", "handle": "luma_for_sobel", "nodeId": "luma_for_sobel" },
 
-    { "id": 20, "typeId": "node.convolution_2d_9tap", "handle": "sobel_x",
+    { "id": 20, "typeId": "node.convolution_2d_9tap", "handle": "sobel_x", "nodeId": "sobel_x",
       "params": {
         "k0": { "type": "Float", "value": -1.0 }, "k1": { "type": "Float", "value": 0.0 }, "k2": { "type": "Float", "value": 1.0 },
         "k3": { "type": "Float", "value": -2.0 }, "k4": { "type": "Float", "value": 0.0 }, "k5": { "type": "Float", "value": 2.0 },
         "k6": { "type": "Float", "value": -1.0 }, "k7": { "type": "Float", "value": 0.0 }, "k8": { "type": "Float", "value": 1.0 },
         "bias": { "type": "Float", "value": 0.0 }, "normalise": { "type": "Bool", "value": false }
       } },
-    { "id": 21, "typeId": "node.convolution_2d_9tap", "handle": "sobel_y",
+    { "id": 21, "typeId": "node.convolution_2d_9tap", "handle": "sobel_y", "nodeId": "sobel_y",
       "params": {
         "k0": { "type": "Float", "value": -1.0 }, "k1": { "type": "Float", "value": -2.0 }, "k2": { "type": "Float", "value": -1.0 },
         "k3": { "type": "Float", "value": 0.0 },  "k4": { "type": "Float", "value": 0.0 },  "k5": { "type": "Float", "value": 0.0 },
@@ -160,7 +160,7 @@
         "bias": { "type": "Float", "value": 0.0 }, "normalise": { "type": "Bool", "value": false }
       } },
 
-    { "id": 22, "typeId": "node.pack_channels", "handle": "gradient_xy",
+    { "id": 22, "typeId": "node.pack_channels", "handle": "gradient_xy", "nodeId": "gradient_xy",
       "params": {
         "default_r": { "type": "Float", "value": 0.0 },
         "default_g": { "type": "Float", "value": 0.0 },
@@ -168,15 +168,15 @@
         "default_a": { "type": "Float", "value": 1.0 }
       } },
 
-    { "id": 23, "typeId": "node.length_vec2", "handle": "gradient_mag" },
+    { "id": 23, "typeId": "node.length_vec2", "handle": "gradient_mag", "nodeId": "gradient_mag" },
 
-    { "id": 24, "typeId": "node.gain", "handle": "edge_gain",
+    { "id": 24, "typeId": "node.gain", "handle": "edge_gain", "nodeId": "edge_gain",
       "params": { "gain": { "type": "Float", "value": 5.0 } } },
 
-    { "id": 25, "typeId": "node.clamp_texture", "handle": "edge_clamp",
+    { "id": 25, "typeId": "node.clamp_texture", "handle": "edge_clamp", "nodeId": "edge_clamp",
       "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 32, "typeId": "node.bake_equirect_envmap", "handle": "envmap",
+    { "id": 32, "typeId": "node.bake_equirect_envmap", "handle": "envmap", "nodeId": "envmap",
       "params": {
         "width":  { "type": "Int", "value": 512 },
         "height": { "type": "Int", "value": 256 },
@@ -184,7 +184,7 @@
         "azimuth_variation": { "type": "Float", "value": 0.12 }
       } },
 
-    { "id": 33, "typeId": "node.generate_grid_mesh", "handle": "grid_mesh",
+    { "id": 33, "typeId": "node.generate_grid_mesh", "handle": "grid_mesh", "nodeId": "grid_mesh",
       "params": {
         "max_capacity": { "type": "Int", "value": 250000 },
         "resolution_x": { "type": "Int", "value": 500 },
@@ -193,7 +193,7 @@
         "size_y":       { "type": "Float", "value": 2.0 }
       } },
 
-    { "id": 34, "typeId": "node.displace_mesh", "handle": "displace_mesh_node",
+    { "id": 34, "typeId": "node.displace_mesh", "handle": "displace_mesh_node", "nodeId": "displace_mesh_node",
       "params": {
         "cols":         { "type": "Int", "value": 500 },
         "rows":         { "type": "Int", "value": 500 },
@@ -201,20 +201,20 @@
         "height_bias":  { "type": "Float", "value": 0.5 }
       } },
 
-    { "id": 35, "typeId": "node.triangulate_grid", "handle": "triangulated",
+    { "id": 35, "typeId": "node.triangulate_grid", "handle": "triangulated", "nodeId": "triangulated",
       "params": {
         "src_cols": { "type": "Int", "value": 500 },
         "src_rows": { "type": "Int", "value": 500 }
       } },
 
-    { "id": 36, "typeId": "node.affine_scalar", "handle": "cam_orbit_deg_to_rad",
+    { "id": 36, "typeId": "node.affine_scalar", "handle": "cam_orbit_deg_to_rad", "nodeId": "cam_orbit_deg_to_rad",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 1.57079632679 } } },
-    { "id": 37, "typeId": "node.affine_scalar", "handle": "cam_tilt_deg_to_rad",
+    { "id": 37, "typeId": "node.affine_scalar", "handle": "cam_tilt_deg_to_rad", "nodeId": "cam_tilt_deg_to_rad",
       "params": { "a": { "type": "Float", "value": -10.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 38, "typeId": "node.affine_scalar", "handle": "cam_fov_deg_to_rad",
+    { "id": 38, "typeId": "node.affine_scalar", "handle": "cam_fov_deg_to_rad", "nodeId": "cam_fov_deg_to_rad",
       "params": { "a": { "type": "Float", "value": 54.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 43, "typeId": "node.camera_orbit", "handle": "cam_orbit_node",
+    { "id": 43, "typeId": "node.camera_orbit", "handle": "cam_orbit_node", "nodeId": "cam_orbit_node",
       "params": {
         "orbit":    { "type": "Float", "value": 1.57079632679 },
         "tilt":     { "type": "Float", "value": -0.1745 },
@@ -225,25 +225,25 @@
         "far":      { "type": "Float", "value": 50.0 }
       } },
 
-    { "id": 49, "typeId": "node.gain", "handle": "height_for_normal_gain",
+    { "id": 49, "typeId": "node.gain", "handle": "height_for_normal_gain", "nodeId": "height_for_normal_gain",
       "params": { "gain": { "type": "Float", "value": 0.2 } } },
 
-    { "id": 57, "typeId": "node.feedback", "handle": "fb_height_smooth",
+    { "id": 57, "typeId": "node.feedback", "handle": "fb_height_smooth", "nodeId": "fb_height_smooth",
       "outputFormats": { "out": "rgba16float" } },
-    { "id": 58, "typeId": "node.mix", "handle": "temporal_blend_height",
+    { "id": 58, "typeId": "node.mix", "handle": "temporal_blend_height", "nodeId": "temporal_blend_height",
       "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
 
-    { "id": 59, "typeId": "node.feedback", "handle": "fb_edge_smooth",
+    { "id": 59, "typeId": "node.feedback", "handle": "fb_edge_smooth", "nodeId": "fb_edge_smooth",
       "outputFormats": { "out": "rgba16float" } },
-    { "id": 60, "typeId": "node.mix", "handle": "temporal_blend_edge",
+    { "id": 60, "typeId": "node.mix", "handle": "temporal_blend_edge", "nodeId": "temporal_blend_edge",
       "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
 
-    { "id": 61, "typeId": "node.math", "handle": "z_scale_from_canvas",
+    { "id": 61, "typeId": "node.math", "handle": "z_scale_from_canvas", "nodeId": "z_scale_from_canvas",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1920.0 }, "op": { "type": "Enum", "value": 3 } } },
 
-    { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass" },
+    { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass", "nodeId": "geometry_pass" },
 
-    { "id": 62, "typeId": "node.pbr_material", "handle": "pbr_material",
+    { "id": 62, "typeId": "node.pbr_material", "handle": "pbr_material", "nodeId": "pbr_material",
       "params": {
         "color_r":            { "type": "Float", "value": 0.8 },
         "color_g":            { "type": "Float", "value": 0.8 },
@@ -258,7 +258,7 @@
         "emission_intensity": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 63, "typeId": "node.light", "handle": "key_light",
+    { "id": 63, "typeId": "node.light", "handle": "key_light", "nodeId": "key_light",
       "params": {
         "mode":              { "type": "Enum",  "value": 0 },
         "pos_x":             { "type": "Float", "value": -2.0 },
@@ -278,17 +278,17 @@
         "shadow_resolution": { "type": "Int",   "value": 2048 }
       } },
 
-    { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal",
+    { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal", "nodeId": "surface_normal",
       "params": {
         "z_scale":     { "type": "Float", "value": 0.02 },
         "aspect":      { "type": "Float", "value": 1.0 },
         "coord_space": { "type": "Enum",  "value": 1 }
       } },
 
-    { "id": 52, "typeId": "node.scale_offset_texture", "handle": "roughness_from_edge",
+    { "id": 52, "typeId": "node.scale_offset_texture", "handle": "roughness_from_edge", "nodeId": "roughness_from_edge",
       "params": { "scale": { "type": "Float", "value": 0.15 }, "offset": { "type": "Float", "value": 0.05 } } },
 
-    { "id": 40, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 40, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 1,  "fromPort": "out",  "toNode": 2,  "toPort": "b" },

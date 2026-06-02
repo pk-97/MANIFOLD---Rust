@@ -74,8 +74,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "chromatic",
+          "kind": "node",
+          "nodeId": "chromatic",
           "param": "amount"
         },
         "convert": {
@@ -87,8 +87,8 @@
         "label": "Offset",
         "defaultValue": 0.01,
         "target": {
-          "kind": "handleNode",
-          "handle": "offset_scale",
+          "kind": "node",
+          "nodeId": "offset_scale",
           "param": "a"
         },
         "convert": {
@@ -100,8 +100,8 @@
         "label": "Mode",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "field",
+          "kind": "node",
+          "nodeId": "field",
           "param": "mode"
         },
         "convert": {
@@ -113,8 +113,8 @@
         "label": "Angle",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "field",
+          "kind": "node",
+          "nodeId": "field",
           "param": "angle"
         },
         "convert": {
@@ -126,8 +126,8 @@
         "label": "Falloff",
         "defaultValue": 0.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "field",
+          "kind": "node",
+          "nodeId": "field",
           "param": "falloff"
         },
         "convert": {
@@ -144,12 +144,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.radial_offset_field",
-      "handle": "field",
+      "handle": "field", "nodeId": "field",
       "params": {
         "mode": { "type": "Enum", "value": 0 },
         "angle": { "type": "Float", "value": 0.0 },
@@ -159,7 +159,7 @@
     {
       "id": 2,
       "typeId": "node.math",
-      "handle": "offset_scale",
+      "handle": "offset_scale", "nodeId": "offset_scale",
       "params": {
         "a": { "type": "Float", "value": 0.01 },
         "b": { "type": "Float", "value": -1000.0 },
@@ -169,7 +169,7 @@
     {
       "id": 3,
       "typeId": "node.chromatic_displace",
-      "handle": "split",
+      "handle": "split", "nodeId": "split",
       "params": {
         "amount": { "type": "Float", "value": -10.0 }
       }
@@ -177,7 +177,7 @@
     {
       "id": 4,
       "typeId": "node.mix",
-      "handle": "chromatic",
+      "handle": "chromatic", "nodeId": "chromatic",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -186,7 +186,7 @@
     {
       "id": 5,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

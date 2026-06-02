@@ -59,53 +59,53 @@
     ],
     "bindings": [
       { "id": "line",  "label": "Line",  "defaultValue": 0.015,
-        "target": { "kind": "handleNode", "handle": "shape_square", "param": "line" },
+        "target": { "kind": "node", "nodeId": "shape_square", "param": "line" },
         "convert": { "type": "Float" } },
       { "id": "line",  "label": "Line",  "defaultValue": 0.015,
-        "target": { "kind": "handleNode", "handle": "shape_diamond", "param": "line" },
+        "target": { "kind": "node", "nodeId": "shape_diamond", "param": "line" },
         "convert": { "type": "Float" } },
       { "id": "line",  "label": "Line",  "defaultValue": 0.015,
-        "target": { "kind": "handleNode", "handle": "shape_octagon", "param": "line" },
+        "target": { "kind": "node", "nodeId": "shape_octagon", "param": "line" },
         "convert": { "type": "Float" } },
 
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "shape_square", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "shape_square", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "shape_diamond", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "shape_diamond", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "shape_octagon", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "shape_octagon", "param": "scale" },
         "convert": { "type": "Float" } },
 
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "modulus_table", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "modulus_table", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "is_wireframe_on", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "is_wireframe_on", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "fill",  "label": "Fill",  "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "off_wireframe", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "off_wireframe", "param": "selector" },
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "gated_shape_idx", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "gated_shape_idx", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "gated_is_wireframe", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "gated_is_wireframe", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "gated_target_angle", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "gated_target_angle", "param": "selector" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1,  "typeId": "system.final_output",    "handle": "final_output" },
+    { "id": 0,  "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+    { "id": 1,  "typeId": "system.final_output",    "handle": "final_output", "nodeId": "final_output" },
 
     {
-      "id": 2, "typeId": "node.mux_scalar", "handle": "modulus_table",
+      "id": 2, "typeId": "node.mux_scalar", "handle": "modulus_table", "nodeId": "modulus_table",
       "params": {
         "selector": { "type": "Float", "value": 1.0 },
         "in_0":     { "type": "Float", "value": 3.0 },
@@ -115,12 +115,12 @@
     },
 
     {
-      "id": 3, "typeId": "node.clip_trigger_index", "handle": "variant_cycle",
+      "id": 3, "typeId": "node.clip_trigger_index", "handle": "variant_cycle", "nodeId": "variant_cycle",
       "params": { "modulus": { "type": "Int", "value": 6 } }
     },
 
     {
-      "id": 4, "typeId": "node.math", "handle": "shape_idx_mod",
+      "id": 4, "typeId": "node.math", "handle": "shape_idx_mod", "nodeId": "shape_idx_mod",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 3.0 },
@@ -129,7 +129,7 @@
     },
 
     {
-      "id": 5, "typeId": "node.math", "handle": "tc_divided",
+      "id": 5, "typeId": "node.math", "handle": "tc_divided", "nodeId": "tc_divided",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 6.0 },
@@ -137,7 +137,7 @@
       }
     },
     {
-      "id": 6, "typeId": "node.math", "handle": "rot_step_floored",
+      "id": 6, "typeId": "node.math", "handle": "rot_step_floored", "nodeId": "rot_step_floored",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -145,7 +145,7 @@
       }
     },
     {
-      "id": 7, "typeId": "node.math", "handle": "rot_step_mod",
+      "id": 7, "typeId": "node.math", "handle": "rot_step_mod", "nodeId": "rot_step_mod",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 8.0 },
@@ -154,7 +154,7 @@
     },
 
     {
-      "id": 8, "typeId": "node.mux_scalar", "handle": "target_angle_table",
+      "id": 8, "typeId": "node.mux_scalar", "handle": "target_angle_table", "nodeId": "target_angle_table",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value":  0.0 },
@@ -169,7 +169,7 @@
     },
 
     {
-      "id": 9, "typeId": "node.math", "handle": "variant_div_3",
+      "id": 9, "typeId": "node.math", "handle": "variant_div_3", "nodeId": "variant_div_3",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 3.0 },
@@ -177,7 +177,7 @@
       }
     },
     {
-      "id": 10, "typeId": "node.math", "handle": "variant_floor_div_3",
+      "id": 10, "typeId": "node.math", "handle": "variant_floor_div_3", "nodeId": "variant_floor_div_3",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -186,7 +186,7 @@
     },
 
     {
-      "id": 11, "typeId": "node.mux_scalar", "handle": "is_wireframe_on",
+      "id": 11, "typeId": "node.mux_scalar", "handle": "is_wireframe_on", "nodeId": "is_wireframe_on",
       "params": {
         "selector": { "type": "Float", "value": 1.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
@@ -195,7 +195,7 @@
       }
     },
     {
-      "id": 12, "typeId": "node.mux_scalar", "handle": "off_wireframe",
+      "id": 12, "typeId": "node.mux_scalar", "handle": "off_wireframe", "nodeId": "off_wireframe",
       "params": {
         "selector": { "type": "Float", "value": 1.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
@@ -205,7 +205,7 @@
     },
 
     {
-      "id": 13, "typeId": "node.mux_scalar", "handle": "gated_shape_idx",
+      "id": 13, "typeId": "node.mux_scalar", "handle": "gated_shape_idx", "nodeId": "gated_shape_idx",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
@@ -213,7 +213,7 @@
       }
     },
     {
-      "id": 14, "typeId": "node.mux_scalar", "handle": "gated_is_wireframe",
+      "id": 14, "typeId": "node.mux_scalar", "handle": "gated_is_wireframe", "nodeId": "gated_is_wireframe",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
@@ -221,7 +221,7 @@
       }
     },
     {
-      "id": 15, "typeId": "node.mux_scalar", "handle": "gated_target_angle",
+      "id": 15, "typeId": "node.mux_scalar", "handle": "gated_target_angle", "nodeId": "gated_target_angle",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
@@ -230,12 +230,12 @@
     },
 
     {
-      "id": 16, "typeId": "node.trigger_ease_to", "handle": "rotation_eased",
+      "id": 16, "typeId": "node.trigger_ease_to", "handle": "rotation_eased", "nodeId": "rotation_eased",
       "params": { "window_beats": { "type": "Float", "value": 0.25 } }
     },
 
     {
-      "id": 17, "typeId": "node.basic_shape", "handle": "shape_square",
+      "id": 17, "typeId": "node.basic_shape", "handle": "shape_square", "nodeId": "shape_square",
       "params": {
         "shape":        { "type": "Enum",  "value": 0 },
         "aspect":       { "type": "Float", "value": 1.0 },
@@ -246,7 +246,7 @@
       }
     },
     {
-      "id": 18, "typeId": "node.basic_shape", "handle": "shape_diamond",
+      "id": 18, "typeId": "node.basic_shape", "handle": "shape_diamond", "nodeId": "shape_diamond",
       "params": {
         "shape":        { "type": "Enum",  "value": 1 },
         "aspect":       { "type": "Float", "value": 1.0 },
@@ -257,7 +257,7 @@
       }
     },
     {
-      "id": 19, "typeId": "node.basic_shape", "handle": "shape_octagon",
+      "id": 19, "typeId": "node.basic_shape", "handle": "shape_octagon", "nodeId": "shape_octagon",
       "params": {
         "shape":        { "type": "Enum",  "value": 2 },
         "aspect":       { "type": "Float", "value": 1.0 },
@@ -269,7 +269,7 @@
     },
 
     {
-      "id": 20, "typeId": "node.mux_texture", "handle": "shape_mux",
+      "id": 20, "typeId": "node.mux_texture", "handle": "shape_mux", "nodeId": "shape_mux",
       "params": { "selector": { "type": "Float", "value": 0.0 } }
     }
   ],

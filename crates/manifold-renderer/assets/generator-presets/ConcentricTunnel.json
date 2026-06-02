@@ -87,40 +87,40 @@
     ],
     "bindings": [
       { "id": "shape", "label": "Shape", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mux_n_sides", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mux_n_sides", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "line", "label": "Line", "defaultValue": 0.008,
-        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
         "convert": { "type": "Float" } },
       { "id": "rate", "label": "Rate", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "mux_ring_freq", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mux_ring_freq", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
-        "target": { "kind": "handleNode", "handle": "frac_offset", "param": "b" },
+        "target": { "kind": "node", "nodeId": "frac_offset", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
-        "target": { "kind": "handleNode", "handle": "scales", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "scales", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "shape_active", "param": "a" },
+        "target": { "kind": "node", "nodeId": "shape_active", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "spawn_active", "param": "a" },
+        "target": { "kind": "node", "nodeId": "spawn_active", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "trigger_mode", "label": "Trigger Mode", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "mode_shape_enable", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mode_shape_enable", "param": "selector" },
         "convert": { "type": "Float" } },
       { "id": "trigger_mode", "label": "Trigger Mode", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "mode_spawn_enable", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "mode_spawn_enable", "param": "selector" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
 
     {
-      "id": 1, "typeId": "node.mux_scalar", "handle": "mux_n_sides",
+      "id": 1, "typeId": "node.mux_scalar", "handle": "mux_n_sides", "nodeId": "mux_n_sides",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 64.0 },
@@ -131,7 +131,7 @@
       }
     },
     {
-      "id": 2, "typeId": "node.mux_scalar", "handle": "mux_ring_freq",
+      "id": 2, "typeId": "node.mux_scalar", "handle": "mux_ring_freq", "nodeId": "mux_ring_freq",
       "params": {
         "selector": { "type": "Float", "value": 2.0 },
         "in_0":     { "type": "Float", "value": 4.0  },
@@ -143,7 +143,7 @@
     },
 
     {
-      "id": 3, "typeId": "node.math", "handle": "base_expansion",
+      "id": 3, "typeId": "node.math", "handle": "base_expansion", "nodeId": "base_expansion",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 1.0 },
@@ -151,7 +151,7 @@
       }
     },
     {
-      "id": 4, "typeId": "node.math", "handle": "spawn_gate",
+      "id": 4, "typeId": "node.math", "handle": "spawn_gate", "nodeId": "spawn_gate",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -159,7 +159,7 @@
       }
     },
     {
-      "id": 5, "typeId": "node.math", "handle": "expansion",
+      "id": 5, "typeId": "node.math", "handle": "expansion", "nodeId": "expansion",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -168,7 +168,7 @@
     },
 
     {
-      "id": 6, "typeId": "node.render_lines", "handle": "render",
+      "id": 6, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.008 },
         "closed_loop":       { "type": "Bool",  "value": false },
@@ -184,14 +184,14 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 7, "typeId": "system.final_output", "handle": "final_output" },
+    { "id": 7, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" },
 
     {
-      "id": 8, "typeId": "node.clip_trigger_index", "handle": "shape_cycle_idx",
+      "id": 8, "typeId": "node.clip_trigger_index", "handle": "shape_cycle_idx", "nodeId": "shape_cycle_idx",
       "params": { "modulus": { "type": "Int", "value": 6 } }
     },
     {
-      "id": 9, "typeId": "node.mux_scalar", "handle": "mux_cycle_sides",
+      "id": 9, "typeId": "node.mux_scalar", "handle": "mux_cycle_sides", "nodeId": "mux_cycle_sides",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 3.0  },
@@ -204,7 +204,7 @@
     },
 
     {
-      "id": 10, "typeId": "node.mux_scalar", "handle": "mode_shape_enable",
+      "id": 10, "typeId": "node.mux_scalar", "handle": "mode_shape_enable", "nodeId": "mode_shape_enable",
       "params": {
         "selector": { "type": "Float", "value": 2.0 },
         "in_0":     { "type": "Float", "value": 1.0 },
@@ -213,7 +213,7 @@
       }
     },
     {
-      "id": 11, "typeId": "node.mux_scalar", "handle": "mode_spawn_enable",
+      "id": 11, "typeId": "node.mux_scalar", "handle": "mode_spawn_enable", "nodeId": "mode_spawn_enable",
       "params": {
         "selector": { "type": "Float", "value": 2.0 },
         "in_0":     { "type": "Float", "value": 0.0 },
@@ -223,7 +223,7 @@
     },
 
     {
-      "id": 12, "typeId": "node.math", "handle": "shape_active",
+      "id": 12, "typeId": "node.math", "handle": "shape_active", "nodeId": "shape_active",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -231,7 +231,7 @@
       }
     },
     {
-      "id": 13, "typeId": "node.math", "handle": "spawn_active",
+      "id": 13, "typeId": "node.math", "handle": "spawn_active", "nodeId": "spawn_active",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -240,12 +240,12 @@
     },
 
     {
-      "id": 14, "typeId": "node.mux_scalar", "handle": "mux_final_n_sides",
+      "id": 14, "typeId": "node.mux_scalar", "handle": "mux_final_n_sides", "nodeId": "mux_final_n_sides",
       "params": { "selector": { "type": "Float", "value": 0.0 } }
     },
 
     {
-      "id": 15, "typeId": "node.generate_range", "handle": "angles",
+      "id": 15, "typeId": "node.generate_range", "handle": "angles", "nodeId": "angles",
       "params": {
         "start":         { "type": "Float", "value": 0.0 },
         "end":           { "type": "Float", "value": 6.28318530718 },
@@ -254,11 +254,11 @@
       }
     },
     {
-      "id": 16, "typeId": "node.array_math", "handle": "cos_t",
+      "id": 16, "typeId": "node.array_math", "handle": "cos_t", "nodeId": "cos_t",
       "params": { "op": { "type": "Enum", "value": 12 } }
     },
     {
-      "id": 17, "typeId": "node.array_math", "handle": "cos_x",
+      "id": 17, "typeId": "node.array_math", "handle": "cos_x", "nodeId": "cos_x",
       "params": {
         "op":     { "type": "Enum",  "value": 6 },
         "scale":  { "type": "Float", "value": 1.0 },
@@ -266,11 +266,11 @@
       }
     },
     {
-      "id": 18, "typeId": "node.array_math", "handle": "sin_t",
+      "id": 18, "typeId": "node.array_math", "handle": "sin_t", "nodeId": "sin_t",
       "params": { "op": { "type": "Enum", "value": 11 } }
     },
     {
-      "id": 19, "typeId": "node.array_math", "handle": "sin_y",
+      "id": 19, "typeId": "node.array_math", "handle": "sin_y", "nodeId": "sin_y",
       "params": {
         "op":     { "type": "Enum",  "value": 6 },
         "scale":  { "type": "Float", "value": 1.0 },
@@ -278,11 +278,11 @@
       }
     },
     {
-      "id": 20, "typeId": "node.pack_curve_xy", "handle": "pack",
+      "id": 20, "typeId": "node.pack_curve_xy", "handle": "pack", "nodeId": "pack",
       "params": { "scale": { "type": "Float", "value": 4.0 } }
     },
     {
-      "id": 21, "typeId": "node.consecutive_edges", "handle": "edges_topology",
+      "id": 21, "typeId": "node.consecutive_edges", "handle": "edges_topology", "nodeId": "edges_topology",
       "params": {
         "count":        { "type": "Int",  "value": 4 },
         "closed":       { "type": "Bool", "value": true },
@@ -291,7 +291,7 @@
     },
 
     {
-      "id": 22, "typeId": "node.generate_range", "handle": "i_array",
+      "id": 22, "typeId": "node.generate_range", "handle": "i_array", "nodeId": "i_array",
       "params": {
         "start":         { "type": "Float", "value": 0.0 },
         "end":           { "type": "Float", "value": 15.0 },
@@ -300,7 +300,7 @@
       }
     },
     {
-      "id": 23, "typeId": "node.math", "handle": "floor_exp",
+      "id": 23, "typeId": "node.math", "handle": "floor_exp", "nodeId": "floor_exp",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -308,7 +308,7 @@
       }
     },
     {
-      "id": 24, "typeId": "node.math", "handle": "frac_exp",
+      "id": 24, "typeId": "node.math", "handle": "frac_exp", "nodeId": "frac_exp",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.0 },
@@ -316,7 +316,7 @@
       }
     },
     {
-      "id": 25, "typeId": "node.math", "handle": "frac_offset",
+      "id": 25, "typeId": "node.math", "handle": "frac_offset", "nodeId": "frac_offset",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.12 },
@@ -324,7 +324,7 @@
       }
     },
     {
-      "id": 26, "typeId": "node.array_math", "handle": "scales",
+      "id": 26, "typeId": "node.array_math", "handle": "scales", "nodeId": "scales",
       "params": {
         "op":     { "type": "Enum",  "value": 6 },
         "scale":  { "type": "Float", "value": 0.12 },
@@ -332,7 +332,7 @@
       }
     },
     {
-      "id": 27, "typeId": "node.array_replicate_polyline_rings", "handle": "stack",
+      "id": 27, "typeId": "node.array_replicate_polyline_rings", "handle": "stack", "nodeId": "stack",
       "params": { "max_rings": { "type": "Int", "value": 16 } }
     }
   ],

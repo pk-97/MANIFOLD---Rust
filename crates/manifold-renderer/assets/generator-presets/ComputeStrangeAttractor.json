@@ -125,65 +125,65 @@
     ],
     "bindings": [
       { "id": "type", "label": "Attractor Type", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "type_mux", "param": "in_0" },
+        "target": { "kind": "node", "nodeId": "type_mux", "param": "in_0" },
         "convert": { "type": "Float" } },
 
       { "id": "contrast", "label": "Contrast", "defaultValue": 3.5,
-        "target": { "kind": "handleNode", "handle": "tone_map", "param": "contrast" },
+        "target": { "kind": "node", "nodeId": "tone_map", "param": "contrast" },
         "convert": { "type": "Float" } },
 
       { "id": "chaos", "label": "Chaos", "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "chaos" },
+        "target": { "kind": "node", "nodeId": "simulate", "param": "chaos" },
         "convert": { "type": "Float" } },
 
       { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "dt_multiplier" },
+        "target": { "kind": "node", "nodeId": "simulate", "param": "dt_multiplier" },
         "convert": { "type": "Float" } },
       { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "cam_angle_a", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "cam_angle_a", "param": "scale" },
         "convert": { "type": "Float" } },
 
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "display_zoom", "param": "scale" },
+        "target": { "kind": "node", "nodeId": "display_zoom", "param": "scale" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "uv_scale" },
+        "target": { "kind": "node", "nodeId": "simulate", "param": "uv_scale" },
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "type_mux", "param": "selector" },
+        "target": { "kind": "node", "nodeId": "type_mux", "param": "selector" },
         "convert": { "type": "Float" } },
 
       { "id": "count_m", "label": "Particle Count", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "particle_count_calc", "param": "a" },
+        "target": { "kind": "node", "nodeId": "particle_count_calc", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "count_m", "label": "Particle Count", "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "size_per_countm", "param": "b" },
+        "target": { "kind": "node", "nodeId": "size_per_countm", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "diffusion", "label": "Diffusion", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "diffuse", "param": "diffusion" },
+        "target": { "kind": "node", "nodeId": "diffuse", "param": "diffusion" },
         "convert": { "type": "Float" } },
 
       { "id": "tilt", "label": "Tilt", "defaultValue": 0.3,
-        "target": { "kind": "handleNode", "handle": "simulate", "param": "cam_tilt" },
+        "target": { "kind": "node", "nodeId": "simulate", "param": "cam_tilt" },
         "convert": { "type": "Float" } },
 
       { "id": "size", "label": "Size", "defaultValue": 3.0,
-        "target": { "kind": "handleNode", "handle": "size_per_countm", "param": "a" },
+        "target": { "kind": "node", "nodeId": "size_per_countm", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "invert", "label": "Invert", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "display_invert", "param": "intensity" },
+        "target": { "kind": "node", "nodeId": "display_invert", "param": "intensity" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "typeId": "system.final_output",    "handle": "final_output" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+    { "id": 1, "typeId": "system.final_output",    "handle": "final_output", "nodeId": "final_output" },
 
-    { "id": 2, "typeId": "node.seed_particles", "handle": "seed",
+    { "id": 2, "typeId": "node.seed_particles", "handle": "seed", "nodeId": "seed",
       "params": {
         "max_capacity": { "type": "Float", "value": 2000000.0 },
         "active_count": { "type": "Float", "value": 500000.0 },
@@ -191,7 +191,7 @@
         "seed_mode":    { "type": "Enum",  "value": 1 }
       } },
 
-    { "id": 3, "typeId": "node.wgsl_compute", "handle": "simulate",
+    { "id": 3, "typeId": "node.wgsl_compute", "handle": "simulate", "nodeId": "simulate",
       "wgslSource": "// Strange-attractor simulate kernel — JSON-editable.\n//\n// Five ODE families (Lorenz / Rössler / Aizawa / Thomas / Halvorsen)\n// selected by attractor_type. RK2 midpoint integration, 8 substeps\n// per frame. Per-attractor intrinsic constants (centre, scale, base\n// timestep) live as const arrays indexed by attractor_type.\n//\n// Adding a new attractor: append a case to ode(), append entries to\n// CENTER_Z / SCALE / BASE_DT, bump the const indices the const arrays\n// expect (extend the arrays in lockstep). Increase the outer-card\n// `type` slider max.\n//\n// First-frame init: seed_particles zeroes velocity. We detect this per\n// particle via near-zero magnitude, then hash-seed near the attractor\n// centre and warm up to converge onto the manifold (with phase stagger\n// so particles span the full cycle from frame 1).\n//\n// NaN / divergence guard: any particle whose 3D state escapes a large\n// radius (numerical instability at extreme chaos values) teleports\n// back to centre. Replaces the bundled monolith's 50-step escape\n// respawn — one comparison per substep instead of an inner loop.\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\nstruct U {\n    attractor_type: u32,\n    active_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n    chaos: f32,\n    cam_angle: f32,\n    cam_tilt: f32,\n    aspect: f32,\n    dt_multiplier: f32,\n    uv_scale: f32,\n    _pad2: f32,\n    _pad3: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nconst STEPS_PER_FRAME: i32 = 8;\nconst SEED_MIN_TIME: f32 = 10.0;\nconst SEED_WARMUP_MIN: i32 = 50;\nconst MAX_RADIUS_SQ: f32 = 1.0e6;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float3(seed: u32) -> vec3<f32> {\n    let h1 = wang_hash(seed);\n    let h2 = wang_hash(h1);\n    let h3 = wang_hash(h2);\n    return vec3<f32>(f32(h1), f32(h2), f32(h3)) / 4294967296.0;\n}\n\nfn attractor_center_z(atype: u32) -> f32 {\n    switch atype {\n        case 0u: { return 25.0; }\n        case 1u: { return 2.0; }\n        case 2u: { return 0.5; }\n        case 3u: { return 0.0; }\n        default: { return 0.0; }\n    }\n}\n\nfn attractor_scale(atype: u32) -> f32 {\n    switch atype {\n        case 0u: { return 25.0; }\n        case 1u: { return 10.0; }\n        case 2u: { return 1.2; }\n        case 3u: { return 4.0; }\n        default: { return 12.0; }\n    }\n}\n\nfn attractor_base_dt(atype: u32) -> f32 {\n    switch atype {\n        case 0u: { return 0.003; }\n        case 1u: { return 0.008; }\n        case 2u: { return 0.008; }\n        case 3u: { return 0.03; }\n        default: { return 0.004; }\n    }\n}\n\nfn lorenz(p: vec3<f32>, c: f32) -> vec3<f32> {\n    let sigma = 10.0 + c * 4.0;\n    let rho = 28.0 + c * 8.0;\n    let beta = 2.6667 + c * 0.5;\n    return vec3<f32>(sigma * (p.y - p.x), p.x * (rho - p.z) - p.y, p.x * p.y - beta * p.z);\n}\n\nfn rossler(p: vec3<f32>, c: f32) -> vec3<f32> {\n    let a = 0.2 + c * 0.15;\n    let b = 0.2 + c * 0.1;\n    let cc = 5.7 + c * 3.0;\n    return vec3<f32>(-p.y - p.z, p.x + a * p.y, b + p.z * (p.x - cc));\n}\n\nfn aizawa(p: vec3<f32>, c: f32) -> vec3<f32> {\n    let a = 0.95 + c * 0.1;\n    let b = 0.7 + c * 0.2;\n    let d = 3.5 + c * 1.0;\n    let e = 0.25;\n    let f = 0.1;\n    return vec3<f32>(\n        (p.z - b) * p.x - d * p.y,\n        d * p.x + (p.z - b) * p.y,\n        0.6 + a * p.z - (p.z * p.z * p.z) / 3.0\n            - (p.x * p.x + p.y * p.y) * (1.0 + e * p.z)\n            + f * p.z * p.x * p.x * p.x,\n    );\n}\n\nfn thomas(p: vec3<f32>, c: f32) -> vec3<f32> {\n    let b = 0.208186 - c * 0.05;\n    return vec3<f32>(sin(p.y) - b * p.x, sin(p.z) - b * p.y, sin(p.x) - b * p.z);\n}\n\nfn halvorsen(p: vec3<f32>, c: f32) -> vec3<f32> {\n    let a = 1.89 + c * 0.5;\n    return vec3<f32>(\n        -a * p.x - 4.0 * p.y - 4.0 * p.z - p.y * p.y,\n        -a * p.y - 4.0 * p.z - 4.0 * p.x - p.z * p.z,\n        -a * p.z - 4.0 * p.x - 4.0 * p.y - p.x * p.x,\n    );\n}\n\nfn ode(atype: u32, p: vec3<f32>, c: f32) -> vec3<f32> {\n    switch atype {\n        case 0u: { return lorenz(p, c); }\n        case 1u: { return rossler(p, c); }\n        case 2u: { return aizawa(p, c); }\n        case 3u: { return thomas(p, c); }\n        default: { return halvorsen(p, c); }\n    }\n}\n\nfn attractor_step(atype: u32, p: vec3<f32>, dt: f32, c: f32) -> vec3<f32> {\n    let dp = ode(atype, p, c);\n    let mid = p + dp * (dt * 0.5);\n    let dp2 = ode(atype, mid, c);\n    return p + dp2 * dt;\n}\n\nfn project_point(p: vec3<f32>, center: vec3<f32>, scl: f32,\n                 cam_angle: f32, tilt: f32, aspect: f32, uv_scale: f32) -> vec2<f32> {\n    let q = (p - center) / scl;\n    let ca = cos(cam_angle);\n    let sa = sin(cam_angle);\n    let rx = q.x * ca - q.z * sa;\n    let rz_rot = q.x * sa + q.z * ca;\n    let ct = cos(tilt);\n    let st = sin(tilt);\n    let ry = q.y * ct - rz_rot * st;\n    let rz = q.y * st + rz_rot * ct;\n    let depth = rz + 2.5;\n    let persp_scale = 2.0 / (uv_scale * max(depth, 0.3));\n    let sx = rx * persp_scale / aspect;\n    let sy = ry * persp_scale;\n    return vec2<f32>(sx * 0.5 + 0.5, sy * 0.5 + 0.5);\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= u.active_count {\n        return;\n    }\n\n    let atype = u.attractor_type;\n    let center = vec3<f32>(0.0, 0.0, attractor_center_z(atype));\n    let scl = attractor_scale(atype);\n    let dt = attractor_base_dt(atype) * u.dt_multiplier;\n\n    var p = particles[i];\n    var state = p.velocity;\n\n    // First-frame init: seed_particles zeroes velocity. Detect via\n    // near-zero magnitude (post-integration state always has |v| > 0).\n    if dot(state, state) < 1.0e-12 {\n        let seed = i * 1664525u + 747796405u;\n        let rnd = hash_float3(seed) * 2.0 - 1.0;\n        state = center + rnd * scl * 0.15;\n\n        let warm_dt = dt * 2.0;\n        let converge_steps = clamp(i32(SEED_MIN_TIME / warm_dt) + 1, SEED_WARMUP_MIN, 2000);\n        let phase_steps = converge_steps * i32(i % 997u) / 997;\n        let warmup_steps = min(converge_steps + phase_steps, 4000);\n        for (var w = 0; w < warmup_steps; w++) {\n            state = attractor_step(atype, state, warm_dt, u.chaos);\n        }\n    }\n\n    // Per-frame RK2 substeps.\n    for (var s = 0; s < STEPS_PER_FRAME; s++) {\n        state = attractor_step(atype, state, dt, u.chaos);\n        if any(state != state) || dot(state, state) > MAX_RADIUS_SQ {\n            state = center;\n        }\n    }\n\n    p.velocity = state;\n    p.position = vec3<f32>(\n        project_point(state, center, scl, u.cam_angle, u.cam_tilt, u.aspect, u.uv_scale),\n        0.0,\n    );\n    p.life = 1.0;\n    p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n    particles[i] = p;\n}\n",
       "params": {
         "attractor_type": { "type": "Float", "value": 0.0 },
@@ -204,31 +204,31 @@
         "uv_scale":       { "type": "Float", "value": 1.0 }
       } },
 
-    { "id": 4, "typeId": "node.array_diffuse_particles", "handle": "diffuse",
+    { "id": 4, "typeId": "node.array_diffuse_particles", "handle": "diffuse", "nodeId": "diffuse",
       "params": {
         "diffusion":    { "type": "Float", "value": 0.0 },
         "active_count": { "type": "Float", "value": 500000.0 }
       } },
 
-    { "id": 5, "typeId": "node.scatter_particles", "handle": "scatter",
+    { "id": 5, "typeId": "node.scatter_particles", "handle": "scatter", "nodeId": "scatter",
       "params": {
         "active_count":   { "type": "Float", "value": 500000.0 },
         "scaled_energy":  { "type": "Float", "value": 41.0 },
         "boundary":       { "type": "Enum",  "value": 1 }
       } },
 
-    { "id": 6, "typeId": "node.resolve_accumulator", "handle": "resolve",
+    { "id": 6, "typeId": "node.resolve_accumulator", "handle": "resolve", "nodeId": "resolve",
       "params": {
         "fixed_point_scale": { "type": "Float", "value": 4096.0 }
       } },
 
-    { "id": 7, "typeId": "node.reinhard_tone_map", "handle": "tone_map",
+    { "id": 7, "typeId": "node.reinhard_tone_map", "handle": "tone_map", "nodeId": "tone_map",
       "params": {
         "intensity": { "type": "Float", "value": 3.0 },
         "contrast":  { "type": "Float", "value": 3.5 }
       } },
 
-    { "id": 8, "typeId": "node.affine_transform", "handle": "display_zoom",
+    { "id": 8, "typeId": "node.affine_transform", "handle": "display_zoom", "nodeId": "display_zoom",
       "params": {
         "translate_x": { "type": "Float", "value": 0.0 },
         "translate_y": { "type": "Float", "value": 0.0 },
@@ -236,65 +236,65 @@
         "rotation":    { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 9, "typeId": "node.invert", "handle": "display_invert",
+    { "id": 9, "typeId": "node.invert", "handle": "display_invert", "nodeId": "display_invert",
       "params": {
         "intensity": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 10, "typeId": "node.affine_scalar", "handle": "cam_angle_a",
+    { "id": 10, "typeId": "node.affine_scalar", "handle": "cam_angle_a", "nodeId": "cam_angle_a",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": 1.0 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
-    { "id": 11, "typeId": "node.affine_scalar", "handle": "cam_angle_b",
+    { "id": 11, "typeId": "node.affine_scalar", "handle": "cam_angle_b", "nodeId": "cam_angle_b",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": 0.25 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 12, "typeId": "node.affine_scalar", "handle": "particle_count_calc",
+    { "id": 12, "typeId": "node.affine_scalar", "handle": "particle_count_calc", "nodeId": "particle_count_calc",
       "params": {
         "a":      { "type": "Float", "value": 0.5 },
         "scale":  { "type": "Float", "value": 1000000.0 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 13, "typeId": "node.math", "handle": "size_per_countm",
+    { "id": 13, "typeId": "node.math", "handle": "size_per_countm", "nodeId": "size_per_countm",
       "params": {
         "a":  { "type": "Float", "value": 3.0 },
         "b":  { "type": "Float", "value": 0.5 },
         "op": { "type": "Enum",  "value": 3 }
       } },
 
-    { "id": 14, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc",
+    { "id": 14, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc", "nodeId": "scaled_energy_calc",
       "params": {
         "a":      { "type": "Float", "value": 1.0 },
         "scale":  { "type": "Float", "value": 6.8266667 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 15, "typeId": "node.canvas_area_scale", "handle": "area_scale",
+    { "id": 15, "typeId": "node.canvas_area_scale", "handle": "area_scale", "nodeId": "area_scale",
       "params": {
         "width":          { "type": "Float", "value": 1920.0 },
         "height":         { "type": "Float", "value": 1080.0 },
         "reference_area": { "type": "Float", "value": 2073600.0 }
       } },
 
-    { "id": 16, "typeId": "node.affine_scalar", "handle": "intensity_calc",
+    { "id": 16, "typeId": "node.affine_scalar", "handle": "intensity_calc", "nodeId": "intensity_calc",
       "params": {
         "a":      { "type": "Float", "value": 1.0 },
         "scale":  { "type": "Float", "value": 3.0 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 17, "typeId": "node.clip_trigger_cycle", "handle": "type_cycle",
+    { "id": 17, "typeId": "node.clip_trigger_cycle", "handle": "type_cycle", "nodeId": "type_cycle",
       "params": {
         "modulus": { "type": "Float", "value": 5.0 }
       } },
 
-    { "id": 18, "typeId": "node.mux_scalar", "handle": "type_mux",
+    { "id": 18, "typeId": "node.mux_scalar", "handle": "type_mux", "nodeId": "type_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 },
         "in_0":     { "type": "Float", "value": 0.0 },

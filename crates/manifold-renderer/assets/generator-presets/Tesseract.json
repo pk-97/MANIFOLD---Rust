@@ -143,45 +143,45 @@
     ],
     "bindings": [
       { "id": "rotate_xy_speed", "label": "Rotate XY Speed", "defaultValue": 0.6,
-        "target": { "kind": "handleNode", "handle": "angle_xy_mul", "param": "b" },
+        "target": { "kind": "node", "nodeId": "angle_xy_mul", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "rotate_zw_speed", "label": "Rotate ZW Speed", "defaultValue": 0.4,
-        "target": { "kind": "handleNode", "handle": "angle_zw_mul", "param": "b" },
+        "target": { "kind": "node", "nodeId": "angle_zw_mul", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "rotate_xw_speed", "label": "Rotate XW Speed", "defaultValue": 0.25,
-        "target": { "kind": "handleNode", "handle": "angle_xw_mul", "param": "b" },
+        "target": { "kind": "node", "nodeId": "angle_xw_mul", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "line", "label": "Line", "defaultValue": 0.002,
-        "target": { "kind": "handleNode", "handle": "render", "param": "edge_thickness" },
+        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
         "convert": { "type": "Float" } },
       { "id": "dist", "label": "Distance", "defaultValue": 3.0,
-        "target": { "kind": "handleNode", "handle": "project", "param": "proj_dist" },
+        "target": { "kind": "node", "nodeId": "project", "param": "proj_dist" },
         "convert": { "type": "Float" } },
       { "id": "show_verts", "label": "Show Vertices", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "show_verts" },
+        "target": { "kind": "node", "nodeId": "render", "param": "show_verts" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "vert_size", "label": "Vertex Size", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "vert_size" },
+        "target": { "kind": "node", "nodeId": "render", "param": "vert_size" },
         "convert": { "type": "Float" } },
       { "id": "animate", "label": "Animate", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "animate" },
+        "target": { "kind": "node", "nodeId": "render", "param": "animate" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "render", "param": "speed" },
+        "target": { "kind": "node", "nodeId": "render", "param": "speed" },
         "convert": { "type": "Float" } },
       { "id": "window", "label": "Window", "defaultValue": 0.1,
-        "target": { "kind": "handleNode", "handle": "render", "param": "window" },
+        "target": { "kind": "node", "nodeId": "render", "param": "window" },
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "project", "param": "proj_scale" },
+        "target": { "kind": "node", "nodeId": "project", "param": "proj_scale" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
     {
-      "id": 1, "typeId": "node.math", "handle": "angle_xy_mul",
+      "id": 1, "typeId": "node.math", "handle": "angle_xy_mul", "nodeId": "angle_xy_mul",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.6 },
@@ -189,7 +189,7 @@
       }
     },
     {
-      "id": 2, "typeId": "node.math", "handle": "angle_zw_mul",
+      "id": 2, "typeId": "node.math", "handle": "angle_zw_mul", "nodeId": "angle_zw_mul",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.4 },
@@ -197,16 +197,16 @@
       }
     },
     {
-      "id": 3, "typeId": "node.math", "handle": "angle_xw_mul",
+      "id": 3, "typeId": "node.math", "handle": "angle_xw_mul", "nodeId": "angle_xw_mul",
       "params": {
         "a":  { "type": "Float", "value": 0.0 },
         "b":  { "type": "Float", "value": 0.25 },
         "op": { "type": "Enum",  "value": 2 }
       }
     },
-    { "id": 4, "typeId": "node.generate_tesseract_vertices", "handle": "shape" },
+    { "id": 4, "typeId": "node.generate_tesseract_vertices", "handle": "shape", "nodeId": "shape" },
     {
-      "id": 5, "typeId": "node.rotate_4d", "handle": "rotate",
+      "id": 5, "typeId": "node.rotate_4d", "handle": "rotate", "nodeId": "rotate",
       "params": {
         "angle_xy": { "type": "Float", "value": 0.0 },
         "angle_zw": { "type": "Float", "value": 0.0 },
@@ -214,14 +214,14 @@
       }
     },
     {
-      "id": 6, "typeId": "node.project_4d", "handle": "project",
+      "id": 6, "typeId": "node.project_4d", "handle": "project", "nodeId": "project",
       "params": {
         "proj_scale": { "type": "Float", "value": 1.0 },
         "proj_dist":  { "type": "Float", "value": 3.0 }
       }
     },
     {
-      "id": 7, "typeId": "node.render_lines", "handle": "render",
+      "id": 7, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.002 },
         "closed_loop":       { "type": "Bool",  "value": false },
@@ -237,7 +237,7 @@
         "color_a":           { "type": "Float", "value": 1.0   }
       }
     },
-    { "id": 8, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 8, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },

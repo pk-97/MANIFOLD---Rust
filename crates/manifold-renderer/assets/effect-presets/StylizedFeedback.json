@@ -49,8 +49,8 @@
         "label": "Amount",
         "defaultValue": 0.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "gain",
+          "kind": "node",
+          "nodeId": "gain",
           "param": "gain"
         },
         "convert": { "type": "Float" }
@@ -60,8 +60,8 @@
         "label": "Zoom",
         "defaultValue": 0.95,
         "target": {
-          "kind": "handleNode",
-          "handle": "affine",
+          "kind": "node",
+          "nodeId": "affine",
           "param": "scale"
         },
         "convert": { "type": "Float" }
@@ -71,8 +71,8 @@
         "label": "Rotate",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "affine",
+          "kind": "node",
+          "nodeId": "affine",
           "param": "rotation"
         },
         "convert": { "type": "Float" }
@@ -81,12 +81,12 @@
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source" },
-    { "id": 1, "typeId": "node.feedback", "handle": "feedback" },
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    { "id": 1, "typeId": "node.feedback", "handle": "feedback", "nodeId": "feedback" },
     {
       "id": 2,
       "typeId": "node.affine_transform",
-      "handle": "affine",
+      "handle": "affine", "nodeId": "affine",
       "params": {
         "scale": { "type": "Float", "value": 0.95 },
         "rotation": { "type": "Float", "value": 0.0 }
@@ -95,7 +95,7 @@
     {
       "id": 3,
       "typeId": "node.gain",
-      "handle": "gain",
+      "handle": "gain", "nodeId": "gain",
       "params": {
         "gain": { "type": "Float", "value": 0.5 }
       }
@@ -103,7 +103,7 @@
     {
       "id": 4,
       "typeId": "node.vignette",
-      "handle": "vignette",
+      "handle": "vignette", "nodeId": "vignette",
       "params": {
         "shape": { "type": "Enum", "value": 2 },
         "size": { "type": "Float", "value": 0.98 },
@@ -114,13 +114,13 @@
     {
       "id": 5,
       "typeId": "node.mix",
-      "handle": "mix",
+      "handle": "mix", "nodeId": "mix",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 1 }
       }
     },
-    { "id": 6, "typeId": "system.final_output", "handle": "final_output" }
+    { "id": 6, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },

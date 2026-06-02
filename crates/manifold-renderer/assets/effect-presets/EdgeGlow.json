@@ -53,8 +53,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "edge_detect",
+          "kind": "node",
+          "nodeId": "edge_detect",
           "param": "amount"
         },
         "convert": {
@@ -66,8 +66,8 @@
         "label": "Threshold",
         "defaultValue": 0.1,
         "target": {
-          "kind": "handleNode",
-          "handle": "edge_detect",
+          "kind": "node",
+          "nodeId": "edge_detect",
           "param": "threshold"
         },
         "convert": {
@@ -90,12 +90,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.edge_detect",
-      "handle": "edge_detect",
+      "handle": "edge_detect", "nodeId": "edge_detect",
       "params": {
         "amount": {
           "type": "Float",
@@ -110,7 +110,7 @@
     {
       "id": 2,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

@@ -53,8 +53,8 @@
         "label": "Amount",
         "defaultValue": 1.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "edge_stretch",
+          "kind": "node",
+          "nodeId": "edge_stretch",
           "param": "amount"
         },
         "convert": {
@@ -66,8 +66,8 @@
         "label": "Width",
         "defaultValue": 0.5,
         "target": {
-          "kind": "handleNode",
-          "handle": "strip",
+          "kind": "node",
+          "nodeId": "strip",
           "param": "width"
         },
         "convert": {
@@ -79,8 +79,8 @@
         "label": "Direction",
         "defaultValue": 0.0,
         "target": {
-          "kind": "handleNode",
-          "handle": "strip",
+          "kind": "node",
+          "nodeId": "strip",
           "param": "direction"
         },
         "convert": {
@@ -103,12 +103,12 @@
     {
       "id": 0,
       "typeId": "system.source",
-      "handle": "source"
+      "handle": "source", "nodeId": "source"
     },
     {
       "id": 1,
       "typeId": "node.uv_strip_clamp",
-      "handle": "strip",
+      "handle": "strip", "nodeId": "strip",
       "params": {
         "width": { "type": "Float", "value": 0.5 },
         "direction": { "type": "Enum", "value": 0 }
@@ -117,7 +117,7 @@
     {
       "id": 2,
       "typeId": "node.remap",
-      "handle": "remapped",
+      "handle": "remapped", "nodeId": "remapped",
       "params": {
         "wrap": { "type": "Enum", "value": 0 }
       }
@@ -125,7 +125,7 @@
     {
       "id": 3,
       "typeId": "node.mix",
-      "handle": "edge_stretch",
+      "handle": "edge_stretch", "nodeId": "edge_stretch",
       "params": {
         "amount": { "type": "Float", "value": 1.0 },
         "mode": { "type": "Enum", "value": 0 }
@@ -134,7 +134,7 @@
     {
       "id": 4,
       "typeId": "system.final_output",
-      "handle": "final_output"
+      "handle": "final_output", "nodeId": "final_output"
     }
   ],
   "wires": [

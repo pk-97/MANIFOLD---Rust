@@ -167,7 +167,17 @@ impl ProjectIOService {
         let load_result = manifold_io::loader::load_project(path);
 
         match load_result {
-            Ok(project) => {
+            Ok(mut project) => {
+                // One-time load upgrade: pre-node-id user bindings stored
+                // their target by handle. Resolve those to stable node ids
+                // against each effect's graph (override or canonical
+                // preset) now, before the project goes live, so a grouped
+                // inner node keeps driving its card slider. Idempotent and
+                // renderer-side (it needs the bundled preset graphs).
+                manifold_renderer::node_graph::migrate_user_param_bindings_to_node_id(
+                    &mut project,
+                );
+
                 let path_str = path.to_string_lossy().to_string();
                 let was_v1 = !manifold_io::archive::is_v2_archive(&path_str);
                 let name = project.project_name.clone();

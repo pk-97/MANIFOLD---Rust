@@ -33,120 +33,120 @@
     ],
     "bindings": [
       { "id": "speed",             "label": "Speed",        "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "euler_3d", "param": "speed" },
+        "target": { "kind": "node", "nodeId": "euler_3d", "param": "speed" },
         "convert": { "type": "Float" } },
 
       { "id": "flow",              "label": "Flow",         "defaultValue": -0.01,
-        "target": { "kind": "handleNode", "handle": "slope_final", "param": "a" },
+        "target": { "kind": "node", "nodeId": "slope_final", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "feather",           "label": "Feather",      "defaultValue": 20.0,
-        "target": { "kind": "handleNode", "handle": "blur_radius_scaled", "param": "a" },
+        "target": { "kind": "node", "nodeId": "blur_radius_scaled", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "curl",              "label": "Curl",         "defaultValue": 85.0,
-        "target": { "kind": "handleNode", "handle": "curl_angle_base", "param": "a" },
+        "target": { "kind": "node", "nodeId": "curl_angle_base", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "turbulence",        "label": "Turbulence",   "defaultValue": 0.001,
-        "target": { "kind": "handleNode", "handle": "noise_final", "param": "a" },
+        "target": { "kind": "node", "nodeId": "noise_final", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "contrast",          "label": "Contrast",     "defaultValue": 3.5,
-        "target": { "kind": "handleNode", "handle": "display_tone", "param": "contrast" },
+        "target": { "kind": "node", "nodeId": "display_tone", "param": "contrast" },
         "convert": { "type": "Float" } },
 
       { "id": "scale",             "label": "Scale",        "defaultValue": 1.0,
-        "target": { "kind": "handleNode", "handle": "uv_scale_inv", "param": "b" },
+        "target": { "kind": "node", "nodeId": "uv_scale_inv", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "particle_count_calc", "param": "a" },
+        "target": { "kind": "node", "nodeId": "particle_count_calc", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "size_per_pm", "param": "b" },
+        "target": { "kind": "node", "nodeId": "size_per_pm", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
-        "target": { "kind": "handleNode", "handle": "vol_scaled_energy_calc", "param": "b" },
+        "target": { "kind": "node", "nodeId": "vol_scaled_energy_calc", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "trig_gate_env", "param": "enable" },
+        "target": { "kind": "node", "nodeId": "trig_gate_env", "param": "enable" },
         "convert": { "type": "BoolThreshold" } },
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mode3_gate", "param": "b" },
+        "target": { "kind": "node", "nodeId": "mode3_gate", "param": "b" },
         "convert": { "type": "Float" } },
       { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mode4_gate", "param": "b" },
+        "target": { "kind": "node", "nodeId": "mode4_gate", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "mode_value", "param": "value" },
+        "target": { "kind": "node", "nodeId": "mode_value", "param": "value" },
         "convert": { "type": "Float" } },
 
       { "id": "size",              "label": "Size",         "defaultValue": 3.0,
-        "target": { "kind": "handleNode", "handle": "size_per_pm", "param": "a" },
+        "target": { "kind": "node", "nodeId": "size_per_pm", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
-        "target": { "kind": "handleNode", "handle": "noise_force", "param": "anti_clump" },
+        "target": { "kind": "node", "nodeId": "noise_force", "param": "anti_clump" },
         "convert": { "type": "Float" } },
       { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 20.0,
-        "target": { "kind": "handleNode", "handle": "diffusion_calc", "param": "a" },
+        "target": { "kind": "node", "nodeId": "diffusion_calc", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "force",             "label": "Force",        "defaultValue": 0.005,
-        "target": { "kind": "handleNode", "handle": "inject_force_gated", "param": "b" },
+        "target": { "kind": "node", "nodeId": "inject_force_gated", "param": "b" },
         "convert": { "type": "Float" } },
 
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "container_repel", "param": "container" },
+        "target": { "kind": "node", "nodeId": "container_repel", "param": "container" },
         "convert": { "type": "EnumRound" } },
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "container_bounds", "param": "container" },
+        "target": { "kind": "node", "nodeId": "container_bounds", "param": "container" },
         "convert": { "type": "EnumRound" } },
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "seed_pattern", "param": "container" },
+        "target": { "kind": "node", "nodeId": "seed_pattern", "param": "container" },
         "convert": { "type": "IntRound" } },
       { "id": "container",         "label": "Container",    "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "container_clamped", "param": "a" },
+        "target": { "kind": "node", "nodeId": "container_clamped", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
-        "target": { "kind": "handleNode", "handle": "container_repel", "param": "ctr_scale" },
+        "target": { "kind": "node", "nodeId": "container_repel", "param": "ctr_scale" },
         "convert": { "type": "Float" } },
       { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
-        "target": { "kind": "handleNode", "handle": "container_bounds", "param": "ctr_scale" },
+        "target": { "kind": "node", "nodeId": "container_bounds", "param": "ctr_scale" },
         "convert": { "type": "Float" } },
       { "id": "ctr_scale",         "label": "Container Scale", "defaultValue": 0.8,
-        "target": { "kind": "handleNode", "handle": "seed_pattern", "param": "ctr_scale" },
+        "target": { "kind": "node", "nodeId": "seed_pattern", "param": "ctr_scale" },
         "convert": { "type": "Float" } },
 
       { "id": "cam_dist",          "label": "Cam Dist",     "defaultValue": 3.0,
-        "target": { "kind": "handleNode", "handle": "cam_orbit_node", "param": "distance" },
+        "target": { "kind": "node", "nodeId": "cam_orbit_node", "param": "distance" },
         "convert": { "type": "Float" } },
 
       { "id": "rotate_x",          "label": "Rotate X",     "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "tilt_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "tilt_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "rotate_y",          "label": "Rotate Y",     "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "orbit_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "orbit_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
       { "id": "rotate_z",          "label": "Rotate Z",     "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "roll_to_rad", "param": "a" },
+        "target": { "kind": "node", "nodeId": "roll_to_rad", "param": "a" },
         "convert": { "type": "Float" } },
 
       { "id": "flatten",           "label": "Flatten",      "defaultValue": 0.0,
-        "target": { "kind": "handleNode", "handle": "flatten_3d", "param": "flatten" },
+        "target": { "kind": "node", "nodeId": "flatten_3d", "param": "flatten" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1,  "typeId": "system.final_output",    "handle": "final_output" },
+    { "id": 0,  "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
+    { "id": 1,  "typeId": "system.final_output",    "handle": "final_output", "nodeId": "final_output" },
 
-    { "id": 2,  "typeId": "node.camera_orbit", "handle": "cam_orbit_node",
+    { "id": 2,  "typeId": "node.camera_orbit", "handle": "cam_orbit_node", "nodeId": "cam_orbit_node",
       "params": {
         "orbit":    { "type": "Float", "value": 0.0 },
         "tilt":     { "type": "Float", "value": 0.0 },
@@ -158,14 +158,14 @@
         "far":      { "type": "Float", "value": 200.0 }
       } },
 
-    { "id": 3,  "typeId": "node.affine_scalar", "handle": "tilt_to_rad",
+    { "id": 3,  "typeId": "node.affine_scalar", "handle": "tilt_to_rad", "nodeId": "tilt_to_rad",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 4,  "typeId": "node.affine_scalar", "handle": "orbit_to_rad",
+    { "id": 4,  "typeId": "node.affine_scalar", "handle": "orbit_to_rad", "nodeId": "orbit_to_rad",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 5,  "typeId": "node.affine_scalar", "handle": "roll_to_rad",
+    { "id": 5,  "typeId": "node.affine_scalar", "handle": "roll_to_rad", "nodeId": "roll_to_rad",
       "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 3.14159265 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 100, "typeId": "node.seed_particles", "handle": "seed_buffer",
+    { "id": 100, "typeId": "node.seed_particles", "handle": "seed_buffer", "nodeId": "seed_buffer",
       "params": {
         "max_capacity": { "type": "Int",  "value": 8000000 },
         "active_count": { "type": "Int",  "value": 2000000 },
@@ -173,7 +173,7 @@
         "seed_mode":    { "type": "Enum", "value": 0 }
       } },
 
-    { "id": 101, "typeId": "node.wgsl_compute", "handle": "seed_pattern",
+    { "id": 101, "typeId": "node.wgsl_compute", "handle": "seed_pattern", "nodeId": "seed_pattern",
       "wgslSource": "// FluidSim3D seed pattern — open family (8 patterns, JSON-editable).\n// Writes initial 3D particle positions for one of 8 patterns into an\n// aliased Array<Particle> (allocated by node.seed_particles upstream).\n// Add a 9th pattern by appending a `case` to the switch.\n//\n// Patterns: 0 center cluster, 1 H planes, 2 V planes, 3 shells,\n// 4 diagonal cross, 5 helix, 6 surface sphere, 7+ random fill.\n// Container-aware: positions outside the SDF are pulled back inside.\n// (Camera flatten is applied per-frame by node.flatten_to_camera_plane,\n// so the seed itself does not flatten.)\n\nstruct U {\n    active_count: u32,\n    pattern: u32,\n    trigger_count: u32,\n    container: u32,\n    ctr_scale: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float3(seed: u32) -> vec3<f32> {\n    let h0 = wang_hash(seed);\n    let h1 = wang_hash(h0);\n    let h2 = wang_hash(h1);\n    return vec3<f32>(\n        f32(h0) / 4294967296.0,\n        f32(h1) / 4294967296.0,\n        f32(h2) / 4294967296.0,\n    );\n}\n\nfn sd_box(p: vec3<f32>, half_size: vec3<f32>) -> f32 {\n    let d = abs(p) - half_size;\n    return length(max(d, vec3<f32>(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);\n}\n\nfn sd_sphere(p: vec3<f32>, r: f32) -> f32 {\n    return length(p) - r;\n}\n\nfn sd_torus(p: vec3<f32>, big_r: f32, small_r: f32) -> f32 {\n    let q = vec2<f32>(length(p.xz) - big_r, p.y);\n    return length(q) - small_r;\n}\n\nfn container_sdf(p: vec3<f32>, ctype: u32, scale: f32) -> f32 {\n    let centered = p - 0.5;\n    switch ctype {\n        case 1u: { return sd_box(centered, vec3<f32>(scale * 0.5)); }\n        case 2u: { return sd_sphere(centered, scale * 0.5); }\n        case 3u: { return sd_torus(centered, scale * 0.3, scale * 0.12); }\n        default: { return -1.0; }\n    }\n}\n\nfn container_gradient(p: vec3<f32>, ctype: u32, scale: f32) -> vec3<f32> {\n    let eps: f32 = 0.002;\n    return normalize(vec3<f32>(\n        container_sdf(p + vec3<f32>(eps, 0.0, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(eps, 0.0, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, eps, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(0.0, eps, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, 0.0, eps), ctype, scale) - container_sdf(p - vec3<f32>(0.0, 0.0, eps), ctype, scale),\n    ));\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= u.active_count {\n        return;\n    }\n\n    let pattern_seed = u.trigger_count * 7919u;\n    let seed = i * 1664525u + pattern_seed * 747796405u;\n    var pos: vec3<f32>;\n\n    switch u.pattern {\n        case 0u: {\n            var sum = vec3<f32>(0.0);\n            var s = seed;\n            for (var j: i32 = 0; j < 4; j++) {\n                sum += hash_float3(s);\n                s = wang_hash(s);\n            }\n            pos = 0.5 + (sum - 2.0) * 0.052;\n        }\n        case 1u: {\n            let slab_idx = i % 6u;\n            let xz = hash_float3(seed).xy;\n            pos = vec3<f32>(xz.x, (f32(slab_idx) + 0.5) / 6.0, xz.y);\n        }\n        case 2u: {\n            let slab_idx = i % 6u;\n            let yz = hash_float3(seed).xy;\n            pos = vec3<f32>((f32(slab_idx) + 0.5) / 6.0, yz.x, yz.y);\n        }\n        case 3u: {\n            let shell_idx = i % 3u;\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let radius = 0.1 + f32(shell_idx) * 0.1;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        case 4u: {\n            let t = hash_float(seed);\n            let spread = hash_float(seed + 1u) * 0.03;\n            let axis = i % 3u;\n            if axis == 0u {\n                pos = vec3<f32>(t, t + spread, 0.5 + spread);\n            } else if axis == 1u {\n                pos = vec3<f32>(t, 0.5 + spread, t + spread);\n            } else {\n                pos = vec3<f32>(0.5 + spread, t, t + spread);\n            }\n        }\n        case 5u: {\n            let norm = f32(i) / f32(u.active_count);\n            let angle = norm * 6.0 * 6.28318530718;\n            let y = norm;\n            let radius: f32 = 0.15;\n            let spread = hash_float(seed) * 0.015;\n            let helix_side = select(0.0, 3.14159, (i & 1u) != 0u);\n            pos = vec3<f32>(\n                0.5 + cos(angle + helix_side) * (radius + spread),\n                y,\n                0.5 + sin(angle + helix_side) * (radius + spread),\n            );\n        }\n        case 6u: {\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let spread = (hash_float(seed + 1u) - 0.5) * 0.03;\n            let radius = 0.45 + spread;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        default: {\n            pos = hash_float3(seed);\n        }\n    }\n\n    pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n\n    if u.container > 0u {\n        if container_sdf(pos, u.container, u.ctr_scale) > 0.0 {\n            let n = container_gradient(pos, u.container, u.ctr_scale);\n            let d = container_sdf(pos, u.container, u.ctr_scale);\n            pos -= n * (d + 0.01);\n            pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n        }\n    }\n\n    var out_p: Particle;\n    out_p.position = pos;\n    out_p.velocity = vec3<f32>(0.0);\n    out_p.life = 1.0;\n    out_p.age = -1.0;\n    out_p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n    particles[i] = out_p;\n}\n",
       "params": {
         "active_count":  { "type": "Float", "value": 2000000.0 },
@@ -183,10 +183,10 @@
         "ctr_scale":     { "type": "Float", "value": 0.8 }
       } },
 
-    { "id": 102, "typeId": "node.array_feedback", "handle": "particles_feedback",
+    { "id": 102, "typeId": "node.array_feedback", "handle": "particles_feedback", "nodeId": "particles_feedback",
       "params": {} },
 
-    { "id": 7,  "typeId": "node.scatter_particles_3d", "handle": "vol_scatter",
+    { "id": 7,  "typeId": "node.scatter_particles_3d", "handle": "vol_scatter", "nodeId": "vol_scatter",
       "params": {
         "active_count":  { "type": "Int",  "value": 2000000 },
         "vol_res":       { "type": "Int",  "value": 128 },
@@ -194,26 +194,26 @@
         "scaled_energy": { "type": "Int",  "value": 4096 }
       } },
 
-    { "id": 8,  "typeId": "node.resolve_3d_accumulator", "handle": "vol_resolve",
+    { "id": 8,  "typeId": "node.resolve_3d_accumulator", "handle": "vol_resolve", "nodeId": "vol_resolve",
       "params": {
         "vol_res":   { "type": "Int", "value": 128 },
         "vol_depth": { "type": "Int", "value": 128 }
       } },
 
-    { "id": 9,  "typeId": "node.blur_3d_separable", "handle": "density_blur_x",
+    { "id": 9,  "typeId": "node.blur_3d_separable", "handle": "density_blur_x", "nodeId": "density_blur_x",
       "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 0 }, "radius": { "type": "Float", "value": 5.0 } } },
-    { "id": 10, "typeId": "node.blur_3d_separable", "handle": "density_blur_y",
+    { "id": 10, "typeId": "node.blur_3d_separable", "handle": "density_blur_y", "nodeId": "density_blur_y",
       "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 5.0 } } },
-    { "id": 11, "typeId": "node.blur_3d_separable", "handle": "density_blur_z",
+    { "id": 11, "typeId": "node.blur_3d_separable", "handle": "density_blur_z", "nodeId": "density_blur_z",
       "params": { "mode": { "type": "Enum", "value": 0 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 2 }, "radius": { "type": "Float", "value": 5.0 } } },
 
-    { "id": 111, "typeId": "node.gradient_central_diff_3d", "handle": "grad_3d",
+    { "id": 111, "typeId": "node.gradient_central_diff_3d", "handle": "grad_3d", "nodeId": "grad_3d",
       "params": {
         "vol_res":   { "type": "Int", "value": 128 },
         "vol_depth": { "type": "Int", "value": 128 }
       } },
 
-    { "id": 112, "typeId": "node.curl_slope_force_3d", "handle": "curl_slope",
+    { "id": 112, "typeId": "node.curl_slope_force_3d", "handle": "curl_slope", "nodeId": "curl_slope",
       "params": {
         "vol_res":        { "type": "Int",   "value": 128 },
         "vol_depth":      { "type": "Int",   "value": 128 },
@@ -224,56 +224,56 @@
         "ref_axis_z":     { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 13, "typeId": "node.blur_3d_separable", "handle": "field_blur_x",
+    { "id": 13, "typeId": "node.blur_3d_separable", "handle": "field_blur_x", "nodeId": "field_blur_x",
       "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 0 }, "radius": { "type": "Float", "value": 5.0 } } },
-    { "id": 14, "typeId": "node.blur_3d_separable", "handle": "field_blur_y",
+    { "id": 14, "typeId": "node.blur_3d_separable", "handle": "field_blur_y", "nodeId": "field_blur_y",
       "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 5.0 } } },
-    { "id": 15, "typeId": "node.blur_3d_separable", "handle": "field_blur_z",
+    { "id": 15, "typeId": "node.blur_3d_separable", "handle": "field_blur_z", "nodeId": "field_blur_z",
       "params": { "mode": { "type": "Enum", "value": 1 }, "vol_res": { "type": "Int", "value": 128 }, "axis": { "type": "Enum", "value": 2 }, "radius": { "type": "Float", "value": 5.0 } } },
 
-    { "id": 103, "typeId": "node.sample_texture_3d_at_particles", "handle": "sample_forces",
+    { "id": 103, "typeId": "node.sample_texture_3d_at_particles", "handle": "sample_forces", "nodeId": "sample_forces",
       "params": { "active_count": { "type": "Int", "value": 2000000 } } },
 
-    { "id": 104, "typeId": "node.simplex_noise_force_3d_at_particles", "handle": "noise_force",
+    { "id": 104, "typeId": "node.simplex_noise_force_3d_at_particles", "handle": "noise_force", "nodeId": "noise_force",
       "params": {
         "turbulence":   { "type": "Float", "value": 0.001 },
         "anti_clump":   { "type": "Float", "value": 20.0 },
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 105, "typeId": "node.diffuse_force_3d_at_particles", "handle": "diffuse",
+    { "id": 105, "typeId": "node.diffuse_force_3d_at_particles", "handle": "diffuse", "nodeId": "diffuse",
       "params": {
         "diffusion":    { "type": "Float", "value": 0.0166 },
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 106, "typeId": "node.container_repel_force_3d", "handle": "container_repel",
+    { "id": 106, "typeId": "node.container_repel_force_3d", "handle": "container_repel", "nodeId": "container_repel",
       "params": {
         "container":    { "type": "Enum",  "value": 0 },
         "ctr_scale":    { "type": "Float", "value": 0.8 },
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 107, "typeId": "node.euler_step_particles_3d", "handle": "euler_3d",
+    { "id": 107, "typeId": "node.euler_step_particles_3d", "handle": "euler_3d", "nodeId": "euler_3d",
       "params": {
         "active_count": { "type": "Int",   "value": 2000000 },
         "speed":        { "type": "Float", "value": 1.0 }
       } },
 
-    { "id": 108, "typeId": "node.container_bounds_3d", "handle": "container_bounds",
+    { "id": 108, "typeId": "node.container_bounds_3d", "handle": "container_bounds", "nodeId": "container_bounds",
       "params": {
         "container":    { "type": "Enum",  "value": 0 },
         "ctr_scale":    { "type": "Float", "value": 0.8 },
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 109, "typeId": "node.flatten_to_camera_plane", "handle": "flatten_3d",
+    { "id": 109, "typeId": "node.flatten_to_camera_plane", "handle": "flatten_3d", "nodeId": "flatten_3d",
       "params": {
         "flatten":      { "type": "Float", "value": 0.0 },
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 110, "typeId": "node.apply_radial_burst_3d_to_particles", "handle": "inject_3d",
+    { "id": 110, "typeId": "node.apply_radial_burst_3d_to_particles", "handle": "inject_3d", "nodeId": "inject_3d",
       "params": {
         "inject_index": { "type": "Int",   "value": -1 },
         "inject_force": { "type": "Float", "value": 0.0 },
@@ -281,7 +281,7 @@
         "active_count": { "type": "Int",   "value": 2000000 }
       } },
 
-    { "id": 17, "typeId": "node.scatter_particles_camera", "handle": "display_scatter",
+    { "id": 17, "typeId": "node.scatter_particles_camera", "handle": "display_scatter", "nodeId": "display_scatter",
       "params": {
         "active_count":  { "type": "Int",  "value": 2000000 },
         "disp_w":        { "type": "Int",  "value": 1920 },
@@ -290,16 +290,16 @@
         "scaled_energy": { "type": "Int",  "value": 4096 }
       } },
 
-    { "id": 18, "typeId": "node.resolve_accumulator", "handle": "display_resolve",
+    { "id": 18, "typeId": "node.resolve_accumulator", "handle": "display_resolve", "nodeId": "display_resolve",
       "params": { "fixed_point_scale": { "type": "Float", "value": 4096.0 } } },
 
-    { "id": 19, "typeId": "node.reinhard_tone_map", "handle": "display_tone",
+    { "id": 19, "typeId": "node.reinhard_tone_map", "handle": "display_tone", "nodeId": "display_tone",
       "params": {
         "intensity": { "type": "Float", "value": 3.0 },
         "contrast":  { "type": "Float", "value": 3.5 }
       } },
 
-    { "id": 20, "typeId": "node.affine_transform", "handle": "display_zoom",
+    { "id": 20, "typeId": "node.affine_transform", "handle": "display_zoom", "nodeId": "display_zoom",
       "params": {
         "translate_x": { "type": "Float", "value": 0.0 },
         "translate_y": { "type": "Float", "value": 0.0 },
@@ -307,124 +307,124 @@
         "rotation":    { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 21, "typeId": "node.canvas_area_scale", "handle": "area_scale",
+    { "id": 21, "typeId": "node.canvas_area_scale", "handle": "area_scale", "nodeId": "area_scale",
       "params": { "width": { "type": "Float", "value": 1920.0 }, "height": { "type": "Float", "value": 1080.0 }, "reference_area": { "type": "Float", "value": 2073600.0 }, "min_width": { "type": "Float", "value": 640.0 }, "min_height": { "type": "Float", "value": 360.0 } } },
 
-    { "id": 22, "typeId": "node.affine_scalar", "handle": "intensity_calc",
+    { "id": 22, "typeId": "node.affine_scalar", "handle": "intensity_calc", "nodeId": "intensity_calc",
       "params": { "a": { "type": "Float", "value": 1.0 }, "scale": { "type": "Float", "value": 3.0 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 23, "typeId": "node.math", "handle": "uv_scale_inv",
+    { "id": 23, "typeId": "node.math", "handle": "uv_scale_inv", "nodeId": "uv_scale_inv",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
 
-    { "id": 24, "typeId": "node.affine_scalar", "handle": "particle_count_calc",
+    { "id": 24, "typeId": "node.affine_scalar", "handle": "particle_count_calc", "nodeId": "particle_count_calc",
       "params": { "a": { "type": "Float", "value": 2.0 }, "scale": { "type": "Float", "value": 1000000.0 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 25, "typeId": "node.math", "handle": "size_per_pm",
+    { "id": 25, "typeId": "node.math", "handle": "size_per_pm", "nodeId": "size_per_pm",
       "params": { "a": { "type": "Float", "value": 3.0 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 3 } } },
 
-    { "id": 26, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc",
+    { "id": 26, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc", "nodeId": "scaled_energy_calc",
       "params": { "a": { "type": "Float", "value": 1.5 }, "scale": { "type": "Float", "value": 6.8266667 }, "offset": { "type": "Float", "value": 0.5 } } },
 
-    { "id": 27, "typeId": "node.affine_scalar", "handle": "diffusion_calc",
+    { "id": 27, "typeId": "node.affine_scalar", "handle": "diffusion_calc", "nodeId": "diffusion_calc",
       "params": { "a": { "type": "Float", "value": 20.0 }, "scale": { "type": "Float", "value": 0.0008333333 }, "offset": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 28, "typeId": "node.affine_scalar", "handle": "blur_radius_scaled",
+    { "id": 28, "typeId": "node.affine_scalar", "handle": "blur_radius_scaled", "nodeId": "blur_radius_scaled",
       "params": { "a": { "type": "Float", "value": 20.0 }, "scale": { "type": "Float", "value": 0.2 }, "offset": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 30, "typeId": "node.trigger_gate", "handle": "trig_gate_env",
+    { "id": 30, "typeId": "node.trigger_gate", "handle": "trig_gate_env", "nodeId": "trig_gate_env",
       "params": { "enable": { "type": "Bool", "value": false } } },
 
-    { "id": 31, "typeId": "node.envelope_decay", "handle": "env",
+    { "id": 31, "typeId": "node.envelope_decay", "handle": "env", "nodeId": "env",
       "params": { "decay_rate": { "type": "Float", "value": 12.0 } } },
 
-    { "id": 32, "typeId": "node.value", "handle": "mode_value",
+    { "id": 32, "typeId": "node.value", "handle": "mode_value", "nodeId": "mode_value",
       "params": { "value": { "type": "Float", "value": 0.0 } } },
 
-    { "id": 33, "typeId": "node.sample_and_hold", "handle": "mode_hold",
+    { "id": 33, "typeId": "node.sample_and_hold", "handle": "mode_hold", "nodeId": "mode_hold",
       "params": {} },
 
-    { "id": 34, "typeId": "node.value", "handle": "const_one",
+    { "id": 34, "typeId": "node.value", "handle": "const_one", "nodeId": "const_one",
       "params": { "value": { "type": "Float", "value": 1.0 } } },
 
-    { "id": 35, "typeId": "node.mux_scalar", "handle": "mux_noise",
+    { "id": 35, "typeId": "node.mux_scalar", "handle": "mux_noise", "nodeId": "mux_noise",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 36, "typeId": "node.math", "handle": "env_x9",
+    { "id": 36, "typeId": "node.math", "handle": "env_x9", "nodeId": "env_x9",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 9.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 37, "typeId": "node.math", "handle": "noise_factor",
+    { "id": 37, "typeId": "node.math", "handle": "noise_factor", "nodeId": "noise_factor",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
-    { "id": 38, "typeId": "node.math", "handle": "noise_final",
+    { "id": 38, "typeId": "node.math", "handle": "noise_final", "nodeId": "noise_final",
       "params": { "a": { "type": "Float", "value": 0.001 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 39, "typeId": "node.mux_scalar", "handle": "mux_curl",
+    { "id": 39, "typeId": "node.mux_scalar", "handle": "mux_curl", "nodeId": "mux_curl",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 40, "typeId": "node.math", "handle": "env_x_pi",
+    { "id": 40, "typeId": "node.math", "handle": "env_x_pi", "nodeId": "env_x_pi",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 3.14159265 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 41, "typeId": "node.affine_scalar", "handle": "curl_angle_base",
+    { "id": 41, "typeId": "node.affine_scalar", "handle": "curl_angle_base", "nodeId": "curl_angle_base",
       "params": { "a": { "type": "Float", "value": 85.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 42, "typeId": "node.math", "handle": "curl_angle_final",
+    { "id": 42, "typeId": "node.math", "handle": "curl_angle_final", "nodeId": "curl_angle_final",
       "params": { "a": { "type": "Float", "value": 1.4835 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
 
-    { "id": 43, "typeId": "node.mux_scalar", "handle": "mux_flow",
+    { "id": 43, "typeId": "node.mux_scalar", "handle": "mux_flow", "nodeId": "mux_flow",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 44, "typeId": "node.math", "handle": "env_x_neg2",
+    { "id": 44, "typeId": "node.math", "handle": "env_x_neg2", "nodeId": "env_x_neg2",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": -2.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 45, "typeId": "node.math", "handle": "flow_factor",
+    { "id": 45, "typeId": "node.math", "handle": "flow_factor", "nodeId": "flow_factor",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
-    { "id": 46, "typeId": "node.math", "handle": "slope_final",
+    { "id": 46, "typeId": "node.math", "handle": "slope_final", "nodeId": "slope_final",
       "params": { "a": { "type": "Float", "value": -0.01 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 50, "typeId": "node.mux_scalar", "handle": "mux_mode3",
+    { "id": 50, "typeId": "node.mux_scalar", "handle": "mux_mode3", "nodeId": "mux_mode3",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 51, "typeId": "node.math", "handle": "mode3_gate",
+    { "id": 51, "typeId": "node.math", "handle": "mode3_gate", "nodeId": "mode3_gate",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 52, "typeId": "node.trigger_gate", "handle": "trig_gate_seed",
+    { "id": 52, "typeId": "node.trigger_gate", "handle": "trig_gate_seed", "nodeId": "trig_gate_seed",
       "params": { "enable": { "type": "Bool", "value": false } } },
-    { "id": 53, "typeId": "node.clip_trigger_cycle", "handle": "pattern_cycle",
+    { "id": 53, "typeId": "node.clip_trigger_cycle", "handle": "pattern_cycle", "nodeId": "pattern_cycle",
       "params": { "modulus": { "type": "Int", "value": 8 } } },
 
-    { "id": 60, "typeId": "node.mux_scalar", "handle": "mux_mode4",
+    { "id": 60, "typeId": "node.mux_scalar", "handle": "mux_mode4", "nodeId": "mux_mode4",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 61, "typeId": "node.math", "handle": "mode4_gate",
+    { "id": 61, "typeId": "node.math", "handle": "mode4_gate", "nodeId": "mode4_gate",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 62, "typeId": "node.inject_burst", "handle": "inject",
+    { "id": 62, "typeId": "node.inject_burst", "handle": "inject", "nodeId": "inject",
       "params": { "duration": { "type": "Float", "value": 0.5 } } },
-    { "id": 63, "typeId": "node.clip_trigger_cycle", "handle": "inject_zone_cycle",
+    { "id": 63, "typeId": "node.clip_trigger_cycle", "handle": "inject_zone_cycle", "nodeId": "inject_zone_cycle",
       "params": { "modulus": { "type": "Int", "value": 4 } } },
-    { "id": 64, "typeId": "node.value", "handle": "const_neg_one",
+    { "id": 64, "typeId": "node.value", "handle": "const_neg_one", "nodeId": "const_neg_one",
       "params": { "value": { "type": "Float", "value": -1.0 } } },
-    { "id": 65, "typeId": "node.mux_scalar", "handle": "mux_inject_index",
+    { "id": 65, "typeId": "node.mux_scalar", "handle": "mux_inject_index", "nodeId": "mux_inject_index",
       "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 66, "typeId": "node.math", "handle": "inject_force_gated",
+    { "id": 66, "typeId": "node.math", "handle": "inject_force_gated", "nodeId": "inject_force_gated",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.005 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 70, "typeId": "node.math", "handle": "sin_angle",
+    { "id": 70, "typeId": "node.math", "handle": "sin_angle", "nodeId": "sin_angle",
       "params": { "a": { "type": "Float", "value": 1.4835 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 7 } } },
-    { "id": 71, "typeId": "node.math", "handle": "cos_angle",
+    { "id": 71, "typeId": "node.math", "handle": "cos_angle", "nodeId": "cos_angle",
       "params": { "a": { "type": "Float", "value": 1.4835 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 8 } } },
-    { "id": 72, "typeId": "node.math", "handle": "curl_strength_final",
+    { "id": 72, "typeId": "node.math", "handle": "curl_strength_final", "nodeId": "curl_strength_final",
       "params": { "a": { "type": "Float", "value": -5.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 73, "typeId": "node.math", "handle": "slope_strength_final",
+    { "id": 73, "typeId": "node.math", "handle": "slope_strength_final", "nodeId": "slope_strength_final",
       "params": { "a": { "type": "Float", "value": -5.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 74, "typeId": "node.math", "handle": "vol_scaled_energy_calc",
+    { "id": 74, "typeId": "node.math", "handle": "vol_scaled_energy_calc", "nodeId": "vol_scaled_energy_calc",
       "params": { "a": { "type": "Float", "value": 20.48 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 3 } } },
-    { "id": 75, "typeId": "node.math", "handle": "container_clamped",
+    { "id": 75, "typeId": "node.math", "handle": "container_clamped", "nodeId": "container_clamped",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 4 } } },
-    { "id": 76, "typeId": "node.math", "handle": "mode_inv",
+    { "id": 76, "typeId": "node.math", "handle": "mode_inv", "nodeId": "mode_inv",
       "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 1 } } },
-    { "id": 77, "typeId": "node.math", "handle": "force_scale_500",
+    { "id": 77, "typeId": "node.math", "handle": "force_scale_500", "nodeId": "force_scale_500",
       "params": { "a": { "type": "Float", "value": -0.01 }, "b": { "type": "Float", "value": 500.0 }, "op": { "type": "Enum", "value": 2 } } },
 
-    { "id": 80, "typeId": "node.math", "handle": "t_ref",
+    { "id": 80, "typeId": "node.math", "handle": "t_ref", "nodeId": "t_ref",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.3 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 81, "typeId": "node.math", "handle": "t_ref_07",
+    { "id": 81, "typeId": "node.math", "handle": "t_ref_07", "nodeId": "t_ref_07",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.7 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 82, "typeId": "node.math", "handle": "t_ref_05",
+    { "id": 82, "typeId": "node.math", "handle": "t_ref_05", "nodeId": "t_ref_05",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.5 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 83, "typeId": "node.math", "handle": "ref_x_calc",
+    { "id": 83, "typeId": "node.math", "handle": "ref_x_calc", "nodeId": "ref_x_calc",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 7 } } },
-    { "id": 84, "typeId": "node.math", "handle": "ref_y_calc",
+    { "id": 84, "typeId": "node.math", "handle": "ref_y_calc", "nodeId": "ref_y_calc",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 8 } } },
-    { "id": 85, "typeId": "node.math", "handle": "ref_z_calc",
+    { "id": 85, "typeId": "node.math", "handle": "ref_z_calc", "nodeId": "ref_z_calc",
       "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 7 } } }
   ],
   "wires": [
