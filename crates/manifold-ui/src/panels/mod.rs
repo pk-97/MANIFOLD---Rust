@@ -45,6 +45,19 @@ pub enum EnvelopeParam {
     Release,
 }
 
+/// Which graph host a per-param [`PanelAction`] targets — the
+/// discriminator that replaced the parallel `Effect*` / `Gen*` variant
+/// pairs, so a card action can't be emitted (or dispatched) for the wrong
+/// kind by construction. `Effect` carries the chain-positional effect
+/// index (the card's `effect_index`); `Generator` carries nothing (a layer
+/// hosts one generator, resolved from the active layer at dispatch time,
+/// exactly as the old `Gen*` arms did).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GraphParamTarget {
+    Effect(usize),
+    Generator,
+}
+
 /// Actions that panels emit to be handled by the app layer.
 /// Panels never touch the engine directly — they fire actions
 /// that the app wires to PlaybackEngine/EditingService.
@@ -183,38 +196,44 @@ pub enum PanelAction {
     // and the bridge resolved via the static-tier-only
     // `param_index_to_id` — the bug class that left user-exposed
     // sliders dead for drivers / envelopes / Ableton mapping.
-    EffectParamSnapshot(usize, manifold_core::effects::ParamId),
-    EffectParamChanged(usize, manifold_core::effects::ParamId, f32),
-    EffectParamCommit(usize, manifold_core::effects::ParamId),
-    EffectParamRightClick(usize, manifold_core::effects::ParamId, f32), // fx_idx, param_id, default_value
-    EffectDriverToggle(usize, manifold_core::effects::ParamId),
-    EffectEnvelopeToggle(usize, manifold_core::effects::ParamId),
-    EffectDriverConfig(usize, manifold_core::effects::ParamId, DriverConfigAction),
-    EffectEnvParamChanged(usize, manifold_core::effects::ParamId, EnvelopeParam, f32),
-    /// Snapshot ADSR state before drag (for undo). Unity: onEnvConfigSnapshot.
-    EffectEnvParamSnapshot(usize, manifold_core::effects::ParamId),
-    /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
-    EffectEnvParamCommit(usize, manifold_core::effects::ParamId),
+    //
+    // Phase-D unification: these were parallel `Effect*` / `Gen*` pairs;
+    // each is now one variant carrying a [`GraphParamTarget`] so a card
+    // action can't be emitted or dispatched for the wrong kind. The
+    // dispatch matches `Effect(fx_idx)` and `Generator` as separate arms,
+    // so the two bodies stay distinct where they genuinely differ.
+    ParamSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    ParamChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
+    ParamCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    ParamRightClick(GraphParamTarget, manifold_core::effects::ParamId, f32), // target, param_id, default_value
+    DriverToggle(GraphParamTarget, manifold_core::effects::ParamId),
+    EnvelopeToggle(GraphParamTarget, manifold_core::effects::ParamId),
+    DriverConfig(GraphParamTarget, manifold_core::effects::ParamId, DriverConfigAction),
+    EnvParamChanged(GraphParamTarget, manifold_core::effects::ParamId, EnvelopeParam, f32),
+    /// Snapshot ADSR state before drag (for undo).
+    EnvParamSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Commit ADSR drag (record undo command).
+    EnvParamCommit(GraphParamTarget, manifold_core::effects::ParamId),
     /// Toggle envelope mode between ADSR and Random.
-    EffectEnvModeToggle(usize, manifold_core::effects::ParamId),
+    EnvModeToggle(GraphParamTarget, manifold_core::effects::ParamId),
     /// Toggle random_jump flag on a Random-mode envelope.
-    EffectEnvRandomJumpToggle(usize, manifold_core::effects::ParamId),
-    EffectTrimChanged(usize, manifold_core::effects::ParamId, f32, f32),
-    /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
-    EffectTrimSnapshot(usize, manifold_core::effects::ParamId),
-    /// Commit trim drag (record undo command). Unity: onTrimCommit.
-    EffectTrimCommit(usize, manifold_core::effects::ParamId),
-    EffectTargetChanged(usize, manifold_core::effects::ParamId, f32),
-    /// Snapshot target state before drag (for undo). Unity: onTargetSnapshot.
-    EffectTargetSnapshot(usize, manifold_core::effects::ParamId),
-    /// Commit target drag (record undo command). Unity: onTargetCommit.
-    EffectTargetCommit(usize, manifold_core::effects::ParamId),
-    /// Envelope range changed: fx_idx, param_id, range_min, range_max.
-    EffectEnvRangeChanged(usize, manifold_core::effects::ParamId, f32, f32),
+    EnvRandomJumpToggle(GraphParamTarget, manifold_core::effects::ParamId),
+    TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
+    /// Snapshot trim state before drag (for undo).
+    TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Commit trim drag (record undo command).
+    TrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    TargetChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
+    /// Snapshot target state before drag (for undo).
+    TargetSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Commit target drag (record undo command).
+    TargetCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Envelope range changed: target, param_id, range_min, range_max.
+    EnvRangeChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot envelope range before drag (for undo).
-    EffectEnvRangeSnapshot(usize, manifold_core::effects::ParamId),
+    EnvRangeSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
     /// Commit envelope range drag (record undo command).
-    EffectEnvRangeCommit(usize, manifold_core::effects::ParamId),
+    EnvRangeCommit(GraphParamTarget, manifold_core::effects::ParamId),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),
@@ -408,52 +427,19 @@ pub enum PanelAction {
         group_id: u32,
     },
 
-    // ── Per-generator-param actions ────────────────────────────────
+    // ── Generator-only per-param actions ───────────────────────────────
     //
-    // Mirror of the effect-side block but without `fx_idx` — a layer
-    // owns at most one generator. `param_id` is always a static-tier
-    // id today (generators don't expose user-tier bindings yet) but
-    // the wire format matches the effect side for symmetry and future
-    // extension.
+    // The effect/generator mirror pairs (snapshot / changed / commit /
+    // right-click, drivers, envelopes, trims, targets, env-ranges) collapsed
+    // into the target-carrying `ParamSnapshot` … `EnvRangeCommit` variants
+    // above. Only these have no effect counterpart and stay generator-only.
     GenTypeClicked(Option<LayerId>), // layer_id
-    GenParamSnapshot(manifold_core::effects::ParamId),
-    GenParamChanged(manifold_core::effects::ParamId, f32),
-    GenParamCommit(manifold_core::effects::ParamId),
-    GenParamRightClick(manifold_core::effects::ParamId, f32), // param_id, default_value
     GenParamToggle(manifold_core::effects::ParamId),
-    /// Outer-card click on a `is_trigger` param's button — increment
-    /// the underlying monotonic counter by one. Consumed by the same
-    /// `ChangeGeneratorParamsCommand` path as toggles, but with `+1`
-    /// instead of `0↔1` flip. Wired in [`crate::panels::param_card`].
+    /// Outer-card click on a `is_trigger` param's button — increment the
+    /// underlying monotonic counter by one. Same write path as a toggle
+    /// (`ChangeGraphParamCommand` on the generator), but `+1` instead of a
+    /// `0↔1` flip. Wired in [`crate::panels::param_card`].
     GenParamFire(manifold_core::effects::ParamId),
-    GenDriverToggle(manifold_core::effects::ParamId),
-    GenEnvelopeToggle(manifold_core::effects::ParamId),
-    GenDriverConfig(manifold_core::effects::ParamId, DriverConfigAction),
-    GenEnvParamChanged(manifold_core::effects::ParamId, EnvelopeParam, f32),
-    /// Snapshot ADSR state before drag (for undo). Unity: onEnvConfigSnapshot.
-    GenEnvParamSnapshot(manifold_core::effects::ParamId),
-    /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
-    GenEnvParamCommit(manifold_core::effects::ParamId),
-    /// Toggle envelope mode between ADSR and Random.
-    GenEnvModeToggle(manifold_core::effects::ParamId),
-    /// Toggle random_jump flag on a Random-mode envelope.
-    GenEnvRandomJumpToggle(manifold_core::effects::ParamId),
-    GenTrimChanged(manifold_core::effects::ParamId, f32, f32),
-    /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
-    GenTrimSnapshot(manifold_core::effects::ParamId),
-    /// Commit trim drag (record undo command). Unity: onTrimCommit.
-    GenTrimCommit(manifold_core::effects::ParamId),
-    GenTargetChanged(manifold_core::effects::ParamId, f32),
-    /// Snapshot target state before drag (for undo). Unity: onTargetSnapshot.
-    GenTargetSnapshot(manifold_core::effects::ParamId),
-    /// Commit target drag (record undo command). Unity: onTargetCommit.
-    GenTargetCommit(manifold_core::effects::ParamId),
-    /// Envelope range changed: param_id, range_min, range_max.
-    GenEnvRangeChanged(manifold_core::effects::ParamId, f32, f32),
-    /// Snapshot envelope range before drag (for undo).
-    GenEnvRangeSnapshot(manifold_core::effects::ParamId),
-    /// Commit envelope range drag (record undo command).
-    GenEnvRangeCommit(manifold_core::effects::ParamId),
 
     // Generator string params (per-clip text, etc.)
     GenStringParamClicked(usize), // string_param_index — open text input
@@ -493,8 +479,7 @@ pub enum PanelAction {
     ClearMacroMappings(usize),                                  // macro_idx
 
     // Param label right-click → opens "Map to Macro" / "Map from Ableton" context menu
-    EffectParamLabelRightClick(usize, manifold_core::effects::ParamId), // fx_idx, param_id
-    GenParamLabelRightClick(manifold_core::effects::ParamId),           // param_id
+    ParamLabelRightClick(GraphParamTarget, manifold_core::effects::ParamId),
 
     // Ableton mapping (from context menu on param right-click)
     MapEffectParamToAbleton(
