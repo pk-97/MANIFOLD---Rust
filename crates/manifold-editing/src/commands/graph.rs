@@ -21,6 +21,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::GraphTarget;
+use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
@@ -168,6 +169,10 @@ pub struct AddGraphNodeCommand {
     /// re-execute reuses the same id — downstream commands
     /// (`ConnectPorts`, `SetGraphNodeParam`) address by id.
     minted_id: Option<u32>,
+    /// Stable `NodeId` minted at first execute. Persisted across undo/redo so
+    /// a redo reuses the same identity — otherwise a binding made against this
+    /// node would orphan when the node is re-created with a fresh id.
+    minted_node_id: Option<NodeId>,
 }
 
 impl AddGraphNodeCommand {
@@ -184,6 +189,7 @@ impl AddGraphNodeCommand {
             catalog_default,
             scope_path: Vec::new(),
             minted_id: None,
+            minted_node_id: None,
         }
     }
 
@@ -206,12 +212,20 @@ impl Command for AddGraphNodeCommand {
         let pos = self.pos;
         let prev_minted = self.minted_id;
         let scope = self.scope_path.clone();
+        // Mint a stable identity once; reuse it on redo so a binding made
+        // against this node survives undo/redo.
+        let node_id = self
+            .minted_node_id
+            .clone()
+            .unwrap_or_else(|| NodeId::new(manifold_core::short_id()));
+        let node_id_for_store = node_id.clone();
         let minted = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
             let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
             let id = prev_minted.unwrap_or(next_id);
             nodes.push(EffectGraphNode {
                 id,
+                node_id,
                 type_id: node_type_id,
                 handle: None,
                 params: BTreeMap::new(),
@@ -227,7 +241,10 @@ impl Command for AddGraphNodeCommand {
         })
         .flatten();
         match minted {
-            Some(id) => self.minted_id = Some(id),
+            Some(id) => {
+                self.minted_id = Some(id);
+                self.minted_node_id = Some(node_id_for_store);
+            }
             None => eprintln!(
                 "[manifold-editing] AddGraphNode: target {} / scope {:?} did not resolve",
                 self.target.label(),
@@ -2221,6 +2238,7 @@ mod tests {
     fn abc_graph() -> EffectGraphDef {
         let mk = |id: u32, handle: &str, ty: &str| EffectGraphNode {
             id,
+            node_id: manifold_core::NodeId::default(),
             type_id: ty.to_string(),
             handle: Some(handle.to_string()),
             params: BTreeMap::new(),
@@ -2494,6 +2512,7 @@ mod tests {
             nodes: vec![
                 EffectGraphNode {
                     id: 0,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: "system.source".to_string(),
                     handle: Some("source".to_string()),
                     params: BTreeMap::new(),
@@ -2507,6 +2526,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 1,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: "node.transform".to_string(),
                     handle: Some("uv_transform".to_string()),
                     params: BTreeMap::new(),
@@ -2520,6 +2540,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 2,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: "node.mix".to_string(),
                     handle: Some("mix".to_string()),
                     params: BTreeMap::new(),
@@ -2533,6 +2554,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 3,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: "system.final_output".to_string(),
                     handle: Some("final_output".to_string()),
                     params: BTreeMap::new(),
@@ -3107,6 +3129,7 @@ mod tests {
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.render_lines".to_string(),
                 handle: Some("render".to_string()),
                 params: BTreeMap::new(),
@@ -3355,6 +3378,7 @@ mod tests {
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.render_lines".to_string(),
                 handle: Some("render".to_string()),
                 params: BTreeMap::new(),
@@ -3749,6 +3773,7 @@ mod tests {
             }),
             nodes: vec![EffectGraphNode {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.plasma_pattern_2d".to_string(),
                 handle: Some("gen".to_string()),
                 params: BTreeMap::new(),

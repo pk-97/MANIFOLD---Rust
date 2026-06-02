@@ -509,6 +509,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                 }
                 EffectGraphNode {
                     id: inst.id.0,
+                    node_id: manifold_core::NodeId::new(manifold_core::short_id()),
                     type_id: inst.node.type_id().as_str().to_string(),
                     handle: id_to_handle.get(&inst.id.0).cloned(),
                     params,
@@ -1073,6 +1074,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.wgsl_compute".to_string(),
                 handle: Some("simulate".to_string()),
                 params: BTreeMap::new(),
@@ -1146,6 +1148,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.wgsl_compute".to_string(),
                 handle: None,
                 params: BTreeMap::new(),
@@ -1181,6 +1184,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.does_not_exist".to_string(),
                 handle: None,
                 params: BTreeMap::new(),
@@ -1224,6 +1228,7 @@ mod tests {
             nodes: vec![
                 NodeDocument {
                     id: 0,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: SOURCE_TYPE_ID.to_string(),
                     handle: None,
                     params: BTreeMap::new(),
@@ -1237,6 +1242,7 @@ mod tests {
                 },
                 NodeDocument {
                     id: 1,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: FINAL_OUTPUT_TYPE_ID.to_string(),
                     handle: None,
                     params: BTreeMap::new(),
@@ -1274,6 +1280,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
                 handle: None,
                 params,
@@ -1306,6 +1313,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
                 handle: None,
                 params,
@@ -1429,6 +1437,7 @@ mod tests {
             preset_metadata,
             nodes: vec![NodeDocument {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.math".to_string(),
                 handle: Some("math_node".into()),
                 params: BTreeMap::new(),

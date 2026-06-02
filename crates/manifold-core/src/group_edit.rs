@@ -26,6 +26,7 @@ use crate::effect_graph_def::{
     EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID,
     GroupDef, GroupInterface, InterfacePortDef,
 };
+use crate::id::NodeId;
 
 /// One inferred boundary port: its name plus the inner endpoint it binds to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +192,7 @@ pub fn group_selection(
 
     let group_nd = EffectGraphNode {
         id: group_node_id,
+        node_id: NodeId::new(crate::short_id()),
         type_id: GROUP_TYPE_ID.to_string(),
         handle: Some(handle.to_string()),
         params: BTreeMap::new(),
@@ -357,6 +359,7 @@ fn unique_name(base: &str, used: &mut BTreeSet<String>) -> String {
 fn sentinel_node(id: u32, type_id: &str) -> EffectGraphNode {
     EffectGraphNode {
         id,
+        node_id: NodeId::new(crate::short_id()),
         type_id: type_id.to_string(),
         handle: None,
         params: BTreeMap::new(),

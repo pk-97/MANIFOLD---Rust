@@ -556,6 +556,7 @@ mod tests {
     fn node(id: u32, type_id: &str, handle: Option<&str>) -> EffectGraphNode {
         EffectGraphNode {
             id,
+            node_id: crate::NodeId::default(),
             type_id: type_id.to_string(),
             handle: handle.map(|h| h.to_string()),
             params: BTreeMap::new(),

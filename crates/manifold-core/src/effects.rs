@@ -3336,6 +3336,7 @@ mod tests {
             nodes: vec![
                 EffectGraphNode {
                     id: 0,
+                    node_id: crate::NodeId::default(),
                     type_id: "system.source".to_string(),
                     handle: Some("source".to_string()),
                     params: Default::default(),
@@ -3349,6 +3350,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 1,
+                    node_id: crate::NodeId::default(),
                     type_id: "node.transform".to_string(),
                     handle: Some("uv_transform".to_string()),
                     params,

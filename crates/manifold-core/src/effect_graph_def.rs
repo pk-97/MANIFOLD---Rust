@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effect_type_id::EffectTypeId;
 use crate::effects::ParamConvert;
+use crate::id::NodeId;
 
 /// Schema version for graph-topology-only documents (no preset
 /// metadata). Default for per-instance graph overrides and the 25
@@ -106,10 +107,19 @@ pub struct EffectGraphDef {
 #[serde(rename_all = "camelCase")]
 pub struct EffectGraphNode {
     pub id: u32,
+    /// Stable identity, minted once at node creation and preserved through
+    /// grouping / ungrouping / moving / flattening. This is what param
+    /// bindings target, so a card slider keeps driving its inner node no
+    /// matter how the graph is reorganized. Empty only on a pre-migration
+    /// document; the load migration stamps one before anything resolves.
+    /// See `docs/NODE_ID_TARGETING.md`.
+    #[serde(default, skip_serializing_if = "NodeId::is_empty")]
+    pub node_id: NodeId,
     pub type_id: String,
-    /// Stable string handle to pass to `Graph::add_node_named` so
-    /// user-exposed parameter bindings can address this inner node
-    /// across renderer refactors. `None` for anonymous nodes.
+    /// Display / search name. `Some` for authored nodes, `None` for anonymous
+    /// boundary nodes. NOT an addressing key — bindings target `node_id`. Still
+    /// passed to `Graph::add_node_named` so the runtime handle map and the
+    /// graph editor can show a readable name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
     /// Per-parameter overrides keyed by stable param name. Missing
@@ -638,6 +648,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![EffectGraphNode {
                 id: 0,
+                node_id: crate::NodeId::default(),
                 type_id: "node.threshold".to_string(),
                 handle: Some("thresh".to_string()),
                 params,
@@ -685,6 +696,7 @@ mod tests {
             nodes: vec![
                 EffectGraphNode {
                     id: 0,
+                    node_id: crate::NodeId::default(),
                     type_id: GROUP_INPUT_TYPE_ID.to_string(),
                     handle: None,
                     params: BTreeMap::new(),
@@ -698,6 +710,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 1,
+                    node_id: crate::NodeId::default(),
                     type_id: "node.mix".to_string(),
                     handle: Some("mix".to_string()),
                     params: BTreeMap::new(),
@@ -711,6 +724,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 2,
+                    node_id: crate::NodeId::default(),
                     type_id: GROUP_OUTPUT_TYPE_ID.to_string(),
                     handle: None,
                     params: BTreeMap::new(),
@@ -745,6 +759,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![EffectGraphNode {
                 id: 10,
+                node_id: crate::NodeId::default(),
                 type_id: GROUP_TYPE_ID.to_string(),
                 handle: Some("soft_focus".to_string()),
                 params: amount_override,
@@ -779,6 +794,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![EffectGraphNode {
                 id: 0,
+                node_id: crate::NodeId::default(),
                 type_id: "node.blur".to_string(),
                 handle: None,
                 params: BTreeMap::new(),

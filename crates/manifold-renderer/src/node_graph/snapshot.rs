@@ -790,6 +790,7 @@ mod tests {
         };
         let mk = |id: u32, type_id: &str, handle: Option<&str>| EffectGraphNode {
             id,
+            node_id: manifold_core::NodeId::default(),
             type_id: type_id.to_string(),
             handle: handle.map(|h| h.to_string()),
             params: Default::default(),
@@ -1137,6 +1138,7 @@ mod tests {
             nodes: vec![
                 EffectGraphNode {
                     id: 10,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: "system.source".to_string(),
                     handle: Some("source".to_string()),
                     params: Default::default(),
@@ -1150,6 +1152,7 @@ mod tests {
                 },
                 EffectGraphNode {
                     id: 99,
+                    node_id: manifold_core::NodeId::default(),
                     type_id: "system.final_output".to_string(),
                     handle: Some("final_output".to_string()),
                     params: Default::default(),
@@ -1189,6 +1192,7 @@ mod tests {
             preset_metadata: None,
             nodes: vec![EffectGraphNode {
                 id: 0,
+                node_id: manifold_core::NodeId::default(),
                 type_id: "node.does_not_exist".to_string(),
                 handle: None,
                 params: Default::default(),
