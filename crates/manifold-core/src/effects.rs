@@ -291,6 +291,87 @@ fn one() -> f32 {
     1.0
 }
 
+// ─── Per-instance reshape note (DAW-style override) ───
+
+/// A per-instance reshape "note" for ONE card param, addressed by its
+/// stable `param_id`.
+///
+/// This is the DAW-style override the whole preset-unification rests on:
+/// the *shared recipe* (the bundled preset graph) defines a param and its
+/// routing to an inner node; this note records the user's *per-instance*
+/// reshape on top — display label, slider range, invert, response curve,
+/// and the card→consumer affine (`scale`/`offset`). The recipe stays
+/// shared and tiny; only the knobs you actually reshaped carry a note.
+///
+/// **Why a note and not a graph copy.** A reshape is six numbers. Storing
+/// it does not require promoting the instance's whole graph (`graph =
+/// Some(..)`) — that materialization is reserved for the one case that
+/// genuinely changes the recipe, *rewiring the topology*. Reshaping a
+/// stock knob is a small override, exactly like a per-track parameter
+/// tweak in Ableton, and lives here.
+///
+/// **Why effects already half-have this.** [`UserParamBinding`] is itself
+/// a per-instance note (it carries the same reshape fields inline for a
+/// user-exposed param). `ParamMapping` extends that pattern to *stock*
+/// params — the ones shipped already-exposed by the recipe — which had no
+/// per-instance home for a reshape before. One resolver reads both, so
+/// there is exactly one "effective reshape for this knob" path.
+///
+/// **HARD INVARIANT — never touches the value slot.** Ableton / OSC /
+/// drivers / envelopes write `param_values[param_id_to_value_index(id)]`
+/// every frame, addressed by `param_id`, unchanged by this note. The
+/// reshape is applied DOWNSTREAM at the renderer boundary (the binding's
+/// `Reshape`): it reads the slot and reshapes on the way to the inner
+/// node, never rewriting the slot, always after the modulation write. So
+/// a knob with an Ableton macro / driver / envelope bound writes
+/// byte-identically with or without a note — only what the inner node
+/// *sees* changes. That is what makes the unification safe on the live
+/// rig.
+///
+/// **Seeded copy-on-write.** A note is created the first time the user
+/// touches the mapping drawer for a knob, seeded from the recipe (range
+/// from the `ParamDef`, `scale`/`offset` from the recipe binding, identity
+/// invert/curve) and then the edit applied. So a note is a *full* reshape
+/// snapshot, not a sparse delta — present means "use this," absent means
+/// "use the recipe's scale/offset with identity reshape." Skipped on
+/// serialize when the parent's `param_mappings` Vec is empty, so every
+/// project without a single reshaped stock knob round-trips
+/// byte-identically.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParamMapping {
+    /// Stable id of the card param this note reshapes. Matches a
+    /// registry `ParamDef::id` (stock param) or a [`UserParamBinding::id`]
+    /// — the same id namespace `param_id_to_value_index` resolves. NEVER
+    /// mutated by a mapping edit; it is the addressing key.
+    pub param_id: String,
+    /// Optional card-slider relabel. `None` keeps the recipe's label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Renormalize range for invert / curve. Seeded from the param's
+    /// declared range (registry `ParamDef` or the user binding) on first
+    /// edit.
+    pub min: f32,
+    pub max: f32,
+    /// Card-slider invert, applied to the normalized position at the
+    /// renderer write boundary. Mapping-only: the stored slot stays
+    /// physical-valued, so modulation writing the same slot is unaffected.
+    #[serde(default)]
+    pub invert: bool,
+    /// Card-slider response curve, applied to the normalized position
+    /// after invert, before scaling back to `[min, max]`. Shares the
+    /// macro-bank curve type the whole app uses.
+    #[serde(default)]
+    pub curve: crate::macro_bank::MacroCurve,
+    /// Card→consumer linear remap applied after the slider reshape:
+    /// `out = value * scale + offset`. Seeded from the recipe binding's
+    /// scale/offset so an un-edited note is byte-identical to the recipe.
+    #[serde(default = "one")]
+    pub scale: f32,
+    #[serde(default)]
+    pub offset: f32,
+}
+
 // ─── Param Value (per-slot state) ───
 
 /// A single parameter slot's runtime state on an [`EffectInstance`].
@@ -475,6 +556,24 @@ pub struct EffectInstance {
     /// bindings are present. Not serialized; resets to 0 on load and
     /// `u32::MAX` on the renderer side forces a first-frame rebuild.
     pub user_param_bindings_version: u32,
+
+    /// Per-instance reshape notes — the DAW-style override for stock card
+    /// params. Each [`ParamMapping`] reshapes ONE param (keyed by its
+    /// `param_id`) without touching the param's value slot; see the
+    /// `ParamMapping` doc for the invariant. Empty for every project that
+    /// hasn't reshaped a stock knob, and skipped on serialize when empty,
+    /// so existing fixtures round-trip byte-identically. The renderer
+    /// reads a note via the single `effective reshape` resolver and folds
+    /// it into the binding's `Reshape` at build time.
+    pub param_mappings: Vec<ParamMapping>,
+
+    /// Monotonically bumped each time `param_mappings` is mutated.
+    /// Renderer rebuilds this effect's binding list (static + user) with
+    /// the current notes when it advances — analogous to
+    /// `user_param_bindings_version` but it rebuilds the *whole* list, not
+    /// just the user tail, because a note can reshape a stock (static)
+    /// binding. Not serialized; resets to 0 on load.
+    pub param_mappings_version: u32,
 
     /// Per-instance graph topology override. `None` means "use the
     /// catalog default graph for this effect type" — every shipping
@@ -972,6 +1071,9 @@ impl Serialize for EffectInstance {
         if !self.user_param_bindings.is_empty() {
             field_count += 1;
         }
+        if !self.param_mappings.is_empty() {
+            field_count += 1;
+        }
         if self.graph.is_some() {
             field_count += 1;
         }
@@ -1025,6 +1127,13 @@ impl Serialize for EffectInstance {
         // byte-identically — no new field appears in their JSON.
         if !self.user_param_bindings.is_empty() {
             s.serialize_field("userParamBindings", &self.user_param_bindings)?;
+        }
+        // `paramMappings` is skipped when empty — same round-trip-
+        // invariance policy. A project that never reshaped a stock knob
+        // emits no `paramMappings` field, so its JSON is byte-identical
+        // to before this feature existed.
+        if !self.param_mappings.is_empty() {
+            s.serialize_field("paramMappings", &self.param_mappings)?;
         }
         // `graph` is skipped when None — same round-trip-invariance
         // policy. `None` means "use the catalog default for this
@@ -1120,6 +1229,8 @@ impl<'de> Deserialize<'de> for EffectInstance {
             #[serde(default)]
             user_param_bindings: Option<Vec<UserParamBinding>>,
             #[serde(default)]
+            param_mappings: Option<Vec<ParamMapping>>,
+            #[serde(default)]
             graph: Option<EffectGraphDef>,
             #[serde(default, rename = "param0")]
             legacy_param0: Option<f32>,
@@ -1159,6 +1270,8 @@ impl<'de> Deserialize<'de> for EffectInstance {
             group_id: raw.group_id,
             user_param_bindings,
             user_param_bindings_version: 0,
+            param_mappings: raw.param_mappings.unwrap_or_default(),
+            param_mappings_version: 0,
             graph: raw.graph,
             graph_version: 0,
             legacy_param0: raw.legacy_param0,
@@ -1185,6 +1298,8 @@ impl EffectInstance {
             group_id: None,
             user_param_bindings: Vec::new(),
             user_param_bindings_version: 0,
+            param_mappings: Vec::new(),
+            param_mappings_version: 0,
             graph: None,
             graph_version: 0,
             legacy_param0: None,
@@ -1365,6 +1480,40 @@ impl EffectInstance {
             .map(|d| d.param_count)
             .unwrap_or(0);
         self.user_binding_index(id).map(|j| n_static + j)
+    }
+
+    /// The per-instance reshape note for `param_id`, if one exists.
+    /// Absent means "use the recipe's reshape" — see [`ParamMapping`].
+    pub fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
+        self.param_mappings.iter().find(|m| m.param_id == id)
+    }
+
+    /// Insert or replace the reshape note for its `param_id`, bumping
+    /// `param_mappings_version` so the renderer rebuilds this effect's
+    /// binding list with the new note. The note's `param_id` is the key;
+    /// an existing note for that id is overwritten in place (stable
+    /// position) so serialized order doesn't churn on re-edit.
+    pub fn upsert_param_mapping(&mut self, mapping: ParamMapping) {
+        match self
+            .param_mappings
+            .iter_mut()
+            .find(|m| m.param_id == mapping.param_id)
+        {
+            Some(slot) => *slot = mapping,
+            None => self.param_mappings.push(mapping),
+        }
+        self.param_mappings_version = self.param_mappings_version.wrapping_add(1);
+    }
+
+    /// Remove the reshape note for `param_id` (reverting the knob to the
+    /// recipe's reshape), bumping `param_mappings_version`. No-op if no
+    /// note exists.
+    pub fn remove_param_mapping(&mut self, id: &str) {
+        let before = self.param_mappings.len();
+        self.param_mappings.retain(|m| m.param_id != id);
+        if self.param_mappings.len() != before {
+            self.param_mappings_version = self.param_mappings_version.wrapping_add(1);
+        }
     }
 
     /// Full resolution for a `param_id`: slot index plus the value
@@ -2618,6 +2767,8 @@ mod tests {
             group_id: None,
             user_param_bindings: Vec::new(),
             user_param_bindings_version: 0,
+            param_mappings: Vec::new(),
+            param_mappings_version: 0,
             graph: None,
             graph_version: 0,
             legacy_param0: None,
@@ -2677,6 +2828,8 @@ mod tests {
             group_id: None,
             user_param_bindings: Vec::new(),
             user_param_bindings_version: 0,
+            param_mappings: Vec::new(),
+            param_mappings_version: 0,
             graph: None,
             graph_version: 0,
             legacy_param0: None,
@@ -2691,6 +2844,77 @@ mod tests {
         assert!(back.param_values[0].exposed);
         assert_eq!(back.param_values[1].value, 0.2);
         assert!(!back.param_values[1].exposed);
+    }
+
+    #[test]
+    fn param_mappings_empty_emits_no_field_and_note_round_trips() {
+        // Back-compat invariant: an effect that never reshaped a stock
+        // knob must serialize WITHOUT a `paramMappings` field, so every
+        // existing project's JSON is byte-identical to before this
+        // feature existed.
+        let mut fx = EffectInstance::new(EffectTypeId::from_string("ColorGrade".to_string()));
+        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(
+            !json.contains("paramMappings"),
+            "empty param_mappings must not emit a field; got: {json}"
+        );
+
+        // A note round-trips, and upsert bumps the rebuild version.
+        let v0 = fx.param_mappings_version;
+        fx.upsert_param_mapping(ParamMapping {
+            param_id: "amount".to_string(),
+            label: Some("Punch".to_string()),
+            min: 0.0,
+            max: 2.0,
+            invert: true,
+            curve: crate::macro_bank::MacroCurve::SCurve,
+            scale: 2.0,
+            offset: 0.1,
+        });
+        assert_eq!(fx.param_mappings_version, v0 + 1, "upsert bumps version");
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("paramMappings"), "note must emit a field");
+        let back: EffectInstance = serde_json::from_str(&json).unwrap();
+        let note = back.param_mapping("amount").expect("note survives round-trip");
+        assert_eq!(note.label.as_deref(), Some("Punch"));
+        assert!(note.invert);
+        assert_eq!(note.scale, 2.0);
+        assert_eq!(note.offset, 0.1);
+        assert_eq!(note.curve, crate::macro_bank::MacroCurve::SCurve);
+        // version is per-session runtime state, not serialized.
+        assert_eq!(back.param_mappings_version, 0);
+
+        // Upsert by the same id replaces in place (no duplicate row).
+        back_upsert_replaces_in_place();
+    }
+
+    fn back_upsert_replaces_in_place() {
+        let mut fx = EffectInstance::new(EffectTypeId::from_string("ColorGrade".to_string()));
+        fx.upsert_param_mapping(ParamMapping {
+            param_id: "amount".to_string(),
+            label: None,
+            min: 0.0,
+            max: 1.0,
+            invert: false,
+            curve: crate::macro_bank::MacroCurve::Linear,
+            scale: 1.0,
+            offset: 0.0,
+        });
+        fx.upsert_param_mapping(ParamMapping {
+            param_id: "amount".to_string(),
+            label: None,
+            min: 0.0,
+            max: 1.0,
+            invert: true,
+            curve: crate::macro_bank::MacroCurve::Linear,
+            scale: 1.0,
+            offset: 0.0,
+        });
+        assert_eq!(fx.param_mappings.len(), 1, "same id replaces, no dup");
+        assert!(fx.param_mapping("amount").unwrap().invert);
+        fx.remove_param_mapping("amount");
+        assert!(fx.param_mapping("amount").is_none(), "remove clears note");
     }
 
     #[test]
