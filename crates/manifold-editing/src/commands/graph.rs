@@ -1946,6 +1946,182 @@ fn unmirror_generator_side(
 }
 
 // ---------------------------------------------------------------------------
+// Group / Ungroup
+// ---------------------------------------------------------------------------
+
+/// Navigate to the node + wire vectors of the sub-graph at `scope` — a list of
+/// group-node ids to descend into (empty = the document root). Returns `None`
+/// if a hop doesn't resolve to a group. The mutable handles let a command both
+/// read the level (snapshot for undo) and replace it (apply the transform).
+fn descend_level<'a>(
+    nodes: &'a mut Vec<EffectGraphNode>,
+    wires: &'a mut Vec<EffectGraphWire>,
+    scope: &[u32],
+) -> Option<(&'a mut Vec<EffectGraphNode>, &'a mut Vec<EffectGraphWire>)> {
+    match scope.split_first() {
+        None => Some((nodes, wires)),
+        Some((gid, rest)) => {
+            let group = nodes.iter_mut().find(|n| n.id == *gid)?;
+            let body = group.group.as_deref_mut()?;
+            descend_level(&mut body.nodes, &mut body.wires, rest)
+        }
+    }
+}
+
+/// Collapse a selection at `scope_path` into a single group node, via
+/// [`manifold_core::group_edit::group_selection`]. Undo restores the level
+/// wholesale (a structural transform touches many nodes/wires, so a level
+/// snapshot is the clean reverse).
+#[derive(Debug)]
+pub struct GroupNodesCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    selected: Vec<u32>,
+    handle: String,
+    centroid: (f32, f32),
+    catalog_default: EffectGraphDef,
+    /// The level's `(nodes, wires)` before collapse. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl GroupNodesCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        selected: Vec<u32>,
+        handle: String,
+        centroid: (f32, f32),
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            selected,
+            handle,
+            centroid,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for GroupNodesCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let selected: std::collections::BTreeSet<u32> = self.selected.iter().copied().collect();
+        let handle = self.handle.clone();
+        let centroid = self.centroid;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+            match manifold_core::group_edit::group_selection(
+                nodes.clone(),
+                wires.clone(),
+                &selected,
+                &handle,
+                centroid,
+            ) {
+                Ok((nn, nw)) => {
+                    *nodes = nn;
+                    *wires = nw;
+                    Some(prev)
+                }
+                Err(e) => {
+                    eprintln!("[manifold-editing] GroupNodes: {e:?}");
+                    None
+                }
+            }
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Group Nodes"
+    }
+}
+
+/// Dissolve a group node at `scope_path` back into its level, via
+/// [`manifold_core::group_edit::ungroup`]. The inverse of [`GroupNodesCommand`].
+#[derive(Debug)]
+pub struct UngroupNodeCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    group_node_id: u32,
+    catalog_default: EffectGraphDef,
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl UngroupNodeCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        group_node_id: u32,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            group_node_id,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for UngroupNodeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let group_node_id = self.group_node_id;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+            match manifold_core::group_edit::ungroup(nodes.clone(), wires.clone(), group_node_id) {
+                Ok((nn, nw)) => {
+                    *nodes = nn;
+                    *wires = nw;
+                    Some(prev)
+                }
+                Err(e) => {
+                    eprintln!("[manifold-editing] UngroupNode: {e:?}");
+                    None
+                }
+            }
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Ungroup Node"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1956,6 +2132,147 @@ mod tests {
     use manifold_core::EffectTypeId;
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
     use manifold_core::effects::EffectInstance;
+
+    // ── node groups: group / ungroup commands ──
+
+    fn abc_graph() -> EffectGraphDef {
+        let mk = |id: u32, handle: &str, ty: &str| EffectGraphNode {
+            id,
+            type_id: ty.to_string(),
+            handle: Some(handle.to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let w = |fln: u32, fp: &str, tn: u32, tp: &str| EffectGraphWire {
+            from_node: fln,
+            from_port: fp.to_string(),
+            to_node: tn,
+            to_port: tp.to_string(),
+        };
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![
+                mk(0, "a", "system.source"),
+                mk(1, "b", "node.transform"),
+                mk(2, "c", "system.final_output"),
+            ],
+            wires: vec![w(0, "out", 1, "in"), w(1, "out", 2, "in")],
+        }
+    }
+
+    fn project_with_graph(def: EffectGraphDef) -> (Project, EffectId) {
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-group-fx");
+        let mut fx = EffectInstance::new(EffectTypeId::new("test.fx"));
+        fx.id = effect_id.clone();
+        fx.graph = Some(def);
+        project.settings.master_effects.push(fx);
+        (project, effect_id)
+    }
+
+    fn graph_of<'a>(project: &'a Project, id: &EffectId) -> &'a EffectGraphDef {
+        project
+            .find_effect_by_id(id)
+            .unwrap()
+            .graph
+            .as_ref()
+            .unwrap()
+    }
+
+    #[test]
+    fn group_nodes_command_collapses_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let mut cmd = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (5.0, 6.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let g = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .expect("group node created");
+        assert!(g.group.is_some());
+        assert_eq!(g.editor_pos, Some((5.0, 6.0)));
+        assert!(
+            !def.nodes.iter().any(|n| n.handle.as_deref() == Some("b")),
+            "b moved into the group"
+        );
+        let body = g.group.as_deref().unwrap();
+        assert!(body.nodes.iter().any(|n| n.handle.as_deref() == Some("b")));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(
+            def.nodes.iter().any(|n| n.handle.as_deref() == Some("b")),
+            "b restored at top level"
+        );
+        assert!(
+            !def.nodes.iter().any(|n| n.handle.as_deref() == Some("g")),
+            "group node removed"
+        );
+    }
+
+    #[test]
+    fn ungroup_command_inverts_group_then_undo_restores() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        let mut ungroup = UngroupNodeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            g_id,
+            mirror_catalog_default(),
+        );
+        ungroup.execute(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(
+            !def.nodes.iter().any(|n| n.group.is_some()),
+            "no group nodes remain after ungroup"
+        );
+        assert!(
+            def.nodes.iter().any(|n| n.handle.as_deref() == Some("b")),
+            "b back at top level"
+        );
+
+        ungroup.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(
+            def.nodes
+                .iter()
+                .any(|n| n.handle.as_deref() == Some("g") && n.group.is_some()),
+            "undo of ungroup restores the group"
+        );
+    }
 
     /// Catalog default for a Mirror-like graph: source → uv_transform
     /// → mix → final_output, four nodes plus four wires. Mirrors the
