@@ -81,9 +81,11 @@ impl Primitive for Gain {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.gain standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/gain.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.gain",
             )
         });

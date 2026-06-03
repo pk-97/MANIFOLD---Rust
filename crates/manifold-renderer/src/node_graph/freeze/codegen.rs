@@ -58,6 +58,16 @@ fn is_texture_input(i: &NodeInput) -> bool {
     matches!(i.ty, PortType::Texture2D | PortType::Texture2DTyped(_))
 }
 
+/// Generate the standalone kernel for a primitive type — the single-source
+/// `run()` path. Reads the body + classification + ports/params off the type's
+/// `PrimitiveSpec` consts. Deterministic, so `create_compute_pipeline` caches
+/// the result across instances and sessions (the WGSL text is the cache key).
+pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
+) -> Result<String, CodegenError> {
+    let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
+    generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS)
+}
+
 /// Generate the standalone `cs_main` kernel for one atom. `body` is the atom's
 /// `wgsl_body` fragment (defines `fn body(...)` plus any helpers, verbatim).
 ///
