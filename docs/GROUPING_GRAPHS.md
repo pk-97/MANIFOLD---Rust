@@ -4,7 +4,8 @@ This is the "how to think" guide for taking a working flat graph and organizing 
 human-readable node groups — the thing that turns a 57-node hairball into ten labeled boxes you
 can read at a glance. It is the sibling of [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md):
 that guide is about *granularity* (what the atoms are), this one is about *legibility* (how the
-atoms are arranged once they exist).
+atoms are arranged once they exist) — and the one cleanup that cuts complexity hardest before you
+draw a single boundary: folding redundant slider-rescaling out of the graph (§4).
 
 It is written to be followed by a human in the graph editor **or** an AI agent restructuring a
 preset JSON directly. The procedure is the same either way.
@@ -93,7 +94,59 @@ These are not style — break one and the graph fails to load (see `manifold-cor
 
 ---
 
-## 4. How to choose the groups
+## 4. Reduce before you group: fold static slider-rescaling into the binding
+
+The biggest single complexity win usually isn't grouping — it's deleting nodes that never needed to
+exist. The most common offender is a `node.affine_scalar` / `node.scale_offset_texture` /
+`node.math` (Mul or Add) sitting on the path from a card slider to its inner target, doing nothing
+but a constant linear remap, `out = in * k + c`. That node can be deleted outright and its
+transform folded into the binding.
+
+Every `BindingDef` carries `scale` (default `1.0`) and `offset` (default `0.0`), applied at the
+renderer write boundary as `out = value * scale + offset` — the same linear map (see `BindingDef`
+in `manifold-core/src/effect_graph_def.rs`). So:
+
+```
+slider → [node: × k + c] → target.foo     becomes     binding { target: target.foo, scale: k, offset: c }   (node deleted)
+```
+
+Fluid Sim 2D already does this: Curl's degrees→radians factor is `scale: 0.017453293` on the
+binding and Particle Count's million-fold is `scale: 1000000.0` — neither is a graph node. One fold
+can drop several nodes from a busy graph, and it's the cheapest legibility win there is. Run this
+pass first, on the flat graph, before you draw any boundaries — every node you delete is one you
+don't have to place.
+
+**It folds only when all of these hold:**
+- the node is a pure linear function of **one** card slider — `in * const + const`, with every
+  other operand a constant param, not a second wire;
+- the node's output feeds **only** the binding's target — it isn't also read by other graph nodes;
+- you're moving only *where* the constant multiply happens (graph node → write boundary). The
+  slider's user-facing range and default are unchanged.
+
+Fan-out is fine: if three targets each want a different scale of the same slider, that's three
+`BindingDef` entries with the same `id`, each carrying its own `scale` — the binding system already
+fans one slider to many targets (Fluid Sim 2D's `feather` and `clip_trigger` each fan to several
+targets this way; give each entry the `scale` its target needs).
+
+**Leave the node alone when:**
+- it combines the slider with a *live* signal — an envelope, another node's output. Fluid Sim 2D's
+  `rotation_final` survives because it ADDS the envelope to Curl; only the deg→rad constant folded
+  into the binding, the add stayed a node.
+- it transforms a graph-derived value, not a slider (`time × 0.1`, `width × feather`). There's no
+  binding to fold into — its input isn't a card param.
+
+**Verification differs from grouping's.** The fold deliberately *changes* the flat graph (a node is
+gone), so it does **not** pass the flatten-equivalence-to-original check. Verify it instead by
+reading the constants — the binding's `scale`/`offset` must reproduce the deleted node's
+`in * k + c` exactly — and by confirming the node's sole consumer was the target. Do every fold
+first, then take the *post-fold* graph as the baseline for the grouping equivalence check (§8).
+(This is the linear-remap path that DECOMPOSING §7's "needs a `math` node in the graph" note
+predates — `scale` / `offset` are separate fields from the `convert` enum, which stays
+passthrough-only.)
+
+---
+
+## 5. How to choose the groups
 
 The goal is a top level a stranger can read top-to-bottom and understand the instrument. Heuristics,
 in priority order:
@@ -124,7 +177,7 @@ probably doing too much; many more and you haven't really organized it.
 
 ---
 
-## 5. Flat vs. nested — when nesting earns its keep
+## 6. Flat vs. nested — when nesting earns its keep
 
 Nesting is supported to depth 64 and the flattener recurses for free. But nesting is not free to
 *read* or to *wire*, so use it deliberately.
@@ -150,10 +203,11 @@ wires, for one signal. Inject Burst's four outputs each pay this twice. So the t
 
 ---
 
-## 6. Naming
+## 7. Naming
 
-Group names and interface port names are a UX surface, the same as node names. Apply
-DECOMPOSING §6.6 wholesale:
+Names are a UX surface — palette, canvas headers, search, and the prompt an AI agent reads. Every
+part of a grouped graph gets a sensible, human name: the groups, the pins, **and the individual
+nodes inside.** Apply DECOMPOSING §6.6 wholesale, at every level:
 
 - **Name for what it does to the output**, in plain language. `Flow Field`, `Render Density`,
   `Clip Triggers` — not `gradient_rotate_block` or `subsystem_3`.
@@ -163,16 +217,27 @@ DECOMPOSING §6.6 wholesale:
 - **Interface port names: camelCase, no spaces, no underscores** (`blurredDensity`, `injectPointX`,
   `triggerCount`). They're identifiers on the box pins; keep them clean and predictable so the next
   author can guess them.
+- **Title every node whose type alone doesn't say what it does.** A node's `title` is its
+  canvas-header name and is honored for every node type; with no title it falls back to a prettified
+  type id, so a graph full of bare `node.math` / `node.value` / `node.mux_scalar` reads as anonymous
+  boxes. Set a plain-language `title` on each — Glitch titles its two `node.value` hubs `Amount` and
+  `Speed`. Title is display only; **never touch `nodeId`** (§2).
+- **Always title `node.wgsl_compute` — this is the most important one.** A custom shader with no
+  title renders as a generic `node.wgsl_compute (WGSL)` box: the one node type whose entire purpose
+  is invisible from the graph, since the logic lives in a hand-written kernel nothing else can read.
+  Give it the name of what it produces (`Seed Pattern`, `Geodesic Deflection`, `Particle Sim`); the
+  editor keeps the `(WGSL)` marker so it still reads as hand-written. In any graph that uses the
+  escape hatch, this is the single highest-value naming fix.
 
 ---
 
-## 7. Verification — non-negotiable
+## 8. Verification — non-negotiable
 
 This is live-show code; a rewiring slip becomes the show. A grouped graph that loads is not proof
 it's *equivalent*. Prove equivalence directly.
 
 **The equivalence recipe (the gold standard).** Flatten both the grouped graph and the
-pre-grouping baseline, then compare **in `nodeId` space** (which survives the id-renumbering and
+pre-grouping baseline (the *post-fold* graph, if you ran §4), then compare **in `nodeId` space** (which survives the id-renumbering and
 handle-prefixing the flattener does):
 
 1. **Connectivity set** — `{(fromNodeId, fromPort, toNodeId, toPort)}` for every wire. Must be
@@ -201,7 +266,7 @@ impossible by construction.
 
 ---
 
-## 8. Worked example — Fluid Sim 2D
+## 9. Worked example — Fluid Sim 2D
 
 `crates/manifold-renderer/assets/generator-presets/FluidSimulation.json` — 57 flat nodes
 reorganized into ten top-level boxes:
@@ -221,21 +286,27 @@ reference (three flat groups, no nesting).
 
 ---
 
-## 9. The procedure, as a checklist (humans and agents)
+## 10. The procedure, as a checklist (humans and agents)
 
 1. **Read the flat graph end to end.** Identify the spine (chain or loop), the stateful/IO nodes,
    the shared signals, and the control plumbing. Don't group what you don't understand.
-2. **Draft the partition.** Assign every node to exactly one group or to the top level. Name each
-   group for what it does to the output (§6). Keep the spine pivot and IO boundary nodes at the top
-   level (§3.6, §4).
-3. **Decide flat vs. nested per group** using the §5 cost test. Default to flat.
-4. **Define each interface** — the inputs (signals entering) and outputs (signals leaving),
-   exactly one producer per output (§3.1), accurate `portType` tags (§3.5), camelCase names (§6).
-5. **Build it programmatically**, preserving every `nodeId`, `params`, and `wgslSource` verbatim
-   (§2, §7). Omit `interface.params` for pure reorganization (§3.7).
-6. **Verify equivalence** with the three-set `nodeId`-space comparison, then `check-presets`, then
-   the one-frame-execute test (§7). Do not skip the frame execute.
-7. **Update the preset `description`** to narrate the groups (what each box does, why anything is
+2. **Fold static slider-rescaling first (§4).** Delete every pure constant-affine node that only
+   remaps a card slider toward one target; move its `k`/`c` onto the binding's `scale`/`offset`.
+   Fewer nodes to place, and a smaller baseline to verify against.
+3. **Draft the partition.** Assign every remaining node to exactly one group or to the top level.
+   Name each group for what it does to the output (§7). Keep the spine pivot and IO boundary nodes
+   at the top level (§3.6, §5).
+4. **Decide flat vs. nested per group** using the §6 cost test. Default to flat.
+5. **Define each interface** — the inputs (signals entering) and outputs (signals leaving),
+   exactly one producer per output (§3.1), accurate `portType` tags (§3.5), camelCase names (§7).
+6. **Name everything (§7).** Title every ambiguous node and *every* `node.wgsl_compute`; clean
+   group and port names. Never touch `nodeId` (§2).
+7. **Build it programmatically**, preserving every `nodeId`, `params`, and `wgslSource` verbatim
+   (§2, §8). Omit `interface.params` for pure reorganization (§3.7).
+8. **Verify equivalence** with the three-set `nodeId`-space comparison against the post-fold
+   baseline, then `check-presets`, then the one-frame-execute test (§8). Do not skip the frame
+   execute.
+9. **Update the preset `description`** to narrate the groups (what each box does, why anything is
    nested), and state plainly that the groups flatten to the same behavior. Glitch and Fluid Sim 2D
    both do this.
 
