@@ -94,6 +94,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["levels", "gamma", "curves", "Level TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/levels_body.wgsl"),
 }
 
 impl Primitive for Levels {
@@ -117,9 +119,14 @@ impl Primitive for Levels {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: standalone kernel generated from the same
+            // `wgsl_body` the fusion codegen chains. levels.wgsl is retained as
+            // the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.levels standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/levels.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.levels",
             )
         });

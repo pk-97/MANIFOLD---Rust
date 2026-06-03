@@ -50,6 +50,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["posterize", "quantize", "banding"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/posterize_body.wgsl"),
 }
 
 impl Primitive for Posterize {
@@ -72,9 +74,14 @@ impl Primitive for Posterize {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: standalone kernel generated from the same
+            // `wgsl_body` the fusion codegen chains. posterize.wgsl is retained
+            // as the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.posterize standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/posterize.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.posterize",
             )
         });

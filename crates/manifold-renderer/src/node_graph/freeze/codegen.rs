@@ -605,6 +605,12 @@ mod gpu_tests {
             ("node.contrast", "contrast.wgsl", &[1.5]),
             ("node.colorize", "colorize.wgsl", &[0.5, 200.0, 0.7, 0.6]),
             ("node.clamp_texture", "clamp_texture.wgsl", &[0.1, 0.8]),
+            // Vocabulary widening (design §12.3): pure-pointwise color/tone atoms
+            // converted to single-source bodies. Partial invert exercises the
+            // mix; levels uses the MetallicGlass height shape; posterize at 6.
+            ("node.invert", "invert.wgsl", &[0.5]),
+            ("node.levels", "levels.wgsl", &[1.26, 0.29, 0.0, 1.0, 0.8]),
+            ("node.posterize", "posterize.wgsl", &[6.0]),
         ];
         let differ = TextureDiff::new(&device);
         for (type_id, shader_file, params) in cases {
