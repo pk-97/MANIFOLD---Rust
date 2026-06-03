@@ -2749,6 +2749,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     return;
                 }
+                // Editor window: Cmd+L tidies the current level — re-runs the
+                // layered auto-layout and persists every node's new position in
+                // one undoable step.
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("l")
+                {
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        canvas.request_relayout();
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
                 // Editor window: Cmd+Z / Cmd+Shift+Z route to the
                 // content thread's undo stack so graph edits can be
                 // reverted while the editor has focus. (The primary

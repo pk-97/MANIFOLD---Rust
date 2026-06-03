@@ -584,6 +584,97 @@ impl Command for MoveGraphNodeCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Layout Graph Nodes (batch re-position)
+// ---------------------------------------------------------------------------
+
+/// `(node_id, prior editor_pos)` for one node, captured so a batch layout can
+/// be undone. `editor_pos` is itself optional (a node may never have had a
+/// stored position), hence the nested `Option`.
+type NodePosBackup = (u32, Option<(f32, f32)>);
+
+/// Re-position many nodes at once — the canvas "Tidy" command (Cmd+L), which
+/// runs the layered auto-layout and ships every node's new position here. One
+/// command so a tidy is a single undo step, not one per node. Previous
+/// positions are captured on first `execute` for undo.
+#[derive(Debug)]
+pub struct LayoutGraphNodesCommand {
+    target: GraphTarget,
+    /// `(node_id, new_pos)` for every node at the targeted level.
+    positions: Vec<(u32, (f32, f32))>,
+    catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
+    /// Positions before execute(), for undo.
+    previous: Option<Vec<NodePosBackup>>,
+}
+
+impl LayoutGraphNodesCommand {
+    pub fn new(
+        target: GraphTarget,
+        positions: Vec<(u32, (f32, f32))>,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            positions,
+            catalog_default,
+            scope_path: Vec::new(),
+            previous: None,
+        }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
+    }
+}
+
+impl Command for LayoutGraphNodesCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let prev_already_captured = self.previous.is_some();
+        let scope = self.scope_path.clone();
+        let positions = self.positions.clone();
+        let captured =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let mut prev = Vec::with_capacity(positions.len());
+                for (node_id, new_pos) in &positions {
+                    if let Some(node) = nodes.iter_mut().find(|n| n.id == *node_id) {
+                        prev.push((*node_id, node.editor_pos));
+                        node.editor_pos = Some(*new_pos);
+                    }
+                }
+                Some(prev)
+            })
+            .flatten();
+        if !prev_already_captured && let Some(prev) = captured {
+            self.previous = Some(prev);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(previous) = self.previous.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                for (node_id, prior) in &previous {
+                    if let Some(node) = nodes.iter_mut().find(|n| n.id == *node_id) {
+                        node.editor_pos = *prior;
+                    }
+                }
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Tidy Graph Layout"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Set Graph Node Param
 // ---------------------------------------------------------------------------
 
@@ -2401,6 +2492,36 @@ mod tests {
             None,
             "undo restored the body node's editor_pos"
         );
+    }
+
+    /// A batch layout sets every listed node's `editor_pos` in one command,
+    /// and undo restores them all — including the never-positioned `None`.
+    #[test]
+    fn layout_graph_nodes_sets_and_undoes_positions() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let pos_of = |project: &Project, id: u32| {
+            graph_of(project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .editor_pos
+        };
+        assert_eq!(pos_of(&project, 0), None);
+        assert_eq!(pos_of(&project, 2), None);
+
+        let mut cmd = LayoutGraphNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![(0, (10.0, 20.0)), (2, (30.0, 40.0))],
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+        assert_eq!(pos_of(&project, 0), Some((10.0, 20.0)));
+        assert_eq!(pos_of(&project, 2), Some((30.0, 40.0)));
+
+        cmd.undo(&mut project);
+        assert_eq!(pos_of(&project, 0), None, "undo restored node 0");
+        assert_eq!(pos_of(&project, 2), None, "undo restored node 2");
     }
 
     /// A scoped Add drops the new node into the group body, not the root, and

@@ -1082,6 +1082,24 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::RelayoutGraph {
+                    scope_path,
+                    positions,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::LayoutGraphNodesCommand::new(
+                            eid.clone(),
+                            positions.clone(),
+                            default.clone(),
+                        )
+                        .with_scope(scope_path.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::SetGraphNodeParam {
                     node_id,
                     param_name,

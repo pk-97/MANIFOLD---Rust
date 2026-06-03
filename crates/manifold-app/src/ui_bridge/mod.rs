@@ -362,6 +362,7 @@ pub fn dispatch(
         | PanelAction::DisconnectPorts { .. }
         | PanelAction::RemoveGraphNode { .. }
         | PanelAction::MoveGraphNode { .. }
+        | PanelAction::RelayoutGraph { .. }
         | PanelAction::SetGraphNodeParam { .. }
         | PanelAction::GroupSelection { .. }
         | PanelAction::Ungroup { .. }

@@ -395,6 +395,14 @@ pub enum PanelAction {
         node_id: u32,
         new_pos: (f32, f32),
     },
+    /// Re-position every node at `scope_path` in one undoable step. Emitted
+    /// by the canvas's Tidy command (Cmd+L), which runs the layered
+    /// auto-layout over the current level and ships the resulting positions
+    /// here. Routed to `LayoutGraphNodesCommand`.
+    RelayoutGraph {
+        scope_path: Vec<u32>,
+        positions: Vec<(u32, (f32, f32))>,
+    },
     /// Set an inner-node parameter to a new value. Emitted by the
     /// right-sidebar inspector when the user clicks a Bool toggle,
     /// cycles an Enum cell, or drag-scrubs a Float/Int value. The
