@@ -119,6 +119,8 @@ crate::primitive! {
     category: Noise,
     role: Source,
     aliases: ["noise", "perlin", "simplex", "fbm", "fractal", "fractal noise", "white noise", "random", "hash", "clouds", "turbulence", "Noise TOP"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/noise_body.wgsl"),
     extra_fields: {
         default_type: i32 = 0,
         default_octaves: i32 = 1,
@@ -160,8 +162,9 @@ impl Primitive for Noise {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/noise.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.noise standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.noise",
             )
         });

@@ -64,6 +64,29 @@ pub(crate) fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError
     }
 }
 
+/// A param name, made safe to use as a WGSL struct-field / identifier. A param
+/// can legitimately be named `type` (node.noise), but `type` is a WGSL reserved
+/// word, so emitting `struct Params { type: u32 }` / `params.type` fails to
+/// compile. Reserved names get a `p_` prefix; everything else passes through
+/// unchanged (so existing atoms' generated WGSL — and its pipeline-cache key —
+/// is untouched). The fused path namespaces fields as `n{i}_<name>`, which is
+/// never reserved, so only the standalone Params struct needs this.
+pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
+    // WGSL keywords a short param name could realistically collide with.
+    const RESERVED: &[&str] = &[
+        "type", "var", "let", "const", "fn", "struct", "return", "if", "else",
+        "for", "while", "loop", "switch", "case", "default", "break", "continue",
+        "true", "false", "bool", "i32", "u32", "f32", "f16", "array", "atomic",
+        "ptr", "sampler", "texture", "override", "enable", "discard", "vec2",
+        "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4",
+    ];
+    if RESERVED.contains(&name) {
+        std::borrow::Cow::Owned(format!("p_{name}"))
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
 fn is_texture_input(i: &NodeInput) -> bool {
     matches!(i.ty, PortType::Texture2D | PortType::Texture2DTyped(_))
 }
@@ -132,7 +155,7 @@ pub fn generate_standalone(
         out.push_str("struct Params {\n");
         for p in params {
             let ty = param_wgsl_type(p)?;
-            writeln!(out, "    {}: {},", p.name, ty).unwrap();
+            writeln!(out, "    {}: {},", wgsl_safe_field(p.name), ty).unwrap();
         }
         let pad_words = (4 - (params.len() % 4)) % 4;
         for i in 0..pad_words {
@@ -231,7 +254,7 @@ pub fn generate_standalone(
     args.push("uv".to_string());
     args.push("vec2<f32>(dims)".to_string());
     for p in params {
-        args.push(format!("params.{}", p.name));
+        args.push(format!("params.{}", wgsl_safe_field(p.name)));
     }
     writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
     out.push_str("    textureStore(dst, vec2<i32>(id.xy), result);\n");
@@ -1522,6 +1545,21 @@ mod gpu_tests {
         simplex_bytes[4..8].copy_from_slice(&3.0f32.to_le_bytes());
         simplex_bytes[16..20].copy_from_slice(&0.5f32.to_le_bytes()); // z
         // offset_x/y = 0, output_channel = 0 (R) — already zeroed.
+        // node.noise [type(u32), scale, offset_x, offset_y, octaves(i32),
+        // lacunarity, persistence], 32B — one case per branch to exercise every
+        // helper (Perlin fBM / Simplex snoise / Random hash).
+        let noise_case = |ty: i32, scale: f32, octaves: i32| {
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&ty.to_le_bytes());
+            b[4..8].copy_from_slice(&scale.to_le_bytes());
+            b[16..20].copy_from_slice(&octaves.to_le_bytes());
+            b[20..24].copy_from_slice(&2.0f32.to_le_bytes()); // lacunarity
+            b[24..28].copy_from_slice(&0.5f32.to_le_bytes()); // persistence
+            b
+        };
+        let noise_perlin = noise_case(0, 4.0, 3); // Perlin + fBM (3 octaves)
+        let noise_simplex = noise_case(1, 4.0, 1); // Simplex
+        let noise_random = noise_case(2, 8.0, 1); // Random hash
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -1535,6 +1573,9 @@ mod gpu_tests {
             ("node.ellipse_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
             ("node.dither_pattern", "dither_pattern.wgsl", Some(dither_pat_bytes.as_slice())),
             ("node.simplex_field_2d", "simplex_field_2d.wgsl", Some(simplex_bytes.as_slice())),
+            ("node.noise", "noise.wgsl", Some(noise_perlin.as_slice())),
+            ("node.noise", "noise.wgsl", Some(noise_simplex.as_slice())),
+            ("node.noise", "noise.wgsl", Some(noise_random.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();
