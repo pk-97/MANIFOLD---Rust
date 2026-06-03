@@ -757,6 +757,16 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Per-texture-input read-semantics for the fusion codegen
+    /// ([`InputAccess`](crate::node_graph::freeze::classify::InputAccess)),
+    /// aligned to the TEXTURE inputs in declaration order. Default empty = every
+    /// texture input is [`InputAccess::Coincident`] (resolution-robust sampler
+    /// read). Set via the macro's `input_access:` field; forwards
+    /// `P::INPUT_ACCESS`.
+    fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
+        &[]
+    }
+
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —
     /// the primitive runs against whatever the upstream producer

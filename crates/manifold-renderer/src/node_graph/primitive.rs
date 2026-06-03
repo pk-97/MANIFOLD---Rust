@@ -99,6 +99,17 @@ pub trait PrimitiveSpec: Send {
     /// macro's `wgsl_body:` field (typically `include_str!("shaders/x_body.wgsl")`).
     const WGSL_BODY: Option<&'static str> = None;
 
+    /// Per-texture-input read-semantics for the fusion codegen
+    /// ([`InputAccess`](crate::node_graph::freeze::classify::InputAccess)),
+    /// aligned to the TEXTURE inputs in `INPUTS` order (scalar/control inputs are
+    /// skipped). Empty (the default) means every texture input is
+    /// [`InputAccess::Coincident`] — the resolution-robust sampler read that
+    /// pointwise and coincident atoms use. Set per-input via the macro's
+    /// `input_access:` field only when an input needs a different semantic (e.g.
+    /// dither's exact-texel threshold pattern). An index past the end of the list
+    /// also defaults to `Coincident`.
+    const INPUT_ACCESS: &'static [crate::node_graph::freeze::classify::InputAccess] = &[];
+
     /// Returns a process-wide `EffectNodeType` instance for this
     /// primitive, allocated lazily on first call.
     ///
@@ -441,6 +452,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY
     }
+    fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
+        P::INPUT_ACCESS
+    }
 }
 
 /// Runtime view of a primitive's const metadata, suitable for
@@ -549,6 +563,7 @@ macro_rules! primitive {
         $( aliases: [ $($alias:literal),* $(,)? ], )?
         $( fusion_kind: $fusion_kind:ident, )?
         $( wgsl_body: $wgsl_body:expr, )?
+        $( input_access: [ $($access:ident),* $(,)? ], )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -597,6 +612,8 @@ macro_rules! primitive {
             $( const FUSION_KIND: $crate::node_graph::freeze::classify::FusionKind =
                 $crate::node_graph::freeze::classify::FusionKind::$fusion_kind; )?
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
+            $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
+                &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =

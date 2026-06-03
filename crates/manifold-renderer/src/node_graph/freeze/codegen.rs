@@ -16,7 +16,7 @@
 //! pipeline-cache key, so determinism is load-bearing.
 
 use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::freeze::classify::FusionKind;
+use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::parameters::{ParamDef, ParamType};
 use crate::node_graph::ports::{NodeInput, PortType};
 use std::fmt::Write as _;
@@ -75,7 +75,7 @@ fn is_texture_input(i: &NodeInput) -> bool {
 pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
 ) -> Result<String, CodegenError> {
     let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
-    generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS)
+    generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS)
 }
 
 /// Generate the standalone `cs_main` kernel for one atom. `body` is the atom's
@@ -89,6 +89,7 @@ pub fn generate_standalone(
     body: &str,
     inputs: &[NodeInput],
     params: &[ParamDef],
+    input_access: &[InputAccess],
 ) -> Result<String, CodegenError> {
     if body.is_empty() {
         return Err(CodegenError::NoBody);
@@ -105,6 +106,11 @@ pub fn generate_standalone(
             });
         }
     }
+    // Per-(texture-)input read-semantics, aligned to `tex_inputs` order; index
+    // past the end defaults to Coincident (the resolution-robust sampler read).
+    let access_of = |i: usize| input_access.get(i).copied().unwrap_or_default();
+    let any_sampled = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::Coincident);
+    let any_texel = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::CoincidentTexel);
 
     let mut out = String::new();
 
@@ -125,7 +131,10 @@ pub fn generate_standalone(
     }
     out.push_str("}\n\n");
 
-    // --- bindings: uniform(0), texture(1..), sampler, output ---
+    // --- bindings: uniform(0), texture(1..), [sampler], output. The sampler is
+    // emitted ONLY when at least one input is sampler-read (Coincident); an
+    // all-texel-read atom (e.g. dither) binds no sampler, so its dst slot follows
+    // the textures directly — matching what its run() binds. ---
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
     for (idx, inp) in tex_inputs.iter().enumerate() {
         writeln!(
@@ -136,9 +145,12 @@ pub fn generate_standalone(
         )
         .unwrap();
     }
-    let sampler_binding = tex_inputs.len() + 1;
-    let output_binding = sampler_binding + 1;
-    writeln!(out, "@group(0) @binding({sampler_binding}) var samp: sampler;").unwrap();
+    let mut next_binding = tex_inputs.len() + 1;
+    if any_sampled {
+        writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
+        next_binding += 1;
+    }
+    let output_binding = next_binding;
     writeln!(
         out,
         "@group(0) @binding({output_binding}) var dst: texture_storage_2d<rgba16float, write>;"
@@ -157,13 +169,28 @@ pub fn generate_standalone(
     out.push_str("    let dims = textureDimensions(dst);\n");
     out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
     out.push_str("    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n");
-    for inp in &tex_inputs {
-        writeln!(
-            out,
-            "    let c_{} = textureSampleLevel(tex_{}, samp, uv, 0.0);",
-            inp.name, inp.name
-        )
-        .unwrap();
+    if any_texel {
+        out.push_str("    let coord = vec2<i32>(id.xy);\n");
+    }
+    // Read each input by its access kind: Coincident → sampler at the fragment
+    // UV (resolution-robust); CoincidentTexel → exact integer-texel load (no
+    // filter — required when each texel is a distinct value, e.g. a dither
+    // threshold). Both read the fragment's own coordinate.
+    for (i, inp) in tex_inputs.iter().enumerate() {
+        match access_of(i) {
+            InputAccess::Coincident => writeln!(
+                out,
+                "    let c_{} = textureSampleLevel(tex_{}, samp, uv, 0.0);",
+                inp.name, inp.name
+            )
+            .unwrap(),
+            InputAccess::CoincidentTexel => writeln!(
+                out,
+                "    let c_{} = textureLoad(tex_{}, coord, 0);",
+                inp.name, inp.name
+            )
+            .unwrap(),
+        }
     }
     // body(<colors in input order>, uv, dims, params.<p0>, ...). `uv` (normalized
     // center-of-texel) and `dims` (float canvas size) are the ambient fragment
@@ -540,8 +567,8 @@ mod gpu_tests {
     fn generated_wgsl_is_deterministic() {
         let g = Gain::new();
         let body = g.wgsl_body().unwrap();
-        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters()).unwrap();
-        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters()).unwrap();
+        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access()).unwrap();
+        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access()).unwrap();
         assert_eq!(a, b, "codegen must be deterministic");
         assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
         assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
@@ -558,9 +585,14 @@ mod gpu_tests {
         let input = gradient(&device, w, h);
 
         let g = Gain::new();
-        let generated =
-            generate_standalone(g.fusion_kind(), g.wgsl_body().unwrap(), g.inputs(), g.parameters())
-                .expect("gain generates");
+        let generated = generate_standalone(
+            g.fusion_kind(),
+            g.wgsl_body().unwrap(),
+            g.inputs(),
+            g.parameters(),
+            g.input_access(),
+        )
+        .expect("gain generates");
         let original = include_str!("../primitives/shaders/gain.wgsl");
 
         // uniform payload: gain = 1.7, then padding (matches both structs).
@@ -635,6 +667,7 @@ mod gpu_tests {
                 node.wgsl_body().unwrap(),
                 node.inputs(),
                 node.parameters(),
+                node.input_access(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
@@ -821,9 +854,14 @@ mod gpu_tests {
 
         let m = crate::node_graph::primitives::Mix::new();
         let node: &dyn EffectNode = &m;
-        let generated =
-            generate_standalone(node.fusion_kind(), node.wgsl_body().unwrap(), node.inputs(), node.parameters())
-                .expect("mix generates");
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("mix generates");
         let original = include_str!("../primitives/shaders/mix.wgsl");
 
         // uniform payload: amount = 0.6 (f32), mode = 4 (Multiply, u32), pad.
@@ -865,6 +903,7 @@ mod gpu_tests {
             node.wgsl_body().unwrap(),
             node.inputs(),
             node.parameters(),
+            node.input_access(),
         )
         .expect("vignette generates");
         let original = include_str!("../primitives/shaders/vignette.wgsl");
@@ -908,5 +947,91 @@ mod gpu_tests {
                 r.max_abs, r.max_rel
             );
         }
+    }
+
+    /// Dispatch a two-input EXACT-TEXEL kernel: uniform(0), a(1), b(2), dst(3) —
+    /// NO sampler (both inputs are textureLoad'd). Mirrors dither's binding set.
+    fn dispatch_two_texel(
+        device: &GpuDevice,
+        wgsl: &str,
+        a: &GpuTexture,
+        b: &GpuTexture,
+        param_bytes: &[u8],
+    ) -> RenderTarget {
+        let (w, h) = (a.width, a.height);
+        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-test-dither");
+        let out = RenderTarget::new(device, w, h, FMT, "codegen-out-dither");
+        let mut enc = device.create_encoder("codegen-test-dither");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: param_bytes },
+                GpuBinding::Texture { binding: 1, texture: a },
+                GpuBinding::Texture { binding: 2, texture: b },
+                GpuBinding::Texture { binding: 3, texture: &out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "codegen-test-dither",
+        );
+        enc.commit_and_wait_completed();
+        out
+    }
+
+    /// CoincidentTexel parity (design §12.3 read-semantics generalization).
+    /// dither is the first atom with exact-texel inputs and NO sampler — both
+    /// `in` and `pattern` are textureLoad'd at the fragment texel (sampling the
+    /// threshold map would blend neighbouring thresholds and smear the dither).
+    /// The generated standalone kernel must reproduce hand dither.wgsl
+    /// bit-for-bit AND emit the sampler-free binding set (uniform(0), in(1),
+    /// pattern(2), dst(3)) so it's a drop-in for dither's run().
+    #[test]
+    fn generated_dither_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let source = gradient(&device, w, h);
+        let pattern = gradient_b(&device, w, h); // R channel = the threshold map
+
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let node = registry.construct("node.dither").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("dither generates");
+
+        // Structural: the all-texel atom binds NO sampler and reads both inputs
+        // via textureLoad (the new CoincidentTexel read-path).
+        assert!(
+            !generated.contains("var samp: sampler"),
+            "an all-CoincidentTexel atom must bind no sampler:\n{generated}"
+        );
+        assert_eq!(
+            generated.matches("textureLoad(").count(),
+            2,
+            "both dither inputs must be textureLoad'd:\n{generated}"
+        );
+
+        let original = include_str!("../primitives/shaders/dither.wgsl");
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // amount
+
+        let from_original = dispatch_two_texel(&device, original, &source, &pattern, &bytes);
+        let from_generated = dispatch_two_texel(&device, &generated, &source, &pattern, &bytes);
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated dither must reproduce dither.wgsl (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
     }
 }

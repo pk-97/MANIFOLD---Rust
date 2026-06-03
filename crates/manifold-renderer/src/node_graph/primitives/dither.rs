@@ -52,6 +52,9 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["dither", "bayer", "ordered dither"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/dither_body.wgsl"),
+    input_access: [CoincidentTexel, CoincidentTexel],
 }
 
 impl Primitive for Dither {
@@ -74,9 +77,16 @@ impl Primitive for Dither {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: the standalone kernel is generated from the same
+            // `wgsl_body` the fusion codegen chains. Both inputs are
+            // CoincidentTexel (exact-texel, no sampler), so the generated
+            // bindings are uniform(0), in(1), pattern(2), dst(3) — matching the
+            // sampler-free binding set below. dither.wgsl is the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.dither standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/dither.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.dither",
             )
         });

@@ -45,6 +45,42 @@ impl FusionKind {
     }
 }
 
+/// How a single texture input is READ by a fusable atom's body — the
+/// read-semantics axis, orthogonal to the channel/type axis (what's *on* the
+/// wire). A fusable atom tags each texture input with one of these via
+/// `INPUT_ACCESS` (aligned to the TEXTURE inputs in `INPUTS` order); the codegen
+/// emits one read-path per kind, and the region-grower enforces each kind's
+/// fusion constraint. This is the unit that lets a new atom slot in by "tag your
+/// inputs" instead of growing a bespoke node category each time.
+///
+/// GPU input access is a CLOSED, small set. The two variants here are what's
+/// built; the planned additive kinds — each just one more codegen read-path +
+/// one region-grow rule, never a re-tag of the atoms already shipped — are:
+///   - `Gather`: read at a coordinate the body COMPUTES (the UV-warp family —
+///     kaleidoscope / chromatic / voronoi). The body receives the texture +
+///     sampler as a declared arg and owns the exact filter/address-mode of the
+///     unfused atom (design §11.B / line 156).
+///   - `BufferIndex`: read element `[i]` from a storage buffer (the particle-sim
+///     lane).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputAccess {
+    /// Read at the fragment's own coordinate, resolution-ROBUST: the codegen
+    /// samples through a sampler at the fragment UV (standalone) or threads the
+    /// in-region register (fused). The default for every texture input — covers
+    /// pointwise (own pixel) and coincident multi-input (mix). A differently
+    /// sized producer is rescaled by the sampler, so it fuses across a resolution
+    /// seam safely.
+    #[default]
+    Coincident,
+    /// Read at the fragment's own integer texel, EXACT (`textureLoad`, no
+    /// filter). Correct only when the producer matches the output resolution —
+    /// sampling would blend neighbours and corrupt the value (e.g. dither's
+    /// ordered-threshold pattern, where each texel IS a distinct threshold). The
+    /// region-grower must refuse to fuse a `CoincidentTexel` input across a
+    /// resolution seam (design §11.B / line 147).
+    CoincidentTexel,
+}
+
 #[cfg(test)]
 mod tests {
     use super::FusionKind;
@@ -96,5 +132,29 @@ mod tests {
                 .unwrap_or_else(|| panic!("{type_id} has no wgsl_body"));
             assert!(body.contains("fn body"), "{type_id} body must define `fn body`");
         }
+    }
+
+    /// Per-input read-semantics: dither tags BOTH its inputs `CoincidentTexel`
+    /// (exact-texel, no sampler), while a plain color atom leaves `INPUT_ACCESS`
+    /// empty (every input defaults to `Coincident`).
+    #[test]
+    fn input_access_tags_dither_texel_and_defaults_color_coincident() {
+        use super::InputAccess;
+        use crate::node_graph::PrimitiveRegistry;
+        let registry = PrimitiveRegistry::with_builtin();
+
+        let dither = registry.construct("node.dither").expect("registry missing node.dither");
+        assert_eq!(
+            dither.input_access(),
+            &[InputAccess::CoincidentTexel, InputAccess::CoincidentTexel],
+            "dither's in + pattern are both exact-texel"
+        );
+
+        let gain = registry.construct("node.gain").expect("registry missing node.gain");
+        assert!(
+            gain.input_access().is_empty(),
+            "a color atom leaves INPUT_ACCESS empty (= all Coincident by default)"
+        );
+        assert_eq!(InputAccess::default(), InputAccess::Coincident);
     }
 }
