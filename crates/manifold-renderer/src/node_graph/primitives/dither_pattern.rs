@@ -52,6 +52,8 @@ crate::primitive! {
     category: Stylize,
     role: Source,
     aliases: ["dither pattern", "bayer", "halftone", "threshold map"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/dither_pattern_body.wgsl"),
 }
 
 impl Primitive for DitherPattern {
@@ -73,8 +75,9 @@ impl Primitive for DitherPattern {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/dither_pattern.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.dither_pattern standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.dither_pattern",
             )
         });
