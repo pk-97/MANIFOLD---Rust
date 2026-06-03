@@ -11,6 +11,7 @@
 //! two renders (unfused = exact oracle, fused = candidate) to a tiny verdict.
 
 pub mod classify;
+pub mod codegen;
 pub mod diff;
 pub mod reference;
 
