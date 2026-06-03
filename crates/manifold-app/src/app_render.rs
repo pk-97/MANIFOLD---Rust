@@ -590,9 +590,10 @@ impl Application {
         }
 
         // Editor-card chevron requested the sideways mapping drawer: resolve the
-        // binding's current mapping from the edited effect, anchor on the row's
-        // chevron, and open the popover. Resolution is effect-only (generators
-        // have no UserParamBinding); a `None` (e.g. a stale id) just no-ops.
+        // binding's current mapping from the edited effect OR generator, anchor
+        // on the row's chevron, and open the popover. Effects resolve a user
+        // binding or stock note; generators resolve a per-instance ParamMapping
+        // note (or recipe identity). A `None` (e.g. a stale id) just no-ops.
         if let Some(pid) = pending_open_card_mapping {
             self.open_editor_card_mapping(&pid);
         }
@@ -2436,6 +2437,11 @@ impl Application {
             // envelopes in real time.
             self.editor_mapping_popover.set_live_value(popover_live_value);
             self.editor_mapping_popover.render(ui);
+            // The popover draws immediate-mode rects AFTER the overlay's last
+            // scissor batch, so cover them or `prepare` skips the fills (panel
+            // background + buttons) while curve/text still draw — a transparent
+            // panel. Full viewport: the popover floats over the whole window.
+            ui.cover_trailing_rects(None);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }

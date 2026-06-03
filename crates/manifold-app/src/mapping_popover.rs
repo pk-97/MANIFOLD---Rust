@@ -52,7 +52,7 @@ const PREVIEW_H: f32 = 52.0;
 const PREVIEW_SAMPLES: usize = 48;
 
 // ── Colors ──────────────────────────────────────────────────────────
-const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 0.98];
+const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 1.0];
 const PANEL_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
 const TRACK_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.08];
 const TRACK_FILL: [f32; 4] = [0.50, 0.78, 1.00, 0.45];

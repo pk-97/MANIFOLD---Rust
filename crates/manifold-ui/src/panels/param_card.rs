@@ -1380,7 +1380,19 @@ impl ParamCardPanel {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
             let mut cy = inner_y + HEADER_HEIGHT;
-            let slider_w = content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
+            // Author mode reserves the same right-edge mapping-drawer chevron
+            // lane the effect card does, so generator slider rows shrink to
+            // match and the chevron sits past the D/E buttons. Generators are
+            // remappable too (per-instance ParamMapping note), so this unifies
+            // the surface — same chevron, same drawer.
+            let author = self.context == CardContext::Author;
+            let chevron_lane = if author {
+                MAP_CHEVRON_W + DE_BUTTON_GAP
+            } else {
+                0.0
+            };
+            let slider_w =
+                content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
             // Wider label cell in the editor (Author) lane so friendly names
             // don't clip; the inspector keeps the terse default.
             let label_width = if self.context == CardContext::Author {
@@ -1446,6 +1458,7 @@ impl ParamCardPanel {
                     // flat to `-1`, use the gen-param slider palette, the
                     // body-size driver-config font, and always show the `E`
                     // button (generators always support envelopes).
+                    let row_y = cy;
                     let row = build_param_row(
                         tree,
                         -1,
@@ -1472,6 +1485,32 @@ impl ParamCardPanel {
                     self.envelope_random_config_ids[i] = row.envelope_random_config;
                     self.driver_config_ids[i] = row.driver_config;
                     self.ableton_config_ids[i] = row.ableton_config;
+                    // Mapping-drawer chevron at the row's right edge (Author +
+                    // mappable) — identical to the effect card. Opens the same
+                    // sideways range/scale/offset/invert/curve drawer; click
+                    // resolves via the shared `mapping_chevron_ids`.
+                    if author && info.mappable {
+                        let ch_x = cx + content_w - MAP_CHEVRON_W;
+                        let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+                        self.mapping_chevron_ids[i] = tree.add_button(
+                            -1,
+                            ch_x,
+                            ch_y,
+                            MAP_CHEVRON_W,
+                            DE_BUTTON_SIZE,
+                            UIStyle {
+                                bg_color: Color32::TRANSPARENT,
+                                hover_bg_color: color::HOVER_OVERLAY,
+                                pressed_bg_color: color::PRESS_OVERLAY,
+                                text_color: color::CHEVRON_COLOR,
+                                font_size: FONT_SIZE,
+                                text_align: TextAlign::Center,
+                                corner_radius: 2.0,
+                                ..UIStyle::default()
+                            },
+                            "\u{203A}", // ›
+                        ) as i32;
+                    }
                     cy = row.new_cy;
                 }
             }
@@ -1859,6 +1898,18 @@ impl ParamCardPanel {
         // Cog → open graph editor for this generator
         if id == self.cog_btn_id {
             return vec![PanelAction::OpenGeneratorGraphEditor];
+        }
+
+        // Mapping-drawer chevron (Author context) → open the sideways
+        // range/scale/offset/invert/curve drawer for this row's param. Same
+        // action the effect card emits; the host resolves it against the
+        // watched generator target (the unified mapping surface).
+        if let Some(pi) = self
+            .mapping_chevron_ids
+            .iter()
+            .position(|&cid| cid >= 0 && cid == id)
+        {
+            return vec![PanelAction::OpenCardMapping(self.pid_at(pi))];
         }
 
         // Card click (header bg, name, border) → select the card
@@ -2947,6 +2998,46 @@ mod tests {
         // The chevron also has a resolvable anchor rect by binding id.
         assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
         assert!(panel.mapping_chevron_rect(&tree, "radius").is_none());
+    }
+
+    /// Generator config with the second param marked mappable — generators are
+    /// remappable too, so the Author-context mapping chevron must appear, same
+    /// as effects (the unified surface).
+    fn generator_config_with_mappable() -> ParamCardConfig {
+        let mut c = effect_config();
+        c.kind = ParamCardKind::Generator;
+        c.params[1].mappable = true;
+        c
+    }
+
+    #[test]
+    fn generator_author_context_shows_mapping_chevron() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.set_context(CardContext::Author);
+        panel.configure(&generator_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+
+        // Same as the effect card: chevron only on the mappable row, click opens
+        // the card mapping drawer, and the anchor rect resolves by binding id.
+        assert!(panel.mapping_chevron_ids[0] < 0, "row 0 not mappable");
+        let chevron = panel.mapping_chevron_ids[1];
+        assert!(chevron >= 0, "generator mappable row → chevron");
+        let actions = panel.handle_click(chevron as u32);
+        assert!(
+            matches!(&actions[..], [PanelAction::OpenCardMapping(pid)] if pid == "strength"),
+            "got {actions:?}"
+        );
+        assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
+    }
+
+    #[test]
+    fn generator_perform_context_has_no_mapping_chevron() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // default Perform
+        panel.configure(&generator_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+        assert!(panel.mapping_chevron_ids.iter().all(|&id| id < 0));
     }
 
     #[test]
