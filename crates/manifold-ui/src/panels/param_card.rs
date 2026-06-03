@@ -17,7 +17,7 @@
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{EnvelopeParam, PanelAction};
+use super::{EnvelopeParam, GraphParamTarget, PanelAction};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -517,6 +517,15 @@ impl ParamCardPanel {
 
     pub fn effect_index(&self) -> usize {
         self.effect_index
+    }
+
+    /// The [`GraphParamTarget`] this card's per-param actions carry — the
+    /// effect index for an effect card, `Generator` for a generator card.
+    fn param_target(&self) -> GraphParamTarget {
+        match self.kind {
+            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
+            ParamCardKind::Generator => GraphParamTarget::Generator,
+        }
     }
     pub fn effect_id(&self) -> &EffectId {
         &self.effect_id
@@ -1371,7 +1380,19 @@ impl ParamCardPanel {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
             let mut cy = inner_y + HEADER_HEIGHT;
-            let slider_w = content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
+            // Author mode reserves the same right-edge mapping-drawer chevron
+            // lane the effect card does, so generator slider rows shrink to
+            // match and the chevron sits past the D/E buttons. Generators are
+            // remappable too (per-instance ParamMapping note), so this unifies
+            // the surface — same chevron, same drawer.
+            let author = self.context == CardContext::Author;
+            let chevron_lane = if author {
+                MAP_CHEVRON_W + DE_BUTTON_GAP
+            } else {
+                0.0
+            };
+            let slider_w =
+                content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
             // Wider label cell in the editor (Author) lane so friendly names
             // don't clip; the inspector keeps the terse default.
             let label_width = if self.context == CardContext::Author {
@@ -1437,6 +1458,7 @@ impl ParamCardPanel {
                     // flat to `-1`, use the gen-param slider palette, the
                     // body-size driver-config font, and always show the `E`
                     // button (generators always support envelopes).
+                    let row_y = cy;
                     let row = build_param_row(
                         tree,
                         -1,
@@ -1463,6 +1485,32 @@ impl ParamCardPanel {
                     self.envelope_random_config_ids[i] = row.envelope_random_config;
                     self.driver_config_ids[i] = row.driver_config;
                     self.ableton_config_ids[i] = row.ableton_config;
+                    // Mapping-drawer chevron at the row's right edge (Author +
+                    // mappable) — identical to the effect card. Opens the same
+                    // sideways range/scale/offset/invert/curve drawer; click
+                    // resolves via the shared `mapping_chevron_ids`.
+                    if author && info.mappable {
+                        let ch_x = cx + content_w - MAP_CHEVRON_W;
+                        let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+                        self.mapping_chevron_ids[i] = tree.add_button(
+                            -1,
+                            ch_x,
+                            ch_y,
+                            MAP_CHEVRON_W,
+                            DE_BUTTON_SIZE,
+                            UIStyle {
+                                bg_color: Color32::TRANSPARENT,
+                                hover_bg_color: color::HOVER_OVERLAY,
+                                pressed_bg_color: color::PRESS_OVERLAY,
+                                text_color: color::CHEVRON_COLOR,
+                                font_size: FONT_SIZE,
+                                text_align: TextAlign::Center,
+                                corner_radius: 2.0,
+                                ..UIStyle::default()
+                            },
+                            "\u{203A}", // ›
+                        ) as i32;
+                    }
                     cy = row.new_cy;
                 }
             }
@@ -1794,22 +1842,22 @@ impl ParamCardPanel {
         ) {
             return match rc {
                 RowClick::DriverToggle(pi) => {
-                    vec![PanelAction::EffectDriverToggle(ei, self.pid_at(pi))]
+                    vec![PanelAction::DriverToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::EnvelopeToggle(pi) => {
-                    vec![PanelAction::EffectEnvelopeToggle(ei, self.pid_at(pi))]
+                    vec![PanelAction::EnvelopeToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::DriverConfig(pi, action) => {
-                    vec![PanelAction::EffectDriverConfig(ei, self.pid_at(pi), action)]
+                    vec![PanelAction::DriverConfig(GraphParamTarget::Effect(ei), self.pid_at(pi), action)]
                 }
                 RowClick::EnvModeToggle(pi) => {
-                    vec![PanelAction::EffectEnvModeToggle(ei, self.pid_at(pi))]
+                    vec![PanelAction::EnvModeToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::EnvRandomJumpToggle(pi) => {
-                    vec![PanelAction::EffectEnvRandomJumpToggle(ei, self.pid_at(pi))]
+                    vec![PanelAction::EnvRandomJumpToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::AbletonInvert(pi) => {
-                    vec![PanelAction::AbletonInvertToggle(ei, self.pid_at(pi))]
+                    vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
@@ -1850,6 +1898,18 @@ impl ParamCardPanel {
         // Cog → open graph editor for this generator
         if id == self.cog_btn_id {
             return vec![PanelAction::OpenGeneratorGraphEditor];
+        }
+
+        // Mapping-drawer chevron (Author context) → open the sideways
+        // range/scale/offset/invert/curve drawer for this row's param. Same
+        // action the effect card emits; the host resolves it against the
+        // watched generator target (the unified mapping surface).
+        if let Some(pi) = self
+            .mapping_chevron_ids
+            .iter()
+            .position(|&cid| cid >= 0 && cid == id)
+        {
+            return vec![PanelAction::OpenCardMapping(self.pid_at(pi))];
         }
 
         // Card click (header bg, name, border) → select the card
@@ -1893,19 +1953,19 @@ impl ParamCardPanel {
             &self.param_info,
         ) {
             return match rc {
-                RowClick::DriverToggle(pi) => vec![PanelAction::GenDriverToggle(self.pid_at(pi))],
+                RowClick::DriverToggle(pi) => vec![PanelAction::DriverToggle(GraphParamTarget::Generator, self.pid_at(pi))],
                 RowClick::EnvelopeToggle(pi) => {
-                    vec![PanelAction::GenEnvelopeToggle(self.pid_at(pi))]
+                    vec![PanelAction::EnvelopeToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::DriverConfig(pi, action) => {
-                    vec![PanelAction::GenDriverConfig(self.pid_at(pi), action)]
+                    vec![PanelAction::DriverConfig(GraphParamTarget::Generator, self.pid_at(pi), action)]
                 }
-                RowClick::EnvModeToggle(pi) => vec![PanelAction::GenEnvModeToggle(self.pid_at(pi))],
+                RowClick::EnvModeToggle(pi) => vec![PanelAction::EnvModeToggle(GraphParamTarget::Generator, self.pid_at(pi))],
                 RowClick::EnvRandomJumpToggle(pi) => {
-                    vec![PanelAction::GenEnvRandomJumpToggle(self.pid_at(pi))]
+                    vec![PanelAction::EnvRandomJumpToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::AbletonInvert(pi) => {
-                    vec![PanelAction::AbletonGenInvertToggle(self.pid_at(pi))]
+                    vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
@@ -1963,12 +2023,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
             }
         }
@@ -1979,7 +2039,7 @@ impl ParamCardPanel {
                 && node_id as i32 == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::EffectTargetSnapshot(ei, self.pid_at(pi))];
+                return vec![PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
             }
         }
 
@@ -1989,12 +2049,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
             }
         }
@@ -2005,12 +2065,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonTrimSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonTrimSnapshot(ei, self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
             }
         }
@@ -2023,9 +2083,9 @@ impl ParamCardPanel {
                     self.drag.dragging_env_slot = 0;
                     let norm = BitmapSlider::x_to_normalized(c.attack_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
-                        PanelAction::EffectEnvParamChanged(
-                            ei,
+                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
+                        PanelAction::EnvParamChanged(
+                            GraphParamTarget::Effect(ei),
                             self.pid_at(pi),
                             EnvelopeParam::Attack,
                             norm * ENV_ADR_MAX,
@@ -2037,9 +2097,9 @@ impl ParamCardPanel {
                     self.drag.dragging_env_slot = 1;
                     let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
-                        PanelAction::EffectEnvParamChanged(
-                            ei,
+                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
+                        PanelAction::EnvParamChanged(
+                            GraphParamTarget::Effect(ei),
                             self.pid_at(pi),
                             EnvelopeParam::Decay,
                             norm * ENV_ADR_MAX,
@@ -2051,9 +2111,9 @@ impl ParamCardPanel {
                     self.drag.dragging_env_slot = 2;
                     let norm = BitmapSlider::x_to_normalized(c.sustain_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
-                        PanelAction::EffectEnvParamChanged(
-                            ei,
+                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
+                        PanelAction::EnvParamChanged(
+                            GraphParamTarget::Effect(ei),
                             self.pid_at(pi),
                             EnvelopeParam::Sustain,
                             norm * ENV_S_MAX,
@@ -2065,9 +2125,9 @@ impl ParamCardPanel {
                     self.drag.dragging_env_slot = 3;
                     let norm = BitmapSlider::x_to_normalized(c.release_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
-                        PanelAction::EffectEnvParamChanged(
-                            ei,
+                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
+                        PanelAction::EnvParamChanged(
+                            GraphParamTarget::Effect(ei),
                             self.pid_at(pi),
                             EnvelopeParam::Release,
                             norm * ENV_ADR_MAX,
@@ -2145,12 +2205,12 @@ impl ParamCardPanel {
                         self.drag.dragging_trim_param = pi as i32;
                         self.drag.dragging_trim_is_min = true;
                         let _ = trim;
-                        return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
+                        return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                     }
                     if dist_max < hit_zone {
                         self.drag.dragging_trim_param = pi as i32;
                         self.drag.dragging_trim_is_min = false;
-                        return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
+                        return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                     }
                 }
 
@@ -2197,12 +2257,12 @@ impl ParamCardPanel {
                         if dist_min < hit_zone && dist_min <= dist_max {
                             self.drag.dragging_range_param = pi as i32;
                             self.drag.dragging_range_is_min = true;
-                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
+                            return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                         }
                         if dist_max < hit_zone {
                             self.drag.dragging_range_param = pi as i32;
                             self.drag.dragging_range_is_min = false;
-                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
+                            return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                         }
                     } else {
                         let tgt = self
@@ -2216,7 +2276,7 @@ impl ParamCardPanel {
 
                         if (pos.x - target_center).abs() < hit_zone {
                             self.drag.dragging_target_param = pi as i32;
-                            return vec![PanelAction::EffectTargetSnapshot(ei, self.pid_at(pi))];
+                            return vec![PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                         }
                     }
                 }
@@ -2228,8 +2288,8 @@ impl ParamCardPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 return vec![
-                    PanelAction::EffectParamSnapshot(ei, self.pid_at(pi)),
-                    PanelAction::EffectParamChanged(ei, self.pid_at(pi), val),
+                    PanelAction::ParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
+                    PanelAction::ParamChanged(GraphParamTarget::Effect(ei), self.pid_at(pi), val),
                 ];
             }
         }
@@ -2244,12 +2304,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::GenEnvRangeSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::GenEnvRangeSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
             }
         }
@@ -2260,7 +2320,7 @@ impl ParamCardPanel {
                 && node_id as i32 == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::GenTargetSnapshot(self.pid_at(pi))];
+                return vec![PanelAction::TargetSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
             }
         }
 
@@ -2270,12 +2330,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::GenTrimSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::GenTrimSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
             }
         }
@@ -2286,12 +2346,12 @@ impl ParamCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonGenTrimSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonGenTrimSnapshot(self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
             }
         }
@@ -2311,8 +2371,8 @@ impl ParamCardPanel {
                         self.drag.dragging_env_slot = slot;
                         let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                         return vec![
-                            PanelAction::GenEnvParamSnapshot(self.pid_at(pi)),
-                            PanelAction::GenEnvParamChanged(self.pid_at(pi), *param, norm * max),
+                            PanelAction::EnvParamSnapshot(GraphParamTarget::Generator, self.pid_at(pi)),
+                            PanelAction::EnvParamChanged(GraphParamTarget::Generator, self.pid_at(pi), *param, norm * max),
                         ];
                     }
                 }
@@ -2339,8 +2399,8 @@ impl ParamCardPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 return vec![
-                    PanelAction::GenParamSnapshot(self.pid_at(pi)),
-                    PanelAction::GenParamChanged(self.pid_at(pi), val),
+                    PanelAction::ParamSnapshot(GraphParamTarget::Generator, self.pid_at(pi)),
+                    PanelAction::ParamChanged(GraphParamTarget::Generator, self.pid_at(pi), val),
                 ];
             }
         }
@@ -2416,16 +2476,12 @@ impl ParamCardPanel {
                 }
 
                 let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::EffectEnvRangeChanged(
-                            ei, pid, new_min, new_max,
-                        )]
-                    }
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::GenEnvRangeChanged(pid, new_min, new_max)]
-                    }
-                };
+                return vec![PanelAction::EnvRangeChanged(
+                    self.param_target(),
+                    pid,
+                    new_min,
+                    new_max,
+                )];
             }
         }
 
@@ -2453,8 +2509,8 @@ impl ParamCardPanel {
 
                 let pid = self.pid_at(pi);
                 return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::EffectTargetChanged(ei, pid, norm)],
-                    ParamCardKind::Generator => vec![PanelAction::GenTargetChanged(pid, norm)],
+                    ParamCardKind::Effect => vec![PanelAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm)],
+                    ParamCardKind::Generator => vec![PanelAction::TargetChanged(GraphParamTarget::Generator, pid, norm)],
                 };
             }
         }
@@ -2524,10 +2580,10 @@ impl ParamCardPanel {
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::EffectTrimChanged(ei, pid, new_min, new_max)]
+                        vec![PanelAction::TrimChanged(GraphParamTarget::Effect(ei), pid, new_min, new_max)]
                     }
                     ParamCardKind::Generator => {
-                        vec![PanelAction::GenTrimChanged(pid, new_min, new_max)]
+                        vec![PanelAction::TrimChanged(GraphParamTarget::Generator, pid, new_min, new_max)]
                     }
                 };
             }
@@ -2580,10 +2636,10 @@ impl ParamCardPanel {
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::AbletonTrimChanged(ei, pid, new_min, new_max)]
+                        vec![PanelAction::AbletonTrimChanged(GraphParamTarget::Effect(ei), pid, new_min, new_max)]
                     }
                     ParamCardKind::Generator => {
-                        vec![PanelAction::AbletonGenTrimChanged(pid, new_min, new_max)]
+                        vec![PanelAction::AbletonTrimChanged(GraphParamTarget::Generator, pid, new_min, new_max)]
                     }
                 };
             }
@@ -2606,10 +2662,10 @@ impl ParamCardPanel {
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::EffectEnvParamChanged(ei, pid, param, val)]
+                        vec![PanelAction::EnvParamChanged(GraphParamTarget::Effect(ei), pid, param, val)]
                     }
                     ParamCardKind::Generator => {
-                        vec![PanelAction::GenEnvParamChanged(pid, param, val)]
+                        vec![PanelAction::EnvParamChanged(GraphParamTarget::Generator, pid, param, val)]
                     }
                 };
             }
@@ -2635,8 +2691,8 @@ impl ParamCardPanel {
                 self.param_cache[pi] = val;
                 let pid = self.pid_at(pi);
                 return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::EffectParamChanged(ei, pid, val)],
-                    ParamCardKind::Generator => vec![PanelAction::GenParamChanged(pid, val)],
+                    ParamCardKind::Effect => vec![PanelAction::ParamChanged(GraphParamTarget::Effect(ei), pid, val)],
+                    ParamCardKind::Generator => vec![PanelAction::ParamChanged(GraphParamTarget::Generator, pid, val)],
                 };
             }
         }
@@ -2654,8 +2710,8 @@ impl ParamCardPanel {
             self.drag.dragging_range_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EffectEnvRangeCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::GenEnvRangeCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::EnvRangeCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::EnvRangeCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_target_param >= 0 {
@@ -2663,8 +2719,8 @@ impl ParamCardPanel {
             self.drag.dragging_target_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EffectTargetCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::GenTargetCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::TargetCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::TargetCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_trim_param >= 0 {
@@ -2672,8 +2728,8 @@ impl ParamCardPanel {
             self.drag.dragging_trim_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EffectTrimCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::GenTrimCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::TrimCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::TrimCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_ableton_trim_param >= 0 {
@@ -2681,8 +2737,8 @@ impl ParamCardPanel {
             self.drag.dragging_ableton_trim_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::AbletonTrimCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::AbletonGenTrimCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_env_param >= 0 {
@@ -2690,8 +2746,8 @@ impl ParamCardPanel {
             self.drag.dragging_env_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EffectEnvParamCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::GenEnvParamCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::EnvParamCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::EnvParamCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_param >= 0 {
@@ -2699,8 +2755,8 @@ impl ParamCardPanel {
             self.drag.dragging_param = -1;
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EffectParamCommit(ei, pid)],
-                ParamCardKind::Generator => vec![PanelAction::GenParamCommit(pid)],
+                ParamCardKind::Effect => vec![PanelAction::ParamCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::ParamCommit(GraphParamTarget::Generator, pid)],
             };
         }
 
@@ -2721,8 +2777,8 @@ impl ParamCardPanel {
                 // Right-click slider track → reset to default
                 if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::EffectParamRightClick(
-                        ei,
+                    return vec![PanelAction::ParamRightClick(
+                        GraphParamTarget::Effect(ei),
                         self.pid_at(pi),
                         default,
                     )];
@@ -2735,7 +2791,7 @@ impl ParamCardPanel {
                     && ids.label >= 0
                     && node_id == ids.label as u32
                 {
-                    return vec![PanelAction::EffectParamLabelRightClick(ei, self.pid_at(pi))];
+                    return vec![PanelAction::ParamLabelRightClick(GraphParamTarget::Effect(ei), self.pid_at(pi))];
                 }
             }
         }
@@ -2767,7 +2823,7 @@ impl ParamCardPanel {
                 // Right-click slider track → reset to default
                 if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::GenParamRightClick(self.pid_at(pi), default)];
+                    return vec![PanelAction::ParamRightClick(GraphParamTarget::Generator, self.pid_at(pi), default)];
                 }
                 // Right-click label → perform-mapping menu. Suppressed in
                 // Author (see effect path above).
@@ -2775,7 +2831,7 @@ impl ParamCardPanel {
                     && ids.label >= 0
                     && node_id == ids.label as u32
                 {
-                    return vec![PanelAction::GenParamLabelRightClick(self.pid_at(pi))];
+                    return vec![PanelAction::ParamLabelRightClick(GraphParamTarget::Generator, self.pid_at(pi))];
                 }
             }
         }
@@ -2944,6 +3000,46 @@ mod tests {
         assert!(panel.mapping_chevron_rect(&tree, "radius").is_none());
     }
 
+    /// Generator config with the second param marked mappable — generators are
+    /// remappable too, so the Author-context mapping chevron must appear, same
+    /// as effects (the unified surface).
+    fn generator_config_with_mappable() -> ParamCardConfig {
+        let mut c = effect_config();
+        c.kind = ParamCardKind::Generator;
+        c.params[1].mappable = true;
+        c
+    }
+
+    #[test]
+    fn generator_author_context_shows_mapping_chevron() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.set_context(CardContext::Author);
+        panel.configure(&generator_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+
+        // Same as the effect card: chevron only on the mappable row, click opens
+        // the card mapping drawer, and the anchor rect resolves by binding id.
+        assert!(panel.mapping_chevron_ids[0] < 0, "row 0 not mappable");
+        let chevron = panel.mapping_chevron_ids[1];
+        assert!(chevron >= 0, "generator mappable row → chevron");
+        let actions = panel.handle_click(chevron as u32);
+        assert!(
+            matches!(&actions[..], [PanelAction::OpenCardMapping(pid)] if pid == "strength"),
+            "got {actions:?}"
+        );
+        assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
+    }
+
+    #[test]
+    fn generator_perform_context_has_no_mapping_chevron() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // default Perform
+        panel.configure(&generator_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+        assert!(panel.mapping_chevron_ids.iter().all(|&id| id < 0));
+    }
+
     #[test]
     fn handle_click_toggle() {
         let mut tree = UITree::new();
@@ -2978,7 +3074,7 @@ mod tests {
         let actions = panel.handle_click(panel.driver_btn_ids[0] as u32);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::EffectDriverToggle(ei, param_id) => {
+            PanelAction::DriverToggle(GraphParamTarget::Effect(ei), param_id) => {
                 assert_eq!(*ei, 0);
                 assert_eq!(param_id.as_ref(), "radius");
             }

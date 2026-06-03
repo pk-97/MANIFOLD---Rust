@@ -348,16 +348,7 @@ impl GraphSnapshot {
             .nodes()
             .map(|inst| {
                 let type_id = inst.node.type_id().as_str().to_string();
-                let title = match inst.node.display_title() {
-                    Some(custom) => format!("{custom} (WGSL)"),
-                    // Prefer the friendly palette label ("Scale + Offset
-                    // (value)") over the raw prettified type id
-                    // ("Affine_scalar"); fall back to the type id for nodes
-                    // with no picker (boundary / internal building blocks).
-                    None => super::palette::friendly_label_for(&type_id)
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| title_from_type_id(&type_id)),
-                };
+                let title = display_label(&type_id, inst.title.as_deref());
                 let inputs = inst
                     .node
                     .inputs()
@@ -639,6 +630,7 @@ fn snapshot_level(
                 dn.id,
                 dn.node_id.clone(),
                 dn.handle.clone(),
+                dn.title.as_deref(),
                 &params,
                 &dn.exposed_params,
                 dn.editor_pos,
@@ -669,17 +661,13 @@ fn node_snapshot_from_constructed(
     id: u32,
     node_id: manifold_core::NodeId,
     handle: Option<String>,
+    author_title: Option<&str>,
     params: &ParamValues,
     exposed: &std::collections::BTreeSet<String>,
     editor_pos: Option<(f32, f32)>,
 ) -> NodeSnapshot {
     let type_id = node.type_id().as_str().to_string();
-    let title = match node.display_title() {
-        Some(custom) => format!("{custom} (WGSL)"),
-        None => super::palette::friendly_label_for(&type_id)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| title_from_type_id(&type_id)),
-    };
+    let title = display_label(&type_id, author_title);
     let inputs = node
         .inputs()
         .iter()
@@ -744,10 +732,37 @@ fn node_snapshot_from_constructed(
 /// raw id when there's no dot separator.
 fn title_from_type_id(type_id: &str) -> String {
     let tail = type_id.rsplit_once('.').map(|(_, t)| t).unwrap_or(type_id);
-    let mut chars = tail.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().chain(chars).collect(),
-        None => String::new(),
+    // Split on underscores and title-case each word: `final_output` →
+    // `Final Output`, `block_displace_field` → `Block Displace Field`. Only
+    // reached for nodes with no friendly palette label (boundary / internal
+    // building blocks), so it's the last-resort prettifier.
+    tail.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The header label for a node: the author title when set, else the friendly
+/// palette label, else a prettified type id. `wgsl_compute` nodes keep a
+/// `(WGSL)` marker on their authored title so a hand-written shader reads as
+/// custom code rather than a native primitive. One definition, used by both
+/// the live (`from_graph`) and structural (group-preserving) snapshot paths.
+fn display_label(type_id: &str, author_title: Option<&str>) -> String {
+    let base = author_title
+        .map(str::to_string)
+        .or_else(|| super::palette::friendly_label_for(type_id).map(|s| s.to_string()))
+        .unwrap_or_else(|| title_from_type_id(type_id));
+    if author_title.is_some() && type_id == super::primitives::wgsl_compute::TYPE_ID {
+        format!("{base} (WGSL)")
+    } else {
+        base
     }
 }
 

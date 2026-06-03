@@ -311,16 +311,6 @@ pub fn instantiate_def(
             boxed.set_wgsl_source(source);
         }
 
-        // (1b) Author-supplied display title — currently only honored by
-        // `node.wgsl_compute` (where multiple escape-hatch nodes in one
-        // preset would otherwise render with identical generic headers).
-        // Every other primitive's `set_display_title` is a no-op, so a
-        // stray override on a regular node is silently ignored rather
-        // than erroring.
-        if let Some(title) = node_doc.title.as_deref() {
-            boxed.set_display_title(title);
-        }
-
         // Snapshot the declared param surface BEFORE moving `boxed` into
         // the graph — we need this for type-checked param overrides
         // below, plus for the exposed-params validation pass.
@@ -368,6 +358,17 @@ pub fn instantiate_def(
             node_doc.node_id.clone()
         };
         graph.set_node_id(runtime_id, resolved_node_id);
+
+        // Author-supplied display title — honored for every node type now.
+        // The snapshot builder adds the `(WGSL)` marker for wgsl_compute, so
+        // a hand-written shader still reads as custom; regular nodes just get
+        // the friendly name the author chose (e.g. a `node.value` hub labelled
+        // "Amount" vs "Speed" instead of two identical "Value" headers).
+        if let Some(title) = &node_doc.title
+            && let Some(inst) = graph.get_node_mut(runtime_id)
+        {
+            inst.title = Some(title.clone());
+        }
 
         // PerSplice: record the handle in the effect-local map. Owned
         // Cow because the handle string comes off disk and we don't

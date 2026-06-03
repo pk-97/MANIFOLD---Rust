@@ -126,118 +126,51 @@ fn apply_mapping(
     target: &AbletonMappingTarget,
     mapping: &Option<AbletonParamMapping>,
 ) {
-    match target {
-        AbletonMappingTarget::MasterEffect {
-            effect_type,
-            param_id,
-        } => {
-            if let Some(fx) = project
-                .settings
-                .master_effects
-                .iter_mut()
-                .find(|f| f.effect_type() == effect_type)
-            {
-                let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
-                m.retain(|x| x.param_id != *param_id);
-                if let Some(mapping) = mapping {
-                    m.push(mapping.clone());
-                }
-                if m.is_empty() {
-                    fx.ableton_mappings = None;
-                }
-            }
+    // MacroSlot stores a single mapping, not a per-param vec — its own arm.
+    if let AbletonMappingTarget::MacroSlot { slot_index } = target {
+        if let Some(slot) = project.settings.macro_bank.slots.get_mut(*slot_index) {
+            slot.ableton_mapping = mapping.clone();
         }
-        AbletonMappingTarget::LayerEffect {
-            layer_id,
-            effect_type,
-            param_id,
-        } => {
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                && let Some(effects) = &mut layer.effects
-                && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
-            {
-                let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
-                m.retain(|x| x.param_id != *param_id);
-                if let Some(mapping) = mapping {
-                    m.push(mapping.clone());
-                }
-                if m.is_empty() {
-                    fx.ableton_mappings = None;
-                }
-            }
+        return;
+    }
+    // The three host-vec variants (master / layer effect / generator) share
+    // one upsert: locate the host's mapping vec, drop any prior mapping for
+    // this param, push the new one (or leave the slot cleared when removing).
+    let Some(param_id) = target.param_id().cloned() else {
+        return;
+    };
+    if let Some(slot) = project.ableton_param_mappings_mut(target) {
+        let m = slot.get_or_insert_with(Vec::new);
+        m.retain(|x| x.param_id != param_id);
+        if let Some(mapping) = mapping {
+            m.push(mapping.clone());
         }
-        AbletonMappingTarget::GenParam { layer_id, param_id } => {
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                && let Some(gp) = layer.gen_params_mut()
-            {
-                let m = gp.ableton_mappings.get_or_insert_with(Vec::new);
-                m.retain(|x| x.param_id != *param_id);
-                if let Some(mapping) = mapping {
-                    m.push(mapping.clone());
-                }
-                if m.is_empty() {
-                    gp.ableton_mappings = None;
-                }
-            }
-        }
-        AbletonMappingTarget::MacroSlot { slot_index } => {
-            if let Some(slot) = project.settings.macro_bank.slots.get_mut(*slot_index) {
-                slot.ableton_mapping = mapping.clone();
-            }
+        if m.is_empty() {
+            *slot = None;
         }
     }
 }
 
 fn set_trim(project: &mut Project, target: &AbletonMappingTarget, min: f32, max: f32) {
-    match target {
-        AbletonMappingTarget::MasterEffect {
-            effect_type,
-            param_id,
-        } => {
-            if let Some(fx) = project
-                .settings
-                .master_effects
-                .iter_mut()
-                .find(|f| f.effect_type() == effect_type)
-                && let Some(ms) = &mut fx.ableton_mappings
-                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-            {
-                m.range_min = min;
-                m.range_max = max;
-            }
+    // MacroSlot's single mapping — its own arm.
+    if let AbletonMappingTarget::MacroSlot { slot_index } = target {
+        if let Some(slot) = project.settings.macro_bank.slots.get_mut(*slot_index)
+            && let Some(m) = &mut slot.ableton_mapping
+        {
+            m.range_min = min;
+            m.range_max = max;
         }
-        AbletonMappingTarget::LayerEffect {
-            layer_id,
-            effect_type,
-            param_id,
-        } => {
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                && let Some(effects) = &mut layer.effects
-                && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
-                && let Some(ms) = &mut fx.ableton_mappings
-                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-            {
-                m.range_min = min;
-                m.range_max = max;
-            }
-        }
-        AbletonMappingTarget::GenParam { layer_id, param_id } => {
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                && let Some(gp) = layer.gen_params_mut()
-                && let Some(ms) = &mut gp.ableton_mappings
-                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-            {
-                m.range_min = min;
-                m.range_max = max;
-            }
-        }
-        AbletonMappingTarget::MacroSlot { slot_index } => {
-            if let Some(slot) = project.settings.macro_bank.slots.get_mut(*slot_index)
-                && let Some(m) = &mut slot.ableton_mapping
-            {
-                m.range_min = min;
-                m.range_max = max;
-            }
-        }
+        return;
+    }
+    // The three host-vec variants share one find-by-param-id + set-range.
+    let Some(param_id) = target.param_id().cloned() else {
+        return;
+    };
+    if let Some(slot) = project.ableton_param_mappings_mut(target)
+        && let Some(ms) = slot.as_mut()
+        && let Some(m) = ms.iter_mut().find(|m| m.param_id == param_id)
+    {
+        m.range_min = min;
+        m.range_max = max;
     }
 }

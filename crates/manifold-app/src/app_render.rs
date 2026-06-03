@@ -14,41 +14,23 @@ use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use manifold_editing::commands::effects::BindingMappingEdit;
 
-/// The resolved store the mapping drawer edits — one per editor-watched
-/// graph target. Effect params (stock or user-exposed) route through
-/// `EditUserParamBindingCommand` (which itself picks user-binding vs note);
-/// generator params route through `EditGenParamMappingCommand` (note only).
-/// This is the single fork that keeps the drawer's twelve actions from
-/// each growing an effect/generator branch.
-#[derive(Clone)]
-enum MappingTarget {
-    Effect(manifold_core::EffectId),
-    Generator(manifold_core::LayerId),
-}
-
-/// Build the right reshape-edit command for the watched target. Both
-/// commands address by stable id + apply a partial [`BindingMappingEdit`].
+/// Build the reshape-edit command for the watched graph target — one
+/// [`manifold_editing::commands::effects::EditParamMappingCommand`] for
+/// both effects and generators. It picks the user-binding store vs the
+/// reshape-note store internally, by stable id, so the effect/generator
+/// fork that used to live here is gone.
 fn build_mapping_command(
-    target: &MappingTarget,
+    target: &manifold_core::GraphTarget,
     param_id: &str,
     edit: manifold_editing::commands::effects::BindingMappingEdit,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
-    match target {
-        MappingTarget::Effect(eid) => Box::new(
-            manifold_editing::commands::effects::EditUserParamBindingCommand::new(
-                eid.clone(),
-                param_id.to_string(),
-                edit,
-            ),
+    Box::new(
+        manifold_editing::commands::effects::EditParamMappingCommand::new(
+            target.clone(),
+            param_id.to_string(),
+            edit,
         ),
-        MappingTarget::Generator(lid) => Box::new(
-            manifold_editing::commands::effects::EditGenParamMappingCommand::new(
-                lid.clone(),
-                param_id.to_string(),
-                edit,
-            ),
-        ),
-    }
+    )
 }
 
 /// Drag-commit variant: the command carries the EXPLICIT pre-drag reverse
@@ -56,40 +38,27 @@ fn build_mapping_command(
 /// the preview-mutated ones — mirroring `ChangeEffectParamCommand`'s
 /// explicit `old_value`.
 fn build_mapping_command_with_reverse(
-    target: &MappingTarget,
+    target: &manifold_core::GraphTarget,
     param_id: &str,
     new: manifold_editing::commands::effects::BindingMappingEdit,
     reverse: manifold_editing::commands::effects::BindingMappingEdit,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
-    match target {
-        MappingTarget::Effect(eid) => Box::new(
-            manifold_editing::commands::effects::EditUserParamBindingCommand::new_with_reverse(
-                eid.clone(),
-                param_id.to_string(),
-                new,
-                reverse,
-            ),
+    Box::new(
+        manifold_editing::commands::effects::EditParamMappingCommand::new_with_reverse(
+            target.clone(),
+            param_id.to_string(),
+            new,
+            reverse,
         ),
-        MappingTarget::Generator(lid) => Box::new(
-            manifold_editing::commands::effects::EditGenParamMappingCommand::new_with_reverse(
-                lid.clone(),
-                param_id.to_string(),
-                new,
-                reverse,
-            ),
-        ),
-    }
+    )
 }
 
 impl Application {
-    /// The mapping drawer's store target for the editor's watched graph.
-    fn mapping_target(&self) -> Option<MappingTarget> {
-        match self.watched_graph_target.as_ref()? {
-            manifold_core::GraphTarget::Effect(eid) => Some(MappingTarget::Effect(eid.clone())),
-            manifold_core::GraphTarget::Generator(lid) => {
-                Some(MappingTarget::Generator(lid.clone()))
-            }
-        }
+    /// The mapping drawer's store target for the editor's watched graph —
+    /// the [`manifold_core::GraphTarget`] the command then resolves to a
+    /// `GraphHost`.
+    fn mapping_target(&self) -> Option<manifold_core::GraphTarget> {
+        self.watched_graph_target.clone()
     }
 
     /// Read the watched param's CURRENT reshape `(min, max, scale, offset)`
@@ -130,6 +99,33 @@ impl Application {
         }
     }
 
+    /// Read the watched param's CURRENT (post-modulation) value — the number
+    /// shown on the card slider — for the mapping popover's live dot. Reads the
+    /// same `param_values` slot drivers / Ableton / envelopes write each frame,
+    /// so the dot tracks live motion. `None` if the param doesn't resolve.
+    fn watched_value(&self, param_id: &str) -> Option<f32> {
+        match self.watched_graph_target.as_ref()? {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                let idx = fx.param_id_to_value_index(param_id)?;
+                fx.param_values.get(idx).map(|p| p.value)
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let gp = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?
+                    .gen_params()?;
+                let def =
+                    manifold_core::generator_definition_registry::try_get(gp.generator_type())?;
+                let idx = *def.id_to_index.get(param_id)?;
+                gp.param_values.get(idx).map(|p| p.value)
+            }
+        }
+    }
+
     /// Live-drag preview: apply the partial edit to the watched param's
     /// reshape store on BOTH the local project (immediate card UI) and the
     /// content thread (smooth canvas + survives the next snapshot sync),
@@ -137,7 +133,12 @@ impl Application {
     /// Reuses the edit command's own apply logic (it picks user-binding vs
     /// note + seeds copy-on-write), so the preview can never diverge from
     /// the commit.
-    fn preview_mapping(&mut self, target: &MappingTarget, param_id: &str, edit: BindingMappingEdit) {
+    fn preview_mapping(
+        &mut self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        edit: BindingMappingEdit,
+    ) {
         build_mapping_command(target, param_id, edit.clone()).execute(&mut self.local_project);
         let target = target.clone();
         let pid = param_id.to_string();
@@ -149,7 +150,12 @@ impl Application {
     /// Commit / single-shot: send the reshape edit as one undoable command.
     /// Self-captures the reverse (correct for single-shot — nothing mutated
     /// the store first).
-    fn commit_mapping(&mut self, target: &MappingTarget, param_id: &str, edit: BindingMappingEdit) {
+    fn commit_mapping(
+        &mut self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        edit: BindingMappingEdit,
+    ) {
         self.send_content_cmd(ContentCommand::Execute(build_mapping_command(
             target, param_id, edit,
         )));
@@ -160,7 +166,7 @@ impl Application {
     /// preview-mutated ones.
     fn commit_mapping_with_reverse(
         &mut self,
-        target: &MappingTarget,
+        target: &manifold_core::GraphTarget,
         param_id: &str,
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
@@ -584,9 +590,10 @@ impl Application {
         }
 
         // Editor-card chevron requested the sideways mapping drawer: resolve the
-        // binding's current mapping from the edited effect, anchor on the row's
-        // chevron, and open the popover. Resolution is effect-only (generators
-        // have no UserParamBinding); a `None` (e.g. a stale id) just no-ops.
+        // binding's current mapping from the edited effect OR generator, anchor
+        // on the row's chevron, and open the popover. Effects resolve a user
+        // binding or stock note; generators resolve a per-instance ParamMapping
+        // note (or recipe identity). A `None` (e.g. a stale id) just no-ops.
         if let Some(pid) = pending_open_card_mapping {
             self.open_editor_card_mapping(&pid);
         }
@@ -1071,6 +1078,24 @@ impl Application {
                             default.clone(),
                         )
                         .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::RelayoutGraph {
+                    scope_path,
+                    positions,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::LayoutGraphNodesCommand::new(
+                            eid.clone(),
+                            positions.clone(),
+                            default.clone(),
+                        )
+                        .with_scope(scope_path.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -2235,6 +2260,13 @@ impl Application {
         let Some(wid) = self.graph_editor_window_id else {
             return;
         };
+        // Resolve the open popover's live value before borrowing the editor
+        // window state mutably (`watched_value` borrows all of `self`).
+        let popover_live_value = if self.editor_mapping_popover.is_open() {
+            self.watched_value(self.editor_mapping_popover.binding_id())
+        } else {
+            None
+        };
         let Some(ws) = self.graph_editor.as_mut() else {
             return;
         };
@@ -2376,13 +2408,27 @@ impl Application {
             if self.editor_card_config_hash != Some(config_hash) {
                 self.editor_card.configure(config);
                 self.editor_card_config_hash = Some(config_hash);
-                // The card's structure (or edited target) changed, so the
-                // chevron geometry the mapping drawer anchored on is stale —
-                // close it rather than leave it pointing at a moved/old row.
-                self.editor_mapping_popover.close();
             }
             self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
             self.editor_card.sync_values(&mut ws.ui_root.tree, values);
+            // Close the drawer only when the row it anchored on is actually gone
+            // (target changed, param unexposed) — NOT on any config change. The
+            // drawer edits the note live, and the note's min/max now flow into
+            // the card config (so the slider range tracks the drawer), so a
+            // range-handle drag changes the config every frame. Closing on that
+            // dismissed the panel mid-drag. The chevron still resolving means
+            // the row is still there, so keep the drawer open.
+            if self.editor_mapping_popover.is_open()
+                && self
+                    .editor_card
+                    .mapping_chevron_rect(
+                        &ws.ui_root.tree,
+                        self.editor_mapping_popover.binding_id(),
+                    )
+                    .is_none()
+            {
+                self.editor_mapping_popover.close();
+            }
         } else {
             self.editor_card_config_hash = None;
             self.editor_mapping_popover.close();
@@ -2416,11 +2462,22 @@ impl Application {
             // scissor batches and the canvas's nodes/wires/grid would
             // never reach the GPU.
             ui.render_overlay_additive(&ws.ui_root.tree, 0);
-            // The sideways mapping drawer floats over everything (immediate-mode
-            // primitives), drawn last so it sits above the card + canvas.
-            self.editor_mapping_popover.render(ui);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+            }
+            // The mapping drawer renders in its OWN second pass, on top of the
+            // fully-composited canvas + sidebar. Text is a global last pass, so
+            // a single-pass popover can't occlude the canvas node labels behind
+            // it (they'd bleed through the solid panel). A separate pass draws
+            // the panel — background, then its own text — over everything.
+            if self.editor_mapping_popover.is_open() {
+                ui.begin_frame();
+                self.editor_mapping_popover.set_live_value(popover_live_value);
+                self.editor_mapping_popover.render(ui);
+                ui.cover_trailing_rects(None);
+                if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
+                    ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+                }
             }
         }
 

@@ -389,6 +389,48 @@ pub struct ParamMapping {
     pub offset: f32,
 }
 
+/// The card→consumer reshape pipeline — the **single definition** shared by
+/// the renderer's runtime write boundary (`ResolvedBinding`'s `Reshape::apply`)
+/// and the mapping-popover's live preview, so the two can never drift. A
+/// preview computed by different math than the engine is a lie the moment one
+/// side changes; routing both through this function makes that unrepresentable.
+///
+/// Two stages, matching [`UserParamBinding`] / [`ParamMapping`] semantics:
+/// 1. **Slider response** — only when `invert` or a non-Linear `curve` is set:
+///    normalize the value within `[min, max]`, invert, apply the curve, scale
+///    back. This stage clamps to `[0, 1]` so the response is well defined
+///    across the slider. A pure scale/offset fold skips this entirely, so it
+///    reproduces the `affine_scalar` it replaced exactly.
+/// 2. **Card→consumer affine** — `out = v * scale + offset`, UNCLAMPED, where a
+///    folded `affine_scalar` lands (e.g. a deg→rad scale a driver may push past
+///    the slider max, which the angle wrap then tames downstream).
+///
+/// Identity inputs (`invert = false`, `curve = Linear`, `scale = 1`,
+/// `offset = 0`) return `value` unchanged.
+pub fn apply_card_reshape(
+    value: f32,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: crate::macro_bank::MacroCurve,
+    scale: f32,
+    offset: f32,
+) -> f32 {
+    let mut v = value;
+    if invert || curve != crate::macro_bank::MacroCurve::Linear {
+        let range = max - min;
+        if range.abs() >= f32::EPSILON {
+            let mut n = ((v - min) / range).clamp(0.0, 1.0);
+            if invert {
+                n = 1.0 - n;
+            }
+            n = curve.apply(n);
+            v = min + range * n;
+        }
+    }
+    v * scale + offset
+}
+
 // ─── Param Value (per-slot state) ───
 
 /// A single parameter slot's runtime state on an [`EffectInstance`].
@@ -2487,6 +2529,24 @@ fn default_group_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_reshape_identity_and_stages() {
+        use crate::macro_bank::MacroCurve;
+        // Identity: passes through untouched.
+        assert!((apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::Linear, 1.0, 0.0) - 2.5).abs() < 1e-4);
+        // Invert: 25% of the range becomes 75%.
+        assert!((apply_card_reshape(2.5, 0.0, 10.0, true, MacroCurve::Linear, 1.0, 0.0) - 7.5).abs() < 1e-4);
+        // SCurve (Hermite 3t^2-2t^3): n=0.25 -> 0.15625 -> *10 = 1.5625.
+        assert!((apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::SCurve, 1.0, 0.0) - 1.5625).abs() < 1e-3);
+        // Degenerate range: passthrough, no divide-by-zero.
+        assert!((apply_card_reshape(42.0, 5.0, 5.0, false, MacroCurve::Exponential, 1.0, 0.0) - 42.0).abs() < 1e-6);
+        // Folded affine (deg->rad): no invert/curve, so scale/offset apply to the
+        // RAW value, unclamped — a past-max 400° must NOT pin to the slider max.
+        let k = std::f32::consts::PI / 180.0;
+        assert!((apply_card_reshape(85.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 85.0 * k).abs() < 1e-5);
+        assert!((apply_card_reshape(400.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 400.0 * k).abs() < 1e-4);
+    }
 
     #[test]
     fn test_driver_sine() {

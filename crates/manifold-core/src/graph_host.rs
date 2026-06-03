@@ -127,6 +127,17 @@ pub trait GraphHost {
     /// host-generic command enumerate "is there a user binding for this
     /// id?" uniformly while the storage stays kind-specific.
     fn user_param_bindings(&self) -> &[UserParamBinding];
+
+    /// Mutable access to a user binding by stable id, for the inline
+    /// reshape edit (label / range / invert / curve / scale / offset).
+    /// `None` for generators — they have no user-binding tier, so a
+    /// host-generic mapping edit falls through to the reshape-note path.
+    fn user_param_binding_mut(&mut self, id: &str) -> Option<&mut UserParamBinding>;
+
+    /// Bump the user-binding version so the renderer rebuilds the user
+    /// tail (and drops its `LastAppliedCache` tail) next frame. No-op for
+    /// generators.
+    fn bump_user_bindings_version(&mut self);
 }
 
 // ── EffectInstance: impl directly ─────────────────────────────────────
@@ -200,6 +211,14 @@ impl GraphHost for EffectInstance {
 
     fn user_param_bindings(&self) -> &[UserParamBinding] {
         &self.user_param_bindings
+    }
+
+    fn user_param_binding_mut(&mut self, id: &str) -> Option<&mut UserParamBinding> {
+        self.user_param_bindings.iter_mut().find(|b| b.id == id)
+    }
+
+    fn bump_user_bindings_version(&mut self) {
+        self.user_param_bindings_version = self.user_param_bindings_version.wrapping_add(1);
     }
 }
 
@@ -322,4 +341,10 @@ impl GraphHost for GeneratorHost<'_> {
         // not as a sibling Vec. Empty here on purpose — see module docs.
         &[]
     }
+
+    fn user_param_binding_mut(&mut self, _id: &str) -> Option<&mut UserParamBinding> {
+        None
+    }
+
+    fn bump_user_bindings_version(&mut self) {}
 }

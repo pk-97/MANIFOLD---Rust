@@ -745,6 +745,46 @@ impl Project {
         }
     }
 
+    /// The `&mut Option<Vec<AbletonParamMapping>>` an Ableton mapping
+    /// target's per-param mappings live in, located the way the Ableton
+    /// bridge addresses hosts — by `effect_type` within master / a layer,
+    /// or a layer's generator. `None` if the host doesn't resolve.
+    ///
+    /// `MacroSlot` is intentionally NOT handled here: a macro slot stores a
+    /// single `Option<AbletonParamMapping>`, not a per-param vec, so its
+    /// call sites keep their own arm. Shared by the editing commands and the
+    /// live bridge so the master/layer/generator locate-fork exists once.
+    pub fn ableton_param_mappings_mut(
+        &mut self,
+        target: &crate::ableton_mapping::AbletonMappingTarget,
+    ) -> Option<&mut Option<Vec<crate::ableton_mapping::AbletonParamMapping>>> {
+        use crate::ableton_mapping::AbletonMappingTarget as T;
+        match target {
+            T::MasterEffect { effect_type, .. } => self
+                .settings
+                .master_effects
+                .iter_mut()
+                .find(|f| f.effect_type() == effect_type)
+                .map(|fx| &mut fx.ableton_mappings),
+            T::LayerEffect {
+                layer_id,
+                effect_type,
+                ..
+            } => self
+                .timeline
+                .find_layer_by_id_mut(layer_id.as_str())
+                .and_then(|(_, layer)| layer.effects.as_mut())
+                .and_then(|effects| effects.iter_mut().find(|f| f.effect_type() == effect_type))
+                .map(|fx| &mut fx.ableton_mappings),
+            T::GenParam { layer_id, .. } => self
+                .timeline
+                .find_layer_by_id_mut(layer_id.as_str())
+                .and_then(|(_, layer)| layer.gen_params_mut())
+                .map(|gp| &mut gp.ableton_mappings),
+            T::MacroSlot { .. } => None,
+        }
+    }
+
     /// The id of the layer that owns the effect `effect_id`, if any.
     ///
     /// Returns the layer for a layer-scoped effect, the layer containing the

@@ -1261,7 +1261,7 @@ impl UIRoot {
                 );
                 true
             }
-            PanelAction::EffectParamLabelRightClick(fx_idx, param_id) => {
+            PanelAction::ParamLabelRightClick(GraphParamTarget::Effect(fx_idx), param_id) => {
                 let tab = self.inspector.last_effect_tab();
                 let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
                 for i in 0..manifold_core::MACRO_COUNT {
@@ -1302,7 +1302,7 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::GenParamLabelRightClick(param_id) => {
+            PanelAction::ParamLabelRightClick(GraphParamTarget::Generator, param_id) => {
                 let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {

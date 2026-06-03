@@ -981,8 +981,11 @@ impl Application {
                                 )
                         {
                             let cmd =
-                                manifold_editing::commands::effects::ChangeEffectParamCommand::new(
-                                    effect_id, param_id, old_val, new_val,
+                                manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                    manifold_core::GraphTarget::Effect(effect_id),
+                                    param_id,
+                                    old_val,
+                                    new_val,
                                 );
                             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                                 Box::new(cmd);
@@ -1015,24 +1018,23 @@ impl Application {
                         parsed
                     };
                     if let Some(gp) = layer.gen_params() {
-                        // Base-value snapshot as plain floats (base if present,
-                        // else effective). `param_values` is `Vec<ParamSlot>`
-                        // now, so fall back through the float projection.
-                        let base: Vec<f32> = gp.snapshot_params();
-                        let old_val = base.get(param_idx).copied().unwrap_or(0.0);
-                        if (old_val - new_val).abs() > f32::EPSILON {
-                            let mut old_params = base.clone();
-                            let mut new_params = base.clone();
-                            if param_idx < new_params.len() {
-                                new_params[param_idx] = new_val;
-                            }
-                            if param_idx < old_params.len() {
-                                old_params[param_idx] = old_val;
-                            }
+                        let old_val = gp.get_param_base(param_idx);
+                        // Resolve the positional registry index to the stable
+                        // param id the unified by-id command addresses.
+                        let param_id =
+                            manifold_core::generator_definition_registry::try_get(gen_type)
+                                .and_then(|d| d.param_ids.get(param_idx).copied());
+                        if (old_val - new_val).abs() > f32::EPSILON
+                            && let Some(param_id) = param_id
+                        {
                             let lid = layer.layer_id.clone();
-                            let cmd = manifold_editing::commands::settings::ChangeGeneratorParamsCommand::new(
-                                        lid, old_params, new_params,
-                                    );
+                            let cmd =
+                                manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                    manifold_core::GraphTarget::Generator(lid),
+                                    param_id,
+                                    old_val,
+                                    new_val,
+                                );
                             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                                 Box::new(cmd);
                             boxed.execute(&mut self.local_project);
@@ -2573,6 +2575,60 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary && self.perform_handle_key(&logical_key) {
                     return;
                 }
+                // Mapping drawer numeric entry: when a value field is active,
+                // keystrokes type into it (digits / `.` / `-` / Backspace),
+                // Enter commits, Esc cancels — ahead of any canvas shortcut
+                // (Backspace would otherwise delete the selected node). Plain
+                // chars only (no Cmd/Ctrl) so shortcuts still pass when not
+                // typing a value.
+                {
+                    use winit::keyboard::{Key, NamedKey};
+                    let typing = !self.modifiers.command && !self.modifiers.ctrl;
+                    if self.editor_mapping_popover.is_editing() {
+                        match &logical_key {
+                            Key::Named(NamedKey::Enter) => self.editor_mapping_popover.commit_edit(),
+                            Key::Named(NamedKey::Escape) => self.editor_mapping_popover.cancel_edit(),
+                            Key::Named(NamedKey::Backspace) => {
+                                self.editor_mapping_popover.on_backspace()
+                            }
+                            Key::Named(NamedKey::Space) if typing => {
+                                self.editor_mapping_popover.on_text_char(' ')
+                            }
+                            Key::Character(c) if typing => {
+                                for ch in c.chars() {
+                                    self.editor_mapping_popover.on_text_char(ch);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                        return;
+                    }
+                    if let Some(canvas) = self.graph_canvas.as_mut()
+                        && canvas.popover_is_editing()
+                    {
+                        match &logical_key {
+                            Key::Named(NamedKey::Enter) => canvas.popover_commit_edit(),
+                            Key::Named(NamedKey::Escape) => canvas.popover_cancel_edit(),
+                            Key::Named(NamedKey::Backspace) => canvas.popover_on_backspace(),
+                            Key::Named(NamedKey::Space) if typing => {
+                                canvas.popover_on_text_char(' ')
+                            }
+                            Key::Character(c) if typing => {
+                                for ch in c.chars() {
+                                    canvas.popover_on_text_char(ch);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                        return;
+                    }
+                }
                 // Editor window: node picker is open → keystrokes drive its
                 // search field. Must run BEFORE the Delete/Backspace node-
                 // delete arm below, or Backspace would delete a node instead
@@ -2687,6 +2743,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         } else {
                             canvas.request_group_selection();
                         }
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
+                // Editor window: Cmd+L tidies the current level — re-runs the
+                // layered auto-layout and persists every node's new position in
+                // one undoable step.
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("l")
+                {
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        canvas.request_relayout();
                     }
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.offscreen_dirty = true;

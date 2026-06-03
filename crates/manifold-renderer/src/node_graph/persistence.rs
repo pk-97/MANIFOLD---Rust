@@ -528,7 +528,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                         .collect(),
                     editor_pos: None,
                     wgsl_source: inst.node.wgsl_source().map(|s| s.to_string()),
-                    title: inst.node.display_title().map(|s| s.to_string()),
+                    title: inst.title.clone(),
                     output_formats,
                     output_canvas_scales,
                     group: None,
@@ -1066,13 +1066,12 @@ mod tests {
         );
     }
 
-    /// `node.wgsl_compute` carries an optional author-supplied `title`
-    /// — the field the graph-canvas header renders as `"<title> (WGSL)"`
-    /// so the four escape-hatch nodes in BlackHole (or any preset that
-    /// stacks them) can be told apart at a glance. Confirms the field
-    /// round-trips through JSON, that `into_graph` installs it via
-    /// `EffectNode::set_display_title`, and that `from_graph` reads it
-    /// back from `EffectNode::display_title`.
+    /// A node carries an optional author-supplied `title` — the field the
+    /// graph-canvas header renders (with a `(WGSL)` marker appended for
+    /// `node.wgsl_compute`) so the four escape-hatch nodes in BlackHole, or
+    /// two `node.value` hubs, can be told apart at a glance. Confirms the
+    /// field round-trips through JSON, that `into_graph` installs it onto the
+    /// live `NodeInstance.title`, and that `from_graph` reads it back.
     #[test]
     fn wgsl_compute_title_field_round_trips_through_json() {
         let doc = GraphDocument {
@@ -1105,18 +1104,18 @@ mod tests {
             "JSON must carry the title field; got: {json}"
         );
 
-        // Load → install on the node via set_display_title.
+        // Load → install on the live instance's `title`.
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
         let g = parsed.into_graph(&registry()).unwrap();
         let kernel_id = g.node_id_by_handle("simulate").expect("handle survived");
         let inst = g.get_node(kernel_id).unwrap();
         assert_eq!(
-            inst.node.display_title(),
+            inst.title.as_deref(),
             Some("Particle Sim"),
-            "title must reach the node via set_display_title",
+            "title must reach the live instance",
         );
 
-        // Re-serialize → title surfaces back out via display_title().
+        // Re-serialize → title surfaces back out of the instance.
         let doc2 = GraphDocument::from_graph(&g);
         let kernel_doc = doc2
             .nodes
@@ -1126,7 +1125,7 @@ mod tests {
         assert_eq!(
             kernel_doc.title.as_deref(),
             Some("Particle Sim"),
-            "title must round-trip back out via display_title()",
+            "title must round-trip back out via from_graph",
         );
     }
 

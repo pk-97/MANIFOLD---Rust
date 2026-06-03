@@ -538,6 +538,35 @@ impl UIRenderer {
         self.flush_scissor_batch();
     }
 
+    /// Cover immediate-mode rects emitted AFTER [`Self::render_overlay_additive`]
+    /// — a floating widget like the mapping popover drawn last — with their own
+    /// scissor batch so they actually reach the GPU.
+    ///
+    /// `prepare` builds GPU batches only from `scissor_batches`; any rect not
+    /// inside one is left in the index buffer but referenced by no
+    /// `prepared_batch`, so it's silently skipped. Lines and text take a
+    /// separate, always-drawn path — which is why an un-covered popover shows
+    /// its curve and labels but its panel fill and buttons vanish (a fully
+    /// transparent panel). Call this once after the floating widget renders.
+    /// `scissor` clips the batch; `None` is the full viewport, correct for a
+    /// popover that floats over everything.
+    pub fn cover_trailing_rects(&mut self, scissor: Option<Rect>) {
+        let covered = self
+            .scissor_batches
+            .iter()
+            .map(|b| b.rect_start + b.rect_count)
+            .max()
+            .unwrap_or(0);
+        let end = self.rect_commands.len();
+        if end > covered {
+            self.scissor_batches.push(ScissorBatch {
+                scissor,
+                rect_start: covered,
+                rect_count: end - covered,
+            });
+        }
+    }
+
     /// Render a sub-region using flat sequential traversal.
     /// Used for incremental inspector rendering — correctly handles reparented
     /// nodes (where `traverse_range` would skip them).

@@ -40,25 +40,29 @@ const PAD: f32 = 8.0;
 const ROW_H: f32 = 18.0;
 const ROW_GAP: f32 = 6.0;
 const HEADER_H: f32 = 16.0;
-const TRACK_H: f32 = 14.0;
-const HANDLE_W: f32 = 4.0;
 const CURVE_ROW_H: f32 = 16.0;
 const FONT: f32 = 11.0;
 const FONT_SMALL: f32 = 10.0;
+/// Height of the live response-curve preview plotted under the header.
+const PREVIEW_H: f32 = 52.0;
+/// How many points to sample the reshape at across the input span when
+/// drawing the preview curve. 48 is smooth at this size without being a cost.
+const PREVIEW_SAMPLES: usize = 48;
 
 // ── Colors ──────────────────────────────────────────────────────────
-const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 0.98];
+const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 1.0];
 const PANEL_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
-const TRACK_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.08];
-const TRACK_FILL: [f32; 4] = [0.50, 0.78, 1.00, 0.45];
-const HANDLE_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
-const HANDLE_HOVER: [f32; 4] = [0.72, 0.90, 1.00, 1.0];
 const BTN_BG: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
 const BTN_BG_ACTIVE: [f32; 4] = [0.42, 0.30, 0.62, 1.0]; // Ableton-purple INV
 const CURVE_BG: [f32; 4] = [0.20, 0.20, 0.25, 1.0];
 const CURVE_BG_ACTIVE: [f32; 4] = [0.28, 0.34, 0.50, 1.0];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
+// Preview plot: a darker inset box, a bright response line, and a live dot.
+const PREVIEW_BG: [f32; 4] = [0.08, 0.08, 0.10, 1.0];
+const PREVIEW_LINE: [f32; 4] = [0.50, 0.78, 1.00, 0.95];
+const PREVIEW_GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
+const PREVIEW_DOT: [f32; 4] = [1.00, 0.86, 0.45, 1.0];
 
 /// The four curve options in display order. Indexed by the order shown,
 /// not by enum discriminant, so the dropdown order is stable here.
@@ -76,6 +80,21 @@ fn curve_label(c: MacroCurve) -> &'static str {
         MacroCurve::Logarithmic => "Log",
         MacroCurve::SCurve => "S-Curve",
     }
+}
+
+/// Compact value formatting for the live readout: whole numbers show clean,
+/// others show up to two decimals with trailing zeros trimmed (`64`, `0.01`,
+/// `1.5`). Falls back to scientific for very large/small magnitudes.
+fn trim_num(v: f32) -> String {
+    let a = v.abs();
+    if a != 0.0 && !(0.001..1_000_000.0).contains(&a) {
+        return format!("{v:.2e}");
+    }
+    if v.fract() == 0.0 {
+        return format!("{}", v as i64);
+    }
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Format a scale/offset value for the popover field, picking a precision
@@ -101,6 +120,10 @@ fn format_affine(v: f32) -> String {
 const SCRUB_K: f32 = 0.004;
 const SCRUB_FLOOR: f32 = 0.05;
 
+/// Pointer travel (px) below which a press-release on a scale/offset field
+/// counts as a click (→ enter numeric edit) rather than a scrub drag.
+const CLICK_SLOP: f32 = 3.0;
+
 /// Which draggable element (if any) the pointer grabbed on press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragTarget {
@@ -108,6 +131,28 @@ enum DragTarget {
     Max,
     Scale,
     Offset,
+}
+
+/// Which field is being typed into. The four numeric fields parse as `f32`;
+/// `Label` is a free-text rename committed via `EffectMappingLabel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditField {
+    Min,
+    Max,
+    Scale,
+    Offset,
+    Label,
+}
+
+impl From<DragTarget> for EditField {
+    fn from(d: DragTarget) -> Self {
+        match d {
+            DragTarget::Min => EditField::Min,
+            DragTarget::Max => EditField::Max,
+            DragTarget::Scale => EditField::Scale,
+            DragTarget::Offset => EditField::Offset,
+        }
+    }
 }
 
 /// In-place mapping editor for one binding. `open()` seeds it with the
@@ -145,9 +190,25 @@ pub struct MappingPopover {
     /// than chained per frame.
     scrub_press_x: f32,
     scrub_start: f32,
-    /// Which handle the cursor is hovering (for the highlight) when not
-    /// dragging.
-    hover: Option<DragTarget>,
+    /// True once a scale/offset press has moved past [`CLICK_SLOP`], so the
+    /// release commits a scrub rather than entering numeric edit. A press that
+    /// never moves is a click → type the value.
+    drag_moved: bool,
+    /// The field currently being typed into (`None` = not editing). Clicking a
+    /// value (min / max / scale / offset) or the header label enters edit mode;
+    /// the host feeds keystrokes via [`Self::on_text_char`] /
+    /// [`Self::on_backspace`] and commits with [`Self::commit_edit`] (Enter) or
+    /// cancels with [`Self::cancel_edit`] (Esc).
+    edit: Option<EditField>,
+    /// In-progress typed text for the active [`Self::edit`] field. Empty on
+    /// entry; commit parses it as `f32` (empty / unparseable → no change).
+    edit_buffer: String,
+    /// The card slider's current (post-modulation) value, pushed by the host
+    /// each frame via [`Self::set_live_value`]. Drives the live dot on the
+    /// preview so you can watch where the knob sits — and where drivers /
+    /// Ableton / envelopes move it — on the response curve. `None` hides the
+    /// dot (host couldn't resolve the value, or no host feeds it).
+    live_value: Option<f32>,
     /// Actions accrued this frame; drained by the host after each event.
     pending_actions: Vec<PanelAction>,
 }
@@ -170,13 +231,35 @@ impl MappingPopover {
             dragging: None,
             scrub_press_x: 0.0,
             scrub_start: 0.0,
-            hover: None,
+            drag_moved: false,
+            edit: None,
+            edit_buffer: String::new(),
+            live_value: None,
             pending_actions: Vec::new(),
         }
     }
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// True while a value field is being typed into — the host routes
+    /// keystrokes here instead of firing canvas shortcuts.
+    pub fn is_editing(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    /// Stable id of the binding currently being edited — the host reads this
+    /// to look up the live value to feed back via [`Self::set_live_value`].
+    pub fn binding_id(&self) -> &str {
+        &self.binding_id
+    }
+
+    /// Push the card slider's current value so the preview can mark where the
+    /// live knob sits on the response curve. Called by the host each frame
+    /// while open; `None` hides the dot.
+    pub fn set_live_value(&mut self, value: Option<f32>) {
+        self.live_value = value;
     }
 
     /// Drain queued mapping edits. Mirrors `GraphCanvas::drain_actions`.
@@ -218,15 +301,23 @@ impl MappingPopover {
         // current min/max (with a tiny pad so a zero-width range still
         // gives the handles room).
         let (lo, hi) = range.unwrap_or((min, max));
-        if hi > lo {
-            self.range_lo = lo;
-            self.range_hi = hi;
+        let (mut lo, mut hi) = if hi > lo {
+            (lo, hi)
         } else {
-            self.range_lo = min.min(max);
-            self.range_hi = (min.max(max)) + 1.0;
-        }
+            (min.min(max), min.max(max) + 1.0)
+        };
+        // Always span the current selection so a note whose min/max was typed
+        // past the param's nominal range still shows its handles on the track
+        // instead of pinned off an edge.
+        lo = lo.min(self.cur_min);
+        hi = hi.max(self.cur_max);
+        self.range_lo = lo;
+        self.range_hi = hi;
         self.dragging = None;
-        self.hover = None;
+        self.drag_moved = false;
+        self.edit = None;
+        self.edit_buffer.clear();
+        self.live_value = None;
 
         let h = self.panel_height();
         // Place to the right of the anchor row; flip to the left if it
@@ -248,15 +339,18 @@ impl MappingPopover {
     pub fn close(&mut self) {
         self.open = false;
         self.dragging = None;
-        self.hover = None;
+        self.edit = None;
+        self.edit_buffer.clear();
     }
 
     // ── Geometry ────────────────────────────────────────────────────
 
     fn panel_height(&self) -> f32 {
-        // header + range track + invert + curve + scale + offset rows, padded.
+        // header + preview + min + max + invert + curve + scale + offset, padded.
         PAD + HEADER_H
-            + ROW_GAP + ROW_H        // range track
+            + ROW_GAP + PREVIEW_H    // live response preview
+            + ROW_GAP + ROW_H        // min
+            + ROW_GAP + ROW_H        // max
             + ROW_GAP + ROW_H        // invert
             + ROW_GAP + CURVE_ROW_H  // curve
             + ROW_GAP + ROW_H        // scale
@@ -268,56 +362,69 @@ impl MappingPopover {
         Rect::new(self.origin.0, self.origin.1, POPOVER_W, self.panel_height())
     }
 
-    /// Y of the range-track row's top edge.
-    fn track_row_y(&self) -> f32 {
-        self.origin.1 + PAD + HEADER_H + ROW_GAP
+    /// The clickable header-label region (left of the live readout). Click to
+    /// rename the knob.
+    fn header_rect(&self) -> Rect {
+        Rect::new(
+            self.origin.0 + PAD,
+            self.origin.1 + PAD - 2.0,
+            POPOVER_W * 0.55,
+            HEADER_H,
+        )
     }
 
-    /// The trim track rect (where the min/max handles live).
-    fn track_rect(&self) -> Rect {
-        let y = self.track_row_y() + (ROW_H - TRACK_H) * 0.5;
-        Rect::new(self.origin.0 + PAD, y, POPOVER_W - 2.0 * PAD, TRACK_H)
+    /// The live response-curve preview box, inset under the header. With the
+    /// trim track gone, this plot IS the range picture — its x-axis spans the
+    /// current min..max, so you read the shape against the bounds below it.
+    fn preview_rect(&self) -> Rect {
+        let y = self.origin.1 + PAD + HEADER_H + ROW_GAP;
+        Rect::new(self.origin.0 + PAD, y, POPOVER_W - 2.0 * PAD, PREVIEW_H)
     }
 
-    /// Map a value in `[range_lo, range_hi]` to a normalized 0..1 across
-    /// the track.
-    fn value_to_norm(&self, v: f32) -> f32 {
-        let span = (self.range_hi - self.range_lo).max(f32::EPSILON);
-        ((v - self.range_lo) / span).clamp(0.0, 1.0)
+    fn min_row_y(&self) -> f32 {
+        self.preview_rect().y + PREVIEW_H + ROW_GAP
+    }
+    fn max_row_y(&self) -> f32 {
+        self.min_row_y() + ROW_H + ROW_GAP
+    }
+    fn invert_row_y(&self) -> f32 {
+        self.max_row_y() + ROW_H + ROW_GAP
+    }
+    fn curve_row_y(&self) -> f32 {
+        self.invert_row_y() + ROW_H + ROW_GAP
+    }
+    fn scale_row_y(&self) -> f32 {
+        self.curve_row_y() + CURVE_ROW_H + ROW_GAP
+    }
+    fn offset_row_y(&self) -> f32 {
+        self.scale_row_y() + ROW_H + ROW_GAP
     }
 
-    /// Map a screen x on the track to a value in `[range_lo, range_hi]`.
-    fn x_to_value(&self, sx: f32) -> f32 {
-        let t = self.track_rect();
-        let norm = ((sx - t.x) / t.w.max(f32::EPSILON)).clamp(0.0, 1.0);
-        self.range_lo + norm * (self.range_hi - self.range_lo)
+    /// The row-Y for a value field (Min / Max / Scale / Offset).
+    fn value_field_row_y(&self, which: DragTarget) -> f32 {
+        match which {
+            DragTarget::Min => self.min_row_y(),
+            DragTarget::Max => self.max_row_y(),
+            DragTarget::Scale => self.scale_row_y(),
+            DragTarget::Offset => self.offset_row_y(),
+        }
     }
 
-    fn handle_center_x(&self, which: DragTarget) -> f32 {
-        let t = self.track_rect();
-        let v = match which {
-            DragTarget::Min => self.cur_min,
-            DragTarget::Max => self.cur_max,
-            // Scale/Offset aren't track handles — never reached here.
-            DragTarget::Scale | DragTarget::Offset => return t.x,
-        };
-        t.x + self.value_to_norm(v) * t.w
-    }
-
-    fn handle_rect(&self, which: DragTarget) -> Rect {
-        let t = self.track_rect();
-        let cx = self.handle_center_x(which);
-        Rect::new(cx - HANDLE_W * 0.5, t.y - 2.0, HANDLE_W, t.h + 4.0)
+    /// Right-aligned click-to-type value box for a Min/Max/Scale/Offset field;
+    /// its label fills the rest of the row to the left.
+    fn value_field_rect(&self, which: DragTarget) -> Rect {
+        Rect::new(
+            self.origin.0 + POPOVER_W - PAD - 76.0,
+            self.value_field_row_y(which),
+            76.0,
+            ROW_H,
+        )
     }
 
     fn invert_btn_rect(&self) -> Rect {
-        let y = self.track_row_y() + ROW_H + ROW_GAP;
+        let y = self.invert_row_y();
         // Right-aligned 36px INV button, label fills the rest.
         Rect::new(self.origin.0 + POPOVER_W - PAD - 36.0, y, 36.0, ROW_H)
-    }
-
-    fn curve_row_y(&self) -> f32 {
-        self.track_row_y() + ROW_H + ROW_GAP + ROW_H + ROW_GAP
     }
 
     fn curve_cell_rect(&self, idx: usize) -> Rect {
@@ -327,24 +434,6 @@ impl MappingPopover {
         let cell_w = (avail - gap * (n - 1.0)) / n;
         let x = self.origin.0 + PAD + idx as f32 * (cell_w + gap);
         Rect::new(x, self.curve_row_y(), cell_w, CURVE_ROW_H)
-    }
-
-    fn scale_row_y(&self) -> f32 {
-        self.curve_row_y() + CURVE_ROW_H + ROW_GAP
-    }
-
-    fn offset_row_y(&self) -> f32 {
-        self.scale_row_y() + ROW_H + ROW_GAP
-    }
-
-    /// Right-aligned draggable value box for the scale or offset field.
-    /// The label sits to its left and fills the rest of the row.
-    fn affine_value_rect(&self, which: DragTarget) -> Rect {
-        let y = match which {
-            DragTarget::Offset => self.offset_row_y(),
-            _ => self.scale_row_y(),
-        };
-        Rect::new(self.origin.0 + POPOVER_W - PAD - 76.0, y, 76.0, ROW_H)
     }
 
     fn point_in(r: Rect, sx: f32, sy: f32) -> bool {
@@ -369,37 +458,26 @@ impl MappingPopover {
         if !Self::point_in(self.panel_rect(), sx, sy) {
             return false;
         }
-        // Min/max handles — start a range drag. Snapshot the pre-drag
-        // (min, max) first so the commit records a single undo entry.
+        // Any press inside the panel commits a pending edit first (click-away
+        // to confirm), then proceeds to handle the new press.
+        if self.is_editing() {
+            self.commit_edit();
+        }
+        // Header label — click to rename the knob (seeded with the current
+        // name). Drivers / Ableton / OSC address this binding by stable id, so
+        // the rename never re-keys them; only the displayed label changes.
+        if Self::point_in(self.header_rect(), sx, sy) {
+            self.enter_edit(EditField::Label);
+            return true;
+        }
+        // Min / Max value fields — click to type an exact bound (including past
+        // the param's nominal range). The range is set numerically now; the
+        // old trim track + drag handles are gone.
         for which in [DragTarget::Min, DragTarget::Max] {
-            // Widen the hit target a little so thin handles are grabbable.
-            let r = self.handle_rect(which);
-            let hit = Rect::new(r.x - 4.0, r.y, r.w + 8.0, r.h);
-            if Self::point_in(hit, sx, sy) {
-                self.pending_actions
-                    .push(PanelAction::EffectMappingRangeSnapshot {
-                        binding_id: self.binding_id.clone(),
-                    });
-                self.dragging = Some(which);
+            if Self::point_in(self.value_field_rect(which), sx, sy) {
+                self.enter_edit(which.into());
                 return true;
             }
-        }
-        // Clicking the track body (not on a handle) moves the nearer
-        // handle to the click, then drags it — matches the trim-bar feel.
-        if Self::point_in(self.track_rect(), sx, sy) {
-            let v = self.x_to_value(sx);
-            let which = if (v - self.cur_min).abs() <= (v - self.cur_max).abs() {
-                DragTarget::Min
-            } else {
-                DragTarget::Max
-            };
-            self.pending_actions
-                .push(PanelAction::EffectMappingRangeSnapshot {
-                    binding_id: self.binding_id.clone(),
-                });
-            self.dragging = Some(which);
-            self.apply_drag_value(which, v);
-            return true;
         }
         // INV toggle.
         if Self::point_in(self.invert_btn_rect(), sx, sy) {
@@ -427,12 +505,13 @@ impl MappingPopover {
         // commit records one undo entry; anchor the scrub on press-x and
         // the field's start value.
         for which in [DragTarget::Scale, DragTarget::Offset] {
-            if Self::point_in(self.affine_value_rect(which), sx, sy) {
+            if Self::point_in(self.value_field_rect(which), sx, sy) {
                 self.pending_actions
                     .push(PanelAction::EffectMappingAffineSnapshot {
                         binding_id: self.binding_id.clone(),
                     });
                 self.dragging = Some(which);
+                self.drag_moved = false;
                 self.scrub_press_x = sx;
                 self.scrub_start = match which {
                     DragTarget::Scale => self.cur_scale,
@@ -446,64 +525,158 @@ impl MappingPopover {
         true
     }
 
-    /// Pointer move. Drives the live range drag (emits
-    /// `EffectMappingRangeChanged`) or updates the handle hover.
-    pub fn on_move(&mut self, sx: f32, sy: f32) {
+    /// Pointer move. Drives the scale/offset scrub (the only drag now that the
+    /// range is set by typing — no trim handles).
+    pub fn on_move(&mut self, sx: f32, _sy: f32) {
         if !self.open {
             return;
         }
         if let Some(which) = self.dragging {
-            match which {
-                DragTarget::Min | DragTarget::Max => {
-                    let v = self.x_to_value(sx);
-                    self.apply_drag_value(which, v);
+            self.apply_scrub(which, sx);
+        }
+    }
+
+    /// Pointer release. The only drag is a scale/offset scrub: a real scrub
+    /// commits as one undo entry; a press that never moved is a click → enter
+    /// numeric edit.
+    pub fn on_release(&mut self) {
+        if let Some(which) = self.dragging.take() {
+            if self.drag_moved {
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineCommit {
+                        binding_id: self.binding_id.clone(),
+                    });
+            } else {
+                self.enter_edit(which.into());
+            }
+        }
+    }
+
+    // ── Numeric entry ───────────────────────────────────────────────
+
+    /// Begin typing into `field`. Numeric fields seed empty (type a fresh
+    /// value); the label seeds with the current name (edit in place). Enter
+    /// commits, Esc cancels. Cancels any in-progress drag.
+    fn enter_edit(&mut self, field: EditField) {
+        self.dragging = None;
+        self.edit_buffer = if field == EditField::Label {
+            self.label.clone()
+        } else {
+            String::new()
+        };
+        self.edit = Some(field);
+    }
+
+    /// Feed one typed character to the active field. The label takes any
+    /// printable character; numeric fields take digits, a single decimal point,
+    /// and a leading minus.
+    pub fn on_text_char(&mut self, c: char) {
+        match self.edit {
+            Some(EditField::Label) => {
+                if !c.is_control() {
+                    self.edit_buffer.push(c);
                 }
-                DragTarget::Scale | DragTarget::Offset => self.apply_scrub(which, sx),
+            }
+            Some(_) => {
+                if c.is_ascii_digit() {
+                    self.edit_buffer.push(c);
+                } else if c == '.' && !self.edit_buffer.contains('.') {
+                    self.edit_buffer.push('.');
+                } else if c == '-' && self.edit_buffer.is_empty() {
+                    self.edit_buffer.push('-');
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Delete the last typed character.
+    pub fn on_backspace(&mut self) {
+        if self.edit.is_some() {
+            self.edit_buffer.pop();
+        }
+    }
+
+    /// Cancel the edit, discarding the typed text.
+    pub fn cancel_edit(&mut self) {
+        self.edit = None;
+        self.edit_buffer.clear();
+    }
+
+    /// Commit the typed value to the active field and emit the matching
+    /// snapshot → changed → commit triad (one undo entry). An empty or
+    /// unparseable buffer leaves the value unchanged. A min/max past the
+    /// track's current span widens the span so the handle stays visible.
+    pub fn commit_edit(&mut self) {
+        let Some(field) = self.edit.take() else {
+            return;
+        };
+        let buffer = std::mem::take(&mut self.edit_buffer);
+        let id = self.binding_id.clone();
+
+        // Label: free-text rename. Emits the (already-existing) label edit and
+        // updates the header locally so it shows immediately. Blank or
+        // unchanged → no-op.
+        if field == EditField::Label {
+            let label = buffer.trim().to_string();
+            if !label.is_empty() && label != self.label {
+                self.label = label.clone();
+                self.pending_actions
+                    .push(PanelAction::EffectMappingLabel {
+                        binding_id: id,
+                        label,
+                    });
             }
             return;
         }
-        // Hover highlight when idle.
-        self.hover = [DragTarget::Min, DragTarget::Max].into_iter().find(|&w| {
-            let r = self.handle_rect(w);
-            Self::point_in(Rect::new(r.x - 4.0, r.y, r.w + 8.0, r.h), sx, sy)
-        });
-    }
 
-    /// Pointer release. Commits an in-progress drag into one undo command:
-    /// `EffectMappingRangeCommit` for a min/max drag, or
-    /// `EffectMappingAffineCommit` for a scale/offset scrub.
-    pub fn on_release(&mut self) {
-        if let Some(which) = self.dragging.take() {
-            let action = match which {
-                DragTarget::Min | DragTarget::Max => PanelAction::EffectMappingRangeCommit {
-                    binding_id: self.binding_id.clone(),
-                },
-                DragTarget::Scale | DragTarget::Offset => {
-                    PanelAction::EffectMappingAffineCommit {
-                        binding_id: self.binding_id.clone(),
-                    }
+        // Numeric fields. Empty / unparseable buffer leaves the value unchanged.
+        let Some(v) = buffer.trim().parse::<f32>().ok().filter(|v| v.is_finite()) else {
+            return;
+        };
+        match field {
+            EditField::Min | EditField::Max => {
+                self.pending_actions
+                    .push(PanelAction::EffectMappingRangeSnapshot {
+                        binding_id: id.clone(),
+                    });
+                if field == EditField::Min {
+                    self.cur_min = v.min(self.cur_max);
+                    self.range_lo = self.range_lo.min(self.cur_min);
+                } else {
+                    self.cur_max = v.max(self.cur_min);
+                    self.range_hi = self.range_hi.max(self.cur_max);
                 }
-            };
-            self.pending_actions.push(action);
+                self.pending_actions
+                    .push(PanelAction::EffectMappingRangeChanged {
+                        binding_id: id.clone(),
+                        min: self.cur_min,
+                        max: self.cur_max,
+                    });
+                self.pending_actions
+                    .push(PanelAction::EffectMappingRangeCommit { binding_id: id });
+            }
+            EditField::Scale | EditField::Offset => {
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineSnapshot {
+                        binding_id: id.clone(),
+                    });
+                if field == EditField::Scale {
+                    self.cur_scale = v;
+                } else {
+                    self.cur_offset = v;
+                }
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineChanged {
+                        binding_id: id.clone(),
+                        scale: self.cur_scale,
+                        offset: self.cur_offset,
+                    });
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineCommit { binding_id: id });
+            }
+            EditField::Label => unreachable!("handled above"),
         }
-    }
-
-    /// Apply a dragged value to the grabbed handle, keeping min <= max,
-    /// and emit the live `EffectMappingRangeChanged`.
-    fn apply_drag_value(&mut self, which: DragTarget, v: f32) {
-        let v = v.clamp(self.range_lo, self.range_hi);
-        match which {
-            DragTarget::Min => self.cur_min = v.min(self.cur_max),
-            DragTarget::Max => self.cur_max = v.max(self.cur_min),
-            // Only Min/Max reach here (on_move dispatches the rest).
-            DragTarget::Scale | DragTarget::Offset => return,
-        }
-        self.pending_actions
-            .push(PanelAction::EffectMappingRangeChanged {
-                binding_id: self.binding_id.clone(),
-                min: self.cur_min,
-                max: self.cur_max,
-            });
     }
 
     /// Scrub the scale or offset field relative to its press-anchor and
@@ -512,6 +685,12 @@ impl MappingPopover {
     /// values nudge gently and large ones move fast.
     fn apply_scrub(&mut self, which: DragTarget, sx: f32) {
         let dpx = sx - self.scrub_press_x;
+        // Below the slop, treat the press as a (so-far) click — don't scrub, so
+        // a release without travel can enter numeric edit instead.
+        if !self.drag_moved && dpx.abs() < CLICK_SLOP {
+            return;
+        }
+        self.drag_moved = true;
         let gain = SCRUB_K * self.scrub_start.abs().max(SCRUB_FLOOR);
         let new = self.scrub_start + dpx * gain;
         match which {
@@ -529,6 +708,98 @@ impl MappingPopover {
 
     // ── Render ──────────────────────────────────────────────────────
 
+    /// Evaluate the shared reshape pipeline — the exact math the runtime
+    /// applies at the write boundary — for a raw card value. Used to plot the
+    /// preview and place the live dot, so the picture can never disagree with
+    /// what the engine does to the value.
+    fn reshape_output(&self, input: f32) -> f32 {
+        manifold_core::effects::apply_card_reshape(
+            input,
+            self.cur_min,
+            self.cur_max,
+            self.invert,
+            self.curve,
+            self.cur_scale,
+            self.cur_offset,
+        )
+    }
+
+    /// Draw the live response-curve preview: the composed transform (range →
+    /// invert → curve → scale/offset) plotted as input→output, with a dot at
+    /// the current live value. This is the "see what you do" surface — picking
+    /// S-Curve or dragging the range reshapes this line in real time.
+    fn render_preview(&self, ui: &mut UIRenderer) {
+        let r = self.preview_rect();
+        ui.draw_rounded_rect(r.x, r.y, r.w, r.h, PREVIEW_BG, 3.0);
+        // Faint centre cross for orientation.
+        ui.draw_line(r.x + r.w * 0.5, r.y, r.x + r.w * 0.5, r.y + r.h, 1.0, PREVIEW_GRID);
+        ui.draw_line(r.x, r.y + r.h * 0.5, r.x + r.w, r.y + r.h * 0.5, 1.0, PREVIEW_GRID);
+
+        // Sample output across the full input span, tracking the output range
+        // so the curve auto-fits the box vertically.
+        let span = (self.range_hi - self.range_lo).max(f32::EPSILON);
+        let mut outs = [0f32; PREVIEW_SAMPLES + 1];
+        let (mut out_lo, mut out_hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for (i, slot) in outs.iter_mut().enumerate() {
+            let t = i as f32 / PREVIEW_SAMPLES as f32;
+            let o = self.reshape_output(self.range_lo + t * span);
+            *slot = o;
+            out_lo = out_lo.min(o);
+            out_hi = out_hi.max(o);
+        }
+        let out_span = (out_hi - out_lo).max(f32::EPSILON);
+        // Inset a hair so the line doesn't kiss the box edges.
+        let pad_y = 3.0;
+        let plot = |i: usize| -> (f32, f32) {
+            let t = i as f32 / PREVIEW_SAMPLES as f32;
+            let ny = (outs[i] - out_lo) / out_span;
+            (
+                r.x + t * r.w,
+                r.y + r.h - pad_y - ny * (r.h - 2.0 * pad_y),
+            )
+        };
+        for i in 0..PREVIEW_SAMPLES {
+            let (x0, y0) = plot(i);
+            let (x1, y1) = plot(i + 1);
+            ui.draw_line(x0, y0, x1, y1, 1.5, PREVIEW_LINE);
+        }
+
+        // Live dot at the current value's position on the curve.
+        if let Some(v) = self.live_value {
+            let tn = ((v - self.range_lo) / span).clamp(0.0, 1.0);
+            let ny = ((self.reshape_output(v) - out_lo) / out_span).clamp(0.0, 1.0);
+            let x = r.x + tn * r.w;
+            let y = r.y + r.h - pad_y - ny * (r.h - 2.0 * pad_y);
+            ui.draw_rounded_rect(x - 2.5, y - 2.5, 5.0, 5.0, PREVIEW_DOT, 2.5);
+        }
+    }
+
+    /// Draw one labeled click-to-type value field (Min / Max / Scale / Offset):
+    /// the label on the left, a right-aligned box showing the formatted value
+    /// or, while that field is being edited, the typed buffer + caret.
+    fn draw_value_field(
+        &self,
+        ui: &mut UIRenderer,
+        panel_x: f32,
+        which: DragTarget,
+        name: &str,
+        value_text: String,
+    ) {
+        let r = self.value_field_rect(which);
+        ui.draw_text(panel_x + PAD, r.y + 3.0, name, FONT, TEXT_SECONDARY);
+        let editing = self.edit == Some(which.into());
+        let active = self.dragging == Some(which) || editing;
+        let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
+        ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
+        let txt = if editing {
+            format!("{}|", self.edit_buffer)
+        } else {
+            value_text
+        };
+        let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
+        ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
+    }
+
     pub fn render(&self, ui: &mut UIRenderer) {
         if !self.open {
             return;
@@ -545,49 +816,47 @@ impl MappingPopover {
             PANEL_BORDER,
         );
 
-        // Header: the binding label (read-only — label editing deferred).
-        ui.draw_text(
-            panel.x + PAD,
-            panel.y + PAD,
-            &self.label,
-            FONT,
-            TEXT_PRIMARY,
-        );
+        // Header: the binding label (left, click to rename) and the live
+        // input→output readout (right). While renaming, the label shows the
+        // typed buffer + caret over a highlight; the readout hides so a long
+        // name has room.
+        let renaming = self.edit == Some(EditField::Label);
+        if renaming {
+            let hr = self.header_rect();
+            ui.draw_rounded_rect(hr.x - 3.0, hr.y, hr.w, hr.h, CURVE_BG_ACTIVE, 2.0);
+        }
+        let header_txt = if renaming {
+            format!("{}|", self.edit_buffer)
+        } else {
+            self.label.clone()
+        };
+        ui.draw_text(panel.x + PAD, panel.y + PAD, &header_txt, FONT, TEXT_PRIMARY);
+        if let Some(v) = self.live_value.filter(|_| !renaming) {
+            let readout = format!("{} → {}", trim_num(v), trim_num(self.reshape_output(v)));
+            let tw = readout.chars().count() as f32 * FONT_SMALL * 0.55;
+            ui.draw_text(
+                panel.x + POPOVER_W - PAD - tw,
+                panel.y + PAD + 1.0,
+                &readout,
+                FONT_SMALL,
+                TEXT_SECONDARY,
+            );
+        }
 
-        // ── Range track with min/max handles ──
-        let track = self.track_rect();
-        ui.draw_rounded_rect(track.x, track.y, track.w, track.h, TRACK_BG, 2.0);
-        let min_x = self.handle_center_x(DragTarget::Min);
-        let max_x = self.handle_center_x(DragTarget::Max);
-        let fill_x = min_x.min(max_x);
-        let fill_w = (max_x - min_x).abs();
-        if fill_w > 0.0 {
-            ui.draw_rounded_rect(fill_x, track.y, fill_w, track.h, TRACK_FILL, 2.0);
+        // Live response-curve preview.
+        self.render_preview(ui);
+
+        // ── Min / Max value fields ──
+        // The slider's range, set by typing (the trim track + drag handles are
+        // gone — the preview above is the range picture). Click a box to type;
+        // a value past the param's nominal range is accepted and widens the
+        // preview's span.
+        for (which, name, val) in [
+            (DragTarget::Min, "Min", self.cur_min),
+            (DragTarget::Max, "Max", self.cur_max),
+        ] {
+            self.draw_value_field(ui, panel.x, which, name, format!("{val:.2}"));
         }
-        for which in [DragTarget::Min, DragTarget::Max] {
-            let r = self.handle_rect(which);
-            let active = self.dragging == Some(which) || self.hover == Some(which);
-            let color = if active { HANDLE_HOVER } else { HANDLE_COLOR };
-            ui.draw_rounded_rect(r.x, r.y, r.w, r.h, color, 1.0);
-        }
-        // min/max value labels under the track ends.
-        let val_y = track.y + track.h + 1.0;
-        ui.draw_text(
-            track.x,
-            val_y,
-            &format!("{:.2}", self.cur_min),
-            FONT_SMALL,
-            TEXT_SECONDARY,
-        );
-        let max_text = format!("{:.2}", self.cur_max);
-        let max_text_w = max_text.chars().count() as f32 * FONT_SMALL * 0.55;
-        ui.draw_text(
-            track.x + track.w - max_text_w,
-            val_y,
-            &max_text,
-            FONT_SMALL,
-            TEXT_SECONDARY,
-        );
 
         // ── Invert toggle row ──
         let inv = self.invert_btn_rect();
@@ -628,27 +897,14 @@ impl MappingPopover {
         }
 
         // ── Scale / Offset affine rows ──
-        // The card→consumer remap (out = value * scale + offset). This is
-        // where a folded affine_scalar node lives. Drag the value box to
-        // scrub; precise values arrive from a fold.
+        // The card→consumer remap (out = value * scale + offset). This is where
+        // a folded affine_scalar node lives. Click the box to type; drag it to
+        // scrub.
         for (which, name, val) in [
             (DragTarget::Scale, "Scale", self.cur_scale),
             (DragTarget::Offset, "Offset", self.cur_offset),
         ] {
-            let r = self.affine_value_rect(which);
-            ui.draw_text(panel.x + PAD, r.y + 3.0, name, FONT, TEXT_SECONDARY);
-            let active = self.dragging == Some(which);
-            let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
-            ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
-            let txt = format_affine(val);
-            let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
-            ui.draw_text(
-                r.x + r.w - tw - 5.0,
-                r.y + 3.0,
-                &txt,
-                FONT_SMALL,
-                TEXT_PRIMARY,
-            );
+            self.draw_value_field(ui, panel.x, which, name, format_affine(val));
         }
     }
 }
@@ -692,6 +948,33 @@ mod tests {
     }
 
     #[test]
+    fn live_value_round_trips_and_preview_uses_shared_math() {
+        let mut p = open_popover();
+        assert_eq!(p.binding_id(), "user.uv.rotation.1");
+        assert!(p.live_value.is_none(), "no live value until the host feeds one");
+        p.set_live_value(Some(0.5));
+        assert_eq!(p.live_value, Some(0.5));
+        // Identity mapping (Linear, no invert, scale 1 / offset 0): the preview
+        // evaluates the same core pipeline the runtime uses → passthrough.
+        assert!((p.reshape_output(0.5) - 0.5).abs() < 1e-6);
+        // Opening a fresh binding clears the stale live value.
+        p.open(
+            "other".to_string(),
+            "Other".to_string(),
+            0.0,
+            1.0,
+            false,
+            MacroCurve::Linear,
+            1.0,
+            0.0,
+            Some((0.0, 1.0)),
+            Rect::new(0.0, 0.0, 168.0, 18.0),
+            Rect::new(0.0, 0.0, 1000.0, 800.0),
+        );
+        assert!(p.live_value.is_none(), "open() resets the live value");
+    }
+
+    #[test]
     fn invert_click_emits_action() {
         let mut p = open_popover();
         let r = p.invert_btn_rect();
@@ -723,42 +1006,11 @@ mod tests {
         assert_eq!(p.curve, MacroCurve::Exponential);
     }
 
-    #[test]
-    fn range_drag_snapshots_changes_and_commits() {
-        let mut p = open_popover();
-        // Grab the max handle and drag it left.
-        let r = p.handle_rect(DragTarget::Max);
-        let consumed = p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5);
-        assert!(consumed);
-        // First action is the snapshot.
-        let after_press = p.drain_actions();
-        assert!(matches!(
-            after_press.first(),
-            Some(PanelAction::EffectMappingRangeSnapshot { .. })
-        ));
-        // Move toward the track start; min stays, max shrinks.
-        let track = p.track_rect();
-        p.on_move(track.x + track.w * 0.5, r.y);
-        let changed = p.drain_actions();
-        assert!(matches!(
-            changed.last(),
-            Some(PanelAction::EffectMappingRangeChanged { .. })
-        ));
-        assert!(p.cur_max < 0.8);
-        assert!(p.cur_max >= p.cur_min);
-        // Release commits.
-        p.on_release();
-        let commit = p.drain_actions();
-        assert!(matches!(
-            commit.as_slice(),
-            [PanelAction::EffectMappingRangeCommit { .. }]
-        ));
-    }
 
     #[test]
     fn scale_scrub_snapshots_changes_and_commits() {
         let mut p = open_popover(); // cur_scale = 1.0
-        let r = p.affine_value_rect(DragTarget::Scale);
+        let r = p.value_field_rect(DragTarget::Scale);
         let consumed = p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5);
         assert!(consumed);
         // First action is the affine snapshot.
@@ -795,13 +1047,114 @@ mod tests {
     }
 
     #[test]
-    fn min_stays_below_max_when_dragged_past() {
+    fn typed_min_clamps_to_max() {
+        let mut p = open_popover(); // cur_min 0.2, cur_max 0.8
+        p.enter_edit(EditField::Min);
+        for ch in "5".chars() {
+            p.on_text_char(ch); // type a min above the current max
+        }
+        p.commit_edit();
+        assert!(p.cur_min <= p.cur_max, "typed min clamps to <= max");
+    }
+
+    #[test]
+    fn click_max_value_types_past_nominal_range() {
+        let mut p = open_popover(); // range (0,1), cur_max 0.8
+        let box_r = p.value_field_rect(DragTarget::Max);
+        assert!(p.on_press(box_r.x + 2.0, box_r.y + 2.0));
+        assert!(p.is_editing(), "clicking the max value enters edit");
+        p.drain_actions();
+        for ch in "128".chars() {
+            p.on_text_char(ch);
+        }
+        p.commit_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.cur_max, 128.0, "typed value past nominal max is accepted");
+        assert!(p.range_hi >= 128.0, "track span widened to keep the handle visible");
+        let actions = p.drain_actions();
+        assert!(matches!(
+            actions.first(),
+            Some(PanelAction::EffectMappingRangeSnapshot { .. })
+        ));
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            PanelAction::EffectMappingRangeChanged { max, .. } if (*max - 128.0).abs() < 1e-3
+        )));
+        assert!(matches!(
+            actions.last(),
+            Some(PanelAction::EffectMappingRangeCommit { .. })
+        ));
+    }
+
+    #[test]
+    fn scale_click_without_drag_enters_edit_then_commits() {
+        let mut p = open_popover(); // cur_scale 1.0
+        let r = p.value_field_rect(DragTarget::Scale);
+        // Press and release with no movement → a click, not a scrub.
+        assert!(p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5));
+        p.on_release();
+        assert!(p.is_editing(), "a no-drag click enters numeric edit");
+        p.drain_actions();
+        for ch in "2.5".chars() {
+            p.on_text_char(ch);
+        }
+        p.commit_edit();
+        assert_eq!(p.cur_scale, 2.5);
+        let actions = p.drain_actions();
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            PanelAction::EffectMappingAffineChanged { scale, .. } if (*scale - 2.5).abs() < 1e-3
+        )));
+        assert!(matches!(
+            actions.last(),
+            Some(PanelAction::EffectMappingAffineCommit { .. })
+        ));
+    }
+
+    #[test]
+    fn text_entry_filters_input_and_cancel_discards() {
         let mut p = open_popover();
-        let r = p.handle_rect(DragTarget::Min);
-        p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5);
-        // Drag min way past max (to the far right of the track).
-        let track = p.track_rect();
-        p.on_move(track.x + track.w, r.y);
-        assert!(p.cur_min <= p.cur_max);
+        p.enter_edit(EditField::Offset);
+        // Letters ignored; one decimal point; minus only leading.
+        for ch in "-1a2.3.4".chars() {
+            p.on_text_char(ch);
+        }
+        assert_eq!(p.edit_buffer, "-12.34");
+        p.on_backspace();
+        assert_eq!(p.edit_buffer, "-12.3");
+        // Cancel discards without emitting or changing the value.
+        let before = p.cur_offset;
+        p.drain_actions();
+        p.cancel_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.cur_offset, before);
+        assert!(p.drain_actions().is_empty());
+    }
+
+    #[test]
+    fn click_header_renames_via_label_action() {
+        let mut p = open_popover(); // label "Rotation"
+        let hr = p.header_rect();
+        assert!(p.on_press(hr.x + 2.0, hr.y + 2.0));
+        assert!(p.is_editing(), "clicking the header enters label edit");
+        // Label seeds with the current name; the field takes free text + spaces.
+        assert_eq!(p.edit_buffer, "Rotation");
+        while !p.edit_buffer.is_empty() {
+            p.on_backspace();
+        }
+        for ch in "Chaos".chars() {
+            p.on_text_char(ch);
+        }
+        p.on_text_char(' ');
+        p.on_text_char('X');
+        p.drain_actions();
+        p.commit_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.label, "Chaos X");
+        let actions = p.drain_actions();
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::EffectMappingLabel { label, .. }] if label == "Chaos X"
+        ));
     }
 }

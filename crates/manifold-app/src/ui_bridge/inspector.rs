@@ -12,7 +12,7 @@ use manifold_editing::commands::drivers::{
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
-    ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
+    ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
     ToggleEffectCommand,
 };
 use manifold_editing::commands::envelopes::{
@@ -20,10 +20,10 @@ use manifold_editing::commands::envelopes::{
     ChangeLayerEnvelopeTargetCommand,
 };
 use manifold_editing::commands::settings::{
-    ChangeGeneratorParamsCommand, ChangeLayerOpacityCommand, ChangeLedBrightnessCommand,
-    ChangeMacroCommand, ChangeMasterOpacityCommand, PasteGeneratorCommand,
+    ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
+    ChangeMasterOpacityCommand, PasteGeneratorCommand,
 };
-use manifold_ui::{DriverConfigAction, InspectorTab, PanelAction};
+use manifold_ui::{DriverConfigAction, GraphParamTarget, InspectorTab, PanelAction};
 
 use super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read, resolve_effects_ref};
@@ -638,7 +638,7 @@ pub(super) fn dispatch_inspector(
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
-        PanelAction::EffectParamRightClick(fx_idx, param_id, default_val) => {
+        PanelAction::ParamRightClick(GraphParamTarget::Effect(fx_idx), param_id, default_val) => {
             let tab = effective_tab;
             let eid = super::resolve_effect_id(
                 editor_target,
@@ -655,15 +655,19 @@ pub(super) fn dispatch_inspector(
                 let old = fx.get_base_param(slot);
                 if (old - *default_val).abs() > f32::EPSILON {
                     fx.set_base_param(slot, *default_val);
-                    let cmd =
-                        ChangeEffectParamCommand::new(eid, param_id.clone(), old, *default_val);
+                    let cmd = ChangeGraphParamCommand::new(
+                        manifold_core::GraphTarget::Effect(eid),
+                        param_id.clone(),
+                        old,
+                        *default_val,
+                    );
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectParamSnapshot(fx_idx, param_id) => {
+        PanelAction::ParamSnapshot(GraphParamTarget::Effect(fx_idx), param_id) => {
             let tab = effective_tab;
             let eid = super::resolve_effect_id(
                 editor_target,
@@ -687,7 +691,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectParamChanged(fx_idx, param_id, val) => {
+        PanelAction::ParamChanged(GraphParamTarget::Effect(fx_idx), param_id, val) => {
             let tab = effective_tab;
             if let Some(eid) = super::resolve_effect_id(
                 editor_target,
@@ -722,7 +726,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectParamCommit(fx_idx, param_id) => {
+        PanelAction::ParamCommit(GraphParamTarget::Effect(fx_idx), param_id) => {
             if let Some(old_val) = drag_snapshot.take() {
                 let tab = effective_tab;
                 let eid = super::resolve_effect_id(
@@ -739,8 +743,8 @@ pub(super) fn dispatch_inspector(
                 {
                     let new_val = fx.get_base_param(slot);
                     if (old_val - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeEffectParamCommand::new(
-                            eid,
+                        let cmd = ChangeGraphParamCommand::new(
+                            manifold_core::GraphTarget::Effect(eid),
                             param_id.clone(),
                             old_val,
                             new_val,
@@ -754,7 +758,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Effect modulation ──────────────────────────────────────
-        PanelAction::EffectDriverToggle(ei, param_id) => {
+        PanelAction::DriverToggle(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let Some(effect_id) =
                 super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
@@ -810,7 +814,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectEnvelopeToggle(ei, param_id) => {
+        PanelAction::EnvelopeToggle(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -876,7 +880,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectDriverConfig(ei, param_id, cfg) => {
+        PanelAction::DriverConfig(GraphParamTarget::Effect(ei), param_id, cfg) => {
             let tab = effective_tab;
             let Some(effect_id) =
                 super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
@@ -976,7 +980,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectEnvParamChanged(ei, param_id, param, val) => {
+        PanelAction::EnvParamChanged(GraphParamTarget::Effect(ei), param_id, param, val) => {
             let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1042,7 +1046,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTrimChanged(ei, param_id, min, max) => {
+        PanelAction::TrimChanged(GraphParamTarget::Effect(ei), param_id, min, max) => {
             let tab = effective_tab;
             let Some(effect_id) =
                 super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
@@ -1075,7 +1079,7 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetChanged(ei, param_id, norm) => {
+        PanelAction::TargetChanged(GraphParamTarget::Effect(ei), param_id, norm) => {
             let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1131,7 +1135,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Modulation undo: snapshot/commit ────────────────────────
-        PanelAction::EffectTrimSnapshot(ei, param_id) => {
+        PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let effect_id =
                 super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei);
@@ -1146,7 +1150,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTrimCommit(ei, param_id) => {
+        PanelAction::TrimCommit(GraphParamTarget::Effect(ei), param_id) => {
             if let Some((old_min, old_max)) = trim_snapshot.take() {
                 let tab = effective_tab;
                 let effect_id = super::resolve_effect_id(
@@ -1180,7 +1184,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetSnapshot(ei, param_id) => {
+        PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1221,7 +1225,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetCommit(ei, param_id) => {
+        PanelAction::TargetCommit(GraphParamTarget::Effect(ei), param_id) => {
             if let Some(old_target) = target_snapshot.take() {
                 let tab = effective_tab;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -1265,7 +1269,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvRangeChanged(ei, param_id, rmin, rmax) => {
+        PanelAction::EnvRangeChanged(GraphParamTarget::Effect(ei), param_id, rmin, rmax) => {
             let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1322,7 +1326,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvRangeSnapshot(ei, param_id) => {
+        PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1352,7 +1356,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvRangeCommit(ei, param_id) => {
+        PanelAction::EnvRangeCommit(GraphParamTarget::Effect(ei), param_id) => {
             if let Some((old_min, old_max)) = range_snapshot.take() {
                 let tab = effective_tab;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -1399,7 +1403,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvParamSnapshot(ei, param_id) => {
+        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1445,7 +1449,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvParamCommit(ei, param_id) => {
+        PanelAction::EnvParamCommit(GraphParamTarget::Effect(ei), param_id) => {
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
                 let tab = effective_tab;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -1500,7 +1504,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Envelope mode toggles ──────────────────────────────────
-        PanelAction::EffectEnvModeToggle(ei, param_id) => {
+        PanelAction::EnvModeToggle(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1559,7 +1563,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectEnvRandomJumpToggle(ei, param_id) => {
+        PanelAction::EnvRandomJumpToggle(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1796,7 +1800,7 @@ pub(super) fn dispatch_inspector(
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
-        PanelAction::GenParamSnapshot(param_id) => {
+        PanelAction::ParamSnapshot(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
@@ -1813,7 +1817,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamChanged(param_id, val) => {
+        PanelAction::ParamChanged(GraphParamTarget::Generator, param_id, val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
@@ -1848,7 +1852,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamCommit(param_id) => {
+        PanelAction::ParamCommit(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(layer_idx) = layer_idx
@@ -1859,13 +1863,12 @@ pub(super) fn dispatch_inspector(
                 let new_val = gp.get_param_base(slot);
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let layer_id = layer.layer_id.clone();
-                    let snap = gp.snapshot_params();
-                    let mut old_params = snap.clone();
-                    if slot < old_params.len() {
-                        old_params[slot] = old_val;
-                    }
-                    let new_params = snap;
-                    let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
+                    let cmd = ChangeGraphParamCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
+                        param_id.clone(),
+                        old_val,
+                        new_val,
+                    );
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
@@ -1884,10 +1887,13 @@ pub(super) fn dispatch_inspector(
                 {
                     let old_val = gp.get_param_base(slot);
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    let old_params = gp.snapshot_params();
                     gp.set_param_base(slot, new_val);
-                    let new_params = gp.snapshot_params();
-                    let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
+                    let cmd = ChangeGraphParamCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
+                        param_id.clone(),
+                        old_val,
+                        new_val,
+                    );
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
@@ -1908,16 +1914,19 @@ pub(super) fn dispatch_inspector(
                 {
                     let old_val = gp.get_param_base(slot);
                     let new_val = old_val + 1.0;
-                    let old_params = gp.snapshot_params();
                     gp.set_param_base(slot, new_val);
-                    let new_params = gp.snapshot_params();
-                    let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
+                    let cmd = ChangeGraphParamCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
+                        param_id.clone(),
+                        old_val,
+                        new_val,
+                    );
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamRightClick(param_id, default_val) => {
+        PanelAction::ParamRightClick(GraphParamTarget::Generator, param_id, default_val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
@@ -1929,11 +1938,13 @@ pub(super) fn dispatch_inspector(
                 {
                     let old = gp.get_param_base(slot);
                     if (old - *default_val).abs() > f32::EPSILON {
-                        let old_params = gp.snapshot_params();
                         gp.set_param_base(slot, *default_val);
-                        let new_params = gp.snapshot_params();
-                        let cmd =
-                            ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
+                        let cmd = ChangeGraphParamCommand::new(
+                            manifold_core::GraphTarget::Generator(layer_id),
+                            param_id.clone(),
+                            old,
+                            *default_val,
+                        );
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
@@ -1943,7 +1954,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Gen modulation ─────────────────────────────────────────
-        PanelAction::GenDriverToggle(param_id) => {
+        PanelAction::DriverToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -1994,7 +2005,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::GenEnvelopeToggle(param_id) => {
+        PanelAction::EnvelopeToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
@@ -2028,7 +2039,7 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::structural()
         }
-        PanelAction::GenDriverConfig(param_id, cfg) => {
+        PanelAction::DriverConfig(GraphParamTarget::Generator, param_id, cfg) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2141,7 +2152,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::GenEnvParamChanged(param_id, param, val) => {
+        PanelAction::EnvParamChanged(GraphParamTarget::Generator, param_id, param, val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
@@ -2180,7 +2191,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTrimChanged(param_id, min, max) => {
+        PanelAction::TrimChanged(GraphParamTarget::Generator, param_id, min, max) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
@@ -2211,7 +2222,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTargetChanged(param_id, norm) => {
+        PanelAction::TargetChanged(GraphParamTarget::Generator, param_id, norm) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
@@ -2241,7 +2252,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Generator modulation undo: snapshot/commit ──────────────
-        PanelAction::GenTrimSnapshot(param_id) => {
+        PanelAction::TrimSnapshot(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
@@ -2255,7 +2266,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTrimCommit(param_id) => {
+        PanelAction::TrimCommit(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some((old_min, old_max)) = trim_snapshot.take()
                 && let Some(layer_idx) = layer_idx
@@ -2282,7 +2293,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenTargetSnapshot(param_id) => {
+        PanelAction::TargetSnapshot(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
@@ -2294,7 +2305,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTargetCommit(param_id) => {
+        PanelAction::TargetCommit(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(old_target) = target_snapshot.take()
                 && let Some(layer_idx) = layer_idx
@@ -2318,7 +2329,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenEnvRangeChanged(param_id, rmin, rmax) => {
+        PanelAction::EnvRangeChanged(GraphParamTarget::Generator, param_id, rmin, rmax) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
@@ -2349,7 +2360,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvRangeSnapshot(param_id) => {
+        PanelAction::EnvRangeSnapshot(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
@@ -2361,7 +2372,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvRangeCommit(param_id) => {
+        PanelAction::EnvRangeCommit(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some((old_min, old_max)) = range_snapshot.take()
                 && let Some(layer_idx) = layer_idx
@@ -2389,7 +2400,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenEnvParamSnapshot(param_id) => {
+        PanelAction::EnvParamSnapshot(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
@@ -2406,7 +2417,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvParamCommit(param_id) => {
+        PanelAction::EnvParamCommit(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
                 && let Some(layer_idx) = layer_idx
@@ -2441,7 +2452,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::GenEnvModeToggle(param_id) => {
+        PanelAction::EnvModeToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx)
@@ -2481,7 +2492,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::GenEnvRandomJumpToggle(param_id) => {
+        PanelAction::EnvRandomJumpToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx)
@@ -2570,7 +2581,7 @@ pub(super) fn dispatch_inspector(
         PanelAction::PasteEffects => DispatchResult::handled(),
 
         // Label right-clicks are consumed by try_open_dropdown — shouldn't reach here
-        PanelAction::EffectParamLabelRightClick(..) | PanelAction::GenParamLabelRightClick(_) => {
+        PanelAction::ParamLabelRightClick(..) => {
             DispatchResult::handled()
         }
 
@@ -2874,7 +2885,7 @@ pub(super) fn dispatch_inspector(
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
         // Ableton trim handles — update range_min/range_max on the mapping.
-        PanelAction::AbletonTrimChanged(fx_idx, param_id, min, max) => {
+        PanelAction::AbletonTrimChanged(GraphParamTarget::Effect(fx_idx), param_id, min, max) => {
             let tab = effective_tab;
             let min = *min;
             let max = *max;
@@ -2950,7 +2961,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonGenTrimChanged(param_id, min, max) => {
+        PanelAction::AbletonTrimChanged(GraphParamTarget::Generator, param_id, min, max) => {
             let min = *min;
             let max = *max;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -2978,9 +2989,6 @@ pub(super) fn dispatch_inspector(
                     })),
                 );
             }
-            DispatchResult::handled()
-        }
-        PanelAction::AbletonGenTrimSnapshot(_) | PanelAction::AbletonGenTrimCommit(_) => {
             DispatchResult::handled()
         }
 
@@ -3011,7 +3019,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonInvertToggle(fx_idx, param_id) => {
+        PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(fx_idx), param_id) => {
             let tab = effective_tab;
             let fx_idx = *fx_idx;
             let effect_type = match tab {
@@ -3076,7 +3084,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
 
-        PanelAction::AbletonGenInvertToggle(param_id) => {
+        PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
