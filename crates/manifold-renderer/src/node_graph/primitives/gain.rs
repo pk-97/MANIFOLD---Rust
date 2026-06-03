@@ -55,6 +55,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["gain", "brightness", "exposure", "Level TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/gain_body.wgsl"),
 }
 
 impl Primitive for Gain {

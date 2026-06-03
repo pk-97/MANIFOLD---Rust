@@ -10,9 +10,11 @@
 //! oracle's foundation is [`diff`] — a GPU texture-diff reducer that compares
 //! two renders (unfused = exact oracle, fused = candidate) to a tiny verdict.
 
+pub mod classify;
 pub mod diff;
 pub mod reference;
 
+pub use classify::FusionKind;
 pub use diff::{DiffResult, TextureDiff};
 
 /// First end-to-end fusion proof — hand-fused Gain and ColorGrade chains

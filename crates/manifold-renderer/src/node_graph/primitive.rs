@@ -84,6 +84,21 @@ pub trait PrimitiveSpec: Send {
     /// is the slot index used by the host's `param_values` storage.
     const PARAMS: &'static [ParamDef];
 
+    /// Fusion classification — whether/how this primitive folds into a fused
+    /// kernel (freeze/fusion compiler, design doc §12). Defaults to
+    /// [`FusionKind::Boundary`] (never fused), so the compiler only fuses what
+    /// an atom explicitly opts into. Set via the macro's `fusion_kind:` field.
+    const FUSION_KIND: crate::node_graph::freeze::classify::FusionKind =
+        crate::node_graph::freeze::classify::FusionKind::Boundary;
+
+    /// Optional fusable body fragment: a WGSL `fn body(...)` with no global
+    /// accesses (purity-checked) that the fusion codegen chains into one
+    /// kernel — and from which the standalone `cs_main` is generated
+    /// (single-source authoring, design doc §12). `None` = no body; the
+    /// primitive's own hand-written kernel is authoritative. Set via the
+    /// macro's `wgsl_body:` field (typically `include_str!("shaders/x_body.wgsl")`).
+    const WGSL_BODY: Option<&'static str> = None;
+
     /// Returns a process-wide `EffectNodeType` instance for this
     /// primitive, allocated lazily on first call.
     ///
@@ -420,6 +435,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     ) -> &'static [crate::node_graph::effect_node::ConditionalRequirement] {
         Primitive::conditional_requirements(self)
     }
+    fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
+        P::FUSION_KIND
+    }
+    fn wgsl_body(&self) -> Option<&'static str> {
+        P::WGSL_BODY
+    }
 }
 
 /// Runtime view of a primitive's const metadata, suitable for
@@ -526,6 +547,8 @@ macro_rules! primitive {
         $( category: $cat:ident, )?
         $( role: $role:ident, )?
         $( aliases: [ $($alias:literal),* $(,)? ], )?
+        $( fusion_kind: $fusion_kind:ident, )?
+        $( wgsl_body: $wgsl_body:expr, )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -570,6 +593,10 @@ macro_rules! primitive {
             ];
 
             const PARAMS: &'static [$crate::node_graph::parameters::ParamDef] = &[ $($params)* ];
+
+            $( const FUSION_KIND: $crate::node_graph::freeze::classify::FusionKind =
+                $crate::node_graph::freeze::classify::FusionKind::$fusion_kind; )?
+            $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =

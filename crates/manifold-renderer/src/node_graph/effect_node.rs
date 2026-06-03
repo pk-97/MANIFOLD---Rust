@@ -761,6 +761,24 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Fusion classification for the freeze/fusion compiler (design doc §12).
+    /// Defaults to [`FusionKind::Boundary`](crate::node_graph::freeze::classify::FusionKind::Boundary)
+    /// — never fused — so the region-grower only folds nodes that explicitly
+    /// opt in. Primitives set it via the `primitive!` macro's `fusion_kind:`
+    /// field; the blanket impl forwards `P::FUSION_KIND`.
+    fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
+        crate::node_graph::freeze::classify::FusionKind::Boundary
+    }
+
+    /// Optional fusable WGSL body fragment (a pure `fn body(...)`) the fusion
+    /// codegen chains into one kernel and generates the standalone kernel from
+    /// (single-source). `None` (default) = the primitive's own kernel is
+    /// authoritative. Set via the macro's `wgsl_body:` field; forwards
+    /// `P::WGSL_BODY`.
+    fn wgsl_body(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —
     /// the primitive runs against whatever the upstream producer
