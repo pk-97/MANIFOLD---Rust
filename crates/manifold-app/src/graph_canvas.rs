@@ -112,6 +112,11 @@ const PARAM_FILL_FG: [f32; 4] = [0.50, 0.78, 1.00, 0.55];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
+/// Hover-tooltip chrome: a near-opaque dark card with a faint border,
+/// drawn above the nodes so the help line reads cleanly over any graph.
+const TOOLTIP_BG: [f32; 4] = [0.10, 0.10, 0.13, 0.97];
+const TOOLTIP_BORDER: [f32; 4] = [0.45, 0.48, 0.60, 0.85];
+const TOOLTIP_TEXT: [u8; 4] = [224, 226, 236, 255];
 /// Pink chip behind the "Reset to Default" header button —
 /// same family as the MOD badge on the effect card so the
 /// "you are diverged" cue is consistent across surfaces.
@@ -199,6 +204,11 @@ struct NodeView {
     /// interface ports; the body lives in the snapshot and is re-resolved by
     /// scope, not stored on the view.
     is_group: bool,
+    /// Friendly one-line summary from the node's `NodeDescriptor`, shown
+    /// as a hover tooltip over the node's header/body. `None` for groups
+    /// (no descriptor) and for any node whose author left the summary
+    /// blank. Resolved once on the topology rebuild — it never changes.
+    tooltip: Option<String>,
 }
 
 impl NodeView {
@@ -264,6 +274,12 @@ struct ParamView {
     /// dragged on the node face. `None` params stay read-only on the canvas
     /// (still editable via the inspector sidebar).
     scrub: Option<ScrubInfo>,
+    /// Plain-English help line for this param, from the `param_doc`
+    /// side-channel keyed by `(node type_id, param name)`. Shown as a
+    /// hover tooltip over the param row. `None` if the node author didn't
+    /// register one. Static per `(type_id, name)`, so it's resolved once
+    /// on the topology rebuild and carried forward on value-only refreshes.
+    tooltip: Option<String>,
 }
 
 /// What a draggable on-node param needs to turn a horizontal drag into a
@@ -331,6 +347,9 @@ fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> Pa
         value,
         fill,
         scrub,
+        // Resolved by the caller that knows the owning node's type_id;
+        // this formatter only sees the param snapshot.
+        tooltip: None,
     }
 }
 
@@ -357,6 +376,31 @@ fn node_summary(params: &[manifold_renderer::node_graph::ParamSnapshot]) -> Opti
         .or_else(|| params.first())?;
     let pv = format_param_for_node(pick);
     Some(format!("{}: {}", pv.label, pv.value))
+}
+
+/// Wrap `text` to lines no wider than `max_chars`, breaking on spaces.
+/// A single word longer than the limit is left whole — it overflows the
+/// box a touch rather than being chopped mid-word. Only the hover tooltip
+/// calls this, so the per-call allocation is off any hot path.
+fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+    let max = max_chars.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if line.is_empty() {
+            line.push_str(word);
+        } else if line.chars().count() + 1 + word.chars().count() <= max {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line.push_str(word);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// Muted header tint per node `Category`, so the graph reads at a glance by
@@ -671,7 +715,21 @@ impl GraphCanvas {
             // auto-layout.
             for node in &mut self.nodes {
                 if let Some(sn) = level_nodes.iter().find(|s| s.id == node.id) {
-                    node.params = sn.parameters.iter().map(format_param_for_node).collect();
+                    // Param tooltips are static per (type_id, name); carry the
+                    // already-resolved ones forward by index rather than
+                    // re-scanning the doc inventory on this per-frame path.
+                    let prev_tips: Vec<Option<String>> =
+                        node.params.iter().map(|p| p.tooltip.clone()).collect();
+                    node.params = sn
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let mut pv = format_param_for_node(p);
+                            pv.tooltip = prev_tips.get(i).cloned().flatten();
+                            pv
+                        })
+                        .collect();
                     node.summary = node_summary(&sn.parameters);
                 }
             }
@@ -696,7 +754,17 @@ impl GraphCanvas {
                 id: n.id,
                 handle: n.node_handle.clone(),
                 title: n.title.clone(),
-                params: n.parameters.iter().map(format_param_for_node).collect(),
+                params: n
+                    .parameters
+                    .iter()
+                    .map(|p| {
+                        let mut pv = format_param_for_node(p);
+                        pv.tooltip =
+                            manifold_renderer::node_graph::tooltip_for(&n.type_id, &p.name)
+                                .map(str::to_owned);
+                        pv
+                    })
+                    .collect(),
                 summary: node_summary(&n.parameters),
                 collapsed: self.collapsed.get(&n.id).copied().unwrap_or(true),
                 header_color: category_header_color(
@@ -720,6 +788,10 @@ impl GraphCanvas {
                     .collect(),
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
                 is_group: n.type_id == GROUP_TYPE_ID,
+                tooltip: manifold_renderer::node_graph::descriptor_for(&n.type_id)
+                    .map(|d| d.summary)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
             })
             .collect();
         self.nodes = new_nodes;
@@ -1779,6 +1851,14 @@ impl GraphCanvas {
             ui.draw_bordered_rect(x, y, w, h, MARQUEE_FILL, 0.0, 1.0, MARQUEE_BORDER);
         }
 
+        // Hover tooltip: the node's friendly summary, or — when the cursor is
+        // over a param row — that param's help line. Drawn above the nodes but
+        // below the popover, and only when the canvas is idle (a tooltip
+        // chasing the cursor mid-drag would be noise).
+        if matches!(self.drag_mode, DragMode::None) && !self.mapping_popover.is_open() {
+            self.draw_hover_tooltip(ui, viewport, canvas);
+        }
+
         // Mapping popover floats above everything else so its handles and
         // buttons are never buried under a node it overlaps.
         self.mapping_popover.render(ui);
@@ -1786,6 +1866,69 @@ impl GraphCanvas {
         // Debug overlay last, on top of everything — it's a diagnostic HUD.
         if self.debug_overlay {
             self.draw_debug_overlay(ui, canvas);
+        }
+    }
+
+    /// Floating help card near the cursor: a param's help line when the
+    /// cursor is over a param row, otherwise the hovered node's friendly
+    /// summary. Both come from the doc side-channels (`param_doc` and
+    /// `NodeDescriptor`) resolved at snapshot time. No-op when there's
+    /// nothing registered for whatever the cursor is over.
+    fn draw_hover_tooltip(&self, ui: &mut UIRenderer, viewport: Rect, canvas: Rect) {
+        let (sx, sy) = self.cursor;
+        // A param row under the cursor wins over the node summary — it's the
+        // more specific thing the user is pointing at.
+        let text: Option<&str> = self
+            .param_row_under(viewport, sx, sy)
+            .and_then(|(nid, idx)| {
+                self.find_node(nid)
+                    .and_then(|n| n.params.get(idx))
+                    .and_then(|p| p.tooltip.as_deref())
+            })
+            .or_else(|| {
+                self.hovered
+                    .and_then(|h| self.find_node(h))
+                    .and_then(|n| n.tooltip.as_deref())
+            });
+        let Some(text) = text else {
+            return;
+        };
+
+        // Fixed screen-space sizing — a tooltip shouldn't shrink with zoom.
+        const FONT: f32 = 11.0;
+        const PAD: f32 = 7.0;
+        const LINE_H: f32 = 14.0;
+        const MAX_W: f32 = 300.0;
+        let char_w = FONT * 0.55;
+        let max_chars = ((MAX_W - 2.0 * PAD) / char_w).floor().max(1.0) as usize;
+        let lines = wrap_text(text, max_chars);
+        if lines.is_empty() {
+            return;
+        }
+        let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let box_w = (longest as f32 * char_w + 2.0 * PAD).min(MAX_W);
+        let box_h = lines.len() as f32 * LINE_H + 2.0 * PAD;
+
+        // Sit below-right of the cursor, then flip/clamp so the box is never
+        // clipped against the canvas edges.
+        let mut x = sx + 16.0;
+        let mut y = sy + 18.0;
+        if x + box_w > canvas.x + canvas.w {
+            x = (sx - box_w - 12.0).max(canvas.x + 2.0);
+        }
+        if y + box_h > canvas.y + canvas.h {
+            y = (sy - box_h - 12.0).max(canvas.y + 2.0);
+        }
+
+        ui.draw_bordered_rect(x, y, box_w, box_h, TOOLTIP_BG, 4.0, 1.0, TOOLTIP_BORDER);
+        for (i, line) in lines.iter().enumerate() {
+            ui.draw_text(
+                x + PAD,
+                y + PAD + i as f32 * LINE_H,
+                line,
+                FONT,
+                TOOLTIP_TEXT,
+            );
         }
     }
 
@@ -2496,5 +2639,29 @@ mod tests {
         assert!(!canvas.is_double_click(140.0, 100.0, 1.1, Some(7)));
         // Same node but too slow → not a double.
         assert!(!canvas.is_double_click(100.5, 100.0, 1.0 + 5.0, Some(7)));
+    }
+
+    #[test]
+    fn wrap_text_breaks_on_spaces_within_limit() {
+        let lines = wrap_text("the quick brown fox jumps", 11);
+        // Every line is within the limit and nothing is dropped.
+        assert!(lines.iter().all(|l| l.chars().count() <= 11));
+        assert_eq!(lines.join(" "), "the quick brown fox jumps");
+        assert!(lines.len() > 1);
+    }
+
+    #[test]
+    fn wrap_text_keeps_an_overlong_word_whole() {
+        // A single word past the limit isn't chopped mid-word; it gets its
+        // own line and overflows the box slightly rather than corrupting.
+        let lines = wrap_text("supercalifragilistic ok", 8);
+        assert_eq!(lines[0], "supercalifragilistic");
+        assert_eq!(lines[1], "ok");
+    }
+
+    #[test]
+    fn wrap_text_empty_input_is_empty() {
+        assert!(wrap_text("", 20).is_empty());
+        assert!(wrap_text("   ", 20).is_empty());
     }
 }
