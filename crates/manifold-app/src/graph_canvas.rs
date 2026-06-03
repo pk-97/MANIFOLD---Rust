@@ -1132,6 +1132,32 @@ impl GraphCanvas {
         self.mapping_popover.is_open()
     }
 
+    /// `true` while a popover value field is being typed into — the host routes
+    /// keystrokes to it instead of firing canvas shortcuts.
+    pub fn popover_is_editing(&self) -> bool {
+        self.mapping_popover.is_editing()
+    }
+
+    /// Feed one typed character into the popover's active numeric field.
+    pub fn popover_on_text_char(&mut self, c: char) {
+        self.mapping_popover.on_text_char(c);
+    }
+
+    /// Delete the last typed character in the popover's active field.
+    pub fn popover_on_backspace(&mut self) {
+        self.mapping_popover.on_backspace();
+    }
+
+    /// Commit the popover's typed value (Enter).
+    pub fn popover_commit_edit(&mut self) {
+        self.mapping_popover.commit_edit();
+    }
+
+    /// Cancel the popover's numeric edit (Esc).
+    pub fn popover_cancel_edit(&mut self) {
+        self.mapping_popover.cancel_edit();
+    }
+
     /// Hit-test ports near the cursor. Searches all output then input
     /// ports of every node, returning the first within `PORT_HIT_RADIUS`
     /// graph-space units of the cursor. Outputs take priority over

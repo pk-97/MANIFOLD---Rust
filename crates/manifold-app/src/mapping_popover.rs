@@ -41,6 +41,9 @@ const ROW_H: f32 = 18.0;
 const ROW_GAP: f32 = 6.0;
 const HEADER_H: f32 = 16.0;
 const TRACK_H: f32 = 14.0;
+/// Height of the min/max numeric value row directly under the track. Click
+/// either end to type an exact bound.
+const MINMAX_H: f32 = 13.0;
 const HANDLE_W: f32 = 4.0;
 const CURVE_ROW_H: f32 = 16.0;
 const FONT: f32 = 11.0;
@@ -126,6 +129,10 @@ fn format_affine(v: f32) -> String {
 const SCRUB_K: f32 = 0.004;
 const SCRUB_FLOOR: f32 = 0.05;
 
+/// Pointer travel (px) below which a press-release on a scale/offset field
+/// counts as a click (→ enter numeric edit) rather than a scrub drag.
+const CLICK_SLOP: f32 = 3.0;
+
 /// Which draggable element (if any) the pointer grabbed on press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragTarget {
@@ -173,6 +180,19 @@ pub struct MappingPopover {
     /// Which handle the cursor is hovering (for the highlight) when not
     /// dragging.
     hover: Option<DragTarget>,
+    /// True once a scale/offset press has moved past [`CLICK_SLOP`], so the
+    /// release commits a scrub rather than entering numeric edit. A press that
+    /// never moves is a click → type the value.
+    drag_moved: bool,
+    /// The field currently being typed into (`None` = not editing). Clicking a
+    /// value (min / max / scale / offset) enters edit mode; the host feeds
+    /// keystrokes via [`Self::on_text_char`] / [`Self::on_backspace`] and
+    /// commits with [`Self::commit_edit`] (Enter) or cancels with
+    /// [`Self::cancel_edit`] (Esc).
+    edit: Option<DragTarget>,
+    /// In-progress typed text for the active [`Self::edit`] field. Empty on
+    /// entry; commit parses it as `f32` (empty / unparseable → no change).
+    edit_buffer: String,
     /// The card slider's current (post-modulation) value, pushed by the host
     /// each frame via [`Self::set_live_value`]. Drives the live dot on the
     /// preview so you can watch where the knob sits — and where drivers /
@@ -202,6 +222,9 @@ impl MappingPopover {
             scrub_press_x: 0.0,
             scrub_start: 0.0,
             hover: None,
+            drag_moved: false,
+            edit: None,
+            edit_buffer: String::new(),
             live_value: None,
             pending_actions: Vec::new(),
         }
@@ -209,6 +232,12 @@ impl MappingPopover {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// True while a value field is being typed into — the host routes
+    /// keystrokes here instead of firing canvas shortcuts.
+    pub fn is_editing(&self) -> bool {
+        self.edit.is_some()
     }
 
     /// Stable id of the binding currently being edited — the host reads this
@@ -263,15 +292,23 @@ impl MappingPopover {
         // current min/max (with a tiny pad so a zero-width range still
         // gives the handles room).
         let (lo, hi) = range.unwrap_or((min, max));
-        if hi > lo {
-            self.range_lo = lo;
-            self.range_hi = hi;
+        let (mut lo, mut hi) = if hi > lo {
+            (lo, hi)
         } else {
-            self.range_lo = min.min(max);
-            self.range_hi = (min.max(max)) + 1.0;
-        }
+            (min.min(max), min.max(max) + 1.0)
+        };
+        // Always span the current selection so a note whose min/max was typed
+        // past the param's nominal range still shows its handles on the track
+        // instead of pinned off an edge.
+        lo = lo.min(self.cur_min);
+        hi = hi.max(self.cur_max);
+        self.range_lo = lo;
+        self.range_hi = hi;
         self.dragging = None;
         self.hover = None;
+        self.drag_moved = false;
+        self.edit = None;
+        self.edit_buffer.clear();
         self.live_value = None;
 
         let h = self.panel_height();
@@ -295,6 +332,8 @@ impl MappingPopover {
         self.open = false;
         self.dragging = None;
         self.hover = None;
+        self.edit = None;
+        self.edit_buffer.clear();
     }
 
     // ── Geometry ────────────────────────────────────────────────────
@@ -304,6 +343,7 @@ impl MappingPopover {
         PAD + HEADER_H
             + ROW_GAP + PREVIEW_H    // live response preview
             + ROW_GAP + ROW_H        // range track
+            + MINMAX_H               // min/max value row (snug under the track)
             + ROW_GAP + ROW_H        // invert
             + ROW_GAP + CURVE_ROW_H  // curve
             + ROW_GAP + ROW_H        // scale
@@ -363,14 +403,35 @@ impl MappingPopover {
         Rect::new(cx - HANDLE_W * 0.5, t.y - 2.0, HANDLE_W, t.h + 4.0)
     }
 
+    /// Top of the min/max numeric value row, directly under the track.
+    fn minmax_row_y(&self) -> f32 {
+        self.track_row_y() + ROW_H
+    }
+
+    /// Click target for the min (left) or max (right) numeric bound. Click to
+    /// type an exact value — including past the param's nominal range.
+    fn minmax_value_rect(&self, which: DragTarget) -> Rect {
+        let t = self.track_rect();
+        let w = 54.0;
+        let x = match which {
+            DragTarget::Min => t.x,
+            _ => t.x + t.w - w,
+        };
+        Rect::new(x, self.minmax_row_y(), w, MINMAX_H)
+    }
+
+    fn invert_row_y(&self) -> f32 {
+        self.minmax_row_y() + MINMAX_H + ROW_GAP
+    }
+
     fn invert_btn_rect(&self) -> Rect {
-        let y = self.track_row_y() + ROW_H + ROW_GAP;
+        let y = self.invert_row_y();
         // Right-aligned 36px INV button, label fills the rest.
         Rect::new(self.origin.0 + POPOVER_W - PAD - 36.0, y, 36.0, ROW_H)
     }
 
     fn curve_row_y(&self) -> f32 {
-        self.track_row_y() + ROW_H + ROW_GAP + ROW_H + ROW_GAP
+        self.invert_row_y() + ROW_H + ROW_GAP
     }
 
     fn curve_cell_rect(&self, idx: usize) -> Rect {
@@ -421,6 +482,19 @@ impl MappingPopover {
         }
         if !Self::point_in(self.panel_rect(), sx, sy) {
             return false;
+        }
+        // Any press inside the panel commits a pending numeric edit first
+        // (click-away to confirm), then proceeds to handle the new press.
+        if self.is_editing() {
+            self.commit_edit();
+        }
+        // Min/max numeric value fields under the track ends — click to type an
+        // exact bound (including past the param's nominal range).
+        for which in [DragTarget::Min, DragTarget::Max] {
+            if Self::point_in(self.minmax_value_rect(which), sx, sy) {
+                self.enter_edit(which);
+                return true;
+            }
         }
         // Min/max handles — start a range drag. Snapshot the pre-drag
         // (min, max) first so the commit records a single undo entry.
@@ -486,6 +560,7 @@ impl MappingPopover {
                         binding_id: self.binding_id.clone(),
                     });
                 self.dragging = Some(which);
+                self.drag_moved = false;
                 self.scrub_press_x = sx;
                 self.scrub_start = match which {
                     DragTarget::Scale => self.cur_scale,
@@ -527,17 +602,123 @@ impl MappingPopover {
     /// `EffectMappingAffineCommit` for a scale/offset scrub.
     pub fn on_release(&mut self) {
         if let Some(which) = self.dragging.take() {
-            let action = match which {
-                DragTarget::Min | DragTarget::Max => PanelAction::EffectMappingRangeCommit {
-                    binding_id: self.binding_id.clone(),
-                },
+            match which {
+                DragTarget::Min | DragTarget::Max => {
+                    self.pending_actions
+                        .push(PanelAction::EffectMappingRangeCommit {
+                            binding_id: self.binding_id.clone(),
+                        });
+                }
                 DragTarget::Scale | DragTarget::Offset => {
-                    PanelAction::EffectMappingAffineCommit {
-                        binding_id: self.binding_id.clone(),
+                    if self.drag_moved {
+                        self.pending_actions
+                            .push(PanelAction::EffectMappingAffineCommit {
+                                binding_id: self.binding_id.clone(),
+                            });
+                    } else {
+                        // Pressed without scrubbing → a click: type the value.
+                        self.enter_edit(which);
                     }
                 }
-            };
-            self.pending_actions.push(action);
+            }
+        }
+    }
+
+    // ── Numeric entry ───────────────────────────────────────────────
+
+    /// Begin typing into `field`, seeded empty (type the new value, Enter
+    /// commits, Esc cancels). Cancels any in-progress drag.
+    fn enter_edit(&mut self, field: DragTarget) {
+        self.dragging = None;
+        self.edit = Some(field);
+        self.edit_buffer.clear();
+    }
+
+    /// Feed one typed character to the active field. Accepts digits, a single
+    /// decimal point, and a leading minus; ignores everything else.
+    pub fn on_text_char(&mut self, c: char) {
+        if self.edit.is_none() {
+            return;
+        }
+        if c.is_ascii_digit() {
+            self.edit_buffer.push(c);
+        } else if c == '.' && !self.edit_buffer.contains('.') {
+            self.edit_buffer.push('.');
+        } else if c == '-' && self.edit_buffer.is_empty() {
+            self.edit_buffer.push('-');
+        }
+    }
+
+    /// Delete the last typed character.
+    pub fn on_backspace(&mut self) {
+        if self.edit.is_some() {
+            self.edit_buffer.pop();
+        }
+    }
+
+    /// Cancel the edit, discarding the typed text.
+    pub fn cancel_edit(&mut self) {
+        self.edit = None;
+        self.edit_buffer.clear();
+    }
+
+    /// Commit the typed value to the active field and emit the matching
+    /// snapshot → changed → commit triad (one undo entry). An empty or
+    /// unparseable buffer leaves the value unchanged. A min/max past the
+    /// track's current span widens the span so the handle stays visible.
+    pub fn commit_edit(&mut self) {
+        let Some(field) = self.edit.take() else {
+            return;
+        };
+        let parsed = self.edit_buffer.trim().parse::<f32>().ok();
+        self.edit_buffer.clear();
+        let Some(v) = parsed.filter(|v| v.is_finite()) else {
+            return;
+        };
+        let id = self.binding_id.clone();
+        match field {
+            DragTarget::Min | DragTarget::Max => {
+                self.pending_actions
+                    .push(PanelAction::EffectMappingRangeSnapshot {
+                        binding_id: id.clone(),
+                    });
+                match field {
+                    DragTarget::Min => {
+                        self.cur_min = v.min(self.cur_max);
+                        self.range_lo = self.range_lo.min(self.cur_min);
+                    }
+                    _ => {
+                        self.cur_max = v.max(self.cur_min);
+                        self.range_hi = self.range_hi.max(self.cur_max);
+                    }
+                }
+                self.pending_actions
+                    .push(PanelAction::EffectMappingRangeChanged {
+                        binding_id: id.clone(),
+                        min: self.cur_min,
+                        max: self.cur_max,
+                    });
+                self.pending_actions
+                    .push(PanelAction::EffectMappingRangeCommit { binding_id: id });
+            }
+            DragTarget::Scale | DragTarget::Offset => {
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineSnapshot {
+                        binding_id: id.clone(),
+                    });
+                match field {
+                    DragTarget::Scale => self.cur_scale = v,
+                    _ => self.cur_offset = v,
+                }
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineChanged {
+                        binding_id: id.clone(),
+                        scale: self.cur_scale,
+                        offset: self.cur_offset,
+                    });
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineCommit { binding_id: id });
+            }
         }
     }
 
@@ -565,6 +746,12 @@ impl MappingPopover {
     /// values nudge gently and large ones move fast.
     fn apply_scrub(&mut self, which: DragTarget, sx: f32) {
         let dpx = sx - self.scrub_press_x;
+        // Below the slop, treat the press as a (so-far) click — don't scrub, so
+        // a release without travel can enter numeric edit instead.
+        if !self.drag_moved && dpx.abs() < CLICK_SLOP {
+            return;
+        }
+        self.drag_moved = true;
         let gain = SCRUB_K * self.scrub_start.abs().max(SCRUB_FLOOR);
         let new = self.scrub_start + dpx * gain;
         match which {
@@ -704,24 +891,29 @@ impl MappingPopover {
             let color = if active { HANDLE_HOVER } else { HANDLE_COLOR };
             ui.draw_rounded_rect(r.x, r.y, r.w, r.h, color, 1.0);
         }
-        // min/max value labels under the track ends.
-        let val_y = track.y + track.h + 1.0;
-        ui.draw_text(
-            track.x,
-            val_y,
-            &format!("{:.2}", self.cur_min),
-            FONT_SMALL,
-            TEXT_SECONDARY,
-        );
-        let max_text = format!("{:.2}", self.cur_max);
-        let max_text_w = max_text.chars().count() as f32 * FONT_SMALL * 0.55;
-        ui.draw_text(
-            track.x + track.w - max_text_w,
-            val_y,
-            &max_text,
-            FONT_SMALL,
-            TEXT_SECONDARY,
-        );
+        // min/max numeric value fields under the track ends. Click either to
+        // type an exact bound; the active field shows the typed buffer + caret.
+        for which in [DragTarget::Min, DragTarget::Max] {
+            let box_r = self.minmax_value_rect(which);
+            let editing = self.edit == Some(which);
+            let txt = if editing {
+                format!("{}|", self.edit_buffer)
+            } else {
+                let v = if which == DragTarget::Min { self.cur_min } else { self.cur_max };
+                format!("{v:.2}")
+            };
+            if editing {
+                ui.draw_rounded_rect(box_r.x, box_r.y, box_r.w, box_r.h, CURVE_BG_ACTIVE, 2.0);
+            }
+            let tc = if editing { TEXT_PRIMARY } else { TEXT_SECONDARY };
+            let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
+            // Min reads from the left edge, max from the right.
+            let tx = match which {
+                DragTarget::Min => box_r.x + 1.0,
+                _ => box_r.x + box_r.w - tw - 1.0,
+            };
+            ui.draw_text(tx, box_r.y + 1.0, &txt, FONT_SMALL, tc);
+        }
 
         // ── Invert toggle row ──
         let inv = self.invert_btn_rect();
@@ -763,18 +955,23 @@ impl MappingPopover {
 
         // ── Scale / Offset affine rows ──
         // The card→consumer remap (out = value * scale + offset). This is
-        // where a folded affine_scalar node lives. Drag the value box to
-        // scrub; precise values arrive from a fold.
+        // where a folded affine_scalar node lives. Click the value box to type
+        // an exact value; drag it to scrub.
         for (which, name, val) in [
             (DragTarget::Scale, "Scale", self.cur_scale),
             (DragTarget::Offset, "Offset", self.cur_offset),
         ] {
             let r = self.affine_value_rect(which);
             ui.draw_text(panel.x + PAD, r.y + 3.0, name, FONT, TEXT_SECONDARY);
-            let active = self.dragging == Some(which);
+            let editing = self.edit == Some(which);
+            let active = self.dragging == Some(which) || editing;
             let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
             ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
-            let txt = format_affine(val);
+            let txt = if editing {
+                format!("{}|", self.edit_buffer)
+            } else {
+                format_affine(val)
+            };
             let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
             ui.draw_text(
                 r.x + r.w - tw - 5.0,
@@ -964,5 +1161,79 @@ mod tests {
         let track = p.track_rect();
         p.on_move(track.x + track.w, r.y);
         assert!(p.cur_min <= p.cur_max);
+    }
+
+    #[test]
+    fn click_max_value_types_past_nominal_range() {
+        let mut p = open_popover(); // range (0,1), cur_max 0.8
+        let box_r = p.minmax_value_rect(DragTarget::Max);
+        assert!(p.on_press(box_r.x + 2.0, box_r.y + 2.0));
+        assert!(p.is_editing(), "clicking the max value enters edit");
+        p.drain_actions();
+        for ch in "128".chars() {
+            p.on_text_char(ch);
+        }
+        p.commit_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.cur_max, 128.0, "typed value past nominal max is accepted");
+        assert!(p.range_hi >= 128.0, "track span widened to keep the handle visible");
+        let actions = p.drain_actions();
+        assert!(matches!(
+            actions.first(),
+            Some(PanelAction::EffectMappingRangeSnapshot { .. })
+        ));
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            PanelAction::EffectMappingRangeChanged { max, .. } if (*max - 128.0).abs() < 1e-3
+        )));
+        assert!(matches!(
+            actions.last(),
+            Some(PanelAction::EffectMappingRangeCommit { .. })
+        ));
+    }
+
+    #[test]
+    fn scale_click_without_drag_enters_edit_then_commits() {
+        let mut p = open_popover(); // cur_scale 1.0
+        let r = p.affine_value_rect(DragTarget::Scale);
+        // Press and release with no movement → a click, not a scrub.
+        assert!(p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5));
+        p.on_release();
+        assert!(p.is_editing(), "a no-drag click enters numeric edit");
+        p.drain_actions();
+        for ch in "2.5".chars() {
+            p.on_text_char(ch);
+        }
+        p.commit_edit();
+        assert_eq!(p.cur_scale, 2.5);
+        let actions = p.drain_actions();
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            PanelAction::EffectMappingAffineChanged { scale, .. } if (*scale - 2.5).abs() < 1e-3
+        )));
+        assert!(matches!(
+            actions.last(),
+            Some(PanelAction::EffectMappingAffineCommit { .. })
+        ));
+    }
+
+    #[test]
+    fn text_entry_filters_input_and_cancel_discards() {
+        let mut p = open_popover();
+        p.enter_edit(DragTarget::Offset);
+        // Letters ignored; one decimal point; minus only leading.
+        for ch in "-1a2.3.4".chars() {
+            p.on_text_char(ch);
+        }
+        assert_eq!(p.edit_buffer, "-12.34");
+        p.on_backspace();
+        assert_eq!(p.edit_buffer, "-12.3");
+        // Cancel discards without emitting or changing the value.
+        let before = p.cur_offset;
+        p.drain_actions();
+        p.cancel_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.cur_offset, before);
+        assert!(p.drain_actions().is_empty());
     }
 }

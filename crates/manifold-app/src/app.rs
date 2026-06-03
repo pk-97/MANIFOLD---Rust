@@ -2575,6 +2575,54 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary && self.perform_handle_key(&logical_key) {
                     return;
                 }
+                // Mapping drawer numeric entry: when a value field is active,
+                // keystrokes type into it (digits / `.` / `-` / Backspace),
+                // Enter commits, Esc cancels — ahead of any canvas shortcut
+                // (Backspace would otherwise delete the selected node). Plain
+                // chars only (no Cmd/Ctrl) so shortcuts still pass when not
+                // typing a value.
+                {
+                    use winit::keyboard::{Key, NamedKey};
+                    let typing = !self.modifiers.command && !self.modifiers.ctrl;
+                    if self.editor_mapping_popover.is_editing() {
+                        match &logical_key {
+                            Key::Named(NamedKey::Enter) => self.editor_mapping_popover.commit_edit(),
+                            Key::Named(NamedKey::Escape) => self.editor_mapping_popover.cancel_edit(),
+                            Key::Named(NamedKey::Backspace) => {
+                                self.editor_mapping_popover.on_backspace()
+                            }
+                            Key::Character(c) if typing => {
+                                for ch in c.chars() {
+                                    self.editor_mapping_popover.on_text_char(ch);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                        return;
+                    }
+                    if let Some(canvas) = self.graph_canvas.as_mut()
+                        && canvas.popover_is_editing()
+                    {
+                        match &logical_key {
+                            Key::Named(NamedKey::Enter) => canvas.popover_commit_edit(),
+                            Key::Named(NamedKey::Escape) => canvas.popover_cancel_edit(),
+                            Key::Named(NamedKey::Backspace) => canvas.popover_on_backspace(),
+                            Key::Character(c) if typing => {
+                                for ch in c.chars() {
+                                    canvas.popover_on_text_char(ch);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                        return;
+                    }
+                }
                 // Editor window: node picker is open → keystrokes drive its
                 // search field. Must run BEFORE the Delete/Backspace node-
                 // delete arm below, or Backspace would delete a node instead
