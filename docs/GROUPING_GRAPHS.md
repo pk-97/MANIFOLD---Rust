@@ -7,14 +7,14 @@ that guide is about *granularity* (what the atoms are), this one is about *legib
 atoms are arranged once they exist) — and the one cleanup that cuts complexity hardest before you
 draw a single boundary: folding redundant slider-rescaling out of the graph (§4).
 
-It is written to be followed by a human in the graph editor **or** an AI agent restructuring a
-preset JSON directly. The procedure is the same either way.
+**The audience is an AI agent restructuring a preset's JSON directly.** This is the JSON-level
+procedure — partition the nodes, fold away redundant plumbing, rewrite the wires, verify — not the
+graph editor's collapse-to-group UX. Names still matter because a human *performer* loads the
+result, but the author following this guide is the agent.
 
 Read alongside:
 - [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) — the flattener mechanics + JSON schema (the
   authoritative spec for *what a group is*; this guide assumes it).
-- [NODE_GROUPS_UI_DESIGN.md](NODE_GROUPS_UI_DESIGN.md) — the editor UX (collapse-to-group, enter,
-  breadcrumbs).
 - [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) §6.6 — naming nodes for what they do.
 
 ---
@@ -116,6 +116,12 @@ can drop several nodes from a busy graph, and it's the cheapest legibility win t
 pass first, on the flat graph, before you draw any boundaries — every node you delete is one you
 don't have to place.
 
+When you delete the node, **re-point the binding's `target.nodeId`** from the deleted node to the
+real consumer, and **sweep any constant/`node.value` node that *only* fed the deleted one** — it's
+now an orphan with no path to the output. Both are easy to miss and both leave the graph subtly
+wrong: a binding pointing at a `nodeId` that no longer exists, or a dead node cluttering the very
+graph you're trying to simplify.
+
 **It folds only when all of these hold:**
 - the node is a pure linear function of **one** card slider — `in * const + const`, with every
   other operand a constant param, not a second wire;
@@ -147,6 +153,14 @@ passthrough-only.)
 ---
 
 ## 5. How to choose the groups
+
+**First, decide whether to group at all.** Grouping earns its keep only on graphs big or tangled
+enough that the flat layout is genuinely hard to read. If the graph is small — roughly under a
+dozen nodes — or is a flat chain of already-well-named atoms with no separable subsystem, **leave
+it flat and record why.** Wrapping a six-node colour filter in boxes adds structure without adding
+clarity, and it's churn on a file that was already legible. (The §4 fold is still worth doing on a
+graph you're otherwise leaving alone — deleting a redundant rescaling node helps regardless.) For
+everything past that bar:
 
 The goal is a top level a stranger can read top-to-bottom and understand the instrument. Heuristics,
 in priority order:
@@ -264,6 +278,15 @@ original, index nodes by id, and emit the grouped structure by pulling each node
 and changing only its local `id`. This makes a transcription error on a large shader source
 impossible by construction.
 
+**Don't commit the verification test.** It depends on a scratch baseline and is a one-shot check —
+write it, run it, delete it. Leaving it in `tests/` ships a test that can't run on a clean checkout.
+
+**Known limitation — edit the JSON, not a round-tripped copy.** Re-saving a grouped preset back
+through the runtime's serializer currently *re-flattens* it: the `from_graph` reconstruction of
+groups is deferred (NODE_GROUPS_DESIGN §9), so a mutate-and-save drops the grouping. It's cosmetic,
+not behavioral — but it means the bundled JSON on disk is the source of truth for a preset's group
+structure. Author there; don't expect groups to survive a round trip through a live `Graph`.
+
 ---
 
 ## 9. Worked example — Fluid Sim 2D
@@ -286,29 +309,32 @@ reference (three flat groups, no nesting).
 
 ---
 
-## 10. The procedure, as a checklist (humans and agents)
+## 10. The procedure, as a checklist (for an AI agent)
 
 1. **Read the flat graph end to end.** Identify the spine (chain or loop), the stateful/IO nodes,
    the shared signals, and the control plumbing. Don't group what you don't understand.
 2. **Fold static slider-rescaling first (§4).** Delete every pure constant-affine node that only
-   remaps a card slider toward one target; move its `k`/`c` onto the binding's `scale`/`offset`.
-   Fewer nodes to place, and a smaller baseline to verify against.
-3. **Draft the partition.** Assign every remaining node to exactly one group or to the top level.
+   remaps a card slider toward one target; move its `k`/`c` onto the binding's `scale`/`offset`,
+   re-point the binding's `target.nodeId`, and sweep any node orphaned by the deletion. Fewer nodes
+   to place, and a smaller baseline to verify against.
+3. **Decide whether to group at all (§5).** Small graph (~under a dozen nodes) or a flat chain with
+   no separable subsystem → leave it flat, record why, stop here. Otherwise continue.
+4. **Draft the partition.** Assign every remaining node to exactly one group or to the top level.
    Name each group for what it does to the output (§7). Keep the spine pivot and IO boundary nodes
    at the top level (§3.6, §5).
-4. **Decide flat vs. nested per group** using the §6 cost test. Default to flat.
-5. **Define each interface** — the inputs (signals entering) and outputs (signals leaving),
+5. **Decide flat vs. nested per group** using the §6 cost test. Default to flat.
+6. **Define each interface** — the inputs (signals entering) and outputs (signals leaving),
    exactly one producer per output (§3.1), accurate `portType` tags (§3.5), camelCase names (§7).
-6. **Name everything (§7).** Title every ambiguous node and *every* `node.wgsl_compute`; clean
+7. **Name everything (§7).** Title every ambiguous node and *every* `node.wgsl_compute`; clean
    group and port names. Never touch `nodeId` (§2).
-7. **Build it programmatically**, preserving every `nodeId`, `params`, and `wgslSource` verbatim
+8. **Build it programmatically**, preserving every `nodeId`, `params`, and `wgslSource` verbatim
    (§2, §8). Omit `interface.params` for pure reorganization (§3.7).
-8. **Verify equivalence** with the three-set `nodeId`-space comparison against the post-fold
-   baseline, then `check-presets`, then the one-frame-execute test (§8). Do not skip the frame
-   execute.
-9. **Update the preset `description`** to narrate the groups (what each box does, why anything is
-   nested), and state plainly that the groups flatten to the same behavior. Glitch and Fluid Sim 2D
-   both do this.
+9. **Verify equivalence** with the three-set `nodeId`-space comparison against the post-fold
+   baseline, then `check-presets`, then the one-frame-execute test (§8). Delete the throwaway test
+   after. Do not skip the frame execute.
+10. **Update the preset `description`** to narrate the groups (what each box does, why anything is
+    nested), and state plainly that the groups flatten to the same behavior. Glitch and Fluid Sim 2D
+    both do this.
 
 If any step can't be satisfied — an output needs two producers, a value wants to pass straight
 through, a group can't be named in a phrase — the partition is wrong, not the constraint. Redraw the
