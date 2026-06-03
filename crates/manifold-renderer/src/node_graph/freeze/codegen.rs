@@ -1598,6 +1598,92 @@ mod gpu_tests {
         }
     }
 
+    /// Dual-packed GATHER parity: node.gaussian_blur is a single-input gather
+    /// whose hand uniform interleaves computed texel_x/texel_y fields the body no
+    /// longer reads (it recovers the step from `dims`), and whose generated Params
+    /// instead carries the address_mode param (host-side sampler only). So the two
+    /// kernels take DIFFERENT 32-byte uniform layouts for the same logical params:
+    /// the hand layout {kernel_size, axis, step, texel_x, texel_y, radius_mode,
+    /// radius, _pad} and the generated layout {kernel_size, axis, step,
+    /// radius_mode, radius, address_mode, _pad, _pad}. Pack each, dispatch via the
+    /// shared 1-input layout, diff. Covers Fixed (9/17-tap) and Dynamic modes on
+    /// both axes; the default Clamp sampler matches address_mode=0.
+    #[test]
+    fn generated_separable_gaussian_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h);
+        let texel = 1.0f32 / 128.0;
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.gaussian_blur").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("gaussian_blur generates");
+        assert!(
+            !generated.contains("let c_in"),
+            "a Gather input must not be pre-sampled:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/separable_gaussian.wgsl");
+
+        let pack_hand = |ks: u32, axis: u32, step: f32, rmode: u32, radius: f32| -> Vec<u8> {
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&ks.to_le_bytes());
+            b[4..8].copy_from_slice(&axis.to_le_bytes());
+            b[8..12].copy_from_slice(&step.to_le_bytes());
+            b[12..16].copy_from_slice(&texel.to_le_bytes()); // texel_x
+            b[16..20].copy_from_slice(&texel.to_le_bytes()); // texel_y
+            b[20..24].copy_from_slice(&rmode.to_le_bytes());
+            b[24..28].copy_from_slice(&radius.to_le_bytes());
+            b
+        };
+        let pack_gen = |ks: u32, axis: u32, step: f32, rmode: u32, radius: f32| -> Vec<u8> {
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&ks.to_le_bytes());
+            b[4..8].copy_from_slice(&axis.to_le_bytes());
+            b[8..12].copy_from_slice(&step.to_le_bytes());
+            b[12..16].copy_from_slice(&rmode.to_le_bytes());
+            b[16..20].copy_from_slice(&radius.to_le_bytes());
+            // address_mode = 0 (Clamp) at [20..24], pads at [24..32].
+            b
+        };
+
+        // (kernel_size, axis, step, radius_mode, radius).
+        let sets: &[(u32, u32, f32, u32, f32)] = &[
+            (1, 0, 2.0, 0, 0.0),  // Fixed 17-tap, horizontal, step 2
+            (0, 1, 1.0, 0, 0.0),  // Fixed 9-tap, vertical
+            (2, 0, 1.0, 0, 0.0),  // Fixed 25-tap, horizontal
+            (1, 0, 1.0, 1, 10.0), // Dynamic, horizontal, radius 10
+            (1, 1, 1.0, 1, 5.0),  // Dynamic, vertical, radius 5
+        ];
+        for &(ks, axis, step, rmode, radius) in sets {
+            let hand_bytes = pack_hand(ks, axis, step, rmode, radius);
+            let gen_bytes = pack_gen(ks, axis, step, rmode, radius);
+            let from_original = dispatch_pointwise(&device, original, &input, &hand_bytes);
+            let from_generated = dispatch_pointwise(&device, &generated, &input, &gen_bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "gaussian_blur set (ks={ks}, axis={axis}, step={step}, rmode={rmode}, \
+                 radius={radius}): generated must reproduce separable_gaussian.wgsl \
+                 (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
+
     /// Dispatch a SOURCE (generator) kernel: [uniform(0)], output. No texture
     /// inputs, no sampler — a paramless source binds only its output at binding 0.
     fn dispatch_source(

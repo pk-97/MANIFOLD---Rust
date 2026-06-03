@@ -113,6 +113,9 @@ crate::primitive! {
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["gaussian blur", "blur", "soft", "Blur TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/separable_gaussian_body.wgsl"),
+    input_access: [Gather],
     extra_fields: {
         // Track the GpuAddressMode the cached sampler was created
         // with so we can rebuild it on address_mode param edits.
@@ -122,17 +125,23 @@ crate::primitive! {
 
 pub const GAUSSIAN_BLUR_TYPE_ID: &str = "node.gaussian_blur";
 
+// Standalone-codegen uniform layout: the generated `Params` struct lays out the
+// PARAMS in declaration order (kernel_size, axis, step, radius_mode, radius,
+// address_mode) padded to 32 bytes. The body recovers the texel step from the
+// ambient `dims`, so — unlike the hand separable_gaussian.wgsl — there are no
+// texel_x/texel_y fields here. address_mode is carried for layout completeness;
+// the body ignores it (the sampler below applies the wrap mode).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SeparableGaussianUniforms {
     kernel_size: u32,
     axis: u32,
     step: f32,
-    texel_x: f32,
-    texel_y: f32,
     radius_mode: u32,
     radius: f32,
-    _pad: f32,
+    address_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 impl Primitive for GaussianBlur {
@@ -179,14 +188,18 @@ impl Primitive for GaussianBlur {
             return;
         };
         let (width, height) = (out_tex.width, out_tex.height);
-        let texel_x = 1.0 / width as f32;
-        let texel_y = 1.0 / height as f32;
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: `in` is a Gather input (the body samples it along one
+            // axis). Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3),
+            // matching the set below; the body recovers the texel step from `dims`
+            // and ignores address_mode (the sampler carries the wrap mode).
+            // separable_gaussian.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/separable_gaussian.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.gaussian_blur standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.gaussian_blur",
             )
         });
@@ -213,11 +226,11 @@ impl Primitive for GaussianBlur {
             kernel_size,
             axis,
             step,
-            texel_x,
-            texel_y,
             radius_mode,
             radius,
-            _pad: 0.0,
+            address_mode,
+            _pad0: 0,
+            _pad1: 0,
         };
 
         gpu.native_enc.dispatch_compute(
