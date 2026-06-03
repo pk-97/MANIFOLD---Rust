@@ -49,6 +49,8 @@ crate::primitive! {
     category: Stylize,
     role: Filter,
     aliases: ["film grain", "grain", "noise", "16mm"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/film_grain_body.wgsl"),
 }
 
 impl Primitive for FilmGrain {
@@ -71,9 +73,15 @@ impl Primitive for FilmGrain {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: standalone kernel generated from the same
+            // `wgsl_body` the fusion codegen chains. Positional — its body reads
+            // the ambient uv/dims to recover pixel = uv*dims. film_grain.wgsl is
+            // retained as the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.film_grain standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/film_grain.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.film_grain",
             )
         });

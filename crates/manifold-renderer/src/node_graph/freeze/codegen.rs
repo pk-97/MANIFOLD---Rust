@@ -623,6 +623,9 @@ mod gpu_tests {
             ("node.invert", "invert.wgsl", &[0.5]),
             ("node.levels", "levels.wgsl", &[1.26, 0.29, 0.0, 1.0, 0.8]),
             ("node.posterize", "posterize.wgsl", &[6.0]),
+            // Positional atom: pixel = uv*dims is identical in both kernels on
+            // the square test input, so the per-pixel hash matches bit-for-bit.
+            ("node.film_grain", "film_grain.wgsl", &[0.3]),
         ];
         let differ = TextureDiff::new(&device);
         for (type_id, shader_file, params) in cases {
