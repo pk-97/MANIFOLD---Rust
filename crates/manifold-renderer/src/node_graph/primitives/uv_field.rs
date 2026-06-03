@@ -28,6 +28,8 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["uv", "coordinates", "position", "uv map"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/uv_field_body.wgsl"),
 }
 
 impl Primitive for UvField {
@@ -43,9 +45,14 @@ impl Primitive for UvField {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: paramless SOURCE atom — the generated kernel binds
+            // only its output at binding 0 (no uniform, no input, no sampler),
+            // matching the binding below. uv_field.wgsl is the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.uv_field standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/uv_field.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.uv_field",
             )
         });

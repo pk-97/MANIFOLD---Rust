@@ -58,6 +58,8 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["checkerboard", "checker", "grid", "test pattern"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/checkerboard_body.wgsl"),
 }
 
 impl Primitive for Checkerboard {
@@ -86,9 +88,14 @@ impl Primitive for Checkerboard {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: SOURCE atom (no input) — the generated kernel binds
+            // uniform(0), output(1), matching the set below. checkerboard.wgsl is
+            // the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.checkerboard standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/checkerboard.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.checkerboard",
             )
         });

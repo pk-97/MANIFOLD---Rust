@@ -98,6 +98,8 @@ pub fn generate_standalone(
     match fusion_kind {
         FusionKind::Pointwise if tex_inputs.len() == 1 => {}
         FusionKind::MultiInputCoincident if tex_inputs.len() >= 2 => {}
+        // Generator: no texture input; the body produces from uv/dims/params.
+        FusionKind::Source if tex_inputs.is_empty() => {}
         FusionKind::Boundary => return Err(CodegenError::NotFusable(fusion_kind)),
         _ => {
             return Err(CodegenError::WrongTextureArity {
@@ -1431,6 +1433,83 @@ mod gpu_tests {
             let bytes = pack_f32(params);
             let from_original = dispatch_coincident(&device, &original, &ga, &gb, &bytes);
             let from_generated = dispatch_coincident(&device, &generated, &ga, &gb, &bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated must reproduce {shader_file} (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
+
+    /// Dispatch a SOURCE (generator) kernel: [uniform(0)], output. No texture
+    /// inputs, no sampler — a paramless source binds only its output at binding 0.
+    fn dispatch_source(
+        device: &GpuDevice,
+        wgsl: &str,
+        param_bytes: Option<&[u8]>,
+        w: u32,
+        h: u32,
+    ) -> RenderTarget {
+        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-source");
+        let out = RenderTarget::new(device, w, h, FMT, "codegen-out-source");
+        let mut bindings: Vec<GpuBinding> = Vec::new();
+        let mut next = 0u32;
+        if let Some(bytes) = param_bytes {
+            bindings.push(GpuBinding::Bytes { binding: 0, data: bytes });
+            next = 1;
+        }
+        bindings.push(GpuBinding::Texture { binding: next, texture: &out.texture });
+        let mut enc = device.create_encoder("codegen-source");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "codegen-source",
+        );
+        enc.commit_and_wait_completed();
+        out
+    }
+
+    /// Source (generator) parity (overnight sweep): a 0-input atom produces from
+    /// uv/dims/params, no colour input. checkerboard (params → uniform0/out1) and
+    /// the paramless uv_field (out0 only — exercises the no-uniform Source path)
+    /// both reproduce their hand shaders bit-for-bit.
+    #[test]
+    fn generated_source_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+        let differ = TextureDiff::new(&device);
+
+        // checkerboard PARAMS: [scale, offset_x, offset_y].
+        let checker_bytes = pack_f32(&[8.0, 0.0, 0.0]);
+        let cases: &[(&str, &str, Option<&[u8]>)] = &[
+            ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
+            ("node.uv_field", "uv_field.wgsl", None),
+        ];
+        for (type_id, shader_file, bytes) in cases {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+                node.input_access(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
+                .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
+            let from_original = dispatch_source(&device, &original, *bytes, w, h);
+            let from_generated = dispatch_source(&device, &generated, *bytes, w, h);
             let r = differ.compare(
                 &device,
                 &from_original.texture,

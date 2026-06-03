@@ -35,6 +35,16 @@ pub enum FusionKind {
     /// element-space (the DD10 resolution-seam guard enforces this). e.g.
     /// `node.mix` — `a` and `b` sampled at the same UV.
     MultiInputCoincident,
+    /// Generator: reads NO texture input, produces one element from the
+    /// fragment's position + params (checkerboard, uv_field, gradients, noise,
+    /// voronoi, the fold coordinate-fields). The body is `fn body(uv, dims,
+    /// ...params)` — no colour arg. Output-sized iteration. The standalone kernel
+    /// binds no textures/sampler beyond its output (and no uniform if paramless).
+    /// The region-grower leaves Source atoms unfused (its workers must read the
+    /// upstream source; a 0-input producer doesn't fit the single-external model)
+    /// — fusing a generator as a region producer is a follow-on; v1 Source is
+    /// standalone single-source only.
+    Source,
 }
 
 impl FusionKind {
