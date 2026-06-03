@@ -72,6 +72,19 @@ impl<'a> CompositorFrame<'a> {
 /// texture)`. The strings are owned; the texture borrows the compositor.
 pub type DumpTextureRef<'a> = (String, String, String, &'a manifold_gpu::GpuTexture);
 
+/// One dumped `Array` (storage-buffer) output for inspection: identity, the
+/// live buffer, the per-item byte stride, and the channel layout as
+/// `(name, kind, byte_offset)` where `kind` ∈ {`f32`,`i32`,`u32`,`vec2f`,
+/// `vec3f`,`vec4f`}. The reader decodes the buffer against these fields.
+pub struct ArrayDump<'a> {
+    pub name: String,
+    pub port: String,
+    pub type_id: String,
+    pub buffer: &'a manifold_gpu::GpuBuffer,
+    pub item_size: u32,
+    pub fields: Vec<(String, &'static str, u32)>,
+}
+
 /// Trait for compositing layers into a final output.
 pub trait Compositor: Send {
     /// Render into the compositor's internal render targets.

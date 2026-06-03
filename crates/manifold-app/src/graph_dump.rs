@@ -200,6 +200,134 @@ pub fn write_graph_dump(
     Ok(dir.to_path_buf())
 }
 
+/// Read one array (storage-buffer) output back to CPU and write a JSON with
+/// the channel schema, per-field stats over every item, and a sample of the
+/// first rows — for inspecting particle / instance / edge buffers that have no
+/// image representation. Returns the per-array manifest entry.
+fn dump_one_array(
+    device: &GpuDevice,
+    a: &manifold_renderer::compositor::ArrayDump<'_>,
+) -> serde_json::Value {
+    let size = a.buffer.size();
+    let item_count = if a.item_size == 0 {
+        0
+    } else {
+        (size / u64::from(a.item_size)) as usize
+    };
+    // Read the buffer back via a shared staging buffer.
+    let staging = device.create_buffer_shared(size);
+    let mut enc = device.create_encoder("Array Dump Readback");
+    enc.copy_buffer_to_buffer(a.buffer, &staging, size);
+    enc.commit_and_wait_completed();
+    let Some(ptr) = staging.mapped_ptr() else {
+        return serde_json::json!({ "node": a.name, "port": a.port, "note": "readback failed" });
+    };
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
+
+    let rd_f32 = |o: usize| f32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let rd_u32 = |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+    let rd_i32 = |o: usize| i32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+
+    // Per-field stats over all items, plus a sample of the first rows.
+    let stride = a.item_size as usize;
+    let comps = |kind: &str| match kind {
+        "vec2f" => 2,
+        "vec3f" => 3,
+        "vec4f" => 4,
+        _ => 1,
+    };
+    let mut field_stats: Vec<serde_json::Value> = Vec::new();
+    for (fname, kind, off) in &a.fields {
+        let n = comps(kind);
+        let mut mn = vec![f64::INFINITY; n];
+        let mut mx = vec![f64::NEG_INFINITY; n];
+        let mut sum = vec![0f64; n];
+        for i in 0..item_count {
+            let base = i * stride + *off as usize;
+            for (c, (mnc, mxc)) in mn.iter_mut().zip(mx.iter_mut()).enumerate() {
+                let o = base + c * 4;
+                if o + 4 > bytes.len() {
+                    break;
+                }
+                let v = match *kind {
+                    "u32" => f64::from(rd_u32(o)),
+                    "i32" => f64::from(rd_i32(o)),
+                    _ => f64::from(rd_f32(o)),
+                };
+                *mnc = mnc.min(v);
+                *mxc = mxc.max(v);
+                sum[c] += v;
+            }
+        }
+        let denom = item_count.max(1) as f64;
+        let mean: Vec<f64> = sum.iter().map(|s| s / denom).collect();
+        field_stats.push(serde_json::json!({
+            "name": fname, "kind": kind, "offset": off,
+            "min": mn, "max": mx, "mean": mean,
+        }));
+    }
+
+    // Sample the first rows (decoded per field) for spot-checking.
+    let sample_n = item_count.min(16);
+    let mut sample: Vec<serde_json::Value> = Vec::with_capacity(sample_n);
+    for i in 0..sample_n {
+        let mut row = serde_json::Map::new();
+        for (fname, kind, off) in &a.fields {
+            let base = i * stride + *off as usize;
+            let n = comps(kind);
+            let vals: Vec<f64> = (0..n)
+                .map(|c| {
+                    let o = base + c * 4;
+                    match *kind {
+                        "u32" => f64::from(rd_u32(o)),
+                        "i32" => f64::from(rd_i32(o)),
+                        _ => f64::from(rd_f32(o)),
+                    }
+                })
+                .collect();
+            row.insert(
+                fname.clone(),
+                if n == 1 {
+                    serde_json::json!(vals[0])
+                } else {
+                    serde_json::json!(vals)
+                },
+            );
+        }
+        sample.push(serde_json::Value::Object(row));
+    }
+
+    serde_json::json!({
+        "node": a.name, "port": a.port, "type_id": a.type_id,
+        "item_size": a.item_size, "item_count": item_count,
+        "fields": field_stats, "sample": sample,
+    })
+}
+
+/// Dump every array output to `dir/arrays.json` (schema + stats + samples).
+pub fn write_array_dump(
+    device: &GpuDevice,
+    arrays: &[manifold_renderer::compositor::ArrayDump<'_>],
+    dir: &Path,
+) -> std::io::Result<()> {
+    if arrays.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir)?;
+    let entries: Vec<serde_json::Value> =
+        arrays.iter().map(|a| dump_one_array(device, a)).collect();
+    let doc = serde_json::json!({
+        "note": "Array (storage-buffer) outputs decoded against their channel \
+                 layout. Per-field min/max/mean are over ALL items; sample is \
+                 the first rows. Components for vecNf are listed in order.",
+        "count": entries.len(),
+        "arrays": entries,
+    });
+    std::fs::write(dir.join("arrays.json"), serde_json::to_vec_pretty(&doc)?)?;
+    log::info!("[graph-dump] wrote {} array(s) to arrays.json", arrays.len());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,12 +440,15 @@ mod tests {
                 texture,
             })
             .collect();
+        let arrays = generator.dump_arrays();
         let dir = std::path::PathBuf::from("/tmp/manifold-blackhole-dump");
         let _ = std::fs::remove_dir_all(&dir);
-        write_graph_dump(&device, &textures, &dir).expect("dump");
+        write_graph_dump(&device, &textures, &dir).expect("dump textures");
+        write_array_dump(&device, &arrays, &dir).expect("dump arrays");
         eprintln!(
-            "DUMP_DONE: {} textures -> {}",
+            "DUMP_DONE: {} textures + {} arrays -> {}",
             textures.len(),
+            arrays.len(),
             dir.display()
         );
     }

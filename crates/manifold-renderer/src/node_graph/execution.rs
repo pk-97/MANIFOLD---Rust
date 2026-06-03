@@ -117,6 +117,10 @@ pub struct Executor {
     /// this frame while [`dump_all`] is set. Cleared and repopulated each
     /// frame. Read after `execute_frame_*` via [`dump_resources`].
     dump_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
+    /// Same, for `Array` (storage-buffer) outputs — particle/instance/edge
+    /// buffers. Read via [`dump_array_resources`] and decoded against the
+    /// resource's `ArrayType` channel layout.
+    dump_array_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
 }
 
 impl Executor {
@@ -138,6 +142,7 @@ impl Executor {
             preview_resource: None,
             dump_all: false,
             dump_resources: Vec::new(),
+            dump_array_resources: Vec::new(),
         }
     }
 
@@ -154,6 +159,13 @@ impl Executor {
     /// [`Backend::slot_for`] + [`Backend::texture_2d`] on [`backend`](Self::backend).
     pub fn dump_resources(&self) -> &[(NodeInstanceId, &'static str, ResourceId)] {
         &self.dump_resources
+    }
+
+    /// `(node, output_port, resource)` for every `Array` output captured on
+    /// the last frame while dump mode was on. Resolve to a buffer via
+    /// [`Backend::array_buffer`] and decode against the resource's `ArrayType`.
+    pub fn dump_array_resources(&self) -> &[(NodeInstanceId, &'static str, ResourceId)] {
+        &self.dump_array_resources
     }
 
     /// Set the node whose output texture should be preserved for an
@@ -412,6 +424,7 @@ impl Executor {
         // target node is live and produces a texture.
         self.preview_resource = None;
         self.dump_resources.clear();
+        self.dump_array_resources.clear();
 
         // Wipe any skip-passthrough aliases installed during the previous
         // frame. Without this, a slot that was aliased-on-skip last frame
@@ -655,8 +668,14 @@ impl Executor {
             // every release while dumping, so they all survive).
             if self.dump_all {
                 for &(port, res) in &step.outputs {
-                    if plan.resource_type(res).is_some_and(|t| t.is_texture_2d()) {
-                        self.dump_resources.push((step.node, port, res));
+                    match plan.resource_type(res) {
+                        Some(t) if t.is_texture_2d() => {
+                            self.dump_resources.push((step.node, port, res));
+                        }
+                        Some(crate::node_graph::ports::PortType::Array(_)) => {
+                            self.dump_array_resources.push((step.node, port, res));
+                        }
+                        _ => {}
                     }
                 }
             }
