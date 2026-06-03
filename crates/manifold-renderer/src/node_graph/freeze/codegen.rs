@@ -342,6 +342,72 @@ mod gpu_tests {
         );
     }
 
+    /// Pack f32 params into a 16-byte-multiple uniform payload.
+    fn pack_f32(params: &[f32]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for p in params {
+            bytes.extend_from_slice(&p.to_le_bytes());
+        }
+        while bytes.len() % 16 != 0 {
+            bytes.push(0);
+        }
+        bytes
+    }
+
+    /// 1b safety gate: every remaining pointwise ColorGrade atom's GENERATED
+    /// standalone kernel reproduces its hand-written shader bit-for-bit (same
+    /// math, same center-UV sampling). Once green, deleting the hand shaders
+    /// (the single-source cutover) cannot change rendering. Originals read from
+    /// disk so this test self-documents which shaders the cutover will retire.
+    #[test]
+    fn generated_pointwise_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+
+        // (type_id, original shader file, representative non-identity params).
+        let cases: &[(&str, &str, &[f32])] = &[
+            ("node.saturation", "saturation.wgsl", &[1.4]),
+            ("node.hue_saturation", "hue_saturation.wgsl", &[30.0, 1.3, 0.9]),
+            ("node.contrast", "contrast.wgsl", &[1.5]),
+            ("node.colorize", "colorize.wgsl", &[0.5, 200.0, 0.7, 0.6]),
+            ("node.clamp_texture", "clamp_texture.wgsl", &[0.1, 0.8]),
+        ];
+        let differ = TextureDiff::new(&device);
+        for (type_id, shader_file, params) in cases {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
+                .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
+            let bytes = pack_f32(params);
+
+            let from_original = dispatch_pointwise(&device, &original, &input, &bytes);
+            let from_generated = dispatch_pointwise(&device, &generated, &input, &bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated kernel must reproduce {shader_file} \
+                 (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
+
     /// The coincident two-input path: the generated standalone mix kernel
     /// reproduces mix.wgsl (two textures, blend mode + alpha lerp). Exercises
     /// the generator's MultiInputCoincident branch before the 1b cutover.
