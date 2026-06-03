@@ -2390,13 +2390,27 @@ impl Application {
             if self.editor_card_config_hash != Some(config_hash) {
                 self.editor_card.configure(config);
                 self.editor_card_config_hash = Some(config_hash);
-                // The card's structure (or edited target) changed, so the
-                // chevron geometry the mapping drawer anchored on is stale —
-                // close it rather than leave it pointing at a moved/old row.
-                self.editor_mapping_popover.close();
             }
             self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
             self.editor_card.sync_values(&mut ws.ui_root.tree, values);
+            // Close the drawer only when the row it anchored on is actually gone
+            // (target changed, param unexposed) — NOT on any config change. The
+            // drawer edits the note live, and the note's min/max now flow into
+            // the card config (so the slider range tracks the drawer), so a
+            // range-handle drag changes the config every frame. Closing on that
+            // dismissed the panel mid-drag. The chevron still resolving means
+            // the row is still there, so keep the drawer open.
+            if self.editor_mapping_popover.is_open()
+                && self
+                    .editor_card
+                    .mapping_chevron_rect(
+                        &ws.ui_root.tree,
+                        self.editor_mapping_popover.binding_id(),
+                    )
+                    .is_none()
+            {
+                self.editor_mapping_popover.close();
+            }
         } else {
             self.editor_card_config_hash = None;
             self.editor_mapping_popover.close();
