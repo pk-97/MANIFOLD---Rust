@@ -658,6 +658,11 @@ mod gpu_tests {
             // Positional atom: pixel = uv*dims is identical in both kernels on
             // the square test input, so the per-pixel hash matches bit-for-bit.
             ("node.film_grain", "film_grain.wgsl", &[0.3]),
+            // Math/convert pointwise atoms (overnight vocabulary sweep).
+            ("node.fract_texture", "fract_texture.wgsl", &[3.0]),
+            ("node.power_texture", "power_texture.wgsl", &[2.5]),
+            ("node.scale_offset_texture", "scale_offset_texture.wgsl", &[1.5, -0.25]),
+            ("node.smoothstep_texture", "smoothstep_texture.wgsl", &[0.2, 0.8]),
         ];
         let differ = TextureDiff::new(&device);
         for (type_id, shader_file, params) in cases {

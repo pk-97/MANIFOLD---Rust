@@ -70,6 +70,8 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["smoothstep", "ease", "s-curve", "soft threshold"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/smoothstep_texture_body.wgsl"),
 }
 
 impl Primitive for SmoothstepTexture {
@@ -87,9 +89,11 @@ impl Primitive for SmoothstepTexture {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.smoothstep_texture standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/smoothstep_texture.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.smoothstep_texture",
             )
         });

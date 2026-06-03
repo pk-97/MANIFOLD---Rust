@@ -47,6 +47,8 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["power", "pow", "exponent", "gamma"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/power_texture_body.wgsl"),
 }
 
 impl Primitive for PowerTexture {
@@ -63,9 +65,11 @@ impl Primitive for PowerTexture {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.power_texture standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/power_texture.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.power_texture",
             )
         });

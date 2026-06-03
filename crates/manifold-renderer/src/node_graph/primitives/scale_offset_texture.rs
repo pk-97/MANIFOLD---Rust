@@ -61,6 +61,8 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["scale offset", "remap", "multiply add", "re-range"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/scale_offset_texture_body.wgsl"),
 }
 
 impl Primitive for ScaleOffsetTexture {
@@ -90,9 +92,11 @@ impl Primitive for ScaleOffsetTexture {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.scale_offset_texture standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/scale_offset_texture.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.scale_offset_texture",
             )
         });
