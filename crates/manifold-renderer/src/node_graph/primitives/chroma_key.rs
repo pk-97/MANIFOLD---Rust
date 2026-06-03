@@ -81,6 +81,8 @@ crate::primitive! {
     category: Mask,
     role: Filter,
     aliases: ["chroma key", "green screen", "keying", "Chroma Key TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/chroma_key_body.wgsl"),
 }
 
 #[repr(C)]
@@ -127,8 +129,9 @@ impl Primitive for ChromaKey {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/chroma_key.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.chroma_key standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.chroma_key",
             )
         });

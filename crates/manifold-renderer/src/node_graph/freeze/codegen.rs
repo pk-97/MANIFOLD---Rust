@@ -71,6 +71,19 @@ pub(crate) fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError
 /// unchanged (so existing atoms' generated WGSL — and its pipeline-cache key —
 /// is untouched). The fused path namespaces fields as `n{i}_<name>`, which is
 /// never reserved, so only the standalone Params struct needs this.
+/// How many 4-byte words a param occupies in the merged scalar uniform. Vec3
+/// expands to 3 consecutive f32 fields (`<name>_x/_y/_z`) — matching how the
+/// hand atoms already pack a colour as three scalars (e.g. chroma_key's
+/// key_r/g/b) — and the body receives it reassembled as a `vec3<f32>`.
+pub(crate) fn param_word_count(p: &ParamDef) -> Result<usize, CodegenError> {
+    match p.ty {
+        ParamType::Float | ParamType::Angle | ParamType::Frequency => Ok(1),
+        ParamType::Int | ParamType::Bool | ParamType::Enum => Ok(1),
+        ParamType::Vec3 => Ok(3),
+        other => Err(CodegenError::UnsupportedParam { name: p.name, ty: other }),
+    }
+}
+
 pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
     // WGSL keywords a short param name could realistically collide with.
     const RESERVED: &[&str] = &[
@@ -154,10 +167,20 @@ pub fn generate_standalone(
     if has_uniform {
         out.push_str("struct Params {\n");
         for p in params {
-            let ty = param_wgsl_type(p)?;
-            writeln!(out, "    {}: {},", wgsl_safe_field(p.name), ty).unwrap();
+            let f = wgsl_safe_field(p.name);
+            if p.ty == ParamType::Vec3 {
+                // A vec3 param expands to three consecutive f32 fields.
+                writeln!(out, "    {f}_x: f32,").unwrap();
+                writeln!(out, "    {f}_y: f32,").unwrap();
+                writeln!(out, "    {f}_z: f32,").unwrap();
+            } else {
+                let ty = param_wgsl_type(p)?;
+                writeln!(out, "    {f}: {ty},").unwrap();
+            }
         }
-        let pad_words = (4 - (params.len() % 4)) % 4;
+        let field_words: usize =
+            params.iter().map(param_word_count).sum::<Result<usize, CodegenError>>()?;
+        let pad_words = (4 - (field_words % 4)) % 4;
         for i in 0..pad_words {
             writeln!(out, "    _pad{i}: u32,").unwrap();
         }
@@ -254,7 +277,12 @@ pub fn generate_standalone(
     args.push("uv".to_string());
     args.push("vec2<f32>(dims)".to_string());
     for p in params {
-        args.push(format!("params.{}", wgsl_safe_field(p.name)));
+        let f = wgsl_safe_field(p.name);
+        if p.ty == ParamType::Vec3 {
+            args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
+        } else {
+            args.push(format!("params.{f}"));
+        }
     }
     writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
     out.push_str("    textureStore(dst, vec2<i32>(id.xy), result);\n");
@@ -1215,9 +1243,23 @@ mod gpu_tests {
             reinhard_bytes.push(0);
         }
 
+        // chroma_key: key_color Vec3 (3 f32) + tolerance, softness (f32) + mode
+        // (Enum -> u32) + pad → 32 B. The Vec3 param expands to 3 uniform floats,
+        // matching the hand shader's key_r/g/b layout.
+        let mut chroma_bytes = Vec::new();
+        chroma_bytes.extend_from_slice(&0.0f32.to_le_bytes()); // key R (greenscreen)
+        chroma_bytes.extend_from_slice(&1.0f32.to_le_bytes()); // key G
+        chroma_bytes.extend_from_slice(&0.0f32.to_le_bytes()); // key B
+        chroma_bytes.extend_from_slice(&0.4f32.to_le_bytes()); // tolerance
+        chroma_bytes.extend_from_slice(&0.1f32.to_le_bytes()); // softness
+        chroma_bytes.extend_from_slice(&1u32.to_le_bytes()); // mode = Reject
+        while chroma_bytes.len() < 32 {
+            chroma_bytes.push(0);
+        }
         let cases: &[(&str, &str, &[u8])] = &[
             ("node.flash", "flash.wgsl", flash_bytes.as_slice()),
             ("node.reinhard_tone_map", "reinhard_tone_map.wgsl", reinhard_bytes.as_slice()),
+            ("node.chroma_key", "chroma_key.wgsl", chroma_bytes.as_slice()),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();
