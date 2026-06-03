@@ -65,10 +65,16 @@ impl ContentThread {
                 self.watched_graph_effect = effect_id;
                 // Only one canvas active at a time.
                 self.watched_graph_generator_layer = None;
+                // Switching what's watched invalidates any node preview.
+                self.preview_graph_node = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
                 self.watched_graph_generator_layer = layer_id;
                 self.watched_graph_effect = None;
+                self.preview_graph_node = None;
+            }
+            ContentCommand::SetGraphPreviewNode(node_id) => {
+                self.preview_graph_node = node_id;
             }
 
             // ── GPU events ─────────────────────────────────────────

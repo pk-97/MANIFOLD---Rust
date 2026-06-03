@@ -567,14 +567,6 @@ impl LayerCompositor {
         }
     }
 
-    /// Set (or clear) the authoring-time node-output preview request. Cheap;
-    /// call when the editor's watched effect or selected node changes. The
-    /// matching chain captures the node's output on subsequent frames; read it
-    /// via [`Self::preview_texture`].
-    pub fn set_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
-        self.preview_request = request;
-    }
-
     /// Apply the current preview request to every screen-effect chain: the one
     /// holding the watched effect aims its capture at the selected node, all
     /// others clear. Called once per frame before compositing so a freshly
@@ -599,30 +591,6 @@ impl LayerCompositor {
         for chain in self.group_effect_chains.values_mut() {
             apply(chain);
         }
-    }
-
-    /// The captured preview texture for this frame, if a preview is active and
-    /// its node produced one. Scans the screen-effect chains and returns the
-    /// first match (only the chain holding the watched effect captures).
-    pub fn preview_texture(&self) -> Option<&GpuTexture> {
-        if self.preview_request.is_none() {
-            return None;
-        }
-        self.master_effect_chain
-            .as_ref()
-            .and_then(|cg| cg.preview_texture())
-            .or_else(|| {
-                self.effect_chains
-                    .values()
-                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
-                    .next()
-            })
-            .or_else(|| {
-                self.group_effect_chains
-                    .values()
-                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
-                    .next()
-            })
     }
 
     /// Ensure a layer scratch buffer exists for the given `LayerId`,
@@ -1889,6 +1857,35 @@ impl LayerCompositor {
 }
 
 impl Compositor for LayerCompositor {
+    /// Set (or clear) the authoring-time node-output preview request. Cheap;
+    /// applied to every screen chain by `apply_preview_targets` each frame.
+    fn set_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
+        self.preview_request = request;
+    }
+
+    /// The captured preview texture for this frame, if a preview is active and
+    /// its node produced one. Scans the screen-effect chains and returns the
+    /// first match (only the chain holding the watched effect captures).
+    fn preview_texture(&self) -> Option<&GpuTexture> {
+        // No preview active → nothing to read.
+        self.preview_request.as_ref()?;
+        self.master_effect_chain
+            .as_ref()
+            .and_then(|cg| cg.preview_texture())
+            .or_else(|| {
+                self.effect_chains
+                    .values()
+                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
+                    .next()
+            })
+            .or_else(|| {
+                self.group_effect_chains
+                    .values()
+                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
+                    .next()
+            })
+    }
+
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
         // Aim the authoring-time output preview at the watched node (or clear)
         // before any chain runs, so a freshly rebuilt chain re-acquires it.

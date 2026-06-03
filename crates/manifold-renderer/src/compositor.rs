@@ -4,6 +4,7 @@ use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::{EffectId, NodeId};
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
@@ -88,6 +89,18 @@ pub trait Compositor: Send {
 
     /// The final compositor output texture (post-tonemap, post-effects).
     fn output_texture(&self) -> &manifold_gpu::GpuTexture;
+
+    /// Set (or clear) the authoring-time node-output preview request:
+    /// `(watched effect, optional selected node)`. The chain holding the
+    /// watched effect preserves the selected node's output texture for the
+    /// editor to sample. Default no-op for compositors without effect chains.
+    fn set_preview_request(&mut self, _request: Option<(EffectId, Option<NodeId>)>) {}
+
+    /// The captured preview texture from the most recent `render`, if a
+    /// preview is active and the watched node produced one. Default `None`.
+    fn preview_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
 
     /// Clean up per-owner effect state for a stopped clip.
     fn cleanup_clip_owner(&mut self, clip_id: &str);

@@ -2256,6 +2256,26 @@ impl Application {
     /// Gated on the editor's own CVDisplayLink: when it hasn't fired,
     /// we skip the present to avoid wasting a drawable slot.
     fn present_graph_editor_window(&mut self) {
+        // Forward the editor's single-node selection to the content thread so
+        // it can capture that node's output for the preview pane. Deduplicated
+        // against the last send. A closed editor (`graph_canvas == None`)
+        // yields `None`, clearing the preview.
+        let preview_node = self
+            .graph_canvas
+            .as_ref()
+            .and_then(|c| c.selected_single_node_id());
+        if preview_node != self.last_preview_node {
+            if let Some(tx) = self.content_tx.as_ref() {
+                crate::content_command::ContentCommand::send(
+                    tx,
+                    crate::content_command::ContentCommand::SetGraphPreviewNode(
+                        preview_node.clone(),
+                    ),
+                );
+            }
+            self.last_preview_node = preview_node;
+        }
+
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
             return;
@@ -2518,6 +2538,49 @@ impl Application {
             true,
             "Editor Offscreen → Drawable",
         );
+
+        // ── Node-output preview pane ──
+        // Composite the captured node texture into the top of the editor
+        // sidebar, over the panel background. Only when a node is being
+        // previewed and its IOSurface front buffer is available. The blit
+        // pipeline targets the drawable's Bgra8Unorm format, so this draws
+        // into the drawable (Load) rather than the Rgba16Float offscreen.
+        #[cfg(target_os = "macos")]
+        if self.last_preview_node.is_some()
+            && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
+        {
+            let front = bridge.front_index() as usize;
+            if let Some(tex) = self
+                .ui_node_preview_textures
+                .get(front)
+                .and_then(|t| t.as_ref())
+            {
+                let scale = scale as f32;
+                let pad = 8.0_f32;
+                let w = (sidebar_width - 2.0 * pad).max(1.0) * scale;
+                let h = w * 9.0 / 16.0;
+                let x = (sidebar_x + pad) * scale;
+                let y = pad * scale;
+                present_enc.draw_fullscreen_viewport(
+                    blit_p,
+                    &drawable_tex,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: tex,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler: blit_s,
+                        },
+                    ],
+                    (x, y, w, h),
+                    manifold_gpu::GpuLoadAction::Load,
+                    "Node Preview → Sidebar",
+                );
+            }
+        }
+
         present_enc.present_drawable(&drawable);
         present_enc.commit();
     }

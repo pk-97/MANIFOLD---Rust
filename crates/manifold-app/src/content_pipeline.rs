@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::types::BlendMode;
+use manifold_core::{EffectId, NodeId};
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
@@ -93,6 +94,17 @@ pub struct ContentPipeline {
     /// Last seen preview bridge generation.
     #[cfg(target_os = "macos")]
     preview_generation: u64,
+    /// Authoring-time node-output preview request `(watched effect, selected
+    /// node)`, forwarded to the compositor each frame. `None` = no preview.
+    node_preview_request: Option<(EffectId, Option<NodeId>)>,
+    /// Triple-buffered IOSurface textures for the node-output preview (the
+    /// captured node texture, downscaled). Separate bridge from the workspace
+    /// preview so the editor reads the node output independently.
+    #[cfg(target_os = "macos")]
+    node_preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// IOSurface bridge for the node-output preview path.
+    #[cfg(target_os = "macos")]
+    node_preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
     /// surface_signal_values[S] to complete (the frame that last used it).
@@ -172,6 +184,11 @@ impl ContentPipeline {
             preview_bridge: None,
             #[cfg(target_os = "macos")]
             preview_generation: 0,
+            node_preview_request: None,
+            #[cfg(target_os = "macos")]
+            node_preview_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
+            node_preview_bridge: None,
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
@@ -427,6 +444,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.preview_bridge = Some(bridge);
     }
 
+    /// Install the IOSurface textures + bridge for the node-output preview.
+    /// Mirrors [`Self::set_preview_textures`] but feeds the graph editor's
+    /// per-node preview pane instead of the workspace view.
+    #[cfg(target_os = "macos")]
+    pub fn set_node_preview_textures(
+        &mut self,
+        textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
+        bridge: Arc<crate::shared_texture::SharedTextureBridge>,
+    ) {
+        self.node_preview_textures = textures.map(Some);
+        self.node_preview_bridge = Some(bridge);
+    }
+
+    /// Set (or clear) the node-output preview request `(watched effect,
+    /// selected node)`. Forwarded to the compositor each frame; the chain
+    /// holding the watched effect preserves the selected node's output.
+    pub fn set_node_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
+        self.node_preview_request = request;
+    }
+
     /// Get a clone of the shared output handle. The UI thread holds this
     /// to read the front buffer view and dimensions.
     pub fn shared_output(&self) -> Arc<SharedOutputView> {
@@ -680,6 +717,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 GpuEncoder::new(&mut native_enc, native_device)
             };
 
+            // Forward the authoring-time node-output preview request so the
+            // chain holding the watched effect preserves the selected node's
+            // output this frame. Cheap clone; `None` clears (no preview).
+            self.compositor
+                .set_preview_request(self.node_preview_request.clone());
+
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
 
@@ -763,6 +806,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.preview_pipeline.as_ref(),
                 self.preview_sampler.as_ref(),
             );
+
+            // ── Node-output preview (downscaled IOSurface) ──────────
+            // If a node is being previewed and its chain captured a texture
+            // this frame, downscale it into the node-preview surface. Reuses
+            // the workspace preview's downscale pipeline + sampler. When a
+            // preview is requested but nothing was captured (the selected node
+            // has no Texture2D output), clear the surface to black so the pane
+            // reads as "no image output" rather than showing a stale frame.
+            if let Some(node_tex) = self.compositor.preview_texture() {
+                Self::update_workspace_preview(
+                    &mut native_enc,
+                    node_tex,
+                    self.node_preview_textures[self.write_surface_index].as_ref(),
+                    self.preview_pipeline.as_ref(),
+                    self.preview_sampler.as_ref(),
+                );
+            } else if self.node_preview_request.is_some()
+                && let Some(target) = self.node_preview_textures[self.write_surface_index].as_ref()
+            {
+                native_enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
+            }
         }
 
         // ── Live recording capture ──────────────────────────────────
@@ -803,8 +867,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if !export_mode {
             let write_idx = self.write_surface_index as u32;
             let preview = self.preview_bridge.clone();
+            // Only publish the node preview when one was actually captured this
+            // frame — otherwise the editor would read a stale front buffer.
+            let node_preview = if self.node_preview_request.is_some() {
+                self.node_preview_bridge.clone()
+            } else {
+                None
+            };
             native_enc.add_completed_handler(move || {
                 if let Some(ref b) = preview {
+                    b.publish_front(write_idx);
+                }
+                if let Some(ref b) = node_preview {
                     b.publish_front(write_idx);
                 }
                 // Signal recording thread that the GPU blit is complete.
