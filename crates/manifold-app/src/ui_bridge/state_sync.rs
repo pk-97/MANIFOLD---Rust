@@ -1322,6 +1322,15 @@ fn effects_to_configs(
                         inverted: mapping.inverted,
                     });
                     let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+                    // Stock effect params aren't special — they're just curated
+                    // JSON. A per-instance ParamMapping note retunes the card
+                    // slider's range exactly like a user-exposed binding does
+                    // (the user-tail below reads `ub.min`/`ub.max`). Fall back to
+                    // the recipe's ParamDef range when no note exists.
+                    let (slider_min, slider_max) = match fx.param_mapping(&pd.id) {
+                        Some(note) => (note.min, note.max),
+                        None => (pd.min, pd.max),
+                    };
                     ParamInfo {
                         // Static-tier `ParamId`. The registry's
                         // `ParamDef.id` is a runtime-owned `String`
@@ -1331,8 +1340,8 @@ fn effects_to_configs(
                         // not in the per-frame state-sync hot loop.
                         param_id: std::borrow::Cow::Owned(pd.id.clone()),
                         name: pd.name.clone(),
-                        min: pd.min,
-                        max: pd.max,
+                        min: slider_min,
+                        max: slider_max,
                         default: pd.default_value,
                         whole_numbers: pd.whole_numbers,
                         // Static-tier params don't carry an angle hint today
@@ -1647,11 +1656,19 @@ fn gen_params_to_config(
                             inverted: mapping.inverted,
                         });
                         let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+                        // Generator params aren't special: a per-instance
+                        // ParamMapping note retunes the card slider's range the
+                        // same way a user-exposed effect binding does. Fall back
+                        // to the recipe's ParamDef range when no note exists.
+                        let (slider_min, slider_max) = match gp.param_mapping(&pd.id) {
+                            Some(note) => (note.min, note.max),
+                            None => (pd.min, pd.max),
+                        };
                         ParamInfo {
                             param_id: std::borrow::Cow::Owned(pd.id.clone()),
                             name: pd.name.clone(),
-                            min: pd.min,
-                            max: pd.max,
+                            min: slider_min,
+                            max: slider_max,
                             default: pd.default_value,
                             whole_numbers: pd.whole_numbers,
                             // Generator-tier angle degree display is a
@@ -1711,11 +1728,19 @@ fn gen_params_to_config(
                             inverted: mapping.inverted,
                         });
                         let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+                        // Generator params aren't special: a per-instance
+                        // ParamMapping note retunes the card slider's range the
+                        // same way a user-exposed effect binding does. Fall back
+                        // to the recipe's ParamDef range when no note exists.
+                        let (slider_min, slider_max) = match gp.param_mapping(&pd.id) {
+                            Some(note) => (note.min, note.max),
+                            None => (pd.min, pd.max),
+                        };
                         ParamInfo {
                             param_id: std::borrow::Cow::Owned(pd.id.clone()),
                             name: pd.name.clone(),
-                            min: pd.min,
-                            max: pd.max,
+                            min: slider_min,
+                            max: slider_max,
                             default: pd.default_value,
                             whole_numbers: pd.whole_numbers,
                             // Generator-tier angle degree display is a
