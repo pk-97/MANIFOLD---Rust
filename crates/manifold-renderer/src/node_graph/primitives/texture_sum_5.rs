@@ -50,6 +50,8 @@ crate::primitive! {
     category: Composite,
     role: Filter,
     aliases: ["add textures", "sum", "blend", "multi blend"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/texture_sum_5_body.wgsl"),
 }
 
 impl Primitive for TextureSum5 {
@@ -84,9 +86,11 @@ impl Primitive for TextureSum5 {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.texture_sum_5 standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/texture_sum_5.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.texture_sum_5",
             )
         });

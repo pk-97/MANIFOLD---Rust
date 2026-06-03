@@ -1039,4 +1039,96 @@ mod gpu_tests {
             r.max_abs, r.max_rel
         );
     }
+
+    /// Dispatch an N-input coincident kernel: uniform(0), inputs(1..=N),
+    /// sampler(N+1), dst(N+2) — the generated MultiInputCoincident layout for any
+    /// arity. Generalizes `dispatch_coincident` (which is fixed at 2 inputs).
+    fn dispatch_coincident_n(
+        device: &GpuDevice,
+        wgsl: &str,
+        inputs: &[&GpuTexture],
+        param_bytes: &[u8],
+    ) -> RenderTarget {
+        let (w, h) = (inputs[0].width, inputs[0].height);
+        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-coincident-n");
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let out = RenderTarget::new(device, w, h, FMT, "codegen-out-coincident-n");
+        let mut bindings: Vec<GpuBinding> =
+            vec![GpuBinding::Bytes { binding: 0, data: param_bytes }];
+        for (i, t) in inputs.iter().enumerate() {
+            bindings.push(GpuBinding::Texture { binding: (i + 1) as u32, texture: t });
+        }
+        bindings.push(GpuBinding::Sampler {
+            binding: (inputs.len() + 1) as u32,
+            sampler: &sampler,
+        });
+        bindings.push(GpuBinding::Texture {
+            binding: (inputs.len() + 2) as u32,
+            texture: &out.texture,
+        });
+        let mut enc = device.create_encoder("codegen-coincident-n");
+        enc.dispatch_compute(
+            &pipeline,
+            &bindings,
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "codegen-coincident-n",
+        );
+        enc.commit_and_wait_completed();
+        out
+    }
+
+    /// Coincident multi-input parity (overnight vocabulary sweep): each blend
+    /// atom's generated kernel reproduces its hand shader bit-for-bit. Inputs
+    /// alternate the two gradients — parity is generated-vs-hand on identical
+    /// inputs, so the specific textures don't matter, only that both kernels see
+    /// the same set. Covers arities 2, 3, and 5.
+    #[test]
+    fn generated_coincident_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let ga = gradient(&device, w, h);
+        let gb = gradient_b(&device, w, h);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+        let differ = TextureDiff::new(&device);
+
+        // (type_id, hand shader, #texture inputs, f32 params in PARAMS order).
+        let cases: &[(&str, &str, usize, &[f32])] = &[
+            ("node.wet_dry", "wet_dry_mix.wgsl", 2, &[0.6]),
+            ("node.hdr_retention_mix", "hdr_retention_mix.wgsl", 2, &[0.7]),
+            ("node.masked_mix", "masked_mix.wgsl", 3, &[0.8]),
+            ("node.texture_sum_5", "texture_sum_5.wgsl", 5, &[5.0]),
+        ];
+        for (type_id, shader_file, n_inputs, params) in cases {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+                node.input_access(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
+                .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
+            let texs: Vec<&GpuTexture> =
+                (0..*n_inputs).map(|i| if i % 2 == 0 { &ga } else { &gb }).collect();
+            let bytes = pack_f32(params);
+            let from_original = dispatch_coincident_n(&device, &original, &texs, &bytes);
+            let from_generated = dispatch_coincident_n(&device, &generated, &texs, &bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated must reproduce {shader_file} (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
 }

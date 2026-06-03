@@ -54,6 +54,8 @@ crate::primitive! {
     category: Composite,
     role: Filter,
     aliases: ["masked mix", "mask blend", "composite"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/masked_mix_body.wgsl"),
 }
 
 #[repr(C)]
@@ -88,9 +90,11 @@ impl Primitive for MaskedMix {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.masked_mix standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/masked_mix.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.masked_mix",
             )
         });

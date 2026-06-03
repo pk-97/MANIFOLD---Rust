@@ -43,6 +43,8 @@ crate::primitive! {
     category: Composite,
     role: Filter,
     aliases: ["wet dry", "dry wet", "blend amount", "mix amount"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/wet_dry_mix_body.wgsl"),
 }
 
 pub const WET_DRY_TYPE_ID: &str = "node.wet_dry";
@@ -84,9 +86,11 @@ impl Primitive for WetDry {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.wet_dry standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/wet_dry_mix.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.wet_dry",
             )
         });

@@ -64,6 +64,8 @@ crate::primitive! {
     category: Composite,
     role: Filter,
     aliases: ["hdr mix", "highlight retention", "hdr blend"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/hdr_retention_mix_body.wgsl"),
 }
 
 impl Primitive for HdrRetentionMix {
@@ -92,9 +94,11 @@ impl Primitive for HdrRetentionMix {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.hdr_retention_mix standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/hdr_retention_mix.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.hdr_retention_mix",
             )
         });
