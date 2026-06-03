@@ -1499,11 +1499,20 @@ mod gpu_tests {
         // the 16-byte generated decl — a larger buffer binds fine to a smaller
         // uniform).
         let lg_bytes = pack_f32(&[0.5, 0.5, 0.785, 0.3, 0.0, 0.0, 0.0, 0.0]);
+        // distance_to_point [cx,cy,scale,scale_x,scale_y] (32B hand uniform).
+        let dist_bytes = pack_f32(&[0.3, 0.7, 1.5, 2.0, 1.0, 0.0, 0.0, 0.0]);
+        // polar_field [cx,cy] (16B).
+        let polar_bytes = pack_f32(&[0.3, 0.7]);
+        // box_mask [cx,cy,half_width,half_height,rotation,softness] (32B).
+        let box_bytes = pack_f32(&[0.5, 0.5, 0.25, 0.25, 0.785, 0.1, 0.0, 0.0]);
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
             ("node.centered_uv", "centered_uv.wgsl", Some(centered_bytes.as_slice())),
             ("node.linear_gradient", "linear_gradient.wgsl", Some(lg_bytes.as_slice())),
+            ("node.distance_to_point", "distance_to_point.wgsl", Some(dist_bytes.as_slice())),
+            ("node.polar_field", "polar_field.wgsl", Some(polar_bytes.as_slice())),
+            ("node.box_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

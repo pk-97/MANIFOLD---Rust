@@ -53,6 +53,8 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["polar", "angle distance", "radial coordinates"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/polar_field_body.wgsl"),
 }
 
 impl Primitive for PolarField {
@@ -78,8 +80,9 @@ impl Primitive for PolarField {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/polar_field.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.polar_field standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.polar_field",
             )
         });

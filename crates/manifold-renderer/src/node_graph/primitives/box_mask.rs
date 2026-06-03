@@ -108,6 +108,8 @@ crate::primitive! {
     category: Mask,
     role: Source,
     aliases: ["rectangle mask", "box mask", "rect", "Rectangle TOP"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/box_mask_body.wgsl"),
 }
 
 impl Primitive for BoxMask {
@@ -131,8 +133,9 @@ impl Primitive for BoxMask {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/box_mask.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.box_mask standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.box_mask",
             )
         });

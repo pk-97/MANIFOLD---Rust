@@ -95,6 +95,8 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["distance", "radial gradient", "circle field"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/distance_to_point_body.wgsl"),
 }
 
 impl Primitive for DistanceToPoint {
@@ -117,8 +119,9 @@ impl Primitive for DistanceToPoint {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/distance_to_point.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.distance_to_point standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.distance_to_point",
             )
         });
