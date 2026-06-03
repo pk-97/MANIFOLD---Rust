@@ -2339,8 +2339,24 @@ impl Application {
         let canvas_x = palette_width;
         let canvas_width = (logical_w as f32 - palette_width - sidebar_width).max(0.0);
         let sidebar_x = canvas_x + canvas_width;
-        let sidebar_viewport =
-            manifold_ui::Rect::new(sidebar_x, 0.0, sidebar_width, logical_h as f32);
+        // When a node is being previewed, the preview pane occupies the top of
+        // the sidebar; the expose/param rows start below it so they don't
+        // overlap. Logical units; the present pass draws the pane to match.
+        let preview_pad = 8.0_f32;
+        let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
+        let preview_h = preview_w * 9.0 / 16.0;
+        let preview_active = self.last_preview_node.is_some();
+        let sidebar_content_top = if preview_active {
+            preview_pad + preview_h + preview_pad
+        } else {
+            0.0
+        };
+        let sidebar_viewport = manifold_ui::Rect::new(
+            sidebar_x,
+            sidebar_content_top,
+            sidebar_width,
+            (logical_h as f32 - sidebar_content_top).max(0.0),
+        );
         let palette_viewport =
             manifold_ui::Rect::new(0.0, 0.0, palette_width, logical_h as f32);
 
@@ -2556,11 +2572,11 @@ impl Application {
                 .and_then(|t| t.as_ref())
             {
                 let scale = scale as f32;
-                let pad = 8.0_f32;
-                let w = (sidebar_width - 2.0 * pad).max(1.0) * scale;
-                let h = w * 9.0 / 16.0;
-                let x = (sidebar_x + pad) * scale;
-                let y = pad * scale;
+                // Same pad / dimensions used to offset the param rows above.
+                let w = preview_w * scale;
+                let h = preview_h * scale;
+                let x = (sidebar_x + preview_pad) * scale;
+                let y = preview_pad * scale;
                 present_enc.draw_fullscreen_viewport(
                     blit_p,
                     &drawable_tex,
