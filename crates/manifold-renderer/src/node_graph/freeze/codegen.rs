@@ -1505,6 +1505,11 @@ mod gpu_tests {
         let polar_bytes = pack_f32(&[0.3, 0.7]);
         // box_mask [cx,cy,half_width,half_height,rotation,softness] (32B).
         let box_bytes = pack_f32(&[0.5, 0.5, 0.25, 0.25, 0.785, 0.1, 0.0, 0.0]);
+        // mirror_fold_uv [mode] (Enum -> u32), packed by hand to 16B.
+        let mut mirror_bytes = vec![0u8; 16];
+        mirror_bytes[0..4].copy_from_slice(&8u32.to_le_bytes()); // FoldBoth
+        // radial_fold_uv [segments, cx, cy] (16B).
+        let radial_bytes = pack_f32(&[6.0, 0.5, 0.5]);
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -1513,6 +1518,8 @@ mod gpu_tests {
             ("node.distance_to_point", "distance_to_point.wgsl", Some(dist_bytes.as_slice())),
             ("node.polar_field", "polar_field.wgsl", Some(polar_bytes.as_slice())),
             ("node.box_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
+            ("node.mirror_fold_uv", "mirror_fold_uv.wgsl", Some(mirror_bytes.as_slice())),
+            ("node.radial_fold_uv", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

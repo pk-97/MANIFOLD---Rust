@@ -66,6 +66,8 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Map,
     aliases: ["mirror", "fold", "quad mirror", "reflect"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/mirror_fold_uv_body.wgsl"),
 }
 
 impl Primitive for MirrorFoldUv {
@@ -86,8 +88,9 @@ impl Primitive for MirrorFoldUv {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/mirror_fold_uv.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.mirror_fold_uv standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.mirror_fold_uv",
             )
         });

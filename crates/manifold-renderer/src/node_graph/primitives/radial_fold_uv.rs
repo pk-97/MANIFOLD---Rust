@@ -68,6 +68,8 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Map,
     aliases: ["kaleidoscope", "mandala", "radial mirror", "wedges"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/radial_fold_uv_body.wgsl"),
 }
 
 impl Primitive for RadialFoldUv {
@@ -87,8 +89,9 @@ impl Primitive for RadialFoldUv {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/radial_fold_uv.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.radial_fold_uv standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.radial_fold_uv",
             )
         });
