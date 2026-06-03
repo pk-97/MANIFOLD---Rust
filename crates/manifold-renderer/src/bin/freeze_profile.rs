@@ -19,6 +19,7 @@
 //!
 //! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
 
+use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -209,8 +210,105 @@ fn main() {
 
     profile_synthetic_pointwise(&device);
     profile_fused_colorgrade(&registry, &device);
+    profile_auto_fused_colorgrade(&registry, &device);
     profile_generators(&registry, &device);
     profile_fluidsim_particle_sweep(&registry, &device);
+}
+
+/// The PRODUCTION number: time the unfused ColorGrade graph against the
+/// **auto-generated** fused graph the install path actually ships
+/// ([`fused_view_by_id`] → `node.wgsl_compute` carrying the codegen kernel),
+/// BOTH driven through the real `Executor` — so this includes the WgslCompute
+/// introspection + dispatch overhead the live chain pays, not the bare
+/// hand-kernel dispatch `profile_fused_colorgrade` measures. This is the speedup
+/// that lands on screen.
+fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
+    use manifold_renderer::node_graph::freeze::install::fused_view_by_id;
+
+    println!(
+        "\n--- ColorGrade: unfused graph vs AUTO-fused graph, both via executor (production path) ---"
+    );
+    println!("{:<8} {:>13} {:>13} {:>10}", "res", "unfused ms", "fused ms", "speedup");
+    println!("{}", "-".repeat(48));
+
+    let source_type_id = Source::new().type_id().as_str().to_string();
+    let json = match std::fs::read_to_string(format!("{EFFECT_PRESETS_DIR}/ColorGrade.json")) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("skip auto-fused-colorgrade: read {e}");
+            return;
+        }
+    };
+    let unfused_def: EffectGraphDef = match serde_json::from_str(&json) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("skip auto-fused-colorgrade: parse {e}");
+            return;
+        }
+    };
+    let Some(fused_view) = fused_view_by_id(&EffectTypeId::new("ColorGrade")) else {
+        eprintln!("skip auto-fused-colorgrade: ColorGrade has no fused view");
+        return;
+    };
+
+    // Time one def through the executor at (w, h): warmup, then avg real GPU
+    // time over FRAMES. Returns None if the graph can't be built/compiled.
+    let time_def = |def: &EffectGraphDef, w: u32, h: u32, label: &str| -> Option<f64> {
+        let mut graph = def.clone().into_graph(registry).ok()?;
+        let plan = compile(&graph).ok()?;
+        let source_id = graph
+            .nodes()
+            .find(|n| n.node.type_id().as_str() == source_type_id)
+            .map(|n| n.id)?;
+        let source_res = resource_for_output(&plan, source_id, "out")?;
+        let input_rt = RenderTarget::new(device, w, h, FORMAT, "auto-cg-input");
+        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        backend.pre_bind_texture_2d(source_res, input_rt);
+        let mut exec = Executor::new(Box::new(backend));
+        let frame_time = FrameTime {
+            beats: Beats(1.0),
+            seconds: Seconds(1.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+        for _ in 0..WARMUP {
+            let mut enc = device.create_encoder("auto-cg-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            }
+            enc.commit_and_wait_completed();
+        }
+        let mut secs = 0.0_f64;
+        for _ in 0..FRAMES {
+            let mut enc = device.create_encoder(label);
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            }
+            secs += enc.commit_and_wait_completed_timed();
+        }
+        Some(secs * 1000.0 / f64::from(FRAMES))
+    };
+
+    for &(w, h) in RESOLUTIONS {
+        let unfused_ms = match time_def(&unfused_def, w, h, "auto-cg-unfused-timed") {
+            Some(ms) => ms,
+            None => {
+                eprintln!("skip auto-fused-colorgrade@{w}x{h}: unfused build");
+                continue;
+            }
+        };
+        let fused_ms = match time_def(fused_view.canonical_def, w, h, "auto-cg-fused-timed") {
+            Some(ms) => ms,
+            None => {
+                eprintln!("skip auto-fused-colorgrade@{w}x{h}: fused build");
+                continue;
+            }
+        };
+        let speedup = if fused_ms > 0.0 { unfused_ms / fused_ms } else { 0.0 };
+        println!("{:>5}p {:>13.3} {:>13.3} {:>9.2}x", h, unfused_ms, fused_ms, speedup);
+    }
 }
 
 /// The headline fusion number: time the SHIPPED ColorGrade preset (unfused, 9

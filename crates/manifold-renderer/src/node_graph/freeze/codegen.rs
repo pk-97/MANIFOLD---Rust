@@ -51,8 +51,10 @@ pub enum CodegenError {
 
 /// Map a (scalar) param type to its WGSL type + 4-byte slot. v1 supports the
 /// scalar params ColorGrade uses; non-scalar params make the atom un-fusable
-/// for now (conservative — the region-grower skips it).
-fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError> {
+/// for now (conservative — the region-grower skips it). `pub(crate)` so the
+/// install-side region-grower can pre-screen a candidate atom's params before
+/// committing to a fusion.
+pub(crate) fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError> {
     match p.ty {
         // Angle/Frequency are presentation hints stored as f32 (radians).
         ParamType::Float | ParamType::Angle | ParamType::Frequency => Ok("f32"),

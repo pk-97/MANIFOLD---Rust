@@ -354,3 +354,139 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
         r.over_fraction()
     );
 }
+
+/// CPU-built gradient with spatially-varying alpha (A ramps in x), so the
+/// faithful per-atom alpha threading (mix lerps a.a→b.a) is observable in the
+/// diff — the §12.4 hardened-fixture alpha axis. R/G/B as in `gradient_input`.
+fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+    let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            px[i] = f16::from_f32(x as f32 / w as f32);
+            px[i + 1] = f16::from_f32(y as f32 / h as f32);
+            px[i + 2] = f16::from_f32(0.5);
+            px[i + 3] = f16::from_f32(0.25 + 0.7 * (x as f32 / w as f32));
+        }
+    }
+    let tex = device.create_texture(&GpuTextureDesc {
+        width: w,
+        height: h,
+        depth: 1,
+        format: FMT,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
+        label: "freeze-proof-input-alpha",
+        mip_levels: 1,
+    });
+    let bytes = unsafe {
+        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+    };
+    device.upload_texture(&tex, bytes);
+    tex
+}
+
+/// **The step-4 production gate (design §12.3 step 5).** Drives the *install*
+/// path end-to-end through the real executor: the region-grower
+/// ([`super::install::fuse_canonical_def`]) auto-discovers the ColorGrade region
+/// and rewrites the def into one `node.wgsl_compute` fused node carrying the
+/// auto-generated kernel; `into_graph` builds it; the executor runs it through
+/// the same WgslCompute introspection + dispatch the live chain uses. Diffed
+/// against the unfused shipped preset rendered the same way.
+///
+/// This is strictly stronger than `fused_colorgrade_matches_unfused_within_tolerance`
+/// above (which dispatches the *hand* kernel directly): it exercises the
+/// def-rewrite, the WgslCompute uniform introspection, the per-atom param
+/// seeding, and the executor — i.e. exactly what renders on stage.
+///
+/// Hardened fixture (§12.4): interior `mix_amount = 0.35` so the source→mix.a
+/// fork materially contributes (not crossfaded out), plus a spatially-varying
+/// input alpha so faithful alpha threading is exercised. Both sides run the
+/// same alpha-faithful atom bodies, so alpha must agree exactly.
+#[test]
+fn auto_fused_colorgrade_via_executor_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/effect-presets/ColorGrade.json"
+    ))
+    .expect("read ColorGrade.json");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse ColorGrade.json");
+
+    // One fixture, both sides. Interior mix_amount makes the fork matter.
+    // (stable node_id, param, value) — drives both graphs identically.
+    let fixture: &[(&str, &str, f32)] = &[
+        ("gain", "gain", 1.15),
+        ("saturation", "saturation", 1.3),
+        ("hue", "hue", 25.0),
+        ("hue", "saturation", 1.2),
+        ("hue", "value", 1.0),
+        ("contrast", "contrast", 1.2),
+        ("colorize", "amount", 0.4),
+        ("colorize", "hue", 210.0),
+        ("colorize", "saturation", 0.8),
+        ("colorize", "focus", 0.6),
+        ("grade_mix", "amount", 0.35),
+    ];
+
+    // ── Unfused: the shipped preset graph, params set by node id. ──
+    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
+        let id = g
+            .node_id_by_handle(node_id)
+            .or_else(|| g.instance_by_node_id(&manifold_core::NodeId::new(node_id)))
+            .unwrap_or_else(|| panic!("unfused graph missing node `{node_id}`"));
+        g.set_param(id, param, ParamValue::Float(v))
+            .unwrap_or_else(|e| panic!("set {node_id}.{param}: {e:?}"));
+    };
+    for (node_id, param, v) in fixture {
+        set_by_node_id(&mut unfused_graph, node_id, param, *v);
+    }
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_out =
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp_texture"), "out");
+    let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+
+    // ── Auto-fused: region-grow + def-rewrite, then run through the executor. ──
+    let FusedDef { def: fused_def, retarget, .. } =
+        fuse_canonical_def(&def, &registry).expect("ColorGrade is a whole-card fusable region");
+    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+    for (node_id, param, v) in fixture {
+        let field = retarget
+            .get(&((*node_id).to_string(), (*param).to_string()))
+            .unwrap_or_else(|| panic!("retarget missing {node_id}.{param}"));
+        fused_graph
+            .set_param(fused_node, field, ParamValue::Float(*v))
+            .unwrap_or_else(|e| panic!("set fused {field}: {e:?}"));
+    }
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+    let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    // Same discontinuity-aware budget as the hand-kernel test, plus an absolute
+    // cap on the failing-texel count so a contiguous failure band can't hide in
+    // the 0.5% fraction (§12.4 verdict tightening).
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "auto-fused ColorGrade (via executor) must match unfused: \
+         max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}

@@ -529,13 +529,31 @@ impl ChainGraph {
             // presetMetadata + bindings + skip_mode in its JSON file —
             // see `assets/effect-presets/`. The preflight above
             // guarantees the view exists.
-            let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
+            let Some(base_view) = loaded_preset_view_by_id(fx.effect_type()) else {
                 eprintln!(
                     "[chain-build-fail] post-preflight view lookup for \
                      effect_type={:?} returned None — should be unreachable",
                     fx.effect_type(),
                 );
                 return None;
+            };
+            // Freeze compiler (design §12): render the FUSED view as the main
+            // path. Gated on (a) the process-level freeze toggle and (b) this
+            // instance using the canonical graph — an effect with a per-instance
+            // graph override (`fx.graph = Some`) is the user's live editing
+            // surface and renders unfused so drilling in / editing stays exact.
+            // `fused_view_by_id` returns `None` for any effect that isn't a
+            // single whole-card fusable region, so non-ColorGrade effects fall
+            // straight through to the canonical view unchanged. The fused view
+            // keeps the same outer-card params + skip mode, so every line below
+            // (splice, outer_param_index, binding resolution) is shape-identical.
+            let view = if crate::node_graph::freeze::install::freeze_enabled()
+                && fx.graph.is_none()
+            {
+                crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type())
+                    .unwrap_or(base_view)
+            } else {
+                base_view
             };
             if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
@@ -2270,6 +2288,81 @@ mod generator_input_tests {
         assert!((read("aspect").unwrap() - (1920.0 / 1080.0)).abs() < 1e-5);
         assert_eq!(read("output_width"), Some(3840.0));
         assert_eq!(read("output_height"), Some(2160.0));
+    }
+
+    /// **The production main-path proof (design §12.3 step 5).** With the freeze
+    /// toggle on (default), [`ChainGraph::try_build`] renders a canonical
+    /// ColorGrade card through the FUSED node, not the 7 atoms: the built chain
+    /// graph contains one `node.wgsl_compute` and none of the original
+    /// `node.gain` / `node.mix` workers, and it runs one frame producing an
+    /// output texture. This is what puts the optimised fused kernel on screen.
+    #[test]
+    fn colorgrade_chain_renders_via_fused_node() {
+        use crate::effect::EffectContext;
+        use crate::gpu_encoder::GpuEncoder;
+
+        // Honor the kill-switch: when MANIFOLD_FREEZE is off this path is
+        // intentionally the unfused one, so the assertion wouldn't hold.
+        if !crate::node_graph::freeze::install::freeze_enabled() {
+            return;
+        }
+
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = make_default(EffectTypeId::new("ColorGrade"));
+
+        let mut cg = ChainGraph::try_build(
+            std::slice::from_ref(&fx),
+            &[],
+            &primitives,
+            &device,
+            None,
+            256,
+            256,
+        )
+        .expect("ColorGrade chain builds");
+
+        // Main-path proof: the fused kernel replaced the atom chain.
+        let type_ids: Vec<&str> =
+            cg.graph.nodes().map(|n| n.node.type_id().as_str()).collect();
+        assert!(
+            type_ids.contains(&"node.wgsl_compute"),
+            "fused chain must contain the fused WGSL node; got {type_ids:?}"
+        );
+        assert!(
+            !type_ids.contains(&"node.gain") && !type_ids.contains(&"node.mix"),
+            "fused chain must NOT still contain unfused ColorGrade atoms; got {type_ids:?}"
+        );
+
+        // And it renders one frame, producing an output texture (the fused
+        // kernel actually dispatched through the production chain).
+        let input = crate::render_target::RenderTarget::new(
+            &device,
+            256,
+            256,
+            GRAPH_FORMAT,
+            "cg-fused-input",
+        );
+        let ctx = EffectContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: 256,
+            height: 256,
+            output_width: 256,
+            output_height: 256,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+        };
+        let mut native_enc = device.create_encoder("cg-fused-run");
+        {
+            let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+            let out =
+                cg.run(&mut gpu, &input.texture, std::slice::from_ref(&fx), &[], &ctx);
+            assert!(out.is_some(), "fused ColorGrade chain produced an output texture");
+        }
+        native_enc.commit_and_wait_completed();
     }
 }
 

@@ -13,6 +13,7 @@
 pub mod classify;
 pub mod codegen;
 pub mod diff;
+pub mod install;
 pub mod reference;
 
 pub use classify::FusionKind;
