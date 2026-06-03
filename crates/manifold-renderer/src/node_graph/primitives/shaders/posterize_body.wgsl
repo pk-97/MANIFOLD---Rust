@@ -8,7 +8,7 @@
 // floors to >= 2. Alpha pass-through. The fusion codegen generates this atom's
 // standalone cs_main from the same body (single-source) — matches
 // posterize.wgsl exactly (the parity oracle).
-fn body(c: vec4<f32>, levels: f32) -> vec4<f32> {
+fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, levels: f32) -> vec4<f32> {
     let n = max(floor(levels), 2.0);
     let steps = n - 1.0;
     let q = round(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * steps) / steps;

@@ -9,7 +9,7 @@
 // (a misconfigured lo < 0 with a fractional gamma still produces defined
 // output). The fusion codegen generates this atom's standalone cs_main from the
 // same body (single-source) — matches levels.wgsl exactly (the parity oracle).
-fn body(c: vec4<f32>, scale: f32, offset: f32, lo: f32, hi: f32, gamma: f32) -> vec4<f32> {
+fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32, lo: f32, hi: f32, gamma: f32) -> vec4<f32> {
     let scaled = c.rgb * scale + vec3<f32>(offset);
     let clamped = clamp(scaled, vec3<f32>(lo), vec3<f32>(hi));
     let powered = pow(max(clamped, vec3<f32>(0.0)), vec3<f32>(gamma));

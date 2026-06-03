@@ -18,7 +18,7 @@ fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
     return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
 }
 
-fn body(c: vec4<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
+fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, saturation: f32, focus: f32) -> vec4<f32> {
     let colorize = clamp(amount, 0.0, 1.0);
     let tint_h = fract(hue / 360.0);
     let tint_hsv = vec3<f32>(tint_h, clamp(saturation, 0.0, 1.0), 1.0);

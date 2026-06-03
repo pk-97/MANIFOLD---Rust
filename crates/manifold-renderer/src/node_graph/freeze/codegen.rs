@@ -165,8 +165,15 @@ pub fn generate_standalone(
         )
         .unwrap();
     }
-    // body(<colors in input order>, params.<p0>, params.<p1>, ...)
+    // body(<colors in input order>, uv, dims, params.<p0>, ...). `uv` (normalized
+    // center-of-texel) and `dims` (float canvas size) are the ambient fragment
+    // context every body receives after its color inputs (design §slot / line 60,
+    // extended with dims so positional atoms can recover aspect = dims.x/dims.y
+    // and pixel = uv*dims). Atoms that ignore position simply don't read them —
+    // spirv-opt's DCE drops the unused args.
     let mut args: Vec<String> = tex_inputs.iter().map(|i| format!("c_{}", i.name)).collect();
+    args.push("uv".to_string());
+    args.push("vec2<f32>(dims)".to_string());
     for p in params {
         args.push(format!("params.{}", p.name));
     }
@@ -349,6 +356,9 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     out.push_str("    let dims = textureDimensions(dst);\n");
     out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
     out.push_str("    let coord = vec2<i32>(i32(id.x), i32(id.y));\n");
+    // Ambient fragment context, computed once and threaded to every body after
+    // its inputs (matches the standalone wrapper). `dims` is already bound above.
+    out.push_str("    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n");
     for e in 0..region.num_external_inputs {
         writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
     }
@@ -373,6 +383,8 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 }
             }
         }
+        args.push("uv".to_string());
+        args.push("vec2<f32>(dims)".to_string());
         for p in node.params {
             args.push(format!("params.n{i}_{}", p.name));
         }
@@ -827,5 +839,71 @@ mod gpu_tests {
             r.max_abs, r.max_rel
         );
         assert!(r.max_abs < 1e-5, "coincident path should be ~bit-identical, got {}", r.max_abs);
+    }
+
+    /// Positional-atom parity (design §12.3 vocabulary widening). vignette is the
+    /// first atom that reads its pixel POSITION via the ambient `uv`/`dims` args.
+    /// The generated standalone kernel derives `aspect = dims.x/dims.y` itself and
+    /// must reproduce the hand vignette.wgsl (which takes `aspect` as a uniform)
+    /// bit-for-bit — so the two uniform payloads differ (hand carries aspect,
+    /// generated doesn't). Verified on a NON-SQUARE canvas so the aspect-correct
+    /// Circle is exercised, plus the uv-only Rectangle.
+    #[test]
+    fn generated_vignette_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (160u32, 128u32); // aspect 1.25, deliberately non-square
+        let input = gradient(&device, w, h);
+        let aspect = w as f32 / h as f32;
+
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let node = registry.construct("node.vignette").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+        )
+        .expect("vignette generates");
+        let original = include_str!("../primitives/shaders/vignette.wgsl");
+        let differ = TextureDiff::new(&device);
+
+        // (shape, size, softness, strength): Circle (aspect-sensitive) + Rectangle.
+        for (shape, size, softness, strength) in
+            [(0u32, 0.6f32, 0.4f32, 1.0f32), (2u32, 0.95, 0.06, 1.0)]
+        {
+            // Hand uniform: shape, size, softness, strength, aspect + pad → 32 B.
+            let mut hand_bytes = Vec::new();
+            hand_bytes.extend_from_slice(&shape.to_le_bytes());
+            hand_bytes.extend_from_slice(&size.to_le_bytes());
+            hand_bytes.extend_from_slice(&softness.to_le_bytes());
+            hand_bytes.extend_from_slice(&strength.to_le_bytes());
+            hand_bytes.extend_from_slice(&aspect.to_le_bytes());
+            while hand_bytes.len() % 16 != 0 {
+                hand_bytes.push(0);
+            }
+            // Generated uniform: shape, size, softness, strength → 16 B (aspect
+            // is recovered from dims inside the body, not plumbed through).
+            let mut gen_bytes = Vec::new();
+            gen_bytes.extend_from_slice(&shape.to_le_bytes());
+            gen_bytes.extend_from_slice(&size.to_le_bytes());
+            gen_bytes.extend_from_slice(&softness.to_le_bytes());
+            gen_bytes.extend_from_slice(&strength.to_le_bytes());
+
+            let from_original = dispatch_pointwise(&device, original, &input, &hand_bytes);
+            let from_generated = dispatch_pointwise(&device, &generated, &input, &gen_bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-4,
+                1e-4,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "vignette shape {shape}: generated must reproduce vignette.wgsl \
+                 (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
     }
 }

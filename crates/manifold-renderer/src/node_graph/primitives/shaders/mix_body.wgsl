@@ -39,7 +39,7 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
     }
 }
 
-fn body(a: vec4<f32>, b: vec4<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     let out_a = mix(a.a, b.a, amount);

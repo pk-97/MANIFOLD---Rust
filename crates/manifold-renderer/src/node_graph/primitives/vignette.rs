@@ -72,8 +72,14 @@ crate::primitive! {
     category: Stylize,
     role: Filter,
     aliases: ["vignette", "edge fade", "border darken"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/vignette_body.wgsl"),
 }
 
+/// 16 bytes, matching the generated standalone kernel's `Params` (PARAMS order:
+/// shape, size, softness, strength — no padding needed at 4 scalar fields).
+/// `aspect` is gone: the body now derives it from `dims` (canvas size), so it
+/// is no longer plumbed through the uniform.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct VignetteUniforms {
@@ -81,10 +87,6 @@ struct VignetteUniforms {
     size: f32,
     softness: f32,
     strength: f32,
-    aspect: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 impl Primitive for Vignette {
@@ -126,13 +128,18 @@ impl Primitive for Vignette {
         if width == 0 || height == 0 {
             return;
         }
-        let aspect = width as f32 / height as f32;
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: standalone kernel generated from the same
+            // `wgsl_body` the fusion codegen chains — the first POSITIONAL atom,
+            // so its body reads the ambient uv/dims the codegen threads in.
+            // vignette.wgsl is retained as the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.vignette standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/vignette.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.vignette",
             )
         });
@@ -145,10 +152,6 @@ impl Primitive for Vignette {
             size,
             softness,
             strength,
-            aspect,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
