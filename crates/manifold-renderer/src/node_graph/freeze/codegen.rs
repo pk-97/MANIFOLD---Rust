@@ -670,6 +670,7 @@ mod gpu_tests {
             ("node.power_texture", "power_texture.wgsl", &[2.5]),
             ("node.scale_offset_texture", "scale_offset_texture.wgsl", &[1.5, -0.25]),
             ("node.smoothstep_texture", "smoothstep_texture.wgsl", &[0.2, 0.8]),
+            ("node.field_combine", "field_combine.wgsl", &[1.5, -0.5, 0.25]),
         ];
         let differ = TextureDiff::new(&device);
         for (type_id, shader_file, params) in cases {
