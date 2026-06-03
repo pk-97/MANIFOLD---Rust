@@ -453,6 +453,125 @@ mod tests {
         );
     }
 
+    /// Sweep BlackHole disk-density knobs (polar-blur `step`/`kernel_size` and
+    /// splat `scaled_energy`) headless and dump the final display of each
+    /// variant, so we can see which reads as a dense cloud. Run with:
+    /// `cargo test -p manifold-app --bin manifold sweep_blackhole_cloud \
+    ///   --release -- --ignored --nocapture`
+    #[test]
+    #[ignore = "headless GPU sweep; run manually with --ignored"]
+    fn sweep_blackhole_cloud() {
+        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+        use manifold_renderer::generator::Generator;
+        use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+        use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+        use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_renderer::node_graph::PrimitiveRegistry;
+        use manifold_renderer::render_target::RenderTarget;
+
+        // Set a node param's `value` (preserving its type tag) by numeric id.
+        fn set_val(doc: &mut serde_json::Value, id: u64, key: &str, v: serde_json::Value) {
+            for n in doc["nodes"].as_array_mut().unwrap() {
+                if n["id"].as_u64() == Some(id)
+                    && let Some(p) = n["params"].get_mut(key)
+                {
+                    p["value"] = v.clone();
+                }
+            }
+        }
+
+        const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+        let (w, h) = (1280u32, 720u32);
+        let json = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/assets/generator-presets/BlackHole.json"
+        ))
+        .unwrap();
+        let base: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let device = GpuDevice::new();
+        let registry = PrimitiveRegistry::with_builtin();
+        let dir = std::path::PathBuf::from("/tmp/manifold-blackhole-sweep");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Widen the hardcoded disk-thickness consts in the shader sources:
+        // sim confinement, scatter vertical cull, deflection volume profile.
+        fn thicken(doc: &mut serde_json::Value) {
+            for n in doc["nodes"].as_array_mut().unwrap() {
+                if let Some(src) = n["wgslSource"].as_str() {
+                    let s = src
+                        .replace("-pos.y * 1.5", "-pos.y * 0.3") // looser plane pull
+                        .replace("0.24 * r", "0.7 * r") // wider scatter cull
+                        .replace("0.12 * disk_r_xz", "0.45 * disk_r_xz"); // thicker volume
+                    n["wgslSource"] = serde_json::json!(s);
+                }
+            }
+        }
+
+        let pd = [15u64, 16, 17, 18]; // polar-density blur nodes
+        for label in ["a_baseline", "e_thick", "f_thick_blur", "g_thick_energy"] {
+            let mut doc = base.clone();
+            let thick = matches!(label, "e_thick" | "f_thick_blur" | "g_thick_energy");
+            let wide = matches!(label, "f_thick_blur");
+            let energy = matches!(label, "g_thick_energy");
+            if thick {
+                thicken(&mut doc);
+            }
+            if wide {
+                for id in pd {
+                    set_val(&mut doc, id, "step", serde_json::json!(6.0));
+                    set_val(&mut doc, id, "kernel_size", serde_json::json!(2));
+                }
+            }
+            if energy {
+                set_val(&mut doc, 4, "scaled_energy", serde_json::json!(8192.0));
+            }
+
+            let mut generator = JsonGraphGenerator::from_json_str_with_device(
+                &doc.to_string(),
+                &registry,
+                &device,
+                w,
+                h,
+                FMT,
+            )
+            .expect("build variant");
+            let target = RenderTarget::new(&device, w, h, FMT, "sweep-target");
+            let mk = |t: f64| GeneratorContext {
+                time: t,
+                beat: t * 2.0,
+                dt: 1.0 / 60.0,
+                width: w,
+                height: h,
+                output_width: w,
+                output_height: h,
+                aspect: w as f32 / h as f32,
+                anim_progress: 0.0,
+                trigger_count: 0,
+                params: [0.0; MAX_GEN_PARAMS],
+                param_count: 0,
+            };
+            for i in 0..90 {
+                let mut enc = device.create_encoder("sweep");
+                {
+                    let mut gpu = RGpuEncoder::new(&mut enc, &device);
+                    generator.render(&mut gpu, &target.texture, &mk(f64::from(i) / 60.0));
+                }
+                enc.commit_and_wait_completed();
+            }
+            // The render target holds the final display composite.
+            let tex = [DumpTexture {
+                name: label.to_string(),
+                port: "display".to_string(),
+                type_id: String::new(),
+                texture: &target.texture,
+            }];
+            write_graph_dump(&device, &tex, &dir.join(label)).expect("dump variant");
+            eprintln!("VARIANT_DONE: {label}");
+        }
+        eprintln!("SWEEP_DONE -> {}", dir.display());
+    }
+
     /// Write a known gradient (with an HDR region > 1) so the produced PNG can
     /// be opened and visually confirmed. Linear, clamp-only.
     #[test]

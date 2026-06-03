@@ -1219,6 +1219,69 @@ impl ChainGraph {
         out
     }
 
+    /// Captured `Array` (storage-buffer) outputs of effect `effect_id` after a
+    /// dump `run`, with their channel layout — the array counterpart of
+    /// [`Self::dump_textures`].
+    pub fn dump_arrays(&self, effect_id: &EffectId) -> Vec<crate::compositor::ArrayDump<'_>> {
+        use crate::node_graph::ports::{ChannelElementType, PortType, std430_layout};
+        let kind = |t: ChannelElementType| match t {
+            ChannelElementType::F32 => "f32",
+            ChannelElementType::I32 => "i32",
+            ChannelElementType::U32 => "u32",
+            ChannelElementType::Vec2F => "vec2f",
+            ChannelElementType::Vec3F => "vec3f",
+            ChannelElementType::Vec4F => "vec4f",
+        };
+        let Some(slot) = self.effect_nodes.iter().find(|s| &s.effect_id == effect_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_array_resources() {
+            let Some((node_id, _)) = slot.node_map.iter().find(|(_, niid)| *niid == node) else {
+                continue;
+            };
+            let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
+                continue;
+            };
+            let Some(buffer) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().array_buffer(s))
+            else {
+                continue;
+            };
+            let (offsets, _, _) = std430_layout(at.specs);
+            let fields = at
+                .specs
+                .iter()
+                .zip(offsets)
+                .map(|(spec, off)| {
+                    let name = spec
+                        .name
+                        .debug_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("ch@{off}"));
+                    (name, kind(spec.ty), off)
+                })
+                .collect();
+            let type_id = self
+                .graph
+                .get_node(node)
+                .map(|inst| inst.node.type_id().as_str().to_string())
+                .unwrap_or_default();
+            out.push(crate::compositor::ArrayDump {
+                name: node_id.to_string(),
+                port: port.to_string(),
+                type_id,
+                buffer,
+                item_size: at.item_size,
+                fields,
+            });
+        }
+        out
+    }
+
     /// Forwarded `clear_state` for each effect node — called on seek
     /// / project load so trails, feedback, and mip pyramids don't
     /// carry stale content across playback discontinuities. Also

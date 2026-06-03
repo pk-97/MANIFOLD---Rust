@@ -130,6 +130,12 @@ pub trait Compositor: Send {
         Vec::new()
     }
 
+    /// Captured `Array` (storage-buffer) outputs of the watched effect after a
+    /// dump `render`. Default empty.
+    fn dump_arrays(&self) -> Vec<ArrayDump<'_>> {
+        Vec::new()
+    }
+
     /// Clean up per-owner effect state for a stopped clip.
     fn cleanup_clip_owner(&mut self, clip_id: &str);
 

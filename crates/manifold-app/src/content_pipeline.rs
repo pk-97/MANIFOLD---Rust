@@ -979,6 +979,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if let Err(e) = crate::graph_dump::write_graph_dump(native_device, &textures, dir) {
                 log::warn!("[graph-dump] write failed: {e}");
             }
+            // Effect Array outputs (particle/instance buffers) → arrays.json.
+            let arrays = self.compositor.dump_arrays();
+            if let Err(e) = crate::graph_dump::write_array_dump(native_device, &arrays, dir) {
+                log::warn!("[graph-dump] array write failed: {e}");
+            }
         }
 
         // Preview surface tracking — skipped in export mode (no surface cycling).

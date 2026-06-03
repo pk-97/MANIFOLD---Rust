@@ -1919,6 +1919,24 @@ impl Compositor for LayerCompositor {
         Vec::new()
     }
 
+    fn dump_arrays(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
+        let Some(effect_id) = self.dump_request.as_ref() else {
+            return Vec::new();
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains {
+            if let Some(cg) = chain.as_ref() {
+                let dumped = cg.dump_arrays(effect_id);
+                if !dumped.is_empty() {
+                    return dumped;
+                }
+            }
+        }
+        Vec::new()
+    }
+
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
         // Aim the authoring-time output preview at the watched node (or clear)
         // before any chain runs, so a freshly rebuilt chain re-acquires it.
