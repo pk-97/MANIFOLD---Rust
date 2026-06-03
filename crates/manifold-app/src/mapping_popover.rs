@@ -45,6 +45,11 @@ const HANDLE_W: f32 = 4.0;
 const CURVE_ROW_H: f32 = 16.0;
 const FONT: f32 = 11.0;
 const FONT_SMALL: f32 = 10.0;
+/// Height of the live response-curve preview plotted under the header.
+const PREVIEW_H: f32 = 52.0;
+/// How many points to sample the reshape at across the input span when
+/// drawing the preview curve. 48 is smooth at this size without being a cost.
+const PREVIEW_SAMPLES: usize = 48;
 
 // ── Colors ──────────────────────────────────────────────────────────
 const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 0.98];
@@ -59,6 +64,11 @@ const CURVE_BG: [f32; 4] = [0.20, 0.20, 0.25, 1.0];
 const CURVE_BG_ACTIVE: [f32; 4] = [0.28, 0.34, 0.50, 1.0];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
+// Preview plot: a darker inset box, a bright response line, and a live dot.
+const PREVIEW_BG: [f32; 4] = [0.08, 0.08, 0.10, 1.0];
+const PREVIEW_LINE: [f32; 4] = [0.50, 0.78, 1.00, 0.95];
+const PREVIEW_GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
+const PREVIEW_DOT: [f32; 4] = [1.00, 0.86, 0.45, 1.0];
 
 /// The four curve options in display order. Indexed by the order shown,
 /// not by enum discriminant, so the dropdown order is stable here.
@@ -76,6 +86,21 @@ fn curve_label(c: MacroCurve) -> &'static str {
         MacroCurve::Logarithmic => "Log",
         MacroCurve::SCurve => "S-Curve",
     }
+}
+
+/// Compact value formatting for the live readout: whole numbers show clean,
+/// others show up to two decimals with trailing zeros trimmed (`64`, `0.01`,
+/// `1.5`). Falls back to scientific for very large/small magnitudes.
+fn trim_num(v: f32) -> String {
+    let a = v.abs();
+    if a != 0.0 && !(0.001..1_000_000.0).contains(&a) {
+        return format!("{v:.2e}");
+    }
+    if v.fract() == 0.0 {
+        return format!("{}", v as i64);
+    }
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Format a scale/offset value for the popover field, picking a precision
@@ -148,6 +173,12 @@ pub struct MappingPopover {
     /// Which handle the cursor is hovering (for the highlight) when not
     /// dragging.
     hover: Option<DragTarget>,
+    /// The card slider's current (post-modulation) value, pushed by the host
+    /// each frame via [`Self::set_live_value`]. Drives the live dot on the
+    /// preview so you can watch where the knob sits — and where drivers /
+    /// Ableton / envelopes move it — on the response curve. `None` hides the
+    /// dot (host couldn't resolve the value, or no host feeds it).
+    live_value: Option<f32>,
     /// Actions accrued this frame; drained by the host after each event.
     pending_actions: Vec<PanelAction>,
 }
@@ -171,12 +202,26 @@ impl MappingPopover {
             scrub_press_x: 0.0,
             scrub_start: 0.0,
             hover: None,
+            live_value: None,
             pending_actions: Vec::new(),
         }
     }
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Stable id of the binding currently being edited — the host reads this
+    /// to look up the live value to feed back via [`Self::set_live_value`].
+    pub fn binding_id(&self) -> &str {
+        &self.binding_id
+    }
+
+    /// Push the card slider's current value so the preview can mark where the
+    /// live knob sits on the response curve. Called by the host each frame
+    /// while open; `None` hides the dot.
+    pub fn set_live_value(&mut self, value: Option<f32>) {
+        self.live_value = value;
     }
 
     /// Drain queued mapping edits. Mirrors `GraphCanvas::drain_actions`.
@@ -227,6 +272,7 @@ impl MappingPopover {
         }
         self.dragging = None;
         self.hover = None;
+        self.live_value = None;
 
         let h = self.panel_height();
         // Place to the right of the anchor row; flip to the left if it
@@ -254,8 +300,9 @@ impl MappingPopover {
     // ── Geometry ────────────────────────────────────────────────────
 
     fn panel_height(&self) -> f32 {
-        // header + range track + invert + curve + scale + offset rows, padded.
+        // header + preview + range track + invert + curve + scale + offset, padded.
         PAD + HEADER_H
+            + ROW_GAP + PREVIEW_H    // live response preview
             + ROW_GAP + ROW_H        // range track
             + ROW_GAP + ROW_H        // invert
             + ROW_GAP + CURVE_ROW_H  // curve
@@ -268,9 +315,15 @@ impl MappingPopover {
         Rect::new(self.origin.0, self.origin.1, POPOVER_W, self.panel_height())
     }
 
+    /// The live response-curve preview box, inset under the header.
+    fn preview_rect(&self) -> Rect {
+        let y = self.origin.1 + PAD + HEADER_H + ROW_GAP;
+        Rect::new(self.origin.0 + PAD, y, POPOVER_W - 2.0 * PAD, PREVIEW_H)
+    }
+
     /// Y of the range-track row's top edge.
     fn track_row_y(&self) -> f32 {
-        self.origin.1 + PAD + HEADER_H + ROW_GAP
+        self.preview_rect().y + PREVIEW_H + ROW_GAP
     }
 
     /// The trim track rect (where the min/max handles live).
@@ -529,6 +582,72 @@ impl MappingPopover {
 
     // ── Render ──────────────────────────────────────────────────────
 
+    /// Evaluate the shared reshape pipeline — the exact math the runtime
+    /// applies at the write boundary — for a raw card value. Used to plot the
+    /// preview and place the live dot, so the picture can never disagree with
+    /// what the engine does to the value.
+    fn reshape_output(&self, input: f32) -> f32 {
+        manifold_core::effects::apply_card_reshape(
+            input,
+            self.cur_min,
+            self.cur_max,
+            self.invert,
+            self.curve,
+            self.cur_scale,
+            self.cur_offset,
+        )
+    }
+
+    /// Draw the live response-curve preview: the composed transform (range →
+    /// invert → curve → scale/offset) plotted as input→output, with a dot at
+    /// the current live value. This is the "see what you do" surface — picking
+    /// S-Curve or dragging the range reshapes this line in real time.
+    fn render_preview(&self, ui: &mut UIRenderer) {
+        let r = self.preview_rect();
+        ui.draw_rounded_rect(r.x, r.y, r.w, r.h, PREVIEW_BG, 3.0);
+        // Faint centre cross for orientation.
+        ui.draw_line(r.x + r.w * 0.5, r.y, r.x + r.w * 0.5, r.y + r.h, 1.0, PREVIEW_GRID);
+        ui.draw_line(r.x, r.y + r.h * 0.5, r.x + r.w, r.y + r.h * 0.5, 1.0, PREVIEW_GRID);
+
+        // Sample output across the full input span, tracking the output range
+        // so the curve auto-fits the box vertically.
+        let span = (self.range_hi - self.range_lo).max(f32::EPSILON);
+        let mut outs = [0f32; PREVIEW_SAMPLES + 1];
+        let (mut out_lo, mut out_hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for (i, slot) in outs.iter_mut().enumerate() {
+            let t = i as f32 / PREVIEW_SAMPLES as f32;
+            let o = self.reshape_output(self.range_lo + t * span);
+            *slot = o;
+            out_lo = out_lo.min(o);
+            out_hi = out_hi.max(o);
+        }
+        let out_span = (out_hi - out_lo).max(f32::EPSILON);
+        // Inset a hair so the line doesn't kiss the box edges.
+        let pad_y = 3.0;
+        let plot = |i: usize| -> (f32, f32) {
+            let t = i as f32 / PREVIEW_SAMPLES as f32;
+            let ny = (outs[i] - out_lo) / out_span;
+            (
+                r.x + t * r.w,
+                r.y + r.h - pad_y - ny * (r.h - 2.0 * pad_y),
+            )
+        };
+        for i in 0..PREVIEW_SAMPLES {
+            let (x0, y0) = plot(i);
+            let (x1, y1) = plot(i + 1);
+            ui.draw_line(x0, y0, x1, y1, 1.5, PREVIEW_LINE);
+        }
+
+        // Live dot at the current value's position on the curve.
+        if let Some(v) = self.live_value {
+            let tn = ((v - self.range_lo) / span).clamp(0.0, 1.0);
+            let ny = ((self.reshape_output(v) - out_lo) / out_span).clamp(0.0, 1.0);
+            let x = r.x + tn * r.w;
+            let y = r.y + r.h - pad_y - ny * (r.h - 2.0 * pad_y);
+            ui.draw_rounded_rect(x - 2.5, y - 2.5, 5.0, 5.0, PREVIEW_DOT, 2.5);
+        }
+    }
+
     pub fn render(&self, ui: &mut UIRenderer) {
         if !self.open {
             return;
@@ -545,7 +664,8 @@ impl MappingPopover {
             PANEL_BORDER,
         );
 
-        // Header: the binding label (read-only — label editing deferred).
+        // Header: the binding label (left) and the live input→output readout
+        // (right) so you can read exactly what the node receives right now.
         ui.draw_text(
             panel.x + PAD,
             panel.y + PAD,
@@ -553,6 +673,20 @@ impl MappingPopover {
             FONT,
             TEXT_PRIMARY,
         );
+        if let Some(v) = self.live_value {
+            let readout = format!("{} → {}", trim_num(v), trim_num(self.reshape_output(v)));
+            let tw = readout.chars().count() as f32 * FONT_SMALL * 0.55;
+            ui.draw_text(
+                panel.x + POPOVER_W - PAD - tw,
+                panel.y + PAD + 1.0,
+                &readout,
+                FONT_SMALL,
+                TEXT_SECONDARY,
+            );
+        }
+
+        // Live response-curve preview.
+        self.render_preview(ui);
 
         // ── Range track with min/max handles ──
         let track = self.track_rect();
@@ -689,6 +823,33 @@ mod tests {
         assert_eq!(p.cur_max, 0.8);
         assert!(!p.invert);
         assert_eq!(p.curve, MacroCurve::Linear);
+    }
+
+    #[test]
+    fn live_value_round_trips_and_preview_uses_shared_math() {
+        let mut p = open_popover();
+        assert_eq!(p.binding_id(), "user.uv.rotation.1");
+        assert!(p.live_value.is_none(), "no live value until the host feeds one");
+        p.set_live_value(Some(0.5));
+        assert_eq!(p.live_value, Some(0.5));
+        // Identity mapping (Linear, no invert, scale 1 / offset 0): the preview
+        // evaluates the same core pipeline the runtime uses → passthrough.
+        assert!((p.reshape_output(0.5) - 0.5).abs() < 1e-6);
+        // Opening a fresh binding clears the stale live value.
+        p.open(
+            "other".to_string(),
+            "Other".to_string(),
+            0.0,
+            1.0,
+            false,
+            MacroCurve::Linear,
+            1.0,
+            0.0,
+            Some((0.0, 1.0)),
+            Rect::new(0.0, 0.0, 168.0, 18.0),
+            Rect::new(0.0, 0.0, 1000.0, 800.0),
+        );
+        assert!(p.live_value.is_none(), "open() resets the live value");
     }
 
     #[test]

@@ -99,6 +99,33 @@ impl Application {
         }
     }
 
+    /// Read the watched param's CURRENT (post-modulation) value — the number
+    /// shown on the card slider — for the mapping popover's live dot. Reads the
+    /// same `param_values` slot drivers / Ableton / envelopes write each frame,
+    /// so the dot tracks live motion. `None` if the param doesn't resolve.
+    fn watched_value(&self, param_id: &str) -> Option<f32> {
+        match self.watched_graph_target.as_ref()? {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                let idx = fx.param_id_to_value_index(param_id)?;
+                fx.param_values.get(idx).map(|p| p.value)
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let gp = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?
+                    .gen_params()?;
+                let def =
+                    manifold_core::generator_definition_registry::try_get(gp.generator_type())?;
+                let idx = *def.id_to_index.get(param_id)?;
+                gp.param_values.get(idx).map(|p| p.value)
+            }
+        }
+    }
+
     /// Live-drag preview: apply the partial edit to the watched param's
     /// reshape store on BOTH the local project (immediate card UI) and the
     /// content thread (smooth canvas + survives the next snapshot sync),
@@ -2214,6 +2241,13 @@ impl Application {
         let Some(wid) = self.graph_editor_window_id else {
             return;
         };
+        // Resolve the open popover's live value before borrowing the editor
+        // window state mutably (`watched_value` borrows all of `self`).
+        let popover_live_value = if self.editor_mapping_popover.is_open() {
+            self.watched_value(self.editor_mapping_popover.binding_id())
+        } else {
+            None
+        };
         let Some(ws) = self.graph_editor.as_mut() else {
             return;
         };
@@ -2396,7 +2430,11 @@ impl Application {
             // never reach the GPU.
             ui.render_overlay_additive(&ws.ui_root.tree, 0);
             // The sideways mapping drawer floats over everything (immediate-mode
-            // primitives), drawn last so it sits above the card + canvas.
+            // primitives), drawn last so it sits above the card + canvas. The
+            // watched param's live value (resolved above, before the `ws`
+            // borrow) drives the preview dot so it tracks drivers / Ableton /
+            // envelopes in real time.
+            self.editor_mapping_popover.set_live_value(popover_live_value);
             self.editor_mapping_popover.render(ui);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);

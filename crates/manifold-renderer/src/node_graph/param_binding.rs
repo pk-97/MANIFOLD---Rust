@@ -275,23 +275,16 @@ pub(crate) struct Reshape {
 
 impl Reshape {
     /// Apply the slider response (clamped, only when invert/curve is set) then
-    /// the card→consumer affine remap (unclamped). A pure scale/offset fold with
-    /// no invert/curve skips the normalize+clamp entirely, so it reproduces the
-    /// replaced `affine_scalar` exactly.
+    /// the card→consumer affine remap (unclamped). Delegates to
+    /// [`manifold_core::effects::apply_card_reshape`] — the single definition of
+    /// this pipeline, shared with the mapping-popover preview so the two never
+    /// drift. A pure scale/offset fold with no invert/curve skips the
+    /// normalize+clamp entirely, so it reproduces the replaced `affine_scalar`
+    /// exactly.
     fn apply(&self, value: f32) -> f32 {
-        let mut v = value;
-        if self.invert || self.curve != manifold_core::macro_bank::MacroCurve::Linear {
-            let range = self.max - self.min;
-            if range.abs() >= f32::EPSILON {
-                let mut n = ((v - self.min) / range).clamp(0.0, 1.0);
-                if self.invert {
-                    n = 1.0 - n;
-                }
-                n = self.curve.apply(n);
-                v = self.min + range * n;
-            }
-        }
-        v * self.scale + self.offset
+        manifold_core::effects::apply_card_reshape(
+            value, self.min, self.max, self.invert, self.curve, self.scale, self.offset,
+        )
     }
 }
 
