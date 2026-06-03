@@ -111,41 +111,48 @@ pub fn generate_standalone(
     let access_of = |i: usize| input_access.get(i).copied().unwrap_or_default();
     let any_sampled = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::Coincident);
     let any_texel = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::CoincidentTexel);
+    // A paramless atom (e.g. abs_texture) binds NO uniform and NO Params struct,
+    // so its textures start at binding 0 — matching the hand shader, which has no
+    // uniform either. The body simply takes no param args (the param loop below
+    // is empty).
+    let has_uniform = !params.is_empty();
 
     let mut out = String::new();
 
     // --- param uniform struct (scalar fields in PARAMS order, padded to a
-    // 16-byte multiple to match the setBytes buffer size). ---
-    out.push_str("struct Params {\n");
-    for p in params {
-        let ty = param_wgsl_type(p)?;
-        writeln!(out, "    {}: {},", p.name, ty).unwrap();
+    // 16-byte multiple to match the setBytes buffer size). Omitted entirely when
+    // the atom has no params. ---
+    if has_uniform {
+        out.push_str("struct Params {\n");
+        for p in params {
+            let ty = param_wgsl_type(p)?;
+            writeln!(out, "    {}: {},", p.name, ty).unwrap();
+        }
+        let pad_words = (4 - (params.len() % 4)) % 4;
+        for i in 0..pad_words {
+            writeln!(out, "    _pad{i}: u32,").unwrap();
+        }
+        out.push_str("}\n\n");
     }
-    let pad_words = (4 - (params.len() % 4)) % 4;
-    for i in 0..pad_words {
-        writeln!(out, "    _pad{i}: u32,").unwrap();
-    }
-    if params.is_empty() {
-        // A uniform struct needs at least 16 bytes; emit one padded word.
-        out.push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
-    }
-    out.push_str("}\n\n");
 
-    // --- bindings: uniform(0), texture(1..), [sampler], output. The sampler is
-    // emitted ONLY when at least one input is sampler-read (Coincident); an
-    // all-texel-read atom (e.g. dither) binds no sampler, so its dst slot follows
-    // the textures directly — matching what its run() binds. ---
-    out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
-    for (idx, inp) in tex_inputs.iter().enumerate() {
+    // --- bindings: [uniform(0)], texture(..), [sampler], output. The uniform is
+    // emitted only when the atom has params; the sampler only when at least one
+    // input is sampler-read (Coincident). So an all-texel paramless atom binds
+    // just its textures + dst — matching what its run() binds. ---
+    let mut next_binding = 0u32;
+    if has_uniform {
+        out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
+        next_binding = 1;
+    }
+    for inp in tex_inputs.iter() {
         writeln!(
             out,
-            "@group(0) @binding({}) var tex_{}: texture_2d<f32>;",
-            idx + 1,
+            "@group(0) @binding({next_binding}) var tex_{}: texture_2d<f32>;",
             inp.name
         )
         .unwrap();
+        next_binding += 1;
     }
-    let mut next_binding = tex_inputs.len() + 1;
     if any_sampled {
         writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         next_binding += 1;
@@ -1193,5 +1200,79 @@ mod gpu_tests {
                 r.max_abs, r.max_rel
             );
         }
+    }
+
+    /// Dispatch a PARAMLESS pointwise kernel: tex(0), sampler(1), dst(2) — no
+    /// uniform binding (a paramless atom's generated kernel binds none).
+    fn dispatch_paramless_pointwise(
+        device: &GpuDevice,
+        wgsl: &str,
+        input: &GpuTexture,
+    ) -> RenderTarget {
+        let (w, h) = (input.width, input.height);
+        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-paramless");
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let out = RenderTarget::new(device, w, h, FMT, "codegen-out-paramless");
+        let mut enc = device.create_encoder("codegen-paramless");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Texture { binding: 0, texture: input },
+                GpuBinding::Sampler { binding: 1, sampler: &sampler },
+                GpuBinding::Texture { binding: 2, texture: &out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "codegen-paramless",
+        );
+        enc.commit_and_wait_completed();
+        out
+    }
+
+    /// Paramless parity (overnight sweep): abs_texture has zero params, so the
+    /// generated kernel emits NO uniform and starts its textures at binding 0 —
+    /// a drop-in for the hand abs_texture.wgsl, which also has no uniform. Proves
+    /// the paramless codegen path matches bit-for-bit.
+    #[test]
+    fn generated_paramless_atom_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let node = registry.construct("node.abs_texture").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("abs_texture generates");
+
+        // Structural: no uniform, textures start at binding 0.
+        assert!(
+            !generated.contains("var<uniform>"),
+            "a paramless atom must bind no uniform:\n{generated}"
+        );
+        assert!(
+            generated.contains("@group(0) @binding(0) var tex_in"),
+            "paramless tex must start at binding 0:\n{generated}"
+        );
+
+        let original = include_str!("../primitives/shaders/abs_texture.wgsl");
+        let from_original = dispatch_paramless_pointwise(&device, original, &input);
+        let from_generated = dispatch_paramless_pointwise(&device, &generated, &input);
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated abs_texture must reproduce abs_texture.wgsl (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
     }
 }

@@ -24,6 +24,8 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["absolute value", "abs", "magnitude"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/abs_texture_body.wgsl"),
 }
 
 impl Primitive for AbsTexture {
@@ -38,9 +40,14 @@ impl Primitive for AbsTexture {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: paramless atom — the generated kernel binds no
+            // uniform, so its textures start at binding 0, matching the bindings
+            // below. abs_texture.wgsl is the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.abs_texture standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/abs_texture.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.abs_texture",
             )
         });
