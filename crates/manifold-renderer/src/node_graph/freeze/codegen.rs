@@ -1479,9 +1479,13 @@ mod gpu_tests {
             concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
         let differ = TextureDiff::new(&device);
 
+        // color_lut: `in` coincident (a = the centre sample) + `lut` gathered
+        // (b, sampled at the luminance-indexed coord). amount=0.5 exercises the
+        // crossfade; the LUT texture is just gradient_b sampled at y=0.5.
         let cases: &[(&str, &str, &[f32])] = &[
             ("node.chromatic_displace", "chromatic_displace.wgsl", &[2.0]),
             ("node.uv_displace_by_flow", "uv_displace_by_flow.wgsl", &[0.05, 0.5]),
+            ("node.color_lut", "lut1d.wgsl", &[0.5, 1.5]),
         ];
         for (type_id, shader_file, params) in cases {
             let node = registry.construct(type_id).unwrap();
