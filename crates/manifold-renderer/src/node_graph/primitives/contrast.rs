@@ -51,6 +51,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["contrast", "Level TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/contrast_body.wgsl"),
 }
 
 impl Primitive for Contrast {

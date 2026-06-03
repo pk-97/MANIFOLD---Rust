@@ -71,6 +71,8 @@ crate::primitive! {
     category: Composite,
     role: Filter,
     aliases: ["mix", "blend", "composite", "Composite TOP"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/mix_body.wgsl"),
 }
 
 pub const MIX_TYPE_ID: &str = "node.mix";

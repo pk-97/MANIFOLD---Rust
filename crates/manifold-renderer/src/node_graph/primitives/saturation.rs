@@ -51,6 +51,8 @@ crate::primitive! {
     summary: "Pulls colours toward grey or pushes them more vivid.",
     category: ColorAndTone,
     role: Filter,
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/saturation_body.wgsl"),
 }
 
 impl Primitive for Saturation {

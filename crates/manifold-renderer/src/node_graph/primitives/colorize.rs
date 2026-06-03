@@ -78,6 +78,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["colorize", "tint", "duotone"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/colorize_body.wgsl"),
 }
 
 impl Primitive for Colorize {

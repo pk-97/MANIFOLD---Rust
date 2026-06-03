@@ -69,6 +69,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["hue", "saturation", "hsv", "recolour", "HSV Adjust TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/hue_saturation_body.wgsl"),
 }
 
 impl Primitive for HueSaturation {

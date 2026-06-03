@@ -70,4 +70,31 @@ mod tests {
         assert!(body.contains("fn body"), "body fragment must define `fn body`");
         assert!(body.contains("gain"), "gain body must reference the gain param");
     }
+
+    /// All 7 ColorGrade atoms are now classified + carry a body fragment that
+    /// defines `fn body` (the codegen entry). mix is the one coincident atom.
+    #[test]
+    fn all_seven_colorgrade_atoms_classified() {
+        use crate::node_graph::PrimitiveRegistry;
+        let registry = PrimitiveRegistry::with_builtin();
+        let expected = [
+            ("node.gain", FusionKind::Pointwise),
+            ("node.saturation", FusionKind::Pointwise),
+            ("node.hue_saturation", FusionKind::Pointwise),
+            ("node.contrast", FusionKind::Pointwise),
+            ("node.colorize", FusionKind::Pointwise),
+            ("node.mix", FusionKind::MultiInputCoincident),
+            ("node.clamp_texture", FusionKind::Pointwise),
+        ];
+        for (type_id, kind) in expected {
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            assert_eq!(node.fusion_kind(), kind, "{type_id} fusion_kind");
+            let body = node
+                .wgsl_body()
+                .unwrap_or_else(|| panic!("{type_id} has no wgsl_body"));
+            assert!(body.contains("fn body"), "{type_id} body must define `fn body`");
+        }
+    }
 }

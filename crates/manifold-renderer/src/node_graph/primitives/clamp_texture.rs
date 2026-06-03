@@ -59,6 +59,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["clamp", "saturate", "limit"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/clamp_texture_body.wgsl"),
 }
 
 impl Primitive for ClampTexture {
