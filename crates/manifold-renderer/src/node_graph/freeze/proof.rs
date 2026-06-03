@@ -388,6 +388,141 @@ fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTextur
     tex
 }
 
+/// Deterministic LCG (Numerical Recipes constants) — a fuzzer needs random
+/// coverage but a *reproducible* seed so a failure can be replayed exactly
+/// (design §12.3 step 7 reproducer). Not for crypto; just spreads samples.
+fn lcg_next(state: &mut u64) -> u32 {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    (*state >> 33) as u32
+}
+
+fn lcg_f32(state: &mut u64, lo: f32, hi: f32) -> f32 {
+    let u = lcg_next(state) as f32 / u32::MAX as f32;
+    lo + u * (hi - lo)
+}
+
+/// **Step-6 fuzz hardening (design §12.3 step 6 / §12.4).** The single hardened
+/// fixture proves correctness at one point; this sweeps the param space so we
+/// aren't trusting one vector. For many random in-range param sets — including
+/// every `mix` blend mode (0..7, so the `switch` + `safe_div` divide path are
+/// all exercised) — it renders the unfused shipped preset and the AUTO-fused def
+/// through the executor and asserts they agree: no divergent NaN/Inf
+/// (`special_count == 0`, the hard gate) and within the discontinuity-aware
+/// fraction budget. A fixed seed makes any failure replayable.
+#[test]
+fn colorgrade_fuzz_fused_agrees_with_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (192u32, 192u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/effect-presets/ColorGrade.json"
+    ))
+    .expect("read ColorGrade.json");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse ColorGrade.json");
+
+    // (stable node_id, param, lo, hi) — every modulatable float, at its real
+    // range. clamp.min/max kept in a sane band so the clamp is exercised
+    // without flattening the whole frame.
+    let fields: &[(&str, &str, f32, f32)] = &[
+        ("gain", "gain", 0.0, 2.0),
+        ("saturation", "saturation", 0.0, 2.0),
+        ("hue", "hue", -180.0, 180.0),
+        ("hue", "saturation", 0.0, 2.0),
+        ("hue", "value", 0.0, 2.0),
+        ("contrast", "contrast", 0.0, 2.0),
+        ("colorize", "amount", 0.0, 1.0),
+        ("colorize", "hue", 0.0, 360.0),
+        ("colorize", "saturation", 0.0, 2.0),
+        ("colorize", "focus", 0.0, 1.0),
+        ("grade_mix", "amount", 0.0, 1.0),
+        ("clamp", "min", 0.0, 0.1),
+        ("clamp", "max", 0.9, 2.0),
+    ];
+
+    // Build both graphs once; per iteration we only refresh params + re-render.
+    let FusedDef { def: fused_def, retarget, .. } =
+        fuse_canonical_def(&def, &registry).expect("ColorGrade fuses");
+    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph");
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src =
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_out =
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp_texture"), "out");
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+
+    let set_unfused = |g: &mut Graph, node_id: &str, param: &str, v: ParamValue| {
+        let id = g
+            .node_id_by_handle(node_id)
+            .or_else(|| g.instance_by_node_id(&manifold_core::NodeId::new(node_id)))
+            .unwrap_or_else(|| panic!("unfused graph missing node `{node_id}`"));
+        g.set_param(id, param, v).unwrap_or_else(|e| panic!("set {node_id}.{param}: {e:?}"));
+    };
+
+    let differ = TextureDiff::new(&device);
+    let seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut state = seed;
+    const ITERS: u32 = 32;
+
+    for it in 0..ITERS {
+        // Draw one shared param vector, then apply it identically to both sides.
+        let mode = lcg_next(&mut state) % 8;
+        let vals: Vec<(&str, &str, f32)> = fields
+            .iter()
+            .map(|(nid, p, lo, hi)| (*nid, *p, lcg_f32(&mut state, *lo, *hi)))
+            .collect();
+
+        for (nid, p, v) in &vals {
+            set_unfused(&mut unfused_graph, nid, p, ParamValue::Float(*v));
+            let field = retarget
+                .get(&((*nid).to_string(), (*p).to_string()))
+                .unwrap_or_else(|| panic!("retarget missing {nid}.{p}"));
+            fused_graph
+                .set_param(fused_node, field, ParamValue::Float(*v))
+                .unwrap_or_else(|e| panic!("set fused {field}: {e:?}"));
+        }
+        // mix mode: Enum on the unfused atom, the namespaced u32 field on the
+        // fused kernel (WgslCompute carries it as Int/Float — see the storage
+        // collapse). Drives the blend_rgb switch across all 8 branches.
+        set_unfused(&mut unfused_graph, "grade_mix", "mode", ParamValue::Enum(mode));
+        let mode_field = retarget
+            .get(&("grade_mix".to_string(), "mode".to_string()))
+            .expect("retarget has grade_mix.mode");
+        fused_graph
+            .set_param(fused_node, mode_field, ParamValue::Float(mode as f32))
+            .expect("set fused mode");
+
+        let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+        let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+        let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+        // Hard gate: NO divergent NaN/Inf, ever. Plus a discontinuity-aware
+        // fraction budget loose enough to absorb extreme-param boundary bands.
+        assert!(
+            r.passes(0.03),
+            "fuzz iter {it} (seed={seed:#x}, mode={mode}) diverged: special={}, \
+             max_abs={}, max_rel={}, over={}/{} ({:.4}); params={vals:?}",
+            r.special_count,
+            r.max_abs,
+            r.max_rel,
+            r.over_count,
+            r.total,
+            r.over_fraction(),
+        );
+    }
+}
+
 /// **The step-4 production gate (design §12.3 step 5).** Drives the *install*
 /// path end-to-end through the real executor: the region-grower
 /// ([`super::install::fuse_canonical_def`]) auto-discovers the ColorGrade region

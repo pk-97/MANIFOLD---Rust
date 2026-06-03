@@ -35,13 +35,21 @@ struct DiffParams {
 /// texel seen; `over_count` is how many texels broke both tolerances.
 #[derive(Debug, Clone, Copy)]
 pub struct DiffResult {
-    /// Largest per-texel absolute diff (max over channels) anywhere in the
-    /// image. A NaN in either input surfaces here as NaN (see the shader).
+    /// Largest per-texel absolute diff (max over channels) over the FINITE
+    /// texels only — non-finite texels are classified separately
+    /// (`special_count`) and excluded so a NaN/Inf can't corrupt this maximum.
     pub max_abs: f32,
-    /// Largest per-texel relative diff: `abs_diff / max(|a|, |b|, eps)`.
+    /// Largest per-texel relative diff over finite texels:
+    /// `abs_diff / max(|a|, |b|, eps)`.
     pub max_rel: f32,
     /// Count of texels that exceeded BOTH the absolute and relative bounds.
     pub over_count: u32,
+    /// Count of texels where the two sides DISAGREE on finiteness — one side
+    /// produced a NaN/Inf the other didn't (fusion introduced or erased a
+    /// special value). Any non-zero count fails the verdict: a divergent NaN/Inf
+    /// is never "within tolerance" (design §12.3 step 6). Texels where both
+    /// sides agree on a non-finite result are not counted.
+    pub special_count: u32,
     /// Total texels compared (`width * height`).
     pub total: u32,
 }
@@ -57,12 +65,15 @@ impl DiffResult {
     }
 
     /// Verdict: pass when no more than `max_over_fraction` of texels broke both
-    /// tolerances AND no NaN leaked into the max (NaN is never "within
-    /// tolerance"). The tolerances themselves were applied in the shader; this
-    /// is the discontinuity-aware fraction gate on top.
+    /// tolerances, AND no texel diverged on a NaN/Inf, AND no non-finite value
+    /// leaked into the diagnostic maxima. The tolerances themselves were applied
+    /// in the shader; this is the discontinuity-aware fraction gate plus the
+    /// hard NaN/Inf-agreement gate on top (a divergent special is never "within
+    /// tolerance", design §12.3 step 6).
     pub fn passes(&self, max_over_fraction: f64) -> bool {
-        !self.max_abs.is_nan()
-            && !self.max_rel.is_nan()
+        self.special_count == 0
+            && self.max_abs.is_finite()
+            && self.max_rel.is_finite()
             && self.over_fraction() <= max_over_fraction
     }
 }
@@ -171,6 +182,7 @@ impl TextureDiff {
             max_abs: f32::from_bits(raw[0]),
             max_rel: f32::from_bits(raw[1]),
             over_count: raw[2],
+            special_count: raw[3],
             total: w * h,
         }
     }
@@ -226,6 +238,48 @@ mod gpu_tests {
         // Every texel differs and 0.25 >> both tolerances → all fail both.
         assert_eq!(r.over_count, w * h, "every texel should exceed tolerance");
         assert!(!r.passes(0.01), "a 0.25 delta everywhere must fail the verdict");
+    }
+
+    #[test]
+    fn introduced_inf_is_counted_and_fails_verdict() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 16u32);
+        // One side finite, the other Inf on the R channel — the classic
+        // "fusion blew up where the oracle stayed finite" case the `max()` path
+        // would have let slip (Inf is not NaN).
+        let finite = cleared(&device, w, h, [0.5, 0.5, 0.5, 1.0], "diff-inf-a");
+        let blown = cleared(&device, w, h, [f64::INFINITY, 0.5, 0.5, 1.0], "diff-inf-b");
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &finite.texture, &blown.texture, 1e-3, 1e-3);
+
+        assert_eq!(
+            r.special_count,
+            w * h,
+            "every texel diverges on finiteness → all counted as special"
+        );
+        assert!(
+            !r.passes(0.5),
+            "a divergent Inf must fail the verdict regardless of over_fraction \
+             (special_count={})",
+            r.special_count
+        );
+    }
+
+    #[test]
+    fn agreed_inf_is_not_counted() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 16u32);
+        // Both sides Inf on R — the fused kernel reproduced the oracle's
+        // non-finite result. Agreement, not a regression: not counted.
+        let a = cleared(&device, w, h, [f64::INFINITY, 0.25, 0.5, 1.0], "diff-inf2-a");
+        let b = cleared(&device, w, h, [f64::INFINITY, 0.25, 0.5, 1.0], "diff-inf2-b");
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &a.texture, &b.texture, 1e-3, 1e-3);
+
+        assert_eq!(r.special_count, 0, "matching Inf is agreement, not divergence");
+        assert!(r.passes(0.0), "both sides identical (incl. the Inf) must pass");
     }
 
     #[test]
