@@ -109,7 +109,11 @@ pub fn generate_standalone(
     // Per-(texture-)input read-semantics, aligned to `tex_inputs` order; index
     // past the end defaults to Coincident (the resolution-robust sampler read).
     let access_of = |i: usize| input_access.get(i).copied().unwrap_or_default();
-    let any_sampled = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::Coincident);
+    // A sampler is bound when any input is sampler-read (Coincident) OR gathered
+    // (a Gather body samples the texture itself, so it needs the sampler too).
+    // A CoincidentTexel-only atom (dither) binds no sampler.
+    let needs_sampler =
+        (0..tex_inputs.len()).any(|i| matches!(access_of(i), InputAccess::Coincident | InputAccess::Gather));
     let any_texel = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::CoincidentTexel);
     // A paramless atom (e.g. abs_texture) binds NO uniform and NO Params struct,
     // so its textures start at binding 0 — matching the hand shader, which has no
@@ -153,7 +157,7 @@ pub fn generate_standalone(
         .unwrap();
         next_binding += 1;
     }
-    if any_sampled {
+    if needs_sampler {
         writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         next_binding += 1;
     }
@@ -182,7 +186,9 @@ pub fn generate_standalone(
     // Read each input by its access kind: Coincident → sampler at the fragment
     // UV (resolution-robust); CoincidentTexel → exact integer-texel load (no
     // filter — required when each texel is a distinct value, e.g. a dither
-    // threshold). Both read the fragment's own coordinate.
+    // threshold). Both read the fragment's own coordinate. A Gather input is NOT
+    // pre-read here — the body computes its own read coord, so it receives the
+    // texture + sampler as args (below) and samples them itself.
     for (i, inp) in tex_inputs.iter().enumerate() {
         match access_of(i) {
             InputAccess::Coincident => writeln!(
@@ -197,15 +203,29 @@ pub fn generate_standalone(
                 inp.name, inp.name
             )
             .unwrap(),
+            InputAccess::Gather => {} // no pre-read; passed as a texture handle
         }
     }
-    // body(<colors in input order>, uv, dims, params.<p0>, ...). `uv` (normalized
-    // center-of-texel) and `dims` (float canvas size) are the ambient fragment
-    // context every body receives after its color inputs (design §slot / line 60,
-    // extended with dims so positional atoms can recover aspect = dims.x/dims.y
-    // and pixel = uv*dims). Atoms that ignore position simply don't read them —
-    // spirv-opt's DCE drops the unused args.
-    let mut args: Vec<String> = tex_inputs.iter().map(|i| format!("c_{}", i.name)).collect();
+    // body(<per-input args>, uv, dims, params.<p0>, ...). Each input contributes:
+    // a Coincident/CoincidentTexel input → its pre-read colour register `c_<name>`;
+    // a Gather input → the texture handle `tex_<name>` + the shared `samp`, which
+    // the body samples at a coord it computes. `uv` (normalized center-of-texel)
+    // and `dims` (float canvas size) are the ambient fragment context every body
+    // receives after its inputs (design §slot / line 60, extended with dims so
+    // positional atoms recover aspect = dims.x/dims.y and pixel = uv*dims). Atoms
+    // that ignore an arg simply don't read it — spirv-opt's DCE drops it.
+    let mut args: Vec<String> = Vec::new();
+    for (i, inp) in tex_inputs.iter().enumerate() {
+        match access_of(i) {
+            InputAccess::Gather => {
+                args.push(format!("tex_{}", inp.name));
+                args.push("samp".to_string());
+            }
+            InputAccess::Coincident | InputAccess::CoincidentTexel => {
+                args.push(format!("c_{}", inp.name));
+            }
+        }
+    }
     args.push("uv".to_string());
     args.push("vec2<f32>(dims)".to_string());
     for p in params {
@@ -1273,6 +1293,105 @@ mod gpu_tests {
         assert_eq!(
             r.over_count, 0,
             "generated abs_texture must reproduce abs_texture.wgsl (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
+    /// Gather parity (design §11.B): remap is the first GATHER atom — `source` is
+    /// sampled at a coord the body COMPUTES, so the codegen passes it as a
+    /// texture+sampler arg (not a pre-read register), while `uv_field` is
+    /// coincident. The hand remap.wgsl interleaves the sampler between its two
+    /// textures (uniform0/src1/samp2/field3/out4); the generated kernel binds the
+    /// textures consecutively then the sampler (uniform0/src1/field2/samp3/dst4),
+    /// so each is dispatched with its own layout. wrap=Mirror exercises the
+    /// wrap_coord helper.
+    #[test]
+    fn generated_remap_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let source = gradient(&device, w, h);
+        let field = gradient_b(&device, w, h); // .rg carry the target UVs
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let node = registry.construct("node.remap").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("remap generates");
+
+        // Structural: gather `source` is NOT pre-read; textures then sampler.
+        assert!(
+            generated.contains("@group(0) @binding(1) var tex_source"),
+            "source at binding 1:\n{generated}"
+        );
+        assert!(
+            generated.contains("@group(0) @binding(2) var tex_uv_field"),
+            "uv_field at binding 2:\n{generated}"
+        );
+        assert!(
+            generated.contains("@group(0) @binding(3) var samp"),
+            "sampler after the textures:\n{generated}"
+        );
+        assert!(
+            !generated.contains("let c_source"),
+            "a Gather input must not be pre-sampled into a register:\n{generated}"
+        );
+
+        let original = include_str!("../primitives/shaders/remap.wgsl");
+        // wrap=2 (Mirror), mode=0 (Absolute).
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
+
+        // Hand layout: uniform(0), source(1), sampler(2), uv_field(3), out(4).
+        let hand_out = RenderTarget::new(&device, w, h, FMT, "remap-hand");
+        {
+            let pipeline = device.create_compute_pipeline(original, ENTRY, "remap-hand");
+            let mut enc = device.create_encoder("remap-hand");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &source },
+                    GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                    GpuBinding::Texture { binding: 3, texture: &field },
+                    GpuBinding::Texture { binding: 4, texture: &hand_out.texture },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "remap-hand",
+            );
+            enc.commit_and_wait_completed();
+        }
+        // Generated layout: uniform(0), source(1), uv_field(2), sampler(3), dst(4).
+        let gen_out = RenderTarget::new(&device, w, h, FMT, "remap-gen");
+        {
+            let pipeline = device.create_compute_pipeline(&generated, ENTRY, "remap-gen");
+            let mut enc = device.create_encoder("remap-gen");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &source },
+                    GpuBinding::Texture { binding: 2, texture: &field },
+                    GpuBinding::Sampler { binding: 3, sampler: &sampler },
+                    GpuBinding::Texture { binding: 4, texture: &gen_out.texture },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "remap-gen",
+            );
+            enc.commit_and_wait_completed();
+        }
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &hand_out.texture, &gen_out.texture, 1e-5, 1e-5);
+        assert_eq!(
+            r.over_count, 0,
+            "generated remap must reproduce remap.wgsl (max_abs={}, max_rel={})",
             r.max_abs, r.max_rel
         );
     }

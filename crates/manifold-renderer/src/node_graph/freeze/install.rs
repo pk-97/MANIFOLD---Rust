@@ -57,7 +57,7 @@ use manifold_core::effect_graph_def::{
 
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::freeze::classify::FusionKind;
+use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::ports::{NodeInput, PortType};
@@ -241,6 +241,15 @@ pub(crate) fn fuse_canonical_def(
             return None; // a Boundary atom anywhere → leave the card unfused
         }
         let body = node.wgsl_body()?;
+        // A Gather input (the body computes its own read coord — a dependent
+        // sample) can't be threaded as a fused register, and generate_fused only
+        // threads registers. So a node with any Gather input can't fold into a
+        // multi-atom region yet: treat it as a boundary and leave the whole card
+        // unfused (its standalone single-source kernel still runs). Fusing a
+        // gather INTO a region is a deeper follow-on (design §11.B).
+        if node.input_access().contains(&InputAccess::Gather) {
+            return None;
+        }
         // Every param must lay out as a scalar uniform field, or the codegen
         // can't fuse it (vec/color/table/string params).
         for p in node.parameters() {

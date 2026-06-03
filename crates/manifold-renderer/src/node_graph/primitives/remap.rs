@@ -63,6 +63,9 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Filter,
     aliases: ["remap", "uv map", "displace", "Remap TOP"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/remap_body.wgsl"),
+    input_access: [Gather, Coincident],
 }
 
 impl Primitive for Remap {
@@ -89,9 +92,16 @@ impl Primitive for Remap {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: the generated kernel binds the two textures
+            // consecutively (source, uv_field) then the sampler, so the binding
+            // set below is reordered to match (the hand remap.wgsl interleaved
+            // the sampler between them). `source` is a Gather input — the body
+            // samples it at a computed coord. remap.wgsl is the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.remap standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/remap.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.remap",
             )
         });
@@ -117,13 +127,13 @@ impl Primitive for Remap {
                     binding: 1,
                     texture: src_tex,
                 },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
                 GpuBinding::Texture {
-                    binding: 3,
+                    binding: 2,
                     texture: uv_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler,
                 },
                 GpuBinding::Texture {
                     binding: 4,

@@ -79,6 +79,16 @@ pub enum InputAccess {
     /// region-grower must refuse to fuse a `CoincidentTexel` input across a
     /// resolution seam (design §11.B / line 147).
     CoincidentTexel,
+    /// Read at a coordinate the BODY computes — a dependent sample (the UV-warp
+    /// family: remap, chromatic_displace, uv_displace_by_flow). The codegen
+    /// CANNOT pre-sample this into a register (it doesn't know the coord), so the
+    /// body receives the texture + sampler as ARGS and samples them itself,
+    /// owning the exact filter/address-mode of the unfused atom ("pure modulo
+    /// declared sampled-texture args", design §11.B / line 156). Because the read
+    /// can't be threaded as a register, the region-grower treats a node with any
+    /// Gather input as a boundary — v1 Gather is standalone-only (single-source);
+    /// fusing a gather INTO a multi-atom region is a deeper follow-on.
+    Gather,
 }
 
 #[cfg(test)]
