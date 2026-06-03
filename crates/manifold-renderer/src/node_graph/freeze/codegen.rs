@@ -15,6 +15,7 @@
 //! v1, never baked constants). The generated WGSL text is the cross-session
 //! pipeline-cache key, so determinism is load-bearing.
 
+use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::classify::FusionKind;
 use crate::node_graph::parameters::{ParamDef, ParamType};
 use crate::node_graph::ports::{NodeInput, PortType};
@@ -39,6 +40,13 @@ pub enum CodegenError {
     /// A param type the v1 generator can't lay out as a scalar uniform field
     /// (vec/color/table/string/trigger). Such an atom is simply not fused yet.
     UnsupportedParam { name: &'static str, ty: ParamType },
+    /// Two region bodies define a helper with the same name but different
+    /// bodies — can't dedup safely. (Doesn't occur in v1; the shared HSV/blend
+    /// helpers are byte-identical.)
+    HelperCollision(String),
+    /// A region node's `InputSource` references an unknown node, a node that
+    /// isn't earlier in topo order, or an out-of-range external input.
+    BadInput,
 }
 
 /// Map a (scalar) param type to its WGSL type + 4-byte slot. v1 supports the
@@ -165,6 +173,216 @@ pub fn generate_standalone(
     out.push_str("}\n");
 
     Ok(out)
+}
+
+// ===========================================================================
+// Fused multi-atom codegen (build step 3): chain a region of atom bodies into
+// ONE kernel. Read the external input(s) once, thread a register through each
+// atom's body in topo order (a fork that re-converges in the region is just
+// two uses of one register — e.g. ColorGrade's source -> {chain, mix.a}),
+// dedup shared helpers, namespace each body, merge params into one uniform,
+// write once. Auto-generates the hand-fused colorgrade_fused.wgsl.
+// ===========================================================================
+
+/// Where a region node's texture input comes from.
+#[derive(Debug, Clone)]
+pub enum InputSource {
+    /// The region's Nth external input texture (read once into a register).
+    External(usize),
+    /// Another region node's output register (must appear earlier in topo order).
+    Node(NodeInstanceId),
+}
+
+/// One atom inside a fusion region. Borrows its body + params (both available
+/// as `&'static` from a type's `PrimitiveSpec` consts, or borrowed from a graph
+/// node) for `'a`.
+#[derive(Debug, Clone)]
+pub struct RegionNode<'a> {
+    pub node_id: NodeInstanceId,
+    pub fusion_kind: FusionKind,
+    pub body: &'a str,
+    pub params: &'a [ParamDef],
+    /// Texture inputs in body-arg order (Pointwise: 1; MultiInputCoincident: ≥2).
+    pub inputs: Vec<InputSource>,
+}
+
+/// A maximal fusable region: nodes in topo order, the external inputs they read,
+/// and which node's register is the region output.
+#[derive(Debug, Clone)]
+pub struct FusionRegion<'a> {
+    pub nodes: Vec<RegionNode<'a>>,
+    pub num_external_inputs: usize,
+    pub output: NodeInstanceId,
+}
+
+/// Result of fusing a region: the kernel + the ordered uniform field list
+/// (node + param) so the caller can pack the merged uniform / gather live
+/// values (DD-A5 per-source descriptor; step 4 gathers from inst.params).
+#[derive(Debug, Clone)]
+pub struct GeneratedFusion {
+    pub wgsl: String,
+    pub param_order: Vec<(NodeInstanceId, &'static str)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FnBlock {
+    name: String,
+    text: String,
+}
+
+/// Split a body fragment into its top-level `fn` blocks (helpers + `fn body`).
+/// WGSL has no nested fns, so a column-0 `fn ` reliably starts each definition;
+/// a block runs until the next column-0 `fn ` (lines before the first — the
+/// comment header — are dropped).
+fn split_fns(fragment: &str) -> Vec<FnBlock> {
+    let mut blocks: Vec<FnBlock> = Vec::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+    for line in fragment.lines() {
+        if let Some(rest) = line.strip_prefix("fn ") {
+            if let Some((name, lines)) = current.take() {
+                blocks.push(FnBlock { name, text: lines.join("\n") });
+            }
+            let name = rest.split('(').next().unwrap_or("").trim().to_string();
+            current = Some((name, vec![line.to_string()]));
+        } else if let Some((_, lines)) = current.as_mut() {
+            lines.push(line.to_string());
+        }
+    }
+    if let Some((name, lines)) = current.take() {
+        blocks.push(FnBlock { name, text: lines.join("\n") });
+    }
+    blocks
+}
+
+/// Generate one fused kernel for a region. Errors if a node isn't fusable, a
+/// body lacks `fn body`, an input references an unknown/later node, or two
+/// helpers share a name with different bodies (un-dedupable collision).
+pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, CodegenError> {
+    // node_id -> region index (for resolving InputSource::Node to a register).
+    let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
+
+    // Per-node: split body into helpers + the `body` fn (renamed n{i}_body).
+    let mut helpers: Vec<FnBlock> = Vec::new(); // deduped, emitted once
+    let mut bodies: Vec<String> = Vec::new(); // namespaced body fns
+    for (i, node) in region.nodes.iter().enumerate() {
+        if !node.fusion_kind.is_fusable() {
+            return Err(CodegenError::NotFusable(node.fusion_kind));
+        }
+        if node.body.is_empty() {
+            return Err(CodegenError::NoBody);
+        }
+        let mut found_body = false;
+        for fb in split_fns(node.body) {
+            if fb.name == "body" {
+                // rename the single definition `fn body(` -> `fn n{i}_body(`
+                bodies.push(fb.text.replacen("fn body(", &format!("fn n{i}_body("), 1));
+                found_body = true;
+            } else {
+                // dedup helper by name; identical content collapses, divergent
+                // content is an un-fusable collision.
+                match helpers.iter().find(|h| h.name == fb.name) {
+                    Some(existing) if existing.text == fb.text => {}
+                    Some(_) => return Err(CodegenError::HelperCollision(fb.name)),
+                    None => helpers.push(fb),
+                }
+            }
+        }
+        if !found_body {
+            return Err(CodegenError::NoBody);
+        }
+    }
+
+    // --- merged param uniform (node-namespaced scalar fields, padded to 16). ---
+    let mut param_order: Vec<(NodeInstanceId, &'static str)> = Vec::new();
+    let mut struct_body = String::new();
+    let mut field_count = 0usize;
+    for (i, node) in region.nodes.iter().enumerate() {
+        for p in node.params {
+            let ty = param_wgsl_type(p)?;
+            writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
+            param_order.push((node.node_id, p.name));
+            field_count += 1;
+        }
+    }
+    let pad_words = (4 - (field_count % 4)) % 4;
+    for k in 0..pad_words {
+        writeln!(struct_body, "    _pad{k}: u32,").unwrap();
+    }
+    if field_count == 0 {
+        struct_body.push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
+    }
+
+    let mut out = String::new();
+    out.push_str("struct Params {\n");
+    out.push_str(&struct_body);
+    out.push_str("}\n\n");
+
+    // --- bindings: uniform(0), external inputs(1..), output. textureLoad reads
+    // (exact texel, read-once) so no sampler. ---
+    out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
+    for e in 0..region.num_external_inputs {
+        writeln!(out, "@group(0) @binding({}) var src_{e}: texture_2d<f32>;", e + 1).unwrap();
+    }
+    let out_binding = region.num_external_inputs + 1;
+    writeln!(
+        out,
+        "@group(0) @binding({out_binding}) var dst: texture_storage_2d<rgba16float, write>;"
+    )
+    .unwrap();
+    out.push('\n');
+
+    // --- deduped helpers, then namespaced bodies ---
+    for h in &helpers {
+        out.push_str(h.text.trim_end());
+        out.push_str("\n\n");
+    }
+    for b in &bodies {
+        out.push_str(b.trim_end());
+        out.push_str("\n\n");
+    }
+
+    // --- cs_main: read external inputs once, thread registers, store output ---
+    out.push_str("@compute @workgroup_size(16, 16)\n");
+    out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
+    out.push_str("    let dims = textureDimensions(dst);\n");
+    out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
+    out.push_str("    let coord = vec2<i32>(i32(id.x), i32(id.y));\n");
+    for e in 0..region.num_external_inputs {
+        writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
+    }
+    for (i, node) in region.nodes.iter().enumerate() {
+        let mut args: Vec<String> = Vec::new();
+        for src in &node.inputs {
+            match src {
+                InputSource::External(e) => {
+                    if *e >= region.num_external_inputs {
+                        return Err(CodegenError::BadInput);
+                    }
+                    args.push(format!("ext_{e}"));
+                }
+                InputSource::Node(id) => {
+                    let Some(j) = index_of(*id) else {
+                        return Err(CodegenError::BadInput);
+                    };
+                    if j >= i {
+                        return Err(CodegenError::BadInput); // not earlier in topo order
+                    }
+                    args.push(format!("r{j}"));
+                }
+            }
+        }
+        for p in node.params {
+            args.push(format!("params.n{i}_{}", p.name));
+        }
+        writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
+    }
+    let Some(out_idx) = index_of(region.output) else {
+        return Err(CodegenError::BadInput);
+    };
+    writeln!(out, "    textureStore(dst, coord, r{out_idx});").unwrap();
+    out.push_str("}\n");
+
+    Ok(GeneratedFusion { wgsl: out, param_order })
 }
 
 #[cfg(test)]
@@ -416,6 +634,156 @@ mod gpu_tests {
                 r.max_abs, r.max_rel
             );
         }
+    }
+
+    /// Dispatch a fused kernel: uniform(0), single external src(1), output at
+    /// `dst_binding`. No sampler (fused kernels textureLoad — read once).
+    fn dispatch_fused_kernel(
+        device: &GpuDevice,
+        wgsl: &str,
+        input: &GpuTexture,
+        param_bytes: &[u8],
+        dst_binding: u32,
+    ) -> RenderTarget {
+        let (w, h) = (input.width, input.height);
+        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "fused-test");
+        let out = RenderTarget::new(device, w, h, FMT, "fused-out");
+        let mut enc = device.create_encoder("fused-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: param_bytes },
+                GpuBinding::Texture { binding: 1, texture: input },
+                GpuBinding::Texture { binding: dst_binding, texture: &out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "fused-test",
+        );
+        enc.commit_and_wait_completed();
+        out
+    }
+
+    /// THE step-3 headline: the multi-atom generator chains all 7 ColorGrade
+    /// bodies into ONE kernel (register threading + the source->{chain, mix.a}
+    /// fork + helper dedup + namespacing + merged uniform), and its output
+    /// matches the hand-fused colorgrade_fused.wgsl bit-for-bit through the
+    /// oracle. This is the auto-generated 7.4× ColorGrade.
+    #[test]
+    fn fused_colorgrade_generated_matches_hand_kernel() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::{
+            ClampTexture, Colorize, Contrast, Gain, HueSaturation, Mix, Saturation,
+        };
+
+        let device = crate::test_device();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient(&device, w, h);
+        let id = NodeInstanceId;
+
+        // ColorGrade region: gain -> saturation -> hue -> contrast -> colorize,
+        // then mix(a=source fork, b=colorize) -> clamp. Bodies/params from the
+        // atom types' consts.
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)] },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))] },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))] },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))] },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))] },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))] },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))] },
+            ],
+            num_external_inputs: 1,
+            output: id(6),
+        };
+        let fused = generate_fused(&region).expect("fuse ColorGrade region");
+
+        // Structural: shared helpers deduped (hue_saturation + colorize both
+        // carry rgb2hsv/hsv2rgb), every body namespaced, one entry.
+        assert_eq!(
+            fused.wgsl.matches("fn rgb2hsv").count(),
+            1,
+            "rgb2hsv must be deduped to one copy"
+        );
+        assert_eq!(fused.wgsl.matches("fn hsv2rgb").count(), 1, "hsv2rgb deduped");
+        assert!(!fused.wgsl.contains("fn body("), "every body must be namespaced");
+        assert!(fused.wgsl.contains("fn n5_body"), "mix body namespaced as n5_body");
+        assert_eq!(fused.wgsl.matches("fn cs_main").count(), 1, "exactly one entry");
+
+        // Pack the generated uniform per its param_order. Same logical values
+        // as the hand kernel below; mix.mode is the one u32.
+        let slot_bytes = |nid: u32, name: &str| -> [u8; 4] {
+            if (nid, name) == (5, "mode") {
+                return 0u32.to_le_bytes();
+            }
+            let v: f32 = match (nid, name) {
+                (0, "gain") => 1.15,
+                (1, "saturation") => 1.3,
+                (2, "hue") => 25.0,
+                (2, "saturation") => 1.2,
+                (2, "value") => 1.0,
+                (3, "contrast") => 1.2,
+                (4, "amount") => 0.4,
+                (4, "hue") => 210.0,
+                (4, "saturation") => 0.8,
+                (4, "focus") => 0.6,
+                (5, "amount") => 1.0,
+                (6, "min") => 0.0,
+                (6, "max") => 65000.0,
+                _ => panic!("unexpected param {nid}.{name}"),
+            };
+            v.to_le_bytes()
+        };
+        let mut bytes = Vec::new();
+        for (nid, name) in &fused.param_order {
+            bytes.extend_from_slice(&slot_bytes(nid.0, name));
+        }
+        while bytes.len() % 16 != 0 {
+            bytes.push(0);
+        }
+        let from_generated = dispatch_fused_kernel(&device, &fused.wgsl, &input, &bytes, 2);
+
+        // Hand kernel (colorgrade_fused.wgsl) via the reference module, same values.
+        let hand_params = crate::node_graph::freeze::reference::ColorGradeParams {
+            gain: 1.15,
+            sat_s: 1.3,
+            hue_deg: 25.0,
+            sat_h: 1.2,
+            val_h: 1.0,
+            contrast: 1.2,
+            col_amount: 0.4,
+            col_hue: 210.0,
+            col_sat: 0.8,
+            col_focus: 0.6,
+            mix_amount: 1.0,
+            mix_mode: 0,
+            clamp_min: 0.0,
+            clamp_max: 65000.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        let pipeline = crate::node_graph::freeze::reference::colorgrade_pipeline(&device);
+        let hand_out = RenderTarget::new(&device, w, h, FMT, "hand-cg");
+        {
+            let mut enc = device.create_encoder("hand-cg");
+            crate::node_graph::freeze::reference::dispatch_fused_colorgrade(
+                &mut enc,
+                &pipeline,
+                &input,
+                &hand_out.texture,
+                &hand_params,
+            );
+            enc.commit_and_wait_completed();
+        }
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &hand_out.texture, &from_generated.texture, 1e-4, 1e-4);
+        assert_eq!(
+            r.over_count, 0,
+            "auto-generated fused ColorGrade must match the hand kernel \
+             (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
     }
 
     /// The coincident two-input path: the generated standalone mix kernel
