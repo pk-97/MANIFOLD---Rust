@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::types::BlendMode;
-use manifold_core::{EffectId, NodeId};
+use manifold_core::{EffectId, LayerId, NodeId};
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
@@ -95,8 +95,13 @@ pub struct ContentPipeline {
     #[cfg(target_os = "macos")]
     preview_generation: u64,
     /// Authoring-time node-output preview request `(watched effect, selected
-    /// node)`, forwarded to the compositor each frame. `None` = no preview.
+    /// node)`, forwarded to the compositor each frame. `None` = no effect
+    /// preview. Mutually exclusive with `node_preview_generator`.
     node_preview_request: Option<(EffectId, Option<NodeId>)>,
+    /// Generator-side counterpart `(watched layer, selected node)`. Drives the
+    /// per-node capture on the layer's `JsonGraphGenerator`. `None` = no
+    /// generator preview.
+    node_preview_generator: Option<(LayerId, Option<NodeId>)>,
     /// Triple-buffered IOSurface textures for the node-output preview (the
     /// captured node texture, downscaled). Separate bridge from the workspace
     /// preview so the editor reads the node output independently.
@@ -185,6 +190,7 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             preview_generation: 0,
             node_preview_request: None,
+            node_preview_generator: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
@@ -464,6 +470,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.node_preview_request = request;
     }
 
+    /// Generator-side counterpart of [`Self::set_node_preview_request`]:
+    /// `(watched layer, selected node)`. Mutually exclusive with the effect
+    /// request — the content thread sets at most one.
+    pub fn set_node_preview_generator(&mut self, request: Option<(LayerId, Option<NodeId>)>) {
+        self.node_preview_generator = request;
+    }
+
     /// Get a clone of the shared output handle. The UI thread holds this
     /// to read the front buffer view and dimensions.
     pub fn shared_output(&self) -> Arc<SharedOutputView> {
@@ -600,6 +613,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if let Some(gen_renderer) =
                         renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
                     {
+                        // Aim (or clear) the node-output preview before render.
+                        match &self.node_preview_generator {
+                            Some((layer_id, node_id)) => {
+                                gen_renderer.set_preview_node(layer_id, node_id.as_ref())
+                            }
+                            None => gen_renderer.clear_preview(),
+                        }
+
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -610,6 +631,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         );
                         break;
                     }
+                }
+            }
+            // Capture: downscale the watched generator's node output into the
+            // node-preview surface (raw encoder, after the wrapper is dropped),
+            // or clear to black when nothing was captured (non-texture node).
+            #[cfg(target_os = "macos")]
+            if let Some((layer_id, _)) = &self.node_preview_generator {
+                let node_tex = renderers
+                    .iter()
+                    .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
+                    .and_then(|gr| gr.preview_texture(layer_id));
+                if let Some(node_tex) = node_tex {
+                    Self::update_workspace_preview(
+                        &mut gen_enc,
+                        node_tex,
+                        self.node_preview_textures[self.write_surface_index].as_ref(),
+                        self.preview_pipeline.as_ref(),
+                        self.preview_sampler.as_ref(),
+                    );
+                } else if let Some(target) =
+                    self.node_preview_textures[self.write_surface_index].as_ref()
+                {
+                    gen_enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
                 }
             }
             gen_enc.commit();
@@ -867,13 +911,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if !export_mode {
             let write_idx = self.write_surface_index as u32;
             let preview = self.preview_bridge.clone();
-            // Only publish the node preview when one was actually captured this
-            // frame — otherwise the editor would read a stale front buffer.
-            let node_preview = if self.node_preview_request.is_some() {
-                self.node_preview_bridge.clone()
-            } else {
-                None
-            };
+            // Publish the node preview when a preview (effect or generator) is
+            // active this frame — otherwise leave the editor's front buffer.
+            let node_preview =
+                if self.node_preview_request.is_some() || self.node_preview_generator.is_some() {
+                    self.node_preview_bridge.clone()
+                } else {
+                    None
+                };
             native_enc.add_completed_handler(move || {
                 if let Some(ref b) = preview {
                     b.publish_front(write_idx);

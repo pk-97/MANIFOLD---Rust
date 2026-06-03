@@ -629,15 +629,21 @@ impl ContentThread {
         #[cfg(feature = "profiling")]
         let _t0 = std::time::Instant::now();
 
-        // Forward the authoring-time node-output preview request: the watched
-        // effect plus the editor's selected node. `None` when nothing is
-        // watched or no node is selected — clears the preview.
-        let preview_request = self
+        // Forward the authoring-time node-output preview request to the
+        // pipeline. Effect and generator are mutually exclusive (only one
+        // editor canvas is watched at a time); the inactive one is cleared.
+        let effect_preview = self
             .watched_graph_effect
             .as_ref()
             .map(|eid| (eid.clone(), self.preview_graph_node.clone()));
+        let generator_preview = self
+            .watched_graph_generator_layer
+            .as_ref()
+            .map(|lid| (lid.clone(), self.preview_graph_node.clone()));
         self.content_pipeline
-            .set_node_preview_request(preview_request);
+            .set_node_preview_request(effect_preview);
+        self.content_pipeline
+            .set_node_preview_generator(generator_preview);
 
         let render_work_start = std::time::Instant::now();
         self.content_pipeline.render_content(

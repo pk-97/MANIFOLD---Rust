@@ -66,4 +66,15 @@ pub trait Generator: Send {
             "Generator::as_any must be overridden by the concrete type to enable downcasting"
         )
     }
+
+    /// Aim the authoring-time output preview at `node_id`, or clear it.
+    /// Default no-op (Rust generators have no inner graph to preview);
+    /// `JsonGraphGenerator` overrides it to preserve that node's output.
+    fn set_preview_node(&mut self, _node_id: Option<&manifold_core::NodeId>) {}
+
+    /// The preview target's captured output texture from the most recent
+    /// `render`, if a node is targeted and produced one. Default `None`.
+    fn preview_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
 }

@@ -752,6 +752,24 @@ impl Generator for JsonGraphGenerator {
         &self.type_id
     }
 
+    /// Aim the authoring-time output preview at the editor's stable
+    /// [`NodeId`](manifold_core::NodeId), resolved to this generator's runtime
+    /// node, or clear it. The targeted node's output is preserved past the
+    /// frame so the editor can sample it.
+    fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
+        let target = node_id.and_then(|nid| self.graph.instance_by_node_id(nid));
+        self.executor.set_preview_target(target);
+    }
+
+    /// The preview target's captured output texture from the most recent
+    /// `render`. `None` if no target, the node was pruned, or it has no
+    /// texture output.
+    fn preview_texture(&self) -> Option<&GpuTexture> {
+        let res = self.executor.preview_resource()?;
+        let slot = self.executor.backend().slot_for(res)?;
+        self.executor.backend().texture_2d(slot)
+    }
+
     fn render(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
