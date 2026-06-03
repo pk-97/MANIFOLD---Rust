@@ -1513,6 +1513,67 @@ mod gpu_tests {
         }
     }
 
+    /// Single-input GATHER parity: the neighbourhood-filter family (sharpen,
+    /// edge_detect) reads `in` at offsets the body computes, so it binds the
+    /// 1-input layout uniform(0)/tex(1)/samp(2)/dst(3) — identical to a pointwise
+    /// atom — and the body samples `in` itself. Both recover the texel step from
+    /// the ambient `dims` (= output size), so the generated kernel ignores any
+    /// texel_size_* fields the hand uniform carries; the parity payload still
+    /// packs those fields (= 1/dims at the test size) so the hand shader reads the
+    /// matching step. `dispatch_pointwise` covers the shared 1-input layout.
+    #[test]
+    fn generated_single_input_gather_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h);
+        let texel = 1.0f32 / 128.0;
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+        let differ = TextureDiff::new(&device);
+
+        // sharpen PARAMS: [amount]. edge_detect PARAMS: [amount, threshold]; its
+        // hand uniform additionally carries [texel_x, texel_y] = 1/dims.
+        let sharpen_bytes = pack_f32(&[1.5]);
+        let edge_bytes = pack_f32(&[0.7, 0.2, texel, texel]);
+        let cases: &[(&str, &str, &[u8])] = &[
+            ("node.sharpen", "sharpen.wgsl", sharpen_bytes.as_slice()),
+            ("node.edge_detect", "edge_detect.wgsl", edge_bytes.as_slice()),
+        ];
+        for (type_id, shader_file, bytes) in cases {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+                node.input_access(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            // Structural: the gather input is NOT pre-sampled into a register.
+            assert!(
+                !generated.contains("let c_in"),
+                "{type_id}: a Gather input must not be pre-sampled:\n{generated}"
+            );
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
+                .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
+            let from_original = dispatch_pointwise(&device, &original, &input, bytes);
+            let from_generated = dispatch_pointwise(&device, &generated, &input, bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated must reproduce {shader_file} (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
+
     /// Dispatch a SOURCE (generator) kernel: [uniform(0)], output. No texture
     /// inputs, no sampler — a paramless source binds only its output at binding 0.
     fn dispatch_source(

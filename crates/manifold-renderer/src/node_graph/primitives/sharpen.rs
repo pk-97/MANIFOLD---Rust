@@ -54,6 +54,9 @@ crate::primitive! {
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["sharpen", "unsharp mask", "crisp"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/sharpen_body.wgsl"),
+    input_access: [Gather],
 }
 
 impl Primitive for Sharpen {
@@ -73,9 +76,13 @@ impl Primitive for Sharpen {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: `in` is a Gather input (4-neighbour Laplacian). The
+            // generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3), matching the
+            // set below. sharpen.wgsl is retained as the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/sharpen.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.sharpen standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.sharpen",
             )
         });
