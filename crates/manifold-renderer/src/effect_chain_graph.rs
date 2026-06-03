@@ -550,8 +550,21 @@ impl ChainGraph {
             let view = if crate::node_graph::freeze::install::freeze_enabled()
                 && fx.graph.is_none()
             {
-                crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type())
-                    .unwrap_or(base_view)
+                match crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type()) {
+                    Some(fused) => {
+                        // Step-7 attribution (minimal): one line per chain
+                        // rebuild so the operator can confirm a card is actually
+                        // rendering through the fused kernel. Rebuilds are
+                        // editing-time events (topology change / resize), not
+                        // per-frame, so this is not hot-path spam. Grep `[freeze]`.
+                        eprintln!(
+                            "[freeze] {} → FUSED kernel (canonical region collapsed to 1 dispatch)",
+                            fx.effect_type().as_str()
+                        );
+                        fused
+                    }
+                    None => base_view,
+                }
             } else {
                 base_view
             };
