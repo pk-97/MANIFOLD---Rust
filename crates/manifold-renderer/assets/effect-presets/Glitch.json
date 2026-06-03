@@ -117,6 +117,7 @@
       "id": 1,
       "typeId": "node.value",
       "handle": "amount_value", "nodeId": "amount_value",
+      "title": "Amount",
       "params": {
         "value": { "type": "Float", "value": 0.0 }
       }
@@ -125,6 +126,7 @@
       "id": 2,
       "typeId": "node.value",
       "handle": "speed_value", "nodeId": "speed_value",
+      "title": "Speed",
       "params": {
         "value": { "type": "Float", "value": 2.0 }
       }

@@ -34,6 +34,14 @@ pub struct NodeInstance {
     /// `EffectNode::parameters()`. Mutated by the unified
     /// `ToggleNodeParamExposeCommand` via `Graph::set_param_exposed`.
     pub exposed_params: AHashSet<&'static str>,
+    /// Author-supplied display title shown in the node header, copied from
+    /// `EffectGraphNode::title` at load. `None` falls back to the friendly
+    /// palette label (or a prettified type id). Honored for every node type;
+    /// the snapshot builder appends a `(WGSL)` marker for `wgsl_compute` nodes
+    /// so a hand-written shader reads as custom rather than native. This is the
+    /// single home for the title — it round-trips back to the def via
+    /// persistence's `from_graph`.
+    pub title: Option<String>,
 }
 
 impl NodeInstance {
@@ -52,6 +60,7 @@ impl NodeInstance {
             node,
             params,
             exposed_params: AHashSet::default(),
+            title: None,
         }
     }
 }

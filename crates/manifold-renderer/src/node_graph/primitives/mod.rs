@@ -197,7 +197,9 @@ mod uv_field;
 mod value;
 mod vignette;
 mod voronoi_2d;
-mod wgsl_compute;
+// Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
+// the canonical `TYPE_ID` rather than a duplicated string literal.
+pub(crate) mod wgsl_compute;
 mod watercolor;
 mod wet_dry_mix;
 mod wireframe_depth;
