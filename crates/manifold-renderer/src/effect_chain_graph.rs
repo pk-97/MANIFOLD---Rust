@@ -404,6 +404,12 @@ impl ChainGraph {
         pool: Option<&TexturePool>,
         width: u32,
         height: u32,
+        // Effect the graph editor is watching, if any. Its chain is built
+        // unfused even when the freeze toggle is on, so its intermediate
+        // node outputs exist for the authoring-time preview to sample. `None`
+        // (no editor / not watching) leaves the freeze gate untouched — zero
+        // effect on the live render path.
+        preview_effect: Option<&EffectId>,
     ) -> Option<Self> {
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
@@ -549,6 +555,7 @@ impl ChainGraph {
             // (splice, outer_param_index, binding resolution) is shape-identical.
             let view = if crate::node_graph::freeze::install::freeze_enabled()
                 && fx.graph.is_none()
+                && preview_effect != Some(&fx.id)
             {
                 match crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type()) {
                     Some(fused) => {
@@ -1129,6 +1136,45 @@ impl ChainGraph {
         self.executor.backend().texture_2d(self.output_slot)
     }
 
+    /// Aim the authoring-time output preview at `node_id` within effect
+    /// `effect_id`, or clear it. Resolves the editor's stable [`NodeId`] to
+    /// the runtime node via the owning effect's `node_map`. A `None` node id,
+    /// or an `effect_id` this chain doesn't hold, clears capture — so a chain
+    /// that isn't the watched one contributes no stale preview. Call before
+    /// [`Self::run`]; the preserved texture is then read via
+    /// [`Self::preview_texture`].
+    pub fn set_preview_target(&mut self, effect_id: &EffectId, node_id: Option<&NodeId>) {
+        let target = node_id.and_then(|nid| {
+            self.effect_nodes
+                .iter()
+                .find(|slot| &slot.effect_id == effect_id)
+                .and_then(|slot| {
+                    slot.node_map
+                        .iter()
+                        .find(|(mapped, _)| mapped == nid)
+                        .map(|(_, instance)| *instance)
+                })
+        });
+        self.executor.set_preview_target(target);
+    }
+
+    /// Clear any preview capture on this chain. Called each frame for chains
+    /// that don't hold the watched effect so a stale target doesn't keep a
+    /// texture pinned.
+    pub fn clear_preview_target(&mut self) {
+        self.executor.set_preview_target(None);
+    }
+
+    /// The preview target's captured output texture from the most recent
+    /// [`Self::run`], if this chain holds the watched node and it produced a
+    /// texture. `None` otherwise (no target, target pruned, or non-texture
+    /// output). See [`Executor::preview_resource`](crate::node_graph::Executor::preview_resource).
+    pub fn preview_texture(&self) -> Option<&GpuTexture> {
+        let res = self.executor.preview_resource()?;
+        let slot = self.executor.backend().slot_for(res)?;
+        self.executor.backend().texture_2d(slot)
+    }
+
     /// Forwarded `clear_state` for each effect node — called on seek
     /// / project load so trails, feedback, and mip pyramids don't
     /// carry stale content across playback discontinuities. Also
@@ -1441,7 +1487,7 @@ mod multi_segment_tests {
         };
 
         let result =
-            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256);
+            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
 
         let cg = result.expect(
             "ChainGraph should build for a non-contiguous wet/dry group \
@@ -1484,7 +1530,7 @@ mod multi_segment_tests {
         };
 
         let result =
-            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256);
+            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
 
         let cg = result.expect("ChainGraph should build for contiguous group");
         assert_eq!(cg.group_mix_nodes.len(), 1);
@@ -1524,6 +1570,7 @@ mod multi_segment_tests {
             None,
             256,
             256,
+            None,
         );
 
         let cg = result.expect("ChainGraph should build for three-segment group");
@@ -1560,7 +1607,7 @@ mod binding_seed_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(EffectTypeId::SOFT_FOCUS_GRAPH);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("SoftFocus chain should build");
 
         let slot = cg
@@ -1653,7 +1700,7 @@ mod topology_hash_tests {
         assert!(fx.enabled, "EffectInstance::new defaults enabled = true");
 
         let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256);
-        let cg_on = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)
+        let cg_on = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
             .expect("Mirror chain builds at enabled = true");
         assert_eq!(
             cg_on.effect_nodes.len(),
@@ -1671,7 +1718,7 @@ mod topology_hash_tests {
 
         // With this as the only effect, the chain should refuse to build
         // (no active effects → None) — equivalent to "the chain becomes empty".
-        let cg_off = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256);
+        let cg_off = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None);
         assert!(
             cg_off.is_none(),
             "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
@@ -1787,7 +1834,7 @@ mod user_binding_tests {
         let mut control = make_default(EffectTypeId::STYLIZED_FEEDBACK);
         control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
         let mut cg0 =
-            ChainGraph::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256)
+            ChainGraph::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None)
                 .expect("control chain builds");
         apply(&mut cg0, &control.param_values);
         let slot0 = &cg0.effect_nodes[0];
@@ -1802,7 +1849,7 @@ mod user_binding_tests {
         fx.param_values[1] = ParamSlot::exposed(0.3);
         fx.upsert_param_mapping(scale_note("zoom", 2.0));
         let mut cg =
-            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256)
+            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
                 .expect("noted chain builds");
         apply(&mut cg, &fx.param_values);
         let slot = &cg.effect_nodes[0];
@@ -1867,7 +1914,7 @@ mod user_binding_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = stylized_with_translate_exposed(0.48);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("StylizedFeedback chain with one user binding builds");
 
         let slot = cg
@@ -1906,6 +1953,7 @@ mod user_binding_tests {
             None,
             256,
             256,
+            None,
         )
         .expect("StylizedFeedback chain with one user binding builds");
 
@@ -1985,7 +2033,7 @@ mod user_binding_tests {
         assert_eq!(fx.param_values.len(), 4);
         fx.param_values[slot_index] = ParamSlot::exposed(0.42);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("StylizedFeedback chain with one user binding builds");
         let slot = cg
             .effect_nodes
@@ -2190,7 +2238,7 @@ mod generator_input_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = invert_with_generator_input();
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("chain builds with a divergent def including system.generator_input");
 
         let slot = cg
@@ -2217,7 +2265,7 @@ mod generator_input_tests {
         // Canonical Invert preset has no system.generator_input.
         let fx = make_default(EffectTypeId::INVERT_COLORS);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("Invert chain builds without divergent def");
 
         let slot = cg
@@ -2248,7 +2296,7 @@ mod generator_input_tests {
         let fx = invert_with_generator_input();
 
         let mut cg =
-            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256)
+            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
                 .expect("chain builds");
 
         let gi_id = cg
@@ -2332,6 +2380,7 @@ mod generator_input_tests {
             None,
             256,
             256,
+            None,
         )
         .expect("ColorGrade chain builds");
 
@@ -2430,7 +2479,7 @@ mod chain_error_tests {
             offset: 0.0,
         });
 
-        let cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
             .expect("Invert chain still builds; the binding just fails to resolve");
 
         let errors = cg.errors();
@@ -2462,7 +2511,7 @@ mod chain_error_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(EffectTypeId::INVERT_COLORS);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("clean Invert chain builds");
 
         assert!(
