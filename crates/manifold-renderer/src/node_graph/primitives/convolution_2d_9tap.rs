@@ -69,6 +69,9 @@ crate::primitive! {
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["custom convolution", "kernel", "convolve", "filter matrix"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/convolution_2d_9tap_body.wgsl"),
+    input_access: [Gather],
 }
 
 impl Primitive for Convolution2D9Tap {
@@ -108,9 +111,15 @@ impl Primitive for Convolution2D9Tap {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: `in` is a Gather input (3×3 neighbourhood). Generated
+            // kernel binds uniform(0)/tex(1)/samp(2)/dst(3); the 11 scalar params
+            // (k0..k8, bias, normalise) match the hand uniform order exactly and
+            // the body recovers the texel step from `dims`.
+            // convolution_2d_9tap.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/convolution_2d_9tap.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.convolution_2d_9tap standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.convolution_2d_9tap",
             )
         });

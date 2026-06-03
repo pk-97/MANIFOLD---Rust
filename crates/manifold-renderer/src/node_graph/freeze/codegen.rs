@@ -1536,9 +1536,29 @@ mod gpu_tests {
         // hand uniform additionally carries [texel_x, texel_y] = 1/dims.
         let sharpen_bytes = pack_f32(&[1.5]);
         let edge_bytes = pack_f32(&[0.7, 0.2, texel, texel]);
+        // gradient_central_diff PARAMS: [channel, scale_mode, wrap_mode] (all
+        // Enum->u32). channel=G, scale_mode=UV (exercises the dims*0.5 branch);
+        // wrap_mode is host-side sampler-only so the body ignores it. The hand
+        // uniform is {channel, scale_mode, _pad, _pad}; the generated Params is
+        // {channel, scale_mode, wrap_mode, _pad}. Both read channel/scale_mode
+        // from the same offsets, so one 16-byte payload drives both.
+        let mut grad_bytes = vec![0u8; 16];
+        grad_bytes[0..4].copy_from_slice(&1u32.to_le_bytes()); // channel = G
+        grad_bytes[4..8].copy_from_slice(&1u32.to_le_bytes()); // scale_mode = UV
+        // convolution_2d_9tap PARAMS: [k0..k8, bias, normalise (Bool->u32)] —
+        // identical layout to the hand ConvUniforms. A normalising box blur
+        // exercises the sum-normalise divide + the centre-alpha passthrough.
+        let mut conv_bytes = vec![0u8; 48];
+        for i in 0..9 {
+            conv_bytes[i * 4..i * 4 + 4].copy_from_slice(&1.0f32.to_le_bytes());
+        }
+        conv_bytes[36..40].copy_from_slice(&0.0f32.to_le_bytes()); // bias
+        conv_bytes[40..44].copy_from_slice(&1u32.to_le_bytes()); // normalise = true
         let cases: &[(&str, &str, &[u8])] = &[
             ("node.sharpen", "sharpen.wgsl", sharpen_bytes.as_slice()),
             ("node.edge_detect", "edge_detect.wgsl", edge_bytes.as_slice()),
+            ("node.gradient_central_diff", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
+            ("node.convolution_2d_9tap", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

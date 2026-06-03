@@ -81,6 +81,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["gradient", "edge slope", "derivative", "sobel"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/gradient_central_diff_body.wgsl"),
+    input_access: [Gather],
     extra_fields: {
         repeat_sampler: Option<manifold_gpu::GpuSampler> = None,
     },
@@ -117,9 +120,15 @@ impl Primitive for GradientCentralDiff {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: `in` is a Gather input (4-neighbour central
+            // difference). Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3);
+            // the body recovers the texel step from `dims` and ignores wrap_mode
+            // (the sampler below carries the address mode).
+            // gradient_central_diff.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/gradient_central_diff.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.gradient_central_diff standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.gradient_central_diff",
             )
         });
