@@ -116,6 +116,8 @@ Write code directly in the main context by default. Only spawn an agent for genu
 | `docs/NODE_GRAPH_SYSTEM.md` | Node-graph effect/generator architecture |
 | `docs/NODE_CATALOG.md` | Source of truth for what nodes exist — atoms, effects, presets. Read first for the §2.5 audit. |
 | `docs/DECOMPOSING_GENERATORS.md` | How-to-think for any decomposition work (generators + effects + bundles). Bundle-vs-atom criterion + §2.5 audit are mandatory before proposing new primitives. |
+| `docs/GROUPING_GRAPHS.md` | How-to-think for organizing a flat graph into readable node groups (legibility, not granularity). Heuristics for choosing groups, flat-vs-nested, the `nodeId` safety invariant, and the flatten-equivalence verification recipe. Read before grouping any preset. |
+| `docs/NODE_GROUPS_DESIGN.md` | Node-group mechanics + JSON schema: the flattener as a pure `EffectGraphDef → EffectGraphDef` transform, boundary nodes, constraints. The authoritative spec behind GROUPING_GRAPHS. |
 | `docs/GENERATOR_DECOMPOSITION_PLAN.md` | Historical record of the original generator migration (closed — 0 Rust generators remain) |
 | `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` | Active 2nd-pass plan: tranche order, per-bundle inventory, atom activation list |
 | `docs/MATERIAL_SYSTEM_DESIGN.md` | Implementation contract for the Material port type + 3D mesh renderer integration (unlit / phong / pbr / cel). Read before any material-related work; supersedes the scattered-scalar shading params on render_3d_mesh / render_instanced_3d_mesh. |
