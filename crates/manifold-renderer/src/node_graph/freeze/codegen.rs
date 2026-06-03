@@ -1510,6 +1510,8 @@ mod gpu_tests {
         mirror_bytes[0..4].copy_from_slice(&8u32.to_le_bytes()); // FoldBoth
         // radial_fold_uv [segments, cx, cy] (16B).
         let radial_bytes = pack_f32(&[6.0, 0.5, 0.5]);
+        // ellipse_mask [cx,cy,radius_x,radius_y,rotation,softness] (32B).
+        let ellipse_bytes = pack_f32(&[0.5, 0.5, 0.3, 0.2, 0.785, 0.1, 0.0, 0.0]);
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -1520,6 +1522,7 @@ mod gpu_tests {
             ("node.box_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
             ("node.mirror_fold_uv", "mirror_fold_uv.wgsl", Some(mirror_bytes.as_slice())),
             ("node.radial_fold_uv", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
+            ("node.ellipse_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();
