@@ -66,6 +66,8 @@ crate::primitive! {
     category: Stylize,
     role: Filter,
     aliases: ["flash", "strobe", "pulse", "hit"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/flash_body.wgsl"),
 }
 
 impl Primitive for Flash {
@@ -93,9 +95,11 @@ impl Primitive for Flash {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.flash standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/flash.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.flash",
             )
         });

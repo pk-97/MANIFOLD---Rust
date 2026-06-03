@@ -72,6 +72,8 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["reinhard", "tonemap", "hdr"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/reinhard_tone_map_body.wgsl"),
 }
 
 impl Primitive for ReinhardToneMap {
@@ -97,9 +99,11 @@ impl Primitive for ReinhardToneMap {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.reinhard_tone_map standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/reinhard_tone_map.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.reinhard_tone_map",
             )
         });

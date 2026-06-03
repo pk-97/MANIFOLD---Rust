@@ -1131,4 +1131,67 @@ mod gpu_tests {
             );
         }
     }
+
+    /// Enum/int pointwise parity (overnight sweep): atoms whose uniform mixes f32
+    /// and u32 (Enum -> u32) fields, so the payload is packed by hand rather than
+    /// via pack_f32. flash branches on `mode`; reinhard on `curve`. Standard
+    /// pointwise layout (uniform(0), tex(1), sampler(2), dst(3)).
+    #[test]
+    fn generated_enum_pointwise_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+        let differ = TextureDiff::new(&device);
+
+        // flash: amount=0.7 (f32), mode=2 Gain (u32), pad to 16.
+        let mut flash_bytes = Vec::new();
+        flash_bytes.extend_from_slice(&0.7f32.to_le_bytes());
+        flash_bytes.extend_from_slice(&2u32.to_le_bytes());
+        while flash_bytes.len() < 16 {
+            flash_bytes.push(0);
+        }
+        // reinhard: intensity=1.5, contrast=1.2 (f32), curve=1 Simple (u32), pad.
+        let mut reinhard_bytes = Vec::new();
+        reinhard_bytes.extend_from_slice(&1.5f32.to_le_bytes());
+        reinhard_bytes.extend_from_slice(&1.2f32.to_le_bytes());
+        reinhard_bytes.extend_from_slice(&1u32.to_le_bytes());
+        while reinhard_bytes.len() < 16 {
+            reinhard_bytes.push(0);
+        }
+
+        let cases: &[(&str, &str, &[u8])] = &[
+            ("node.flash", "flash.wgsl", flash_bytes.as_slice()),
+            ("node.reinhard_tone_map", "reinhard_tone_map.wgsl", reinhard_bytes.as_slice()),
+        ];
+        for (type_id, shader_file, bytes) in cases {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+                node.input_access(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
+                .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
+            let from_original = dispatch_pointwise(&device, &original, &input, bytes);
+            let from_generated = dispatch_pointwise(&device, &generated, &input, bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated must reproduce {shader_file} (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
 }
