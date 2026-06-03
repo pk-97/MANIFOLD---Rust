@@ -2444,20 +2444,22 @@ impl Application {
             // scissor batches and the canvas's nodes/wires/grid would
             // never reach the GPU.
             ui.render_overlay_additive(&ws.ui_root.tree, 0);
-            // The sideways mapping drawer floats over everything (immediate-mode
-            // primitives), drawn last so it sits above the card + canvas. The
-            // watched param's live value (resolved above, before the `ws`
-            // borrow) drives the preview dot so it tracks drivers / Ableton /
-            // envelopes in real time.
-            self.editor_mapping_popover.set_live_value(popover_live_value);
-            self.editor_mapping_popover.render(ui);
-            // The popover draws immediate-mode rects AFTER the overlay's last
-            // scissor batch, so cover them or `prepare` skips the fills (panel
-            // background + buttons) while curve/text still draw — a transparent
-            // panel. Full viewport: the popover floats over the whole window.
-            ui.cover_trailing_rects(None);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+            }
+            // The mapping drawer renders in its OWN second pass, on top of the
+            // fully-composited canvas + sidebar. Text is a global last pass, so
+            // a single-pass popover can't occlude the canvas node labels behind
+            // it (they'd bleed through the solid panel). A separate pass draws
+            // the panel — background, then its own text — over everything.
+            if self.editor_mapping_popover.is_open() {
+                ui.begin_frame();
+                self.editor_mapping_popover.set_live_value(popover_live_value);
+                self.editor_mapping_popover.render(ui);
+                ui.cover_trailing_rects(None);
+                if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
+                    ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+                }
             }
         }
 

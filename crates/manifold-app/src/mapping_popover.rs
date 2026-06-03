@@ -40,11 +40,6 @@ const PAD: f32 = 8.0;
 const ROW_H: f32 = 18.0;
 const ROW_GAP: f32 = 6.0;
 const HEADER_H: f32 = 16.0;
-const TRACK_H: f32 = 14.0;
-/// Height of the min/max numeric value row directly under the track. Click
-/// either end to type an exact bound.
-const MINMAX_H: f32 = 13.0;
-const HANDLE_W: f32 = 4.0;
 const CURVE_ROW_H: f32 = 16.0;
 const FONT: f32 = 11.0;
 const FONT_SMALL: f32 = 10.0;
@@ -57,10 +52,6 @@ const PREVIEW_SAMPLES: usize = 48;
 // ── Colors ──────────────────────────────────────────────────────────
 const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 1.0];
 const PANEL_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
-const TRACK_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.08];
-const TRACK_FILL: [f32; 4] = [0.50, 0.78, 1.00, 0.45];
-const HANDLE_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
-const HANDLE_HOVER: [f32; 4] = [0.72, 0.90, 1.00, 1.0];
 const BTN_BG: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
 const BTN_BG_ACTIVE: [f32; 4] = [0.42, 0.30, 0.62, 1.0]; // Ableton-purple INV
 const CURVE_BG: [f32; 4] = [0.20, 0.20, 0.25, 1.0];
@@ -177,9 +168,6 @@ pub struct MappingPopover {
     /// than chained per frame.
     scrub_press_x: f32,
     scrub_start: f32,
-    /// Which handle the cursor is hovering (for the highlight) when not
-    /// dragging.
-    hover: Option<DragTarget>,
     /// True once a scale/offset press has moved past [`CLICK_SLOP`], so the
     /// release commits a scrub rather than entering numeric edit. A press that
     /// never moves is a click → type the value.
@@ -221,7 +209,6 @@ impl MappingPopover {
             dragging: None,
             scrub_press_x: 0.0,
             scrub_start: 0.0,
-            hover: None,
             drag_moved: false,
             edit: None,
             edit_buffer: String::new(),
@@ -305,7 +292,6 @@ impl MappingPopover {
         self.range_lo = lo;
         self.range_hi = hi;
         self.dragging = None;
-        self.hover = None;
         self.drag_moved = false;
         self.edit = None;
         self.edit_buffer.clear();
@@ -331,7 +317,6 @@ impl MappingPopover {
     pub fn close(&mut self) {
         self.open = false;
         self.dragging = None;
-        self.hover = None;
         self.edit = None;
         self.edit_buffer.clear();
     }
@@ -339,11 +324,11 @@ impl MappingPopover {
     // ── Geometry ────────────────────────────────────────────────────
 
     fn panel_height(&self) -> f32 {
-        // header + preview + range track + invert + curve + scale + offset, padded.
+        // header + preview + min + max + invert + curve + scale + offset, padded.
         PAD + HEADER_H
             + ROW_GAP + PREVIEW_H    // live response preview
-            + ROW_GAP + ROW_H        // range track
-            + MINMAX_H               // min/max value row (snug under the track)
+            + ROW_GAP + ROW_H        // min
+            + ROW_GAP + ROW_H        // max
             + ROW_GAP + ROW_H        // invert
             + ROW_GAP + CURVE_ROW_H  // curve
             + ROW_GAP + ROW_H        // scale
@@ -355,83 +340,58 @@ impl MappingPopover {
         Rect::new(self.origin.0, self.origin.1, POPOVER_W, self.panel_height())
     }
 
-    /// The live response-curve preview box, inset under the header.
+    /// The live response-curve preview box, inset under the header. With the
+    /// trim track gone, this plot IS the range picture — its x-axis spans the
+    /// current min..max, so you read the shape against the bounds below it.
     fn preview_rect(&self) -> Rect {
         let y = self.origin.1 + PAD + HEADER_H + ROW_GAP;
         Rect::new(self.origin.0 + PAD, y, POPOVER_W - 2.0 * PAD, PREVIEW_H)
     }
 
-    /// Y of the range-track row's top edge.
-    fn track_row_y(&self) -> f32 {
+    fn min_row_y(&self) -> f32 {
         self.preview_rect().y + PREVIEW_H + ROW_GAP
     }
-
-    /// The trim track rect (where the min/max handles live).
-    fn track_rect(&self) -> Rect {
-        let y = self.track_row_y() + (ROW_H - TRACK_H) * 0.5;
-        Rect::new(self.origin.0 + PAD, y, POPOVER_W - 2.0 * PAD, TRACK_H)
+    fn max_row_y(&self) -> f32 {
+        self.min_row_y() + ROW_H + ROW_GAP
     }
-
-    /// Map a value in `[range_lo, range_hi]` to a normalized 0..1 across
-    /// the track.
-    fn value_to_norm(&self, v: f32) -> f32 {
-        let span = (self.range_hi - self.range_lo).max(f32::EPSILON);
-        ((v - self.range_lo) / span).clamp(0.0, 1.0)
-    }
-
-    /// Map a screen x on the track to a value in `[range_lo, range_hi]`.
-    fn x_to_value(&self, sx: f32) -> f32 {
-        let t = self.track_rect();
-        let norm = ((sx - t.x) / t.w.max(f32::EPSILON)).clamp(0.0, 1.0);
-        self.range_lo + norm * (self.range_hi - self.range_lo)
-    }
-
-    fn handle_center_x(&self, which: DragTarget) -> f32 {
-        let t = self.track_rect();
-        let v = match which {
-            DragTarget::Min => self.cur_min,
-            DragTarget::Max => self.cur_max,
-            // Scale/Offset aren't track handles — never reached here.
-            DragTarget::Scale | DragTarget::Offset => return t.x,
-        };
-        t.x + self.value_to_norm(v) * t.w
-    }
-
-    fn handle_rect(&self, which: DragTarget) -> Rect {
-        let t = self.track_rect();
-        let cx = self.handle_center_x(which);
-        Rect::new(cx - HANDLE_W * 0.5, t.y - 2.0, HANDLE_W, t.h + 4.0)
-    }
-
-    /// Top of the min/max numeric value row, directly under the track.
-    fn minmax_row_y(&self) -> f32 {
-        self.track_row_y() + ROW_H
-    }
-
-    /// Click target for the min (left) or max (right) numeric bound. Click to
-    /// type an exact value — including past the param's nominal range.
-    fn minmax_value_rect(&self, which: DragTarget) -> Rect {
-        let t = self.track_rect();
-        let w = 54.0;
-        let x = match which {
-            DragTarget::Min => t.x,
-            _ => t.x + t.w - w,
-        };
-        Rect::new(x, self.minmax_row_y(), w, MINMAX_H)
-    }
-
     fn invert_row_y(&self) -> f32 {
-        self.minmax_row_y() + MINMAX_H + ROW_GAP
+        self.max_row_y() + ROW_H + ROW_GAP
+    }
+    fn curve_row_y(&self) -> f32 {
+        self.invert_row_y() + ROW_H + ROW_GAP
+    }
+    fn scale_row_y(&self) -> f32 {
+        self.curve_row_y() + CURVE_ROW_H + ROW_GAP
+    }
+    fn offset_row_y(&self) -> f32 {
+        self.scale_row_y() + ROW_H + ROW_GAP
+    }
+
+    /// The row-Y for a value field (Min / Max / Scale / Offset).
+    fn value_field_row_y(&self, which: DragTarget) -> f32 {
+        match which {
+            DragTarget::Min => self.min_row_y(),
+            DragTarget::Max => self.max_row_y(),
+            DragTarget::Scale => self.scale_row_y(),
+            DragTarget::Offset => self.offset_row_y(),
+        }
+    }
+
+    /// Right-aligned click-to-type value box for a Min/Max/Scale/Offset field;
+    /// its label fills the rest of the row to the left.
+    fn value_field_rect(&self, which: DragTarget) -> Rect {
+        Rect::new(
+            self.origin.0 + POPOVER_W - PAD - 76.0,
+            self.value_field_row_y(which),
+            76.0,
+            ROW_H,
+        )
     }
 
     fn invert_btn_rect(&self) -> Rect {
         let y = self.invert_row_y();
         // Right-aligned 36px INV button, label fills the rest.
         Rect::new(self.origin.0 + POPOVER_W - PAD - 36.0, y, 36.0, ROW_H)
-    }
-
-    fn curve_row_y(&self) -> f32 {
-        self.invert_row_y() + ROW_H + ROW_GAP
     }
 
     fn curve_cell_rect(&self, idx: usize) -> Rect {
@@ -441,24 +401,6 @@ impl MappingPopover {
         let cell_w = (avail - gap * (n - 1.0)) / n;
         let x = self.origin.0 + PAD + idx as f32 * (cell_w + gap);
         Rect::new(x, self.curve_row_y(), cell_w, CURVE_ROW_H)
-    }
-
-    fn scale_row_y(&self) -> f32 {
-        self.curve_row_y() + CURVE_ROW_H + ROW_GAP
-    }
-
-    fn offset_row_y(&self) -> f32 {
-        self.scale_row_y() + ROW_H + ROW_GAP
-    }
-
-    /// Right-aligned draggable value box for the scale or offset field.
-    /// The label sits to its left and fills the rest of the row.
-    fn affine_value_rect(&self, which: DragTarget) -> Rect {
-        let y = match which {
-            DragTarget::Offset => self.offset_row_y(),
-            _ => self.scale_row_y(),
-        };
-        Rect::new(self.origin.0 + POPOVER_W - PAD - 76.0, y, 76.0, ROW_H)
     }
 
     fn point_in(r: Rect, sx: f32, sy: f32) -> bool {
@@ -488,45 +430,14 @@ impl MappingPopover {
         if self.is_editing() {
             self.commit_edit();
         }
-        // Min/max numeric value fields under the track ends — click to type an
-        // exact bound (including past the param's nominal range).
+        // Min / Max value fields — click to type an exact bound (including past
+        // the param's nominal range). The range is set numerically now; the
+        // old trim track + drag handles are gone.
         for which in [DragTarget::Min, DragTarget::Max] {
-            if Self::point_in(self.minmax_value_rect(which), sx, sy) {
+            if Self::point_in(self.value_field_rect(which), sx, sy) {
                 self.enter_edit(which);
                 return true;
             }
-        }
-        // Min/max handles — start a range drag. Snapshot the pre-drag
-        // (min, max) first so the commit records a single undo entry.
-        for which in [DragTarget::Min, DragTarget::Max] {
-            // Widen the hit target a little so thin handles are grabbable.
-            let r = self.handle_rect(which);
-            let hit = Rect::new(r.x - 4.0, r.y, r.w + 8.0, r.h);
-            if Self::point_in(hit, sx, sy) {
-                self.pending_actions
-                    .push(PanelAction::EffectMappingRangeSnapshot {
-                        binding_id: self.binding_id.clone(),
-                    });
-                self.dragging = Some(which);
-                return true;
-            }
-        }
-        // Clicking the track body (not on a handle) moves the nearer
-        // handle to the click, then drags it — matches the trim-bar feel.
-        if Self::point_in(self.track_rect(), sx, sy) {
-            let v = self.x_to_value(sx);
-            let which = if (v - self.cur_min).abs() <= (v - self.cur_max).abs() {
-                DragTarget::Min
-            } else {
-                DragTarget::Max
-            };
-            self.pending_actions
-                .push(PanelAction::EffectMappingRangeSnapshot {
-                    binding_id: self.binding_id.clone(),
-                });
-            self.dragging = Some(which);
-            self.apply_drag_value(which, v);
-            return true;
         }
         // INV toggle.
         if Self::point_in(self.invert_btn_rect(), sx, sy) {
@@ -554,7 +465,7 @@ impl MappingPopover {
         // commit records one undo entry; anchor the scrub on press-x and
         // the field's start value.
         for which in [DragTarget::Scale, DragTarget::Offset] {
-            if Self::point_in(self.affine_value_rect(which), sx, sy) {
+            if Self::point_in(self.value_field_rect(which), sx, sy) {
                 self.pending_actions
                     .push(PanelAction::EffectMappingAffineSnapshot {
                         binding_id: self.binding_id.clone(),
@@ -574,52 +485,29 @@ impl MappingPopover {
         true
     }
 
-    /// Pointer move. Drives the live range drag (emits
-    /// `EffectMappingRangeChanged`) or updates the handle hover.
-    pub fn on_move(&mut self, sx: f32, sy: f32) {
+    /// Pointer move. Drives the scale/offset scrub (the only drag now that the
+    /// range is set by typing — no trim handles).
+    pub fn on_move(&mut self, sx: f32, _sy: f32) {
         if !self.open {
             return;
         }
         if let Some(which) = self.dragging {
-            match which {
-                DragTarget::Min | DragTarget::Max => {
-                    let v = self.x_to_value(sx);
-                    self.apply_drag_value(which, v);
-                }
-                DragTarget::Scale | DragTarget::Offset => self.apply_scrub(which, sx),
-            }
-            return;
+            self.apply_scrub(which, sx);
         }
-        // Hover highlight when idle.
-        self.hover = [DragTarget::Min, DragTarget::Max].into_iter().find(|&w| {
-            let r = self.handle_rect(w);
-            Self::point_in(Rect::new(r.x - 4.0, r.y, r.w + 8.0, r.h), sx, sy)
-        });
     }
 
-    /// Pointer release. Commits an in-progress drag into one undo command:
-    /// `EffectMappingRangeCommit` for a min/max drag, or
-    /// `EffectMappingAffineCommit` for a scale/offset scrub.
+    /// Pointer release. The only drag is a scale/offset scrub: a real scrub
+    /// commits as one undo entry; a press that never moved is a click → enter
+    /// numeric edit.
     pub fn on_release(&mut self) {
         if let Some(which) = self.dragging.take() {
-            match which {
-                DragTarget::Min | DragTarget::Max => {
-                    self.pending_actions
-                        .push(PanelAction::EffectMappingRangeCommit {
-                            binding_id: self.binding_id.clone(),
-                        });
-                }
-                DragTarget::Scale | DragTarget::Offset => {
-                    if self.drag_moved {
-                        self.pending_actions
-                            .push(PanelAction::EffectMappingAffineCommit {
-                                binding_id: self.binding_id.clone(),
-                            });
-                    } else {
-                        // Pressed without scrubbing → a click: type the value.
-                        self.enter_edit(which);
-                    }
-                }
+            if self.drag_moved {
+                self.pending_actions
+                    .push(PanelAction::EffectMappingAffineCommit {
+                        binding_id: self.binding_id.clone(),
+                    });
+            } else {
+                self.enter_edit(which);
             }
         }
     }
@@ -722,24 +610,6 @@ impl MappingPopover {
         }
     }
 
-    /// Apply a dragged value to the grabbed handle, keeping min <= max,
-    /// and emit the live `EffectMappingRangeChanged`.
-    fn apply_drag_value(&mut self, which: DragTarget, v: f32) {
-        let v = v.clamp(self.range_lo, self.range_hi);
-        match which {
-            DragTarget::Min => self.cur_min = v.min(self.cur_max),
-            DragTarget::Max => self.cur_max = v.max(self.cur_min),
-            // Only Min/Max reach here (on_move dispatches the rest).
-            DragTarget::Scale | DragTarget::Offset => return,
-        }
-        self.pending_actions
-            .push(PanelAction::EffectMappingRangeChanged {
-                binding_id: self.binding_id.clone(),
-                min: self.cur_min,
-                max: self.cur_max,
-            });
-    }
-
     /// Scrub the scale or offset field relative to its press-anchor and
     /// emit the live `EffectMappingAffineChanged` with the current pair.
     /// Gain scales with the field's start magnitude (floored) so fine
@@ -835,6 +705,32 @@ impl MappingPopover {
         }
     }
 
+    /// Draw one labeled click-to-type value field (Min / Max / Scale / Offset):
+    /// the label on the left, a right-aligned box showing the formatted value
+    /// or, while that field is being edited, the typed buffer + caret.
+    fn draw_value_field(
+        &self,
+        ui: &mut UIRenderer,
+        panel_x: f32,
+        which: DragTarget,
+        name: &str,
+        value_text: String,
+    ) {
+        let r = self.value_field_rect(which);
+        ui.draw_text(panel_x + PAD, r.y + 3.0, name, FONT, TEXT_SECONDARY);
+        let editing = self.edit == Some(which);
+        let active = self.dragging == Some(which) || editing;
+        let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
+        ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
+        let txt = if editing {
+            format!("{}|", self.edit_buffer)
+        } else {
+            value_text
+        };
+        let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
+        ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
+    }
+
     pub fn render(&self, ui: &mut UIRenderer) {
         if !self.open {
             return;
@@ -875,44 +771,16 @@ impl MappingPopover {
         // Live response-curve preview.
         self.render_preview(ui);
 
-        // ── Range track with min/max handles ──
-        let track = self.track_rect();
-        ui.draw_rounded_rect(track.x, track.y, track.w, track.h, TRACK_BG, 2.0);
-        let min_x = self.handle_center_x(DragTarget::Min);
-        let max_x = self.handle_center_x(DragTarget::Max);
-        let fill_x = min_x.min(max_x);
-        let fill_w = (max_x - min_x).abs();
-        if fill_w > 0.0 {
-            ui.draw_rounded_rect(fill_x, track.y, fill_w, track.h, TRACK_FILL, 2.0);
-        }
-        for which in [DragTarget::Min, DragTarget::Max] {
-            let r = self.handle_rect(which);
-            let active = self.dragging == Some(which) || self.hover == Some(which);
-            let color = if active { HANDLE_HOVER } else { HANDLE_COLOR };
-            ui.draw_rounded_rect(r.x, r.y, r.w, r.h, color, 1.0);
-        }
-        // min/max numeric value fields under the track ends. Click either to
-        // type an exact bound; the active field shows the typed buffer + caret.
-        for which in [DragTarget::Min, DragTarget::Max] {
-            let box_r = self.minmax_value_rect(which);
-            let editing = self.edit == Some(which);
-            let txt = if editing {
-                format!("{}|", self.edit_buffer)
-            } else {
-                let v = if which == DragTarget::Min { self.cur_min } else { self.cur_max };
-                format!("{v:.2}")
-            };
-            if editing {
-                ui.draw_rounded_rect(box_r.x, box_r.y, box_r.w, box_r.h, CURVE_BG_ACTIVE, 2.0);
-            }
-            let tc = if editing { TEXT_PRIMARY } else { TEXT_SECONDARY };
-            let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
-            // Min reads from the left edge, max from the right.
-            let tx = match which {
-                DragTarget::Min => box_r.x + 1.0,
-                _ => box_r.x + box_r.w - tw - 1.0,
-            };
-            ui.draw_text(tx, box_r.y + 1.0, &txt, FONT_SMALL, tc);
+        // ── Min / Max value fields ──
+        // The slider's range, set by typing (the trim track + drag handles are
+        // gone — the preview above is the range picture). Click a box to type;
+        // a value past the param's nominal range is accepted and widens the
+        // preview's span.
+        for (which, name, val) in [
+            (DragTarget::Min, "Min", self.cur_min),
+            (DragTarget::Max, "Max", self.cur_max),
+        ] {
+            self.draw_value_field(ui, panel.x, which, name, format!("{val:.2}"));
         }
 
         // ── Invert toggle row ──
@@ -954,32 +822,14 @@ impl MappingPopover {
         }
 
         // ── Scale / Offset affine rows ──
-        // The card→consumer remap (out = value * scale + offset). This is
-        // where a folded affine_scalar node lives. Click the value box to type
-        // an exact value; drag it to scrub.
+        // The card→consumer remap (out = value * scale + offset). This is where
+        // a folded affine_scalar node lives. Click the box to type; drag it to
+        // scrub.
         for (which, name, val) in [
             (DragTarget::Scale, "Scale", self.cur_scale),
             (DragTarget::Offset, "Offset", self.cur_offset),
         ] {
-            let r = self.affine_value_rect(which);
-            ui.draw_text(panel.x + PAD, r.y + 3.0, name, FONT, TEXT_SECONDARY);
-            let editing = self.edit == Some(which);
-            let active = self.dragging == Some(which) || editing;
-            let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
-            ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
-            let txt = if editing {
-                format!("{}|", self.edit_buffer)
-            } else {
-                format_affine(val)
-            };
-            let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
-            ui.draw_text(
-                r.x + r.w - tw - 5.0,
-                r.y + 3.0,
-                &txt,
-                FONT_SMALL,
-                TEXT_PRIMARY,
-            );
+            self.draw_value_field(ui, panel.x, which, name, format_affine(val));
         }
     }
 }
@@ -1081,42 +931,11 @@ mod tests {
         assert_eq!(p.curve, MacroCurve::Exponential);
     }
 
-    #[test]
-    fn range_drag_snapshots_changes_and_commits() {
-        let mut p = open_popover();
-        // Grab the max handle and drag it left.
-        let r = p.handle_rect(DragTarget::Max);
-        let consumed = p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5);
-        assert!(consumed);
-        // First action is the snapshot.
-        let after_press = p.drain_actions();
-        assert!(matches!(
-            after_press.first(),
-            Some(PanelAction::EffectMappingRangeSnapshot { .. })
-        ));
-        // Move toward the track start; min stays, max shrinks.
-        let track = p.track_rect();
-        p.on_move(track.x + track.w * 0.5, r.y);
-        let changed = p.drain_actions();
-        assert!(matches!(
-            changed.last(),
-            Some(PanelAction::EffectMappingRangeChanged { .. })
-        ));
-        assert!(p.cur_max < 0.8);
-        assert!(p.cur_max >= p.cur_min);
-        // Release commits.
-        p.on_release();
-        let commit = p.drain_actions();
-        assert!(matches!(
-            commit.as_slice(),
-            [PanelAction::EffectMappingRangeCommit { .. }]
-        ));
-    }
 
     #[test]
     fn scale_scrub_snapshots_changes_and_commits() {
         let mut p = open_popover(); // cur_scale = 1.0
-        let r = p.affine_value_rect(DragTarget::Scale);
+        let r = p.value_field_rect(DragTarget::Scale);
         let consumed = p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5);
         assert!(consumed);
         // First action is the affine snapshot.
@@ -1153,20 +972,20 @@ mod tests {
     }
 
     #[test]
-    fn min_stays_below_max_when_dragged_past() {
-        let mut p = open_popover();
-        let r = p.handle_rect(DragTarget::Min);
-        p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5);
-        // Drag min way past max (to the far right of the track).
-        let track = p.track_rect();
-        p.on_move(track.x + track.w, r.y);
-        assert!(p.cur_min <= p.cur_max);
+    fn typed_min_clamps_to_max() {
+        let mut p = open_popover(); // cur_min 0.2, cur_max 0.8
+        p.enter_edit(DragTarget::Min);
+        for ch in "5".chars() {
+            p.on_text_char(ch); // type a min above the current max
+        }
+        p.commit_edit();
+        assert!(p.cur_min <= p.cur_max, "typed min clamps to <= max");
     }
 
     #[test]
     fn click_max_value_types_past_nominal_range() {
         let mut p = open_popover(); // range (0,1), cur_max 0.8
-        let box_r = p.minmax_value_rect(DragTarget::Max);
+        let box_r = p.value_field_rect(DragTarget::Max);
         assert!(p.on_press(box_r.x + 2.0, box_r.y + 2.0));
         assert!(p.is_editing(), "clicking the max value enters edit");
         p.drain_actions();
@@ -1195,7 +1014,7 @@ mod tests {
     #[test]
     fn scale_click_without_drag_enters_edit_then_commits() {
         let mut p = open_popover(); // cur_scale 1.0
-        let r = p.affine_value_rect(DragTarget::Scale);
+        let r = p.value_field_rect(DragTarget::Scale);
         // Press and release with no movement → a click, not a scrub.
         assert!(p.on_press(r.x + r.w * 0.5, r.y + r.h * 0.5));
         p.on_release();
