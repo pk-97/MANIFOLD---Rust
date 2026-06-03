@@ -234,6 +234,94 @@ mod tests {
         assert!((s.mean[0] - 1.0).abs() < 1e-6);
     }
 
+    /// Headless end-to-end dump of the bundled BlackHole generator. Builds it
+    /// on a real device, warms up the particle sim, then dumps every node
+    /// output to /tmp for inspection. GPU + slow, so `#[ignore]` — run with:
+    /// `cargo test -p manifold-app --bin manifold dump_blackhole_headless \
+    ///   --release -- --ignored --nocapture`
+    #[test]
+    #[ignore = "headless GPU dump; run manually with --ignored"]
+    fn dump_blackhole_headless() {
+        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+        use manifold_renderer::generator::Generator;
+        use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+        use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+        use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_renderer::node_graph::PrimitiveRegistry;
+        use manifold_renderer::render_target::RenderTarget;
+
+        const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+        let (w, h) = (1280u32, 720u32);
+        let json = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/assets/generator-presets/BlackHole.json"
+        ))
+        .expect("read BlackHole.json");
+
+        let device = GpuDevice::new();
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            JsonGraphGenerator::from_json_str_with_device(&json, &registry, &device, w, h, FMT)
+                .expect("build BlackHole generator");
+        let target = RenderTarget::new(&device, w, h, FMT, "dump-target");
+
+        let mk_ctx = |t: f64| GeneratorContext {
+            time: t,
+            beat: t * 2.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: w as f32 / h as f32,
+            anim_progress: 0.0,
+            trigger_count: 0,
+            params: [0.0; MAX_GEN_PARAMS],
+            param_count: 0,
+        };
+
+        // Warm up so the 800k-particle sim populates the disk (particles
+        // self-seed frame 1, then spiral into the visible structure).
+        for i in 0..90 {
+            let mut enc = device.create_encoder("dump-warmup");
+            {
+                let mut gpu = RGpuEncoder::new(&mut enc, &device);
+                generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+
+        // Final frame with dump mode on, then read every node output back.
+        generator.set_dump_all(true);
+        {
+            let mut enc = device.create_encoder("dump-frame");
+            {
+                let mut gpu = RGpuEncoder::new(&mut enc, &device);
+                generator.render(&mut gpu, &target.texture, &mk_ctx(90.0 / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+
+        let textures: Vec<DumpTexture> = generator
+            .dump_textures()
+            .into_iter()
+            .map(|(name, port, type_id, texture)| DumpTexture {
+                name,
+                port,
+                type_id,
+                texture,
+            })
+            .collect();
+        let dir = std::path::PathBuf::from("/tmp/manifold-blackhole-dump");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_graph_dump(&device, &textures, &dir).expect("dump");
+        eprintln!(
+            "DUMP_DONE: {} textures -> {}",
+            textures.len(),
+            dir.display()
+        );
+    }
+
     /// Write a known gradient (with an HDR region > 1) so the produced PNG can
     /// be opened and visually confirmed. Linear, clamp-only.
     #[test]

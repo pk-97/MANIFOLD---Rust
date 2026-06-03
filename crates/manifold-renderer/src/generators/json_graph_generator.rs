@@ -603,6 +603,41 @@ impl JsonGraphGenerator {
         self.executor = executor;
     }
 
+    /// Enable/disable one-shot "dump every output" mode on the executor
+    /// (preserve every Texture2D output for one frame). For the headless
+    /// graph-output inspection dump.
+    pub fn set_dump_all(&mut self, on: bool) {
+        self.executor.set_dump_all(on);
+    }
+
+    /// After a `render` with dump mode on, every captured Texture2D output as
+    /// `(node_id, port, type_id, texture)` — the generator's whole pipeline.
+    pub fn dump_textures(&self) -> Vec<(String, String, String, &GpuTexture)> {
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_resources() {
+            let Some(tex) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().texture_2d(s))
+            else {
+                continue;
+            };
+            let (name, type_id) = self
+                .graph
+                .get_node(node)
+                .map(|inst| {
+                    (
+                        inst.node_id.to_string(),
+                        inst.node.type_id().as_str().to_string(),
+                    )
+                })
+                .unwrap_or_default();
+            out.push((name, port.to_string(), type_id, tex));
+        }
+        out
+    }
+
     /// Install the host-provided target texture as the source for
     /// `final_output.in` via `replace_texture_2d` — a single atomic
     /// retain on the host's `MTLTexture`, no allocation. The slot was
