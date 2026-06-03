@@ -2591,6 +2591,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             Key::Named(NamedKey::Backspace) => {
                                 self.editor_mapping_popover.on_backspace()
                             }
+                            Key::Named(NamedKey::Space) if typing => {
+                                self.editor_mapping_popover.on_text_char(' ')
+                            }
                             Key::Character(c) if typing => {
                                 for ch in c.chars() {
                                     self.editor_mapping_popover.on_text_char(ch);
@@ -2610,6 +2613,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             Key::Named(NamedKey::Enter) => canvas.popover_commit_edit(),
                             Key::Named(NamedKey::Escape) => canvas.popover_cancel_edit(),
                             Key::Named(NamedKey::Backspace) => canvas.popover_on_backspace(),
+                            Key::Named(NamedKey::Space) if typing => {
+                                canvas.popover_on_text_char(' ')
+                            }
                             Key::Character(c) if typing => {
                                 for ch in c.chars() {
                                     canvas.popover_on_text_char(ch);

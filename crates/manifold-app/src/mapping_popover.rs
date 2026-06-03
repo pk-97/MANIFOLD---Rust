@@ -133,6 +133,28 @@ enum DragTarget {
     Offset,
 }
 
+/// Which field is being typed into. The four numeric fields parse as `f32`;
+/// `Label` is a free-text rename committed via `EffectMappingLabel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditField {
+    Min,
+    Max,
+    Scale,
+    Offset,
+    Label,
+}
+
+impl From<DragTarget> for EditField {
+    fn from(d: DragTarget) -> Self {
+        match d {
+            DragTarget::Min => EditField::Min,
+            DragTarget::Max => EditField::Max,
+            DragTarget::Scale => EditField::Scale,
+            DragTarget::Offset => EditField::Offset,
+        }
+    }
+}
+
 /// In-place mapping editor for one binding. `open()` seeds it with the
 /// binding's current state + anchor; `render`/hit-test/`drain_actions`
 /// drive it each frame while open.
@@ -173,11 +195,11 @@ pub struct MappingPopover {
     /// never moves is a click → type the value.
     drag_moved: bool,
     /// The field currently being typed into (`None` = not editing). Clicking a
-    /// value (min / max / scale / offset) enters edit mode; the host feeds
-    /// keystrokes via [`Self::on_text_char`] / [`Self::on_backspace`] and
-    /// commits with [`Self::commit_edit`] (Enter) or cancels with
-    /// [`Self::cancel_edit`] (Esc).
-    edit: Option<DragTarget>,
+    /// value (min / max / scale / offset) or the header label enters edit mode;
+    /// the host feeds keystrokes via [`Self::on_text_char`] /
+    /// [`Self::on_backspace`] and commits with [`Self::commit_edit`] (Enter) or
+    /// cancels with [`Self::cancel_edit`] (Esc).
+    edit: Option<EditField>,
     /// In-progress typed text for the active [`Self::edit`] field. Empty on
     /// entry; commit parses it as `f32` (empty / unparseable → no change).
     edit_buffer: String,
@@ -340,6 +362,17 @@ impl MappingPopover {
         Rect::new(self.origin.0, self.origin.1, POPOVER_W, self.panel_height())
     }
 
+    /// The clickable header-label region (left of the live readout). Click to
+    /// rename the knob.
+    fn header_rect(&self) -> Rect {
+        Rect::new(
+            self.origin.0 + PAD,
+            self.origin.1 + PAD - 2.0,
+            POPOVER_W * 0.55,
+            HEADER_H,
+        )
+    }
+
     /// The live response-curve preview box, inset under the header. With the
     /// trim track gone, this plot IS the range picture — its x-axis spans the
     /// current min..max, so you read the shape against the bounds below it.
@@ -425,17 +458,24 @@ impl MappingPopover {
         if !Self::point_in(self.panel_rect(), sx, sy) {
             return false;
         }
-        // Any press inside the panel commits a pending numeric edit first
-        // (click-away to confirm), then proceeds to handle the new press.
+        // Any press inside the panel commits a pending edit first (click-away
+        // to confirm), then proceeds to handle the new press.
         if self.is_editing() {
             self.commit_edit();
+        }
+        // Header label — click to rename the knob (seeded with the current
+        // name). Drivers / Ableton / OSC address this binding by stable id, so
+        // the rename never re-keys them; only the displayed label changes.
+        if Self::point_in(self.header_rect(), sx, sy) {
+            self.enter_edit(EditField::Label);
+            return true;
         }
         // Min / Max value fields — click to type an exact bound (including past
         // the param's nominal range). The range is set numerically now; the
         // old trim track + drag handles are gone.
         for which in [DragTarget::Min, DragTarget::Max] {
             if Self::point_in(self.value_field_rect(which), sx, sy) {
-                self.enter_edit(which);
+                self.enter_edit(which.into());
                 return true;
             }
         }
@@ -507,33 +547,46 @@ impl MappingPopover {
                         binding_id: self.binding_id.clone(),
                     });
             } else {
-                self.enter_edit(which);
+                self.enter_edit(which.into());
             }
         }
     }
 
     // ── Numeric entry ───────────────────────────────────────────────
 
-    /// Begin typing into `field`, seeded empty (type the new value, Enter
-    /// commits, Esc cancels). Cancels any in-progress drag.
-    fn enter_edit(&mut self, field: DragTarget) {
+    /// Begin typing into `field`. Numeric fields seed empty (type a fresh
+    /// value); the label seeds with the current name (edit in place). Enter
+    /// commits, Esc cancels. Cancels any in-progress drag.
+    fn enter_edit(&mut self, field: EditField) {
         self.dragging = None;
+        self.edit_buffer = if field == EditField::Label {
+            self.label.clone()
+        } else {
+            String::new()
+        };
         self.edit = Some(field);
-        self.edit_buffer.clear();
     }
 
-    /// Feed one typed character to the active field. Accepts digits, a single
-    /// decimal point, and a leading minus; ignores everything else.
+    /// Feed one typed character to the active field. The label takes any
+    /// printable character; numeric fields take digits, a single decimal point,
+    /// and a leading minus.
     pub fn on_text_char(&mut self, c: char) {
-        if self.edit.is_none() {
-            return;
-        }
-        if c.is_ascii_digit() {
-            self.edit_buffer.push(c);
-        } else if c == '.' && !self.edit_buffer.contains('.') {
-            self.edit_buffer.push('.');
-        } else if c == '-' && self.edit_buffer.is_empty() {
-            self.edit_buffer.push('-');
+        match self.edit {
+            Some(EditField::Label) => {
+                if !c.is_control() {
+                    self.edit_buffer.push(c);
+                }
+            }
+            Some(_) => {
+                if c.is_ascii_digit() {
+                    self.edit_buffer.push(c);
+                } else if c == '.' && !self.edit_buffer.contains('.') {
+                    self.edit_buffer.push('.');
+                } else if c == '-' && self.edit_buffer.is_empty() {
+                    self.edit_buffer.push('-');
+                }
+            }
+            None => {}
         }
     }
 
@@ -558,27 +611,41 @@ impl MappingPopover {
         let Some(field) = self.edit.take() else {
             return;
         };
-        let parsed = self.edit_buffer.trim().parse::<f32>().ok();
-        self.edit_buffer.clear();
-        let Some(v) = parsed.filter(|v| v.is_finite()) else {
+        let buffer = std::mem::take(&mut self.edit_buffer);
+        let id = self.binding_id.clone();
+
+        // Label: free-text rename. Emits the (already-existing) label edit and
+        // updates the header locally so it shows immediately. Blank or
+        // unchanged → no-op.
+        if field == EditField::Label {
+            let label = buffer.trim().to_string();
+            if !label.is_empty() && label != self.label {
+                self.label = label.clone();
+                self.pending_actions
+                    .push(PanelAction::EffectMappingLabel {
+                        binding_id: id,
+                        label,
+                    });
+            }
+            return;
+        }
+
+        // Numeric fields. Empty / unparseable buffer leaves the value unchanged.
+        let Some(v) = buffer.trim().parse::<f32>().ok().filter(|v| v.is_finite()) else {
             return;
         };
-        let id = self.binding_id.clone();
         match field {
-            DragTarget::Min | DragTarget::Max => {
+            EditField::Min | EditField::Max => {
                 self.pending_actions
                     .push(PanelAction::EffectMappingRangeSnapshot {
                         binding_id: id.clone(),
                     });
-                match field {
-                    DragTarget::Min => {
-                        self.cur_min = v.min(self.cur_max);
-                        self.range_lo = self.range_lo.min(self.cur_min);
-                    }
-                    _ => {
-                        self.cur_max = v.max(self.cur_min);
-                        self.range_hi = self.range_hi.max(self.cur_max);
-                    }
+                if field == EditField::Min {
+                    self.cur_min = v.min(self.cur_max);
+                    self.range_lo = self.range_lo.min(self.cur_min);
+                } else {
+                    self.cur_max = v.max(self.cur_min);
+                    self.range_hi = self.range_hi.max(self.cur_max);
                 }
                 self.pending_actions
                     .push(PanelAction::EffectMappingRangeChanged {
@@ -589,14 +656,15 @@ impl MappingPopover {
                 self.pending_actions
                     .push(PanelAction::EffectMappingRangeCommit { binding_id: id });
             }
-            DragTarget::Scale | DragTarget::Offset => {
+            EditField::Scale | EditField::Offset => {
                 self.pending_actions
                     .push(PanelAction::EffectMappingAffineSnapshot {
                         binding_id: id.clone(),
                     });
-                match field {
-                    DragTarget::Scale => self.cur_scale = v,
-                    _ => self.cur_offset = v,
+                if field == EditField::Scale {
+                    self.cur_scale = v;
+                } else {
+                    self.cur_offset = v;
                 }
                 self.pending_actions
                     .push(PanelAction::EffectMappingAffineChanged {
@@ -607,6 +675,7 @@ impl MappingPopover {
                 self.pending_actions
                     .push(PanelAction::EffectMappingAffineCommit { binding_id: id });
             }
+            EditField::Label => unreachable!("handled above"),
         }
     }
 
@@ -718,7 +787,7 @@ impl MappingPopover {
     ) {
         let r = self.value_field_rect(which);
         ui.draw_text(panel_x + PAD, r.y + 3.0, name, FONT, TEXT_SECONDARY);
-        let editing = self.edit == Some(which);
+        let editing = self.edit == Some(which.into());
         let active = self.dragging == Some(which) || editing;
         let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
         ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
@@ -747,16 +816,22 @@ impl MappingPopover {
             PANEL_BORDER,
         );
 
-        // Header: the binding label (left) and the live input→output readout
-        // (right) so you can read exactly what the node receives right now.
-        ui.draw_text(
-            panel.x + PAD,
-            panel.y + PAD,
-            &self.label,
-            FONT,
-            TEXT_PRIMARY,
-        );
-        if let Some(v) = self.live_value {
+        // Header: the binding label (left, click to rename) and the live
+        // input→output readout (right). While renaming, the label shows the
+        // typed buffer + caret over a highlight; the readout hides so a long
+        // name has room.
+        let renaming = self.edit == Some(EditField::Label);
+        if renaming {
+            let hr = self.header_rect();
+            ui.draw_rounded_rect(hr.x - 3.0, hr.y, hr.w, hr.h, CURVE_BG_ACTIVE, 2.0);
+        }
+        let header_txt = if renaming {
+            format!("{}|", self.edit_buffer)
+        } else {
+            self.label.clone()
+        };
+        ui.draw_text(panel.x + PAD, panel.y + PAD, &header_txt, FONT, TEXT_PRIMARY);
+        if let Some(v) = self.live_value.filter(|_| !renaming) {
             let readout = format!("{} → {}", trim_num(v), trim_num(self.reshape_output(v)));
             let tw = readout.chars().count() as f32 * FONT_SMALL * 0.55;
             ui.draw_text(
@@ -974,7 +1049,7 @@ mod tests {
     #[test]
     fn typed_min_clamps_to_max() {
         let mut p = open_popover(); // cur_min 0.2, cur_max 0.8
-        p.enter_edit(DragTarget::Min);
+        p.enter_edit(EditField::Min);
         for ch in "5".chars() {
             p.on_text_char(ch); // type a min above the current max
         }
@@ -1039,7 +1114,7 @@ mod tests {
     #[test]
     fn text_entry_filters_input_and_cancel_discards() {
         let mut p = open_popover();
-        p.enter_edit(DragTarget::Offset);
+        p.enter_edit(EditField::Offset);
         // Letters ignored; one decimal point; minus only leading.
         for ch in "-1a2.3.4".chars() {
             p.on_text_char(ch);
@@ -1054,5 +1129,32 @@ mod tests {
         assert!(!p.is_editing());
         assert_eq!(p.cur_offset, before);
         assert!(p.drain_actions().is_empty());
+    }
+
+    #[test]
+    fn click_header_renames_via_label_action() {
+        let mut p = open_popover(); // label "Rotation"
+        let hr = p.header_rect();
+        assert!(p.on_press(hr.x + 2.0, hr.y + 2.0));
+        assert!(p.is_editing(), "clicking the header enters label edit");
+        // Label seeds with the current name; the field takes free text + spaces.
+        assert_eq!(p.edit_buffer, "Rotation");
+        while !p.edit_buffer.is_empty() {
+            p.on_backspace();
+        }
+        for ch in "Chaos".chars() {
+            p.on_text_char(ch);
+        }
+        p.on_text_char(' ');
+        p.on_text_char('X');
+        p.drain_actions();
+        p.commit_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.label, "Chaos X");
+        let actions = p.drain_actions();
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::EffectMappingLabel { label, .. }] if label == "Chaos X"
+        ));
     }
 }

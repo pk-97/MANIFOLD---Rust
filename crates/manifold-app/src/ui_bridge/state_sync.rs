@@ -1324,13 +1324,16 @@ fn effects_to_configs(
                     let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                     // Stock effect params aren't special — they're just curated
                     // JSON. A per-instance ParamMapping note retunes the card
-                    // slider's range exactly like a user-exposed binding does
-                    // (the user-tail below reads `ub.min`/`ub.max`). Fall back to
-                    // the recipe's ParamDef range when no note exists.
-                    let (slider_min, slider_max) = match fx.param_mapping(&pd.id) {
-                        Some(note) => (note.min, note.max),
-                        None => (pd.min, pd.max),
-                    };
+                    // slider's range AND relabels it, exactly like a user-exposed
+                    // binding does (the user-tail below reads `ub.min`/`ub.max`/
+                    // `ub.label`). Fall back to the recipe ParamDef when no note
+                    // exists (or the note keeps the recipe label).
+                    let note = fx.param_mapping(&pd.id);
+                    let (slider_min, slider_max) =
+                        note.map(|n| (n.min, n.max)).unwrap_or((pd.min, pd.max));
+                    let slider_name = note
+                        .and_then(|n| n.label.clone())
+                        .unwrap_or_else(|| pd.name.clone());
                     ParamInfo {
                         // Static-tier `ParamId`. The registry's
                         // `ParamDef.id` is a runtime-owned `String`
@@ -1339,7 +1342,7 @@ fn effects_to_configs(
                         // panel rebuild, paid at editing-time only —
                         // not in the per-frame state-sync hot loop.
                         param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                        name: pd.name.clone(),
+                        name: slider_name,
                         min: slider_min,
                         max: slider_max,
                         default: pd.default_value,
@@ -1657,16 +1660,19 @@ fn gen_params_to_config(
                         });
                         let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                         // Generator params aren't special: a per-instance
-                        // ParamMapping note retunes the card slider's range the
-                        // same way a user-exposed effect binding does. Fall back
-                        // to the recipe's ParamDef range when no note exists.
-                        let (slider_min, slider_max) = match gp.param_mapping(&pd.id) {
-                            Some(note) => (note.min, note.max),
-                            None => (pd.min, pd.max),
-                        };
+                        // ParamMapping note retunes the card slider's range AND
+                        // relabels it, the same way a user-exposed effect binding
+                        // does. Fall back to the recipe ParamDef when no note
+                        // exists (or the note keeps the recipe label).
+                        let note = gp.param_mapping(&pd.id);
+                        let (slider_min, slider_max) =
+                            note.map(|n| (n.min, n.max)).unwrap_or((pd.min, pd.max));
+                        let slider_name = note
+                            .and_then(|n| n.label.clone())
+                            .unwrap_or_else(|| pd.name.clone());
                         ParamInfo {
                             param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                            name: pd.name.clone(),
+                            name: slider_name,
                             min: slider_min,
                             max: slider_max,
                             default: pd.default_value,
@@ -1729,16 +1735,19 @@ fn gen_params_to_config(
                         });
                         let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                         // Generator params aren't special: a per-instance
-                        // ParamMapping note retunes the card slider's range the
-                        // same way a user-exposed effect binding does. Fall back
-                        // to the recipe's ParamDef range when no note exists.
-                        let (slider_min, slider_max) = match gp.param_mapping(&pd.id) {
-                            Some(note) => (note.min, note.max),
-                            None => (pd.min, pd.max),
-                        };
+                        // ParamMapping note retunes the card slider's range AND
+                        // relabels it, the same way a user-exposed effect binding
+                        // does. Fall back to the recipe ParamDef when no note
+                        // exists (or the note keeps the recipe label).
+                        let note = gp.param_mapping(&pd.id);
+                        let (slider_min, slider_max) =
+                            note.map(|n| (n.min, n.max)).unwrap_or((pd.min, pd.max));
+                        let slider_name = note
+                            .and_then(|n| n.label.clone())
+                            .unwrap_or_else(|| pd.name.clone());
                         ParamInfo {
                             param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                            name: pd.name.clone(),
+                            name: slider_name,
                             min: slider_min,
                             max: slider_max,
                             default: pd.default_value,
