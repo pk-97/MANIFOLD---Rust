@@ -211,8 +211,30 @@ fn main() {
     profile_synthetic_pointwise(&device);
     profile_fused_colorgrade(&registry, &device);
     profile_auto_fused_colorgrade(&registry, &device);
+    profile_perf_gate(&device);
     profile_generators(&registry, &device);
     profile_fluidsim_particle_sweep(&registry, &device);
+}
+
+/// Exercise the production perf gate end-to-end: run the startup tuner on this
+/// device (measure fused vs unfused for every fusable effect, decide per the
+/// §12.5 margin) and report its verdicts — the same path `LayerCompositor::new`
+/// runs at launch. Confirms the gate produces a FUSE verdict for ColorGrade on
+/// this hardware (and would veto a non-paying fusion on another).
+fn profile_perf_gate(device: &GpuDevice) {
+    use manifold_renderer::node_graph::freeze::perf_gate;
+
+    println!("\n--- perf gate: startup tune verdicts (device: {}) ---", device.device_name());
+    perf_gate::tune_all(device);
+    println!("  tuned: {}", perf_gate::is_tuned());
+    println!(
+        "  ColorGrade -> {}",
+        if perf_gate::should_fuse(&EffectTypeId::new("ColorGrade")) {
+            "FUSE"
+        } else {
+            "keep unfused"
+        }
+    );
 }
 
 /// The PRODUCTION number: time the unfused ColorGrade graph against the

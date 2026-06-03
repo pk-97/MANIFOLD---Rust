@@ -168,6 +168,14 @@ impl GpuDevice {
         &self.device
     }
 
+    /// Human-readable Metal device name (e.g. `"Apple M4 Max"`). Used as the
+    /// fingerprint for per-device tuning decisions (the freeze perf gate keys
+    /// its fuse/don't-fuse verdicts on this) and for logging. Stable for the
+    /// process lifetime — the device never changes under us.
+    pub fn device_name(&self) -> String {
+        self.device.name().to_string()
+    }
+
     /// Raw Metal device pointer as `*mut c_void` (an `id<MTLDevice>`).
     /// Used for FFI interop with native Objective-C plugins.
     pub fn raw_device_ptr(&self) -> *mut std::ffi::c_void {

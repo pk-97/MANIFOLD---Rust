@@ -14,6 +14,7 @@ pub mod classify;
 pub mod codegen;
 pub mod diff;
 pub mod install;
+pub mod perf_gate;
 pub mod reference;
 
 pub use classify::FusionKind;

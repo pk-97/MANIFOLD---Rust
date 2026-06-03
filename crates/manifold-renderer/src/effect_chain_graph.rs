@@ -550,8 +550,16 @@ impl ChainGraph {
             let view = if crate::node_graph::freeze::install::freeze_enabled()
                 && fx.graph.is_none()
             {
+                // Use the fused view only when (a) one exists and (b) the perf
+                // gate's measured verdict says fusion actually paid off on this
+                // device. The gate can only veto, never force — so if fusion
+                // measured slower (or tuning hasn't run), this falls back to the
+                // known-good unfused path and a frame can never be slower than
+                // baseline (design §12.3 step 6).
                 match crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type()) {
-                    Some(fused) => {
+                    Some(fused)
+                        if crate::node_graph::freeze::perf_gate::should_fuse(fx.effect_type()) =>
+                    {
                         // Step-7 attribution (minimal): one line per chain
                         // rebuild so the operator can confirm a card is actually
                         // rendering through the fused kernel. Rebuilds are
@@ -563,7 +571,7 @@ impl ChainGraph {
                         );
                         fused
                     }
-                    None => base_view,
+                    _ => base_view,
                 }
             } else {
                 base_view

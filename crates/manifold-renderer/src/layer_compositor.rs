@@ -522,6 +522,12 @@ fn led_group_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
 
 impl LayerCompositor {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        // Tune the freeze perf gate once, at startup on the content device,
+        // alongside the pipeline pre-warm below. Measures fused vs unfused for
+        // each fusable effect so the chain builder has a fuse/keep verdict
+        // before the first frame renders — never mid-show. Idempotent
+        // (verdicts are set-once), so a compositor rebuild on resize is a no-op.
+        crate::node_graph::freeze::perf_gate::tune_all(device);
         Self {
             main: PingPong::new(device, None, width, height, "Compositor"),
             layer_bufs: AHashMap::default(),
