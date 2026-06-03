@@ -228,6 +228,12 @@ pub enum ContentCommand {
     /// the editor's node selection changes.
     SetGraphPreviewNode(Option<manifold_core::NodeId>),
 
+    /// Dump every node output of the currently-watched effect to a temp folder
+    /// as 16-bit linear PNGs + a manifest, for visual inspection. One-shot;
+    /// the content thread picks the output directory and logs it. No-op unless
+    /// an effect graph is being watched.
+    DumpGraphOutputs,
+
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
 }

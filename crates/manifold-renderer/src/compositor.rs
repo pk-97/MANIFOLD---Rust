@@ -68,6 +68,10 @@ impl<'a> CompositorFrame<'a> {
     }
 }
 
+/// One dumped texture borrowed from a compositor: `(node_id, port, type_id,
+/// texture)`. The strings are owned; the texture borrows the compositor.
+pub type DumpTextureRef<'a> = (String, String, String, &'a manifold_gpu::GpuTexture);
+
 /// Trait for compositing layers into a final output.
 pub trait Compositor: Send {
     /// Render into the compositor's internal render targets.
@@ -100,6 +104,17 @@ pub trait Compositor: Send {
     /// preview is active and the watched node produced one. Default `None`.
     fn preview_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
         None
+    }
+
+    /// Request a one-shot "dump every output" of effect `effect_id` on the next
+    /// `render`, or clear it. Default no-op. See [`Self::dump_textures`].
+    fn set_dump_request(&mut self, _effect_id: Option<EffectId>) {}
+
+    /// After a `render` with a dump requested, every captured Texture2D output
+    /// of the watched effect as `(node_id, port, type_id, texture)`. Default
+    /// empty.
+    fn dump_textures(&self) -> Vec<DumpTextureRef<'_>> {
+        Vec::new()
     }
 
     /// Clean up per-owner effect state for a stopped clip.

@@ -102,6 +102,10 @@ pub struct ContentPipeline {
     /// per-node capture on the layer's `JsonGraphGenerator`. `None` = no
     /// generator preview.
     node_preview_generator: Option<(LayerId, Option<NodeId>)>,
+    /// One-shot "dump every output of this effect to disk" request `(effect,
+    /// target dir)`. Consumed on the next render: the compositor captures the
+    /// effect's node outputs, then they're read back and written as PNGs.
+    pending_graph_dump: Option<(EffectId, std::path::PathBuf)>,
     /// Triple-buffered IOSurface textures for the node-output preview (the
     /// captured node texture, downscaled). Separate bridge from the workspace
     /// preview so the editor reads the node output independently.
@@ -191,6 +195,7 @@ impl ContentPipeline {
             preview_generation: 0,
             node_preview_request: None,
             node_preview_generator: None,
+            pending_graph_dump: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
@@ -470,6 +475,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.node_preview_request = request;
     }
 
+    /// Request a one-shot dump of every output of `effect_id` to `dir` on the
+    /// next render (the watched effect's node outputs, read back to disk as
+    /// 16-bit PNGs + a manifest).
+    pub fn request_graph_dump(&mut self, effect_id: EffectId, dir: std::path::PathBuf) {
+        self.pending_graph_dump = Some((effect_id, dir));
+    }
+
     /// Generator-side counterpart of [`Self::set_node_preview_request`]:
     /// `(watched layer, selected node)`. Mutually exclusive with the effect
     /// request — the content thread sets at most one.
@@ -576,6 +588,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         export_mode: bool,
         data_version: u64,
     ) {
+        // One-shot graph dump: consume the request as a local so the borrow of
+        // `self.pending_graph_dump` ends here. The compositor captures during
+        // the frame; the readback runs after the compositor CB commits.
+        let pending_dump = self.pending_graph_dump.take();
         let native_device = self.native_device.as_ref().unwrap();
         let texture_pool = self.texture_pool.as_ref();
 
@@ -766,6 +782,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
+            // Enable a one-shot dump on the watched effect's chain this frame.
+            self.compositor
+                .set_dump_request(pending_dump.as_ref().map(|(e, _)| e.clone()));
 
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
@@ -940,6 +959,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         native_enc.add_completed_handler_with_status("Compositor");
         native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // One-shot graph dump readback. Runs AFTER the compositor CB commits so
+        // the captured node textures hold this frame's writes; the readback
+        // uses its own command buffers (one per texture) that the GPU runs
+        // after the compositor's on the same queue.
+        if let Some((_, dir)) = &pending_dump {
+            let textures: Vec<crate::graph_dump::DumpTexture> = self
+                .compositor
+                .dump_textures()
+                .into_iter()
+                .map(|(name, port, type_id, texture)| crate::graph_dump::DumpTexture {
+                    name,
+                    port,
+                    type_id,
+                    texture,
+                })
+                .collect();
+            if let Err(e) = crate::graph_dump::write_graph_dump(native_device, &textures, dir) {
+                log::warn!("[graph-dump] write failed: {e}");
+            }
+        }
 
         // Preview surface tracking — skipped in export mode (no surface cycling).
         if !export_mode {

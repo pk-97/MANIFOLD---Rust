@@ -17,6 +17,7 @@ mod editing_host;
 mod edr_surface;
 mod frame_timer;
 mod graph_canvas;
+mod graph_dump;
 mod input_handler;
 mod input_host;
 mod mapping_popover;

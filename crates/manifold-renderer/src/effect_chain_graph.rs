@@ -1175,6 +1175,50 @@ impl ChainGraph {
         self.executor.backend().texture_2d(slot)
     }
 
+    /// Enable one-shot "dump every output" mode iff this chain holds
+    /// `dump_effect`; otherwise disable it. Call each frame with the requested
+    /// effect (or `None`) so only the watched effect's chain pays the cost.
+    pub fn set_dump(&mut self, dump_effect: Option<&EffectId>) {
+        let on =
+            dump_effect.is_some_and(|eid| self.effect_nodes.iter().any(|s| &s.effect_id == eid));
+        self.executor.set_dump_all(on);
+    }
+
+    /// After a `run` with dump mode on, every captured Texture2D output that
+    /// belongs to effect `effect_id`, as `(node_id, port, type_id, texture)`.
+    /// Filtered to the watched effect's nodes via its `node_map` so the dump is
+    /// one effect's pipeline, not the whole spliced chain.
+    pub fn dump_textures(
+        &self,
+        effect_id: &EffectId,
+    ) -> Vec<(String, String, String, &GpuTexture)> {
+        let Some(slot) = self.effect_nodes.iter().find(|s| &s.effect_id == effect_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_resources() {
+            // Only this effect's nodes (reverse-map runtime id → stable NodeId).
+            let Some((node_id, _)) = slot.node_map.iter().find(|(_, niid)| *niid == node) else {
+                continue;
+            };
+            let Some(tex) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().texture_2d(s))
+            else {
+                continue;
+            };
+            let type_id = self
+                .graph
+                .get_node(node)
+                .map(|inst| inst.node.type_id().as_str().to_string())
+                .unwrap_or_default();
+            out.push((node_id.to_string(), port.to_string(), type_id, tex));
+        }
+        out
+    }
+
     /// Forwarded `clear_state` for each effect node — called on seek
     /// / project load so trails, feedback, and mip pyramids don't
     /// carry stale content across playback discontinuities. Also

@@ -31,6 +31,9 @@ mimalloc = "0.1"
 libc = "0.2"
 parking_lot = { workspace = true }
 arboard = "3"
+# Graph output dump (visual inspection): 16-bit PNG encode + f16 decode.
+png = "0.18"
+half = "2"
 manifold-profiler = { path = "../manifold-profiler", optional = true }
 
 # macOS platform dependencies

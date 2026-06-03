@@ -468,6 +468,11 @@ pub struct LayerCompositor {
     /// Set via [`Self::set_preview_request`]; read back via
     /// [`Self::preview_texture`].
     preview_request: Option<(EffectId, Option<NodeId>)>,
+
+    /// One-shot "dump every output" request for an effect, applied to its chain
+    /// before the next `render`. The content layer reads [`Self::dump_textures`]
+    /// after that frame and clears it. `None` = no dump pending.
+    dump_request: Option<EffectId>,
 }
 
 /// Distinct owner_key for the LED master effect chain — must not collide with
@@ -564,6 +569,7 @@ impl LayerCompositor {
             led_group_chain_last_used_frame: AHashMap::default(),
             led_black_tex: None,
             preview_request: None,
+            dump_request: None,
         }
     }
 
@@ -574,6 +580,7 @@ impl LayerCompositor {
     /// is a screen-authoring aid.
     fn apply_preview_targets(&mut self) {
         let request = self.preview_request.clone();
+        let dump = self.dump_request.clone();
         let apply = |chain: &mut Option<ChainGraph>| {
             if let Some(cg) = chain.as_mut() {
                 match &request {
@@ -582,6 +589,8 @@ impl LayerCompositor {
                     }
                     None => cg.clear_preview_target(),
                 }
+                // Enable dump only on the chain holding the requested effect.
+                cg.set_dump(dump.as_ref());
             }
         };
         apply(&mut self.master_effect_chain);
@@ -1884,6 +1893,30 @@ impl Compositor for LayerCompositor {
                     .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
                     .next()
             })
+    }
+
+    fn set_dump_request(&mut self, effect_id: Option<EffectId>) {
+        self.dump_request = effect_id;
+    }
+
+    fn dump_textures(&self) -> Vec<crate::compositor::DumpTextureRef<'_>> {
+        let Some(effect_id) = self.dump_request.as_ref() else {
+            return Vec::new();
+        };
+        // The watched effect lives in exactly one screen chain; find it and
+        // pull that effect's captured node outputs.
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains {
+            if let Some(cg) = chain.as_ref() {
+                let dumped = cg.dump_textures(effect_id);
+                if !dumped.is_empty() {
+                    return dumped;
+                }
+            }
+        }
+        Vec::new()
     }
 
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {

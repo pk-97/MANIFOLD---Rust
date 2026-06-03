@@ -2805,6 +2805,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     return;
                 }
+                // Editor window: Cmd+D dumps every node output of the watched
+                // effect to a temp folder (16-bit PNGs + manifest) for visual
+                // inspection. The content thread picks the dir and logs it.
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("d")
+                {
+                    if let Some(tx) = self.content_tx.as_ref() {
+                        crate::content_command::ContentCommand::send(
+                            tx,
+                            crate::content_command::ContentCommand::DumpGraphOutputs,
+                        );
+                    }
+                    return;
+                }
                 // Editor window: Cmd+Z / Cmd+Shift+Z route to the
                 // content thread's undo stack so graph edits can be
                 // reverted while the editor has focus. (The primary
