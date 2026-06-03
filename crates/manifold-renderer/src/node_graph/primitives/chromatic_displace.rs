@@ -54,6 +54,9 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Filter,
     aliases: ["rgb split", "chromatic aberration", "chroma shift", "color fringe"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/chromatic_displace_body.wgsl"),
+    input_access: [Gather, Coincident],
 }
 
 impl Primitive for ChromaticDisplace {
@@ -82,9 +85,14 @@ impl Primitive for ChromaticDisplace {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: `in` is a Gather input (3-tap dependent sample). The
+            // generated kernel's bindings match the set below (textures then
+            // sampler). chromatic_displace.wgsl is the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.chromatic_displace standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/chromatic_displace.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.chromatic_displace",
             )
         });

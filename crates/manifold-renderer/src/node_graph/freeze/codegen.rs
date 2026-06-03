@@ -1395,4 +1395,54 @@ mod gpu_tests {
             r.max_abs, r.max_rel
         );
     }
+
+    /// More gather atoms, now the Gather codegen exists. chromatic_displace
+    /// (3-tap RGB split) and uv_displace_by_flow both bind
+    /// uniform0/tex1/tex2/samp3/dst4 for BOTH the hand shader and the generated
+    /// kernel, so dispatch_coincident covers them directly. The first texture is
+    /// the gathered `in`, the second the coincident field.
+    #[test]
+    fn generated_gather_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let ga = gradient(&device, w, h);
+        let gb = gradient_b(&device, w, h);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+        let differ = TextureDiff::new(&device);
+
+        let cases: &[(&str, &str, &[f32])] = &[
+            ("node.chromatic_displace", "chromatic_displace.wgsl", &[2.0]),
+            ("node.uv_displace_by_flow", "uv_displace_by_flow.wgsl", &[0.05, 0.5]),
+        ];
+        for (type_id, shader_file, params) in cases {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+                node.input_access(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
+                .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
+            let bytes = pack_f32(params);
+            let from_original = dispatch_coincident(&device, &original, &ga, &gb, &bytes);
+            let from_generated = dispatch_coincident(&device, &generated, &ga, &gb, &bytes);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated must reproduce {shader_file} (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
 }

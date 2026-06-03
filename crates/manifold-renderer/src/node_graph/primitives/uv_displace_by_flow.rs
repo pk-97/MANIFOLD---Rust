@@ -60,6 +60,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["flow displace", "advect", "warp by flow"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/uv_displace_by_flow_body.wgsl"),
+    input_access: [Gather, Coincident],
 }
 
 impl Primitive for UvDisplaceByFlow {
@@ -90,9 +93,14 @@ impl Primitive for UvDisplaceByFlow {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: `in` is a Gather input (sampled at uv + flow offset).
+            // The generated kernel's bindings match the set below (textures then
+            // sampler). uv_displace_by_flow.wgsl is the parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.uv_displace_by_flow standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/uv_displace_by_flow.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.uv_displace_by_flow",
             )
         });
