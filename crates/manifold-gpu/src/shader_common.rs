@@ -77,6 +77,16 @@ fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
     let mut optimizer = opt::create(None);
 
     optimizer
+        // MergeReturn first: it rewrites functions with early `return`s
+        // (mix's blend_rgb/safe_div/overlay_channel, colorize masks, the
+        // fused-kernel bodies) into single-return form so InlineExhaustive
+        // can actually inline them. Without it spirv-opt logs
+        // "could not be inlined because the return instruction is not at the
+        // end of the function" and leaves those helpers as calls — correct,
+        // but it forfeits the intra-kernel register-threading win and spams
+        // the console on every chain rebuild. This is the pass the warning
+        // itself recommends (design §12.3 step 6).
+        .register_pass(opt::Passes::MergeReturn)
         .register_pass(opt::Passes::InlineExhaustive)
         .register_pass(opt::Passes::EliminateDeadFunctions)
         .register_pass(opt::Passes::EliminateDeadConstant)
