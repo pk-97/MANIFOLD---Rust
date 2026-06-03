@@ -107,6 +107,8 @@ crate::primitive! {
     category: Noise,
     role: Source,
     aliases: ["simplex field", "noise field", "flow"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/simplex_field_2d_body.wgsl"),
 }
 
 impl Primitive for SimplexField2D {
@@ -163,8 +165,9 @@ impl Primitive for SimplexField2D {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/simplex_field_2d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.simplex_field_2d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.simplex_field_2d",
             )
         });

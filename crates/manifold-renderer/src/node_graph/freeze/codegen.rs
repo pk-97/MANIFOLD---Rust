@@ -1515,6 +1515,13 @@ mod gpu_tests {
         // dither_pattern [algorithm] (Enum -> u32), 16B; 0 = Bayer (the LUT path).
         let mut dither_pat_bytes = vec![0u8; 16];
         dither_pat_bytes[0..4].copy_from_slice(&0u32.to_le_bytes());
+        // simplex_field_2d [scale_x, scale_y, offset_x, offset_y, z, output_channel
+        // (u32)], 32B — packed by hand for the mid-struct u32.
+        let mut simplex_bytes = vec![0u8; 32];
+        simplex_bytes[0..4].copy_from_slice(&3.0f32.to_le_bytes());
+        simplex_bytes[4..8].copy_from_slice(&3.0f32.to_le_bytes());
+        simplex_bytes[16..20].copy_from_slice(&0.5f32.to_le_bytes()); // z
+        // offset_x/y = 0, output_channel = 0 (R) — already zeroed.
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -1527,6 +1534,7 @@ mod gpu_tests {
             ("node.radial_fold_uv", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
             ("node.ellipse_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
             ("node.dither_pattern", "dither_pattern.wgsl", Some(dither_pat_bytes.as_slice())),
+            ("node.simplex_field_2d", "simplex_field_2d.wgsl", Some(simplex_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();
