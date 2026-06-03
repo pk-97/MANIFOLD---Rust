@@ -89,6 +89,8 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["centered uv", "centered coordinates", "radial"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/centered_uv_body.wgsl"),
 }
 
 impl Primitive for CenteredUv {
@@ -108,9 +110,11 @@ impl Primitive for CenteredUv {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.centered_uv standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/centered_uv.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.centered_uv",
             )
         });

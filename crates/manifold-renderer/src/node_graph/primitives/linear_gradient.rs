@@ -84,6 +84,8 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["linear gradient", "ramp", "fade", "Ramp TOP"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/linear_gradient_body.wgsl"),
 }
 
 impl Primitive for LinearGradient {
@@ -104,9 +106,11 @@ impl Primitive for LinearGradient {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.linear_gradient standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/linear_gradient.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.linear_gradient",
             )
         });

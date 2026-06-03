@@ -1492,9 +1492,18 @@ mod gpu_tests {
 
         // checkerboard PARAMS: [scale, offset_x, offset_y].
         let checker_bytes = pack_f32(&[8.0, 0.0, 0.0]);
+        // centered_uv PARAMS: [cx, cy, scale_x, scale_y] (16-byte uniform).
+        let centered_bytes = pack_f32(&[0.5, 0.5, 2.0, 2.0]);
+        // linear_gradient PARAMS: [cx, cy, rotation, softness]; its hand uniform
+        // is padded to 32 bytes, so pack 32 (satisfies the 32-byte hand decl AND
+        // the 16-byte generated decl — a larger buffer binds fine to a smaller
+        // uniform).
+        let lg_bytes = pack_f32(&[0.5, 0.5, 0.785, 0.3, 0.0, 0.0, 0.0, 0.0]);
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
+            ("node.centered_uv", "centered_uv.wgsl", Some(centered_bytes.as_slice())),
+            ("node.linear_gradient", "linear_gradient.wgsl", Some(lg_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();
