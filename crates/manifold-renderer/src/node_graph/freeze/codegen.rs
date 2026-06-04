@@ -654,12 +654,15 @@ fn generate_standalone_buffer(
         .iter()
         .filter(|o| matches!(o.ty, PortType::Array(_)))
         .collect();
-    if array_outputs.len() != 1 {
-        // v1 emits a single output element (`buf_out[idx] = body(...)`). A
-        // multi-array-output buffer atom (scatter into two accumulators) is the
-        // BodyOutputs-struct follow-on, mirroring the texture multi-output path.
+    if array_outputs.is_empty() {
+        // A buffer atom writes at least one storage array.
         return Err(CodegenError::NotFusable(FusionKind::Boundary));
     }
+    // ≥2 array outputs → the body returns a `BufferOutputs` struct the wrapper
+    // unpacks (the buffer analogue of the texture multi-output BodyOutputs path);
+    // 1 keeps the direct `buf_out[idx] = body(...)` write — byte-identical for
+    // every existing single-output atom.
+    let multi_output = array_outputs.len() > 1;
 
     // Resolve element type names (inputs then outputs) so struct naming is stable
     // and a same-typed in/out pair dedups to one struct.
@@ -674,25 +677,33 @@ fn generate_standalone_buffer(
         .iter()
         .map(|i| buffer_element_type(specs_of(&i.ty), &mut structs))
         .collect();
-    let out_ty = buffer_element_type(specs_of(&array_outputs[0].ty), &mut structs);
-
+    // Per-output (port name, element type), in declaration order.
+    let out_infos: Vec<(&str, String)> = array_outputs
+        .iter()
+        .map(|o| (o.name, buffer_element_type(specs_of(&o.ty), &mut structs)))
+        .collect();
     // Output array global name. Normally `buf_<port>`, but if the output port
     // shares a name with an input port (e.g. instance_position_jitter's
     // `instances` in AND out — NOT aliased, separate buffers), disambiguate to
     // `buf_out_<port>` so the two storage globals don't collide. Bodies only ever
     // reference INPUT globals, so this never affects a body.
-    let out_port = array_outputs[0].name;
-    let out_global = if array_inputs.iter().any(|i| i.name == out_port) {
-        format!("buf_out_{out_port}")
-    } else {
-        format!("buf_{out_port}")
+    let out_global = |name: &str| -> String {
+        if array_inputs.iter().any(|i| i.name == name) {
+            format!("buf_out_{name}")
+        } else {
+            format!("buf_{name}")
+        }
     };
-    // Atomic-accumulator output (scatter): emitted as `array<atomic<u32>>` and
-    // written by the body via `atomicAdd` on `out_global` itself, not the
-    // wrapper's `out_global[idx] = body(...)`. WGSL atomics are integer-only.
-    let out_is_atomic = atomic_outputs.contains(&out_port);
-    if out_is_atomic && out_ty != "u32" && out_ty != "i32" {
-        return Err(CodegenError::AtomicNonInteger { ty: out_ty.clone() });
+    // Atomic-accumulator output (scatter, single-output only): emitted as
+    // `array<atomic<u32>>` and written by the body via `atomicAdd` on the global
+    // itself, not the wrapper's `[idx] = body(...)`. WGSL atomics are integer-only.
+    let out_is_atomic = !multi_output && atomic_outputs.contains(&array_outputs[0].name);
+    if out_is_atomic && out_infos[0].1 != "u32" && out_infos[0].1 != "i32" {
+        return Err(CodegenError::AtomicNonInteger { ty: out_infos[0].1.clone() });
+    }
+    // Multi-output atomic isn't a shape any atom needs yet.
+    if multi_output && array_outputs.iter().any(|o| atomic_outputs.contains(&o.name)) {
+        return Err(CodegenError::NotFusable(FusionKind::Boundary));
     }
 
     let mut out = String::new();
@@ -779,17 +790,31 @@ fn generate_standalone_buffer(
         writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
         binding += 1;
     }
-    let out_storage_ty = if out_is_atomic {
-        format!("atomic<{out_ty}>")
-    } else {
-        out_ty.clone()
-    };
-    writeln!(
-        out,
-        "@group(0) @binding({binding}) var<storage, read_write> {out_global}: array<{out_storage_ty}>;"
-    )
-    .unwrap();
+    for (name, ety) in &out_infos {
+        let storage_ty = if out_is_atomic {
+            format!("atomic<{ety}>")
+        } else {
+            ety.clone()
+        };
+        writeln!(
+            out,
+            "@group(0) @binding({binding}) var<storage, read_write> {}: array<{storage_ty}>;",
+            out_global(name)
+        )
+        .unwrap();
+        binding += 1;
+    }
     out.push('\n');
+
+    // Multi-output body returns a struct with one field per output array (in
+    // declaration order); the wrapper writes each `buf_<port>[idx] = result.<port>`.
+    if multi_output {
+        out.push_str("struct BufferOutputs {\n");
+        for (name, ety) in &out_infos {
+            writeln!(out, "    {name}: {ety},").unwrap();
+        }
+        out.push_str("}\n\n");
+    }
 
     // --- shared WGSL library includes (e.g. noise_common's simplex3d), prepended
     // so the body's helper calls resolve — mirrors run()'s format!("{lib}\n{body}").
@@ -850,10 +875,22 @@ fn generate_standalone_buffer(
     }
     if out_is_atomic {
         // Scatter: the body computes its own target cell and `atomicAdd`s into
-        // the `out_global` accumulator — no coincident single-element write.
+        // the accumulator global — no coincident single-element write.
         writeln!(out, "    body({});", args.join(", ")).unwrap();
+    } else if multi_output {
+        // The body returns one element per output array; unpack into each.
+        writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
+        for (name, _) in &out_infos {
+            writeln!(out, "    {}[idx] = result.{name};", out_global(name)).unwrap();
+        }
     } else {
-        writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
+        writeln!(
+            out,
+            "    {}[idx] = body({});",
+            out_global(out_infos[0].0),
+            args.join(", ")
+        )
+        .unwrap();
     }
     out.push_str("}\n");
 
