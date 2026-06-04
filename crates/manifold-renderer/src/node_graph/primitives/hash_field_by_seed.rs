@@ -80,6 +80,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Map,
     aliases: ["hash", "randomise", "seed", "scramble"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/hash_field_by_seed_body.wgsl"),
+    input_access: [CoincidentTexel],
 }
 
 impl Primitive for HashFieldBySeed {
@@ -118,9 +121,13 @@ impl Primitive for HashFieldBySeed {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `field` is a CoincidentTexel input (own-texel integer textureLoad, no
+            // sampler). Generated kernel binds uniform(0)/tex(1)/dst(2).
+            // hash_field_by_seed.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/hash_field_by_seed.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.hash_field_by_seed standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.hash_field_by_seed",
             )
         });

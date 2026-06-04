@@ -2610,6 +2610,75 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
+    /// Single-input CoincidentTexel parity: node.hash_field_by_seed reads `field`
+    /// at the OWN texel via integer textureLoad (no sampler) and hashes it with a
+    /// seed. Binding layout uniform(0)/tex(1)/dst(2) — no sampler — for both the
+    /// hand and generated kernel, so one payload drives both. hash2/hash1 use GPU
+    /// sin (matching the hand), so it's bit-exact.
+    #[test]
+    fn generated_hash_field_by_seed_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h); // .rg = a value field
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.hash_field_by_seed").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("hash_field_by_seed generates");
+        assert!(
+            !generated.contains("var samp: sampler"),
+            "a CoincidentTexel input binds no sampler:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/hash_field_by_seed.wgsl");
+
+        // {seed, seed_x, seed_y, mode} = 16B; mode=0 (Hash2).
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&3.0f32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&1.73f32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&2.91f32.to_le_bytes());
+
+        let run = |wgsl: &str| -> RenderTarget {
+            let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "hashseed");
+            let out = RenderTarget::new(&device, w, h, FMT, "hashseed-out");
+            let mut enc = device.create_encoder("hashseed");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &input },
+                    GpuBinding::Texture { binding: 2, texture: &out.texture },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "hashseed",
+            );
+            enc.commit_and_wait_completed();
+            out
+        };
+
+        let from_original = run(original);
+        let from_generated = run(&generated);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated hash_field_by_seed must reproduce the hand kernel (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
     /// outputs get their own texture (no aliasing) so each can be diffed.
     fn dispatch_two_output_source(
