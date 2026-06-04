@@ -20,17 +20,21 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`scale`,
+/// `z`, `offset_x`, `offset_y`, `octaves` Int → i32, `lacunarity`, `gain`) then
+/// the codegen-injected `dispatch_count` (= element count, the guard). 8 words =
+/// 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    count: u32,
     scale: f32,
     z: f32,
     offset_x: f32,
     offset_y: f32,
-    octaves: u32,
+    octaves: i32,
     lacunarity: f32,
     gain: f32,
+    dispatch_count: u32,
 }
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
@@ -114,6 +118,9 @@ crate::primitive! {
     category: Particles2D,
     role: Filter,
     aliases: ["fractal noise", "fbm", "per copy", "variation"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/fbm_per_instance_body.wgsl"),
+    wgsl_includes: [NOISE_COMMON],
 }
 
 impl Primitive for FbmPerInstance {
@@ -168,27 +175,26 @@ impl Primitive for FbmPerInstance {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            let source = format!(
-                "{}\n{}",
-                NOISE_COMMON,
-                include_str!("shaders/fbm_per_instance.wgsl"),
-            );
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path; noise_common prepended via wgsl_includes for
+            // simplex3d). fbm_per_instance.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                &source,
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.fbm_per_instance standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.fbm_per_instance",
             )
         });
 
         let uniforms = Uniforms {
-            count,
             scale,
             z,
             offset_x,
             offset_y,
-            octaves,
+            octaves: octaves as i32,
             lacunarity,
             gain,
+            dispatch_count: count,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -284,5 +290,86 @@ mod tests {
         let prim = FbmPerInstance::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.fbm_per_instance");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain parity oracle (freeze §12) — fbm_per_instance had no GPU
+    //! test. The generated kernel (noise_common prepended for simplex3d, bare
+    //! Array(f32) output) must reproduce the hand kernel value-for-value. Same
+    //! simplex3d + fbm loop on-GPU → bit-identical. Validates the single-channel
+    //! `array<f32>` element path (no struct).
+    use super::*;
+
+    fn dispatch_fbm(wgsl: &str, uvs: &[[f32; 2]], uniform: &[u8], count: u32) -> Vec<f32> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "fbm-oracle");
+        let uv_buf = device.create_buffer_shared(std::mem::size_of_val(uvs) as u64);
+        let out_buf = device.create_buffer_shared(count as u64 * 4);
+        unsafe {
+            uv_buf.write(0, bytemuck::cast_slice(uvs));
+        }
+        let mut enc = device.create_encoder("fbm-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: 1, buffer: &uv_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+            ],
+            [count.div_ceil(256), 1, 1],
+            "fbm-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const f32, count as usize) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_fbm_matches_hand_kernel() {
+        let uvs: [[f32; 2]; 5] = [[0.1, 0.2], [0.5, 0.6], [0.9, 0.3], [0.0, 1.0], [0.33, 0.77]];
+        let n = uvs.len() as u32;
+        let (scale, z, ox, oy) = (4.0f32, 0.5f32, 1.0f32, -2.0f32);
+        let (octaves, lac, gain) = (5u32, 1.5f32, 0.8f32);
+
+        // Hand layout: count(u32), scale, z, offset_x, offset_y, octaves(u32), lacunarity, gain.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&n.to_le_bytes());
+        for v in [scale, z, ox, oy] {
+            hand.extend_from_slice(&v.to_le_bytes());
+        }
+        hand.extend_from_slice(&octaves.to_le_bytes());
+        hand.extend_from_slice(&lac.to_le_bytes());
+        hand.extend_from_slice(&gain.to_le_bytes());
+
+        // Generated layout: scale, z, offset_x, offset_y, octaves(i32), lacunarity, gain, dispatch_count(u32).
+        let mut gen_bytes = Vec::new();
+        for v in [scale, z, ox, oy] {
+            gen_bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        gen_bytes.extend_from_slice(&(octaves as i32).to_le_bytes());
+        gen_bytes.extend_from_slice(&lac.to_le_bytes());
+        gen_bytes.extend_from_slice(&gain.to_le_bytes());
+        gen_bytes.extend_from_slice(&n.to_le_bytes());
+
+        let hand_wgsl =
+            format!("{}\n{}", NOISE_COMMON, include_str!("shaders/fbm_per_instance.wgsl"));
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<FbmPerInstance>()
+            .expect("fbm_per_instance buffer codegen");
+        assert!(gen_wgsl.contains("read_write> buf_out: array<f32>"), "bare f32 output array");
+
+        let from_hand = dispatch_fbm(&hand_wgsl, &uvs, &hand, n);
+        let from_gen = dispatch_fbm(&gen_wgsl, &uvs, &gen_bytes, n);
+
+        for i in 0..n as usize {
+            assert!(
+                (from_hand[i] - from_gen[i]).abs() < 1e-6,
+                "slot {i}: hand={} gen={}",
+                from_hand[i],
+                from_gen[i]
+            );
+        }
     }
 }
