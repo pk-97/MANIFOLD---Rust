@@ -292,19 +292,27 @@ fn classify_node(
     }
 
     // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve).
-    // GATED OFF (2026-06-04): buffer regions form, build, and render without
-    // crashing, but the fused buffer node diverges DETERMINISTICALLY from the
-    // unfused chain (DigitalPlants ~61% of pixels — see the #[ignore]d oracle
-    // `digitalplants_buffer_fusion_renders_like_unfused`). The finder, multi-atom
-    // buffer codegen, element-register threading, in-place aliased-output model,
-    // control-wire re-anchoring, and binding retarget are all verified correct by
-    // inspection, so the fault is in the EXECUTOR's binding of a fused
-    // `node.wgsl_compute` that has an aliased read_write array PLUS multiple
-    // read-only array inputs — a shape no shipped preset exercised. Root-causing
-    // it needs runtime instrumentation in the executor. Until the oracle passes,
-    // buffer atoms stay boundaries (texture/3D fusion unaffected). To re-enable:
-    // replace the line below with `return classify_buffer_node(n.as_ref(), node,
-    // def, registry);` and un-ignore the oracle.
+    // GATED OFF (2026-06-04). ROOT-CAUSED via runtime instrumentation: the
+    // in-place ALIASED-OUTPUT model is the bug. Binding the fused output as
+    // `var<storage, read_write>` makes the executor treat the wire from the output
+    // buffer's PRODUCER as a feedback BACK-EDGE (the same exclusion real feedback
+    // sims rely on for last-frame state), so it drops that forward dependency from
+    // the execution order. The fused node then runs BEFORE its producers populate
+    // the buffers — reading zeros on frame 1, stale data after (DigitalPlants:
+    // src_0/src_1/src_2 all-zero at dispatch on frame 1 → ~59-61% pixel divergence,
+    // see the #[ignore]d oracle `digitalplants_buffer_fusion_renders_like_unfused`).
+    // Everything else (finder, codegen, element-register threading, control-wire
+    // re-anchor, binding retarget, param seeding, buffer sizes, dispatch count) is
+    // VERIFIED CORRECT. THE FIX is not aliasing: give the fused buffer node a fresh
+    // WRITE-ONLY array output (read-only inputs stay forward deps, correctly
+    // ordered). That needs (a) node.wgsl_compute to accept a write-only storage
+    // array as an output-only port — today its `write && !read` branch errors — and
+    // (b) the executor to allocate that fresh output buffer sized to the element
+    // count. Until then buffer atoms stay boundaries (texture/3D fusion
+    // unaffected). To re-enable: implement the write-only output path, switch
+    // generate_fused_buffer off the aliased model, restore
+    // `return classify_buffer_node(n.as_ref(), node, def, registry);` here, and
+    // un-ignore the oracle (it must pass).
     if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         return NodeClass::Boundary;
     }
