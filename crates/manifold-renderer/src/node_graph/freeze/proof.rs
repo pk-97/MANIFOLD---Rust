@@ -932,6 +932,118 @@ fn fused_warp_region_matches_unfused() {
     );
 }
 
+/// Render an effect graph whose bound output is at a REDUCED resolution
+/// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as
+/// [`render_graph`] but the output target — and the copy-out — are sized to the
+/// element-space the producer actually writes (e.g. a quarter-res chain below a
+/// downsample), so a fused node that failed to inherit that scale would mismatch.
+fn render_graph_at(
+    device: &GpuDevice,
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    source_res: ResourceId,
+    input: &GpuTexture,
+    output_res: ResourceId,
+    out_w: u32,
+    out_h: u32,
+) -> RenderTarget {
+    let (sw, sh) = (input.width, input.height);
+    let src_rt = RenderTarget::new(device, sw, sh, FMT, "freeze-src");
+    {
+        let mut e = device.create_encoder("freeze-src-fill");
+        e.copy_texture_to_texture(input, &src_rt.texture, sw, sh, 1);
+        e.commit_and_wait_completed();
+    }
+    let out_rt = RenderTarget::new(device, out_w, out_h, FMT, "freeze-graph-out");
+
+    let mut backend = MetalBackend::new(device, sw, sh, FMT);
+    backend.pre_bind_texture_2d(source_res, src_rt);
+    let out_slot = backend.pre_bind_texture_2d(output_res, out_rt);
+
+    let mut enc = device.create_encoder("freeze-graph-exec");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+        exec.execute_frame_with_gpu(graph, plan, frame_time(), &mut gpu);
+    }
+    enc.commit_and_wait_completed();
+
+    let result = RenderTarget::new(device, out_w, out_h, FMT, "freeze-graph-result");
+    let out_tex = exec.backend().texture_2d(out_slot).expect("graph output retained");
+    {
+        let mut e = device.create_encoder("freeze-graph-copy");
+        e.copy_texture_to_texture(out_tex, &result.texture, out_w, out_h, 1);
+        e.commit_and_wait_completed();
+    }
+    result
+}
+
+/// Multi-resolution oracle — a pixel-local chain BELOW a downsample fuses and
+/// runs at the reduced (quarter-res) element space, matching the unfused chain.
+/// source → downsample(boundary, 4x) → gain → invert → final: {gain, invert}
+/// form one region whose input is canvas-scaled, so the executor's scale
+/// propagation sizes the fused node's output at quarter-res. The fused node reads
+/// the downsampled external via `textureLoad` at its own (quarter-res) coord —
+/// correct precisely because producer and consumer share one element space. We
+/// bind the output at quarter-res, so a fused node that wrongly ran at full canvas
+/// would mismatch. (The downsample itself stays a boundary — folding a resample
+/// INTO a region needs cross-scale sampler reads, a deferred marginal optimization
+/// with no bundled-preset fixture yet: every shipped quarter-res chain is gated on
+/// vocabulary the finder doesn't own, e.g. Bloom's unconverted threshold/blur.)
+#[test]
+fn fused_quarter_res_chain_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+    let (qw, qh) = (w / 4, h / 4); // downsample default factor = 4x
+
+    let json = r#"{
+        "version": 1, "name": "multires", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.downsample", "nodeId": "down" },
+            { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph_at(&device, &mut unfused, &u_plan, u_src, &input, u_out, qw, qh);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the quarter-res chain fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph_at(&device, &mut fused, &f_plan, f_src, &input, f_out, qw, qh);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 16,
+        "fused quarter-res chain must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Fan-out oracle — a region with TWO outputs renders identically fused vs
 /// unfused, end-to-end through the executor. gain forks into invert and contrast;
 /// each runs into its own `threshold` boundary; the two re-merge at a `mix`. The
