@@ -32,6 +32,8 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["normalize", "unit vector", "direction"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/normalize_vec2_body.wgsl"),
 }
 
 impl Primitive for NormalizeVec2 {
@@ -49,9 +51,12 @@ impl Primitive for NormalizeVec2 {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Paramless Pointwise. Generated kernel binds tex(0)/samp(1)/dst(2).
+            // normalize_vec2.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/normalize_vec2.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.normalize_vec2 standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.normalize_vec2",
             )
         });

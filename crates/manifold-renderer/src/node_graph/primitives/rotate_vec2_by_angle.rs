@@ -19,13 +19,15 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+// Standalone-codegen uniform layout: the single `angle` param (the body computes
+// cos/sin itself, where the hand uniform carried CPU-precomputed cos_a/sin_a).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RotateUniforms {
-    cos_a: f32,
-    sin_a: f32,
+    angle: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 crate::primitive! {
@@ -56,6 +58,8 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Map,
     aliases: ["rotate vector", "turn", "rotate flow"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/rotate_vec2_by_angle_body.wgsl"),
 }
 
 // Type-ID alias so saved projects referencing the legacy
@@ -88,9 +92,13 @@ impl Primitive for RotateVec2ByAngle {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Pointwise. Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3);
+            // the body computes cos/sin from `angle`. rotate_vec2_by_angle.wgsl is
+            // the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/rotate_vec2_by_angle.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.rotate_vec2_by_angle standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.rotate_vec2_by_angle",
             )
         });
@@ -99,10 +107,10 @@ impl Primitive for RotateVec2ByAngle {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
         let uniforms = RotateUniforms {
-            cos_a: angle.cos(),
-            sin_a: angle.sin(),
+            angle,
             _pad0: 0.0,
             _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

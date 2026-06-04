@@ -2524,6 +2524,88 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
+    /// Vector-op parity: length_vec2 + normalize_vec2 are paramless Pointwise
+    /// (tex0/samp1/dst2); rotate_vec2_by_angle is Pointwise — the hand shader still
+    /// reads CPU-precomputed cos_a/sin_a while the generated body computes them from
+    /// `angle`, so they're dual-packed and compared at f16 precision (the output is
+    /// f16, so the sub-f16 GPU-vs-CPU trig difference is below the store).
+    #[test]
+    fn generated_vector_op_atoms_match_originals() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let input = gradient(&device, w, h); // .rg = (x/w, y/h)
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let shaders_dir =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
+        let differ = TextureDiff::new(&device);
+
+        // Paramless vector ops.
+        for (type_id, shader) in [
+            ("node.length_vec2", "length_vec2.wgsl"),
+            ("node.normalize_vec2", "normalize_vec2.wgsl"),
+        ] {
+            let node = registry.construct(type_id).unwrap();
+            let generated = generate_standalone(
+                node.fusion_kind(),
+                node.wgsl_body().unwrap(),
+                node.inputs(),
+                node.parameters(),
+                node.input_access(),
+                node.outputs(),
+            )
+            .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
+            let original = std::fs::read_to_string(format!("{shaders_dir}/{shader}"))
+                .unwrap_or_else(|e| panic!("read {shader}: {e}"));
+            let from_original = dispatch_paramless_pointwise(&device, &original, &input);
+            let from_generated = dispatch_paramless_pointwise(&device, &generated, &input);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "{type_id}: generated must reproduce {shader} (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+
+        // rotate_vec2_by_angle: dual-packed (hand cos/sin vs generated angle).
+        let node = registry.construct("node.rotate_vec2_by_angle").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("rotate_vec2 generates");
+        let original = std::fs::read_to_string(format!("{shaders_dir}/rotate_vec2_by_angle.wgsl"))
+            .expect("read rotate_vec2_by_angle.wgsl");
+        let angle = 0.7f32;
+        let hand_bytes = pack_f32(&[angle.cos(), angle.sin()]); // hand reads cos_a/sin_a
+        let gen_bytes = pack_f32(&[angle]); // generated reads angle
+        let from_original = dispatch_pointwise(&device, &original, &input, &hand_bytes);
+        let from_generated = dispatch_pointwise(&device, &generated, &input, &gen_bytes);
+        // f16-level tolerance: the GPU-vs-CPU trig difference is sub-f16.
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            3e-3,
+            3e-3,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "rotate_vec2_by_angle: generated must reproduce the hand kernel at f16 \
+             (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
     /// outputs get their own texture (no aliasing) so each can be diffed.
     fn dispatch_two_output_source(
