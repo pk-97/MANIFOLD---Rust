@@ -19,13 +19,17 @@ use crate::node_graph::primitive::Primitive;
 pub const BLUR_3D_MODES: &[&str] = &["Scalar (density)", "Vector (force field)"];
 pub const BLUR_3D_AXES: &[&str] = &["X", "Y", "Z"];
 
+// Standalone-codegen uniform layout: PARAMS order (mode, axis, vol_res, radius).
+// The hand fluid_blur_3d.wgsl selected scalar/vector via two entry points and
+// carried {vol_res, axis, radius, _pad}; the generated kernel branches on a
+// runtime `mode` and reads vol_res/radius from here.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Blur3DUniforms {
-    vol_res: u32,
+    mode: u32,
     axis: u32,
+    vol_res: i32,
     radius: f32,
-    _pad: u32,
 }
 
 crate::primitive! {
@@ -80,9 +84,9 @@ crate::primitive! {
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["blur 3d", "volume blur", "smooth"],
-    extra_fields: {
-        vector_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
-    },
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/blur_3d_separable_body.wgsl"),
+    input_access: [Gather],
 }
 
 impl Primitive for Blur3DSeparable {
@@ -109,33 +113,27 @@ impl Primitive for Blur3DSeparable {
         };
 
         let gpu = ctx.gpu_encoder();
-        // Mode 0 = scalar (uses self.pipeline), Mode 1 = vector (uses self.vector_pipeline).
-        let pipeline = if mode == 1 {
-            self.vector_pipeline.get_or_insert_with(|| {
-                gpu.device.create_compute_pipeline(
-                    include_str!("../../generators/shaders/fluid_blur_3d.wgsl"),
-                    "blur_vector",
-                    "node.blur_3d_separable.vector",
-                )
-            })
-        } else {
-            self.pipeline.get_or_insert_with(|| {
-                gpu.device.create_compute_pipeline(
-                    include_str!("../../generators/shaders/fluid_blur_3d.wgsl"),
-                    "blur_scalar",
-                    "node.blur_3d_separable.scalar",
-                )
-            })
-        };
+        // Single-source 3D Gather: `in` is a Texture3D gathered along one axis. The
+        // generated kernel branches on a runtime `mode` (scalar vs vector) in one
+        // kernel and binds uniform(0)/tex(1)/samp(2)/dst(3). fluid_blur_3d.wgsl's
+        // two entry points are the parity oracle.
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.blur_3d_separable standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
+                "node.blur_3d_separable",
+            )
+        });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
         let uniforms = Blur3DUniforms {
-            vol_res,
+            mode,
             axis,
+            vol_res: vol_res as i32,
             radius,
-            _pad: 0,
         };
 
         gpu.native_enc.dispatch_compute(

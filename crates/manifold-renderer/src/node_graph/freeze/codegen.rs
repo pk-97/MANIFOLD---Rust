@@ -101,7 +101,61 @@ pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn is_texture_input(i: &NodeInput) -> bool {
-    matches!(i.ty, PortType::Texture2D | PortType::Texture2DTyped(_))
+    matches!(
+        i.ty,
+        PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D
+    )
+}
+
+fn is_texture_port(ty: &PortType) -> bool {
+    matches!(
+        ty,
+        PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D
+    )
+}
+
+/// Texture dimensionality the generated kernel works in. An atom is 3D iff any of
+/// its texture ports is a `Texture3D` (volume atoms like blur_3d_separable);
+/// otherwise 2D. This selects the texture types, workgroup shape, and the
+/// `id`/`uv`/store coordinate forms throughout the wrapper.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TexDim {
+    D2,
+    D3,
+}
+
+/// Per-dimension WGSL fragments for the iteration wrapper.
+struct DimForms {
+    tex_ty: &'static str,
+    storage_ty: &'static str,
+    workgroup: &'static str,
+    guard: &'static str,
+    uv_expr: &'static str,
+    dims_arg: &'static str,
+    store_coord: &'static str,
+}
+
+fn dim_forms(dim: TexDim) -> DimForms {
+    match dim {
+        TexDim::D2 => DimForms {
+            tex_ty: "texture_2d<f32>",
+            storage_ty: "texture_storage_2d<rgba16float, write>",
+            workgroup: "16, 16",
+            guard: "id.x >= dims.x || id.y >= dims.y",
+            uv_expr: "(vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims)",
+            dims_arg: "vec2<f32>(dims)",
+            store_coord: "vec2<i32>(id.xy)",
+        },
+        TexDim::D3 => DimForms {
+            tex_ty: "texture_3d<f32>",
+            storage_ty: "texture_storage_3d<rgba16float, write>",
+            workgroup: "4, 4, 4",
+            guard: "id.x >= dims.x || id.y >= dims.y || id.z >= dims.z",
+            uv_expr: "(vec3<f32>(id) + 0.5) / vec3<f32>(dims)",
+            dims_arg: "vec3<f32>(dims)",
+            store_coord: "vec3<i32>(id)",
+        },
+    }
 }
 
 /// Generate the standalone kernel for a primitive type — the single-source
@@ -137,11 +191,18 @@ pub fn generate_standalone(
     // uniform flag (the executor aliases an unconsumed output slot onto a live
     // one, so an ungated double-write would clobber it). 1 (or 0) keeps the
     // single `dst` path — byte-identical to before for every existing atom.
-    let tex_outputs: Vec<&NodeOutput> = outputs
-        .iter()
-        .filter(|o| matches!(o.ty, PortType::Texture2D | PortType::Texture2DTyped(_)))
-        .collect();
+    let tex_outputs: Vec<&NodeOutput> = outputs.iter().filter(|o| is_texture_port(&o.ty)).collect();
     let multi_output = tex_outputs.len() > 1;
+    // 3D iff any texture port is a Texture3D volume (blur_3d_separable). Drives
+    // the texture types, workgroup, and id/uv/store coordinate forms below.
+    let dim = if tex_outputs.iter().any(|o| o.ty == PortType::Texture3D)
+        || tex_inputs.iter().any(|i| i.ty == PortType::Texture3D)
+    {
+        TexDim::D3
+    } else {
+        TexDim::D2
+    };
+    let forms = dim_forms(dim);
     match fusion_kind {
         FusionKind::Pointwise if tex_inputs.len() == 1 => {}
         FusionKind::MultiInputCoincident if tex_inputs.len() >= 2 => {}
@@ -237,8 +298,8 @@ pub fn generate_standalone(
     for inp in tex_inputs.iter() {
         writeln!(
             out,
-            "@group(0) @binding({next_binding}) var tex_{}: texture_2d<f32>;",
-            inp.name
+            "@group(0) @binding({next_binding}) var tex_{}: {};",
+            inp.name, forms.tex_ty
         )
         .unwrap();
         next_binding += 1;
@@ -253,8 +314,8 @@ pub fn generate_standalone(
         for o in &tex_outputs {
             writeln!(
                 out,
-                "@group(0) @binding({next_binding}) var dst_{}: texture_storage_2d<rgba16float, write>;",
-                o.name
+                "@group(0) @binding({next_binding}) var dst_{}: {};",
+                o.name, forms.storage_ty
             )
             .unwrap();
             next_binding += 1;
@@ -262,7 +323,8 @@ pub fn generate_standalone(
     } else {
         writeln!(
             out,
-            "@group(0) @binding({next_binding}) var dst: texture_storage_2d<rgba16float, write>;"
+            "@group(0) @binding({next_binding}) var dst: {};",
+            forms.storage_ty
         )
         .unwrap();
     }
@@ -284,7 +346,7 @@ pub fn generate_standalone(
 
     // --- iteration wrapper: dims/guard, center-UV sample each input, call
     // body in (texture-inputs-then-params) order, store. ---
-    out.push_str("@compute @workgroup_size(16, 16)\n");
+    writeln!(out, "@compute @workgroup_size({})", forms.workgroup).unwrap();
     out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
     if multi_output {
         // Any output binding gives the canvas size (run() binds the live slot to
@@ -293,10 +355,10 @@ pub fn generate_standalone(
     } else {
         out.push_str("    let dims = textureDimensions(dst);\n");
     }
-    out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
-    out.push_str("    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n");
+    writeln!(out, "    if {} {{\n        return;\n    }}", forms.guard).unwrap();
+    writeln!(out, "    let uv = {};", forms.uv_expr).unwrap();
     if any_texel {
-        out.push_str("    let coord = vec2<i32>(id.xy);\n");
+        writeln!(out, "    let coord = {};", forms.store_coord).unwrap();
     }
     // Read each input by its access kind: Coincident → sampler at the fragment
     // UV (resolution-robust); CoincidentTexel → exact integer-texel load (no
@@ -342,7 +404,7 @@ pub fn generate_standalone(
         }
     }
     args.push("uv".to_string());
-    args.push("vec2<f32>(dims)".to_string());
+    args.push(forms.dims_arg.to_string());
     // Scalar params first (PARAMS order; Vec3 reassembled), then each table as
     // (count, array) — matching the body signature `…, <t>_count, <t>` per table.
     for p in params {
@@ -368,13 +430,13 @@ pub fn generate_standalone(
         for o in &tex_outputs {
             writeln!(
                 out,
-                "    if params.write_{} != 0u {{ textureStore(dst_{}, vec2<i32>(id.xy), result.{}); }}",
-                o.name, o.name, o.name
+                "    if params.write_{} != 0u {{ textureStore(dst_{}, {}, result.{}); }}",
+                o.name, o.name, forms.store_coord, o.name
             )
             .unwrap();
         }
     } else {
-        out.push_str("    textureStore(dst, vec2<i32>(id.xy), result);\n");
+        writeln!(out, "    textureStore(dst, {}, result);", forms.store_coord).unwrap();
     }
     out.push_str("}\n");
 
@@ -2087,6 +2149,154 @@ mod gpu_tests {
                 "variable-width blur (Q={q}, W={wt}): generated must reproduce the hand \
                  kernel (max_abs={}, max_rel={})",
                 r.max_abs, r.max_rel
+            );
+        }
+    }
+
+    /// Allocate an n×n×n 3D texture with the given usage.
+    fn make_3d_texture(device: &GpuDevice, n: u32, usage: GpuTextureUsage, label: &'static str) -> GpuTexture {
+        device.create_texture(&GpuTextureDesc {
+            width: n,
+            height: n,
+            depth: n,
+            format: FMT,
+            dimension: GpuTextureDimension::D3,
+            usage,
+            label,
+            mip_levels: 1,
+        })
+    }
+
+    /// 3D-VOLUME GATHER parity: node.blur_3d_separable blurs a Texture3D along one
+    /// axis. The hand fluid_blur_3d.wgsl has two entry points (blur_scalar /
+    /// blur_vector); the generated kernel merges them behind a runtime `mode`
+    /// branch and runs through the dim-aware (texture_storage_3d, @workgroup_size
+    /// (4,4,4), vec3 id/uv) wrapper. The input is filled on-GPU with a 3D gradient;
+    /// both kernels read it and their output volumes are read back (full depth via
+    /// copy_texture_3d_to_buffer) and compared per voxel. Dual-packed: the hand
+    /// uniform is {vol_res, axis, radius, _pad}, the generated is {mode, axis,
+    /// vol_res, radius}.
+    #[test]
+    fn generated_blur_3d_separable_matches_original() {
+        let device = crate::test_device();
+        let n = 32u32;
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+
+        let node = registry.construct("node.blur_3d_separable").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("blur_3d generates");
+        // Structural: 3D texture types + 3D dispatch.
+        assert!(
+            generated.contains("texture_storage_3d<rgba16float, write>"),
+            "3D storage output missing:\n{generated}"
+        );
+        assert!(
+            generated.contains("var tex_in: texture_3d<f32>"),
+            "3D sampled input missing:\n{generated}"
+        );
+        assert!(
+            generated.contains("@compute @workgroup_size(4, 4, 4)"),
+            "3D workgroup missing:\n{generated}"
+        );
+        let original =
+            include_str!("../../generators/shaders/fluid_blur_3d.wgsl");
+
+        // Fill the input volume with a 3D gradient (varies along every axis).
+        let input = make_3d_texture(
+            &device,
+            n,
+            GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            "blur3d-in",
+        );
+        let fill_wgsl = "\
+@group(0) @binding(0) var vol: texture_storage_3d<rgba16float, write>;\n\
+@compute @workgroup_size(4, 4, 4)\n\
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
+    let d = textureDimensions(vol);\n\
+    if id.x >= d.x || id.y >= d.y || id.z >= d.z { return; }\n\
+    let f = vec3<f32>(id) / vec3<f32>(d);\n\
+    textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
+}\n";
+        {
+            let pipeline = device.create_compute_pipeline(fill_wgsl, ENTRY, "blur3d-fill");
+            let mut enc = device.create_encoder("blur3d-fill");
+            enc.dispatch_compute(
+                &pipeline,
+                &[GpuBinding::Texture { binding: 0, texture: &input }],
+                [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
+                "blur3d-fill",
+            );
+            enc.commit_and_wait_completed();
+        }
+
+        let run = |wgsl: &str, entry: &str, param_bytes: &[u8]| -> Vec<u16> {
+            let pipeline = device.create_compute_pipeline(wgsl, entry, "blur3d");
+            let sampler = device.create_sampler(&GpuSamplerDesc::default());
+            let out = make_3d_texture(
+                &device,
+                n,
+                GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+                "blur3d-out",
+            );
+            let mut enc = device.create_encoder("blur3d");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: param_bytes },
+                    GpuBinding::Texture { binding: 1, texture: &input },
+                    GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                    GpuBinding::Texture { binding: 3, texture: &out },
+                ],
+                [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
+                "blur3d",
+            );
+            enc.commit_and_wait_completed();
+            let bytes_per_row = n * 8; // rgba16float
+            let total = u64::from(bytes_per_row) * u64::from(n) * u64::from(n);
+            let buf = device.create_buffer_shared(total);
+            let mut renc = device.create_encoder("blur3d-readback");
+            renc.copy_texture_3d_to_buffer(&out, &buf, n, n, n, bytes_per_row);
+            renc.commit_and_wait_completed();
+            let ptr = buf.mapped_ptr().expect("shared buffer pointer");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (n * n * n * 4) as usize) };
+            halves.to_vec()
+        };
+
+        // axis=0, radius=4. Hand layout {vol_res, axis, radius, _pad}.
+        let mut hand = [0u8; 16];
+        hand[0..4].copy_from_slice(&n.to_le_bytes()); // vol_res
+        hand[8..12].copy_from_slice(&4.0f32.to_le_bytes()); // radius
+        // Generated layout {mode, axis, vol_res, radius}.
+        let gen_bytes = |mode: u32| -> [u8; 16] {
+            let mut b = [0u8; 16];
+            b[0..4].copy_from_slice(&mode.to_le_bytes());
+            b[8..12].copy_from_slice(&(n as i32).to_le_bytes()); // vol_res
+            b[12..16].copy_from_slice(&4.0f32.to_le_bytes()); // radius
+            b
+        };
+
+        for (mode, entry) in [(0u32, "blur_scalar"), (1u32, "blur_vector")] {
+            let hand_vol = run(original, entry, &hand);
+            let gen_vol = run(&generated, ENTRY, &gen_bytes(mode));
+            assert_eq!(hand_vol.len(), gen_vol.len());
+            let mut max_abs = 0.0f32;
+            for (a, b) in hand_vol.iter().zip(gen_vol.iter()) {
+                let fa = half::f16::from_bits(*a).to_f32();
+                let fb = half::f16::from_bits(*b).to_f32();
+                max_abs = max_abs.max((fa - fb).abs());
+            }
+            assert!(
+                max_abs < 1e-3,
+                "blur_3d mode={mode} ({entry}): generated must reproduce the hand kernel \
+                 (max_abs={max_abs})"
             );
         }
     }

@@ -1322,6 +1322,60 @@ impl GpuEncoder {
         enc.endEncoding();
     }
 
+    /// Copy a full 3D texture volume (`width × height × depth`) to a buffer.
+    /// Layout is z-slice-major: each slice is `bytes_per_row × height` bytes,
+    /// slices laid out consecutively. Used by the freeze codegen's volume parity
+    /// tests, where `copy_texture_to_buffer` (which copies a single slice) isn't
+    /// enough.
+    pub fn copy_texture_3d_to_buffer(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuBuffer,
+        width: u32,
+        height: u32,
+        depth: u32,
+        bytes_per_row: u32,
+    ) {
+        assert!(
+            width <= src.width && height <= src.height && depth <= src.depth,
+            "copy_texture_3d_to_buffer: copy region exceeds source bounds — \
+             src {}×{}×{} ({:?}), copy region {}×{}×{}.",
+            src.width, src.height, src.depth, src.format, width, height, depth,
+        );
+        let bytes_per_image = u64::from(bytes_per_row) * u64::from(height);
+        let required = bytes_per_image * u64::from(depth);
+        assert!(
+            required <= dst.size,
+            "copy_texture_3d_to_buffer: destination buffer too small — \
+             needed {required} bytes, dst buffer is {} bytes",
+            dst.size,
+        );
+        self.end_current();
+        let enc = self
+            .cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed");
+        unsafe {
+            enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                &src.raw,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize {
+                    width: width as usize,
+                    height: height as usize,
+                    depth: depth as usize,
+                },
+                &dst.raw,
+                0,
+                bytes_per_row as usize,
+                bytes_per_image as usize,
+                MTLBlitOption::empty(),
+            );
+        }
+        enc.endEncoding();
+    }
+
     /// Insert a pipeline barrier between dispatches.
     ///
     /// On Metal this is a **no-op** — Metal serializes work within a single
