@@ -681,11 +681,15 @@ fn generate_standalone_buffer(
         writeln!(out, "    {f}: {ty},").unwrap();
         words += param_word_count(p)?; // scalar params are 1 word each
     }
-    // Injected non-param derived fields (frame-derived f32s like dt_scaled),
-    // after the params. run() packs the resolved value each frame.
+    // Injected non-param derived fields (frame-derived values like dt_scaled),
+    // after the params. Each entry is `"name"` (f32) or `"name:ty"` for an
+    // explicit scalar type — `"frame_count:u32"` so a frame counter stays an
+    // exact integer rather than losing precision as an f32 past ~16M frames.
+    // run() packs the resolved value each frame.
     for d in derived_uniforms {
-        writeln!(out, "    {d}: f32,").unwrap();
-        words += 1;
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        writeln!(out, "    {dname}: {dty},").unwrap();
+        words += 1; // every supported derived scalar is one 4-byte word
     }
     out.push_str("    dispatch_count: u32,\n");
     words += 1;
@@ -752,7 +756,8 @@ fn generate_standalone_buffer(
         args.push(format!("params.{f}"));
     }
     for d in derived_uniforms {
-        args.push(format!("params.{d}"));
+        let dname = d.split_once(':').map(|(n, _)| n).unwrap_or(d);
+        args.push(format!("params.{dname}"));
     }
     writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
     out.push_str("}\n");
