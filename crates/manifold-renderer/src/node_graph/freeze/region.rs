@@ -57,8 +57,9 @@ const MIN_REGION_LEN: usize = 2;
 /// How a graph node participates in fusion, resolved once per node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NodeClass {
-    /// A same-element-space pointwise/coincident atom that can fold into a fused
-    /// kernel: it threads its inputs as registers and writes one texture output.
+    /// A same-element-space atom that folds into a fused kernel: a pointwise /
+    /// coincident atom threading its input register(s), or a Source generator
+    /// producing the region's head value from position. Writes one texture output.
     Eligible,
     /// A fusion seam — source/final_output, any non-pointwise atom (blur,
     /// feedback, DNN, resample, generator, router), a gather-input atom, a
@@ -187,11 +188,15 @@ fn classify_node(
         return NodeClass::Boundary; // unknown atom → never fuse
     };
 
-    // Only the register-threadable kinds fuse INTO a region. Source (a 0-input
-    // generator) and Boundary do not — folding a Source as a region producer is
-    // a documented follow-on (it would feed the region from uv/dims, not a
-    // register), so for now it bounds the region like any other producer.
-    if !matches!(n.fusion_kind(), FusionKind::Pointwise | FusionKind::MultiInputCoincident) {
+    // Three kinds fold INTO a region: Pointwise / MultiInputCoincident thread
+    // their input register(s); Source is a 0-input generator that produces the
+    // region's head value from uv/dims (no input register — the fused codegen
+    // already calls a 0-input body as `n{i}_body(uv, dims, params)`). Everything
+    // else (Boundary) is a seam.
+    if !matches!(
+        n.fusion_kind(),
+        FusionKind::Pointwise | FusionKind::MultiInputCoincident | FusionKind::Source
+    ) {
         return NodeClass::Boundary;
     }
     if n.wgsl_body().is_none() {
@@ -209,11 +214,17 @@ fn classify_node(
     }
 
     // Texture I/O shape: exactly one texture output (the register the region
-    // threads), ≥1 texture inputs. An atom with two texture outputs (voronoi)
-    // needs multi-output fused codegen — a follow-on; boundary for now.
+    // threads). A Source reads NO texture input (it generates from position); the
+    // threaded kinds read ≥1. An atom with two texture outputs (voronoi) needs
+    // multi-output fused codegen — a follow-on; boundary for now.
     let tex_in = n.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
     let tex_out = n.outputs().iter().filter(|o| is_texture_port(&o.ty)).count();
-    if tex_in == 0 || tex_out != 1 {
+    let arity_ok = if matches!(n.fusion_kind(), FusionKind::Source) {
+        tex_in == 0
+    } else {
+        tex_in >= 1
+    };
+    if !arity_ok || tex_out != 1 {
         return NodeClass::Boundary;
     }
 
@@ -578,5 +589,64 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         assert!(partition_regions(&def, &registry()).is_empty());
+    }
+
+    /// Tier 2 — a Source generator heads a region. checkerboard (0 texture
+    /// inputs, fusion_kind Source) → invert (Pointwise) form one region whose
+    /// head reads NO external (it produces from position); invert threads the
+    /// generator's register. The fused codegen already calls a 0-input body as
+    /// `body(uv, dims, params)`, so this is purely a finder unlock.
+    #[test]
+    fn source_generator_heads_a_region() {
+        let json = r#"{
+            "version": 1, "name": "gen", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "the generator + invert form one region");
+        let r = &regions[0];
+        assert_eq!(r.members.len(), 2, "checkerboard + invert");
+        assert!(r.externals.is_empty(), "a pure-generator region reads no external texture");
+        assert_eq!(r.output, 2, "invert feeds final_output");
+        let checker = r.members.iter().find(|m| m.doc_id == 1).unwrap();
+        assert!(checker.inputs.is_empty(), "the Source head reads nothing");
+        let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
+        assert_eq!(invert.inputs, vec![RegionInput::Member(1)], "invert threads the generator");
+    }
+
+    /// A Source generator blended with the incoming source texture: the system
+    /// source feeds `mix` as an EXTERNAL while the generator feeds it as a
+    /// region member. Exercises a region that has both a Source head and an
+    /// external input (the common "overlay a pattern" shape).
+    #[test]
+    fn source_plus_external_in_one_region() {
+        let json = r#"{
+            "version": 1, "name": "overlay", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
+                { "id": 2, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "checkerboard + mix are one region");
+        let r = &regions[0];
+        assert_eq!(r.members.len(), 2, "checkerboard + mix");
+        assert_eq!(r.externals.len(), 1, "the system source is the one external");
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(r.output, 2, "mix feeds final_output");
     }
 }

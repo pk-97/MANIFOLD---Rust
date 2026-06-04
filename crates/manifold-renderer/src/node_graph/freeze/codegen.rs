@@ -528,11 +528,17 @@ struct FnBlock {
     text: String,
 }
 
-/// Split a body fragment into its top-level `fn` blocks (helpers + `fn body`).
-/// WGSL has no nested fns, so a column-0 `fn ` reliably starts each definition;
-/// a block runs until the next column-0 `fn ` (lines before the first — the
-/// comment header — are dropped).
-fn split_fns(fragment: &str) -> Vec<FnBlock> {
+/// Split a body fragment into its top-level declaration *prelude* (any `const` /
+/// `struct` / `alias` / `override` the body declares before its first function)
+/// and its `fn` blocks (helpers + `fn body`). The standalone path emits a body
+/// verbatim, so it keeps a leading `const NV_EPS = …`; the fused path splits into
+/// fns, so without carrying the prelude it would silently drop those decls and
+/// the kernel would fail to compile (`no definition in scope`). WGSL has no
+/// nested fns, so a column-0 `fn ` reliably starts each definition; a block runs
+/// until the next column-0 `fn `. Leading comments / blank lines are dropped
+/// (only real declarations are carried).
+fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
+    let mut prelude: Vec<String> = Vec::new();
     let mut blocks: Vec<FnBlock> = Vec::new();
     let mut current: Option<(String, Vec<String>)> = None;
     for line in fragment.lines() {
@@ -544,12 +550,24 @@ fn split_fns(fragment: &str) -> Vec<FnBlock> {
             current = Some((name, vec![line.to_string()]));
         } else if let Some((_, lines)) = current.as_mut() {
             lines.push(line.to_string());
+        } else if is_top_level_decl(line) {
+            prelude.push(line.to_string());
         }
     }
     if let Some((name, lines)) = current.take() {
         blocks.push(FnBlock { name, text: lines.join("\n") });
     }
-    blocks
+    (prelude, blocks)
+}
+
+/// Whether a fragment line is a WGSL top-level declaration the fused prelude must
+/// carry (vs a comment / blank line, which it drops).
+fn is_top_level_decl(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("const ")
+        || t.starts_with("struct ")
+        || t.starts_with("alias ")
+        || t.starts_with("override ")
 }
 
 /// Generate one fused kernel for a region. Errors if a node isn't fusable, a
@@ -559,7 +577,9 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // node_id -> region index (for resolving InputSource::Node to a register).
     let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
 
-    // Per-node: split body into helpers + the `body` fn (renamed n{i}_body).
+    // Per-node: split body into a top-level prelude (consts/structs), helpers,
+    // and the `body` fn (renamed n{i}_body).
+    let mut prelude: Vec<String> = Vec::new(); // deduped top-level decls, emitted once
     let mut helpers: Vec<FnBlock> = Vec::new(); // deduped, emitted once
     let mut bodies: Vec<String> = Vec::new(); // namespaced body fns
     for (i, node) in region.nodes.iter().enumerate() {
@@ -569,8 +589,17 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         if node.body.is_empty() {
             return Err(CodegenError::NoBody);
         }
+        let (pre, blocks) = split_fns(node.body);
+        for line in pre {
+            // Dedup identical declarations (two atoms declaring the same const
+            // collapse to one). A same-name / different-value clash would surface
+            // as a naga redefinition error, caught by the oracle — never silent.
+            if !prelude.contains(&line) {
+                prelude.push(line);
+            }
+        }
         let mut found_body = false;
-        for fb in split_fns(node.body) {
+        for fb in blocks {
             if fb.name == "body" {
                 // rename the single definition `fn body(` -> `fn n{i}_body(`
                 bodies.push(fb.text.replacen("fn body(", &format!("fn n{i}_body("), 1));
@@ -629,7 +658,15 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     .unwrap();
     out.push('\n');
 
-    // --- deduped helpers, then namespaced bodies ---
+    // --- shared prelude (deduped top-level consts/structs the bodies declare),
+    // then deduped helpers, then namespaced bodies ---
+    for line in &prelude {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !prelude.is_empty() {
+        out.push('\n');
+    }
     for h in &helpers {
         out.push_str(h.text.trim_end());
         out.push_str("\n\n");
@@ -834,6 +871,46 @@ mod gpu_tests {
         assert_eq!(a, b, "codegen must be deterministic");
         assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
         assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
+    }
+
+    /// Regression for the NV_EPS-class bug: a body declaring a top-level `const`
+    /// before its `fn body` must carry that const into the fused kernel's shared
+    /// prelude. The standalone path keeps it verbatim; the fused path splits into
+    /// fns and would otherwise drop it (`no definition in scope`). Two atoms
+    /// sharing the const emit it exactly once (deduped).
+    #[test]
+    fn fused_prelude_carries_and_dedups_top_level_consts() {
+        use crate::node_graph::freeze::classify::FusionKind;
+        let body = "const K: f32 = 0.25;\n\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c * K;\n}\n";
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: FusionKind::Pointwise,
+                    body,
+                    params: &[],
+                    inputs: vec![InputSource::External(0)],
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: FusionKind::Pointwise,
+                    body,
+                    params: &[],
+                    inputs: vec![InputSource::Node(id(0))],
+                },
+            ],
+            num_external_inputs: 1,
+            output: id(1),
+        };
+        let g = generate_fused(&region).expect("a region whose body declares a const fuses");
+        assert_eq!(
+            g.wgsl.matches("const K: f32 = 0.25;").count(),
+            1,
+            "the top-level const is carried into the fused kernel exactly once (deduped)"
+        );
+        assert!(g.wgsl.contains("fn n0_body"), "first body namespaced");
+        assert!(g.wgsl.contains("fn n1_body"), "second body namespaced");
     }
 
     /// The generated standalone gain kernel reproduces the hand-written

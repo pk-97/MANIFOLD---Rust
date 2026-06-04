@@ -698,3 +698,121 @@ fn every_fused_preset_executes_one_frame() {
         failures.join("\n  - "),
     );
 }
+
+/// Tier 2 oracle — a Source generator folded into a region renders identically
+/// fused vs unfused. `checkerboard` (Source, 0 inputs) is blended with the
+/// incoming source texture by `mix`: the region has BOTH a 0-input head (the
+/// generator produces from uv/dims) and an external read (the source), so it
+/// exercises the full Source-as-producer path through the executor. Both sides
+/// use the atom defaults, so the one fused kernel must match the two-pass chain.
+#[test]
+fn fused_source_region_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    // source → mix.a, checkerboard → mix.b, mix → final_output.
+    let json = r#"{
+        "version": 1, "name": "overlay", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
+            { "id": 2, "typeId": "node.mix", "nodeId": "mix" },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    // ── Unfused: the two-pass chain (checkerboard, then mix). ──
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    // ── Fused: checkerboard + mix collapse into one kernel. ──
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the Source region fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "fused Source region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// Tier 2 on REAL generators. Generator presets are the same `EffectGraphDef`
+/// graphs as effects (just loaded from a separate registry), and they're built
+/// largely out of Source atoms — exactly what tier 2 unlocks. The live generator
+/// render path doesn't yet swap in fused views (that plumbing rides the
+/// effect/generator unification), but the finder + codegen are path-agnostic, so
+/// we can fuse each generator's canonical def here and prove every generated
+/// kernel is valid WGSL. (Generators may have no `system.source`, so we validate
+/// by compiling the kernels rather than rendering — the synthetic oracle above
+/// already proves the Source render/binding path end-to-end.)
+#[test]
+fn every_fused_generator_kernel_compiles() {
+    use crate::generators::bundled_generator_presets::{
+        bundled_generator_preset_json, bundled_generator_preset_type_ids,
+    };
+    use std::panic::AssertUnwindSafe;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut failures: Vec<String> = Vec::new();
+    let mut fused_generators = 0usize;
+    let mut fused_kernels = 0usize;
+
+    for type_id in bundled_generator_preset_type_ids() {
+        let Some(json) = bundled_generator_preset_json(&type_id) else {
+            continue;
+        };
+        let Ok(def) = serde_json::from_str::<EffectGraphDef>(json) else {
+            continue;
+        };
+        let Some(fused) = super::install::fuse_canonical_def(&def, &registry) else {
+            continue; // no fusable region in this generator
+        };
+        fused_generators += 1;
+        for node in fused.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute") {
+            fused_kernels += 1;
+            let wgsl = node.wgsl_source.as_deref().expect("fused node carries WGSL");
+            let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = device.create_compute_pipeline(wgsl, super::codegen::ENTRY, "gen-kernel-smoke");
+            }));
+            if res.is_err() {
+                failures.push(format!("{}: a fused kernel failed to compile", type_id.as_str()));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "fused generator kernels must be valid WGSL:\n  - {}",
+        failures.join("\n  - "),
+    );
+    // Not an assertion — generator coverage is informational (some generators are
+    // all wgsl_compute / 3D / buffer and fuse nothing until tiers 3+). Logged so
+    // the real reach of tier 2 on generators is visible, never silently zero.
+    eprintln!(
+        "tier 2: {fused_generators} generator presets fused {fused_kernels} kernel(s)"
+    );
+}
