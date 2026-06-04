@@ -23,21 +23,26 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`point_x`,
+/// `point_y`, `amplitude`, `envelope`, `radius`, `active_count` Int → i32), then
+/// the TWO derived fields (`time_val` = seconds, `dt_scaled` = delta*60), then
+/// the codegen-injected `dispatch_count`, padded to a 16-byte multiple. 9 words +
+/// 3 pad = 48 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BurstUniforms {
-    active_count: u32,
-    _pad0: u32,
     point_x: f32,
     point_y: f32,
     amplitude: f32,
     envelope: f32,
     radius: f32,
+    active_count: i32,
     time_val: f32,
     dt_scaled: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
+    dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -113,6 +118,9 @@ crate::primitive! {
     category: Particles2D,
     role: Filter,
     aliases: ["add burst", "explosion", "shockwave", "impulse"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/apply_radial_burst_to_particles_body.wgsl"),
+    derived_uniforms: ["time_val", "dt_scaled"],
 }
 
 impl Primitive for ApplyRadialBurstToParticles {
@@ -164,28 +172,34 @@ impl Primitive for ApplyRadialBurstToParticles {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path; two derived fields). The bespoke simplex is inlined
+            // in the body. apply_radial_burst_to_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/apply_radial_burst_to_particles.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.apply_radial_burst_to_particles standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.apply_radial_burst_to_particles",
             )
         });
 
         let uniforms = BurstUniforms {
-            active_count,
-            _pad0: 0,
             point_x,
             point_y,
             amplitude,
             envelope,
             radius,
+            active_count: active_count as i32,
             time_val,
             dt_scaled,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            dispatch_count: active_count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
+        // `in`/`out` alias one particle buffer; the generated kernel binds buf_in
+        // (read, 1) + buf_out (read_write, 2) — bind it to both (pointwise).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -195,6 +209,11 @@ impl Primitive for ApplyRadialBurstToParticles {
                 },
                 GpuBinding::Buffer {
                     binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
                     buffer: particles,
                     offset: 0,
                 },
@@ -256,5 +275,107 @@ mod tests {
             node.type_id().as_str(),
             "node.apply_radial_burst_to_particles"
         );
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain parity oracle (freeze §12) — apply_radial_burst had no GPU
+    //! test. The generated kernel (bespoke simplex inlined; two derived fields;
+    //! aliased in/out bound to slots 1 and 2) must reproduce the hand kernel
+    //! particle-for-particle: pushed positions for live in-radius particles,
+    //! unchanged for dead / out-of-radius. Deterministic simplex → bit-exact.
+    use super::*;
+
+    fn dispatch_burst(
+        wgsl: &str,
+        particles: &[Particle],
+        uniform: &[u8],
+        count: u32,
+        is_generated: bool,
+    ) -> Vec<Particle> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "burst-oracle");
+        let buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
+        unsafe {
+            buf.write(0, bytemuck::cast_slice(particles));
+        }
+        let mut bindings = vec![
+            GpuBinding::Bytes { binding: 0, data: uniform },
+            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
+        ];
+        if is_generated {
+            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &buf, offset: 0 });
+        }
+        let mut enc = device.create_encoder("burst-oracle");
+        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "burst-oracle");
+        enc.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("shared particle buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_burst_matches_hand_kernel() {
+        let mk = |pos: [f32; 3], life: f32| Particle {
+            position: pos,
+            _pad0: 0.0,
+            velocity: [0.1, -0.2, 0.3],
+            life,
+            age: 0.5,
+            _pad1: [0.0; 3],
+            color: [0.2, 0.4, 0.6, 1.0],
+        };
+        let particles = [
+            mk([0.55, 0.52, 0.0], 1.0), // live, near point → pushed
+            mk([0.40, 0.45, 0.0], 1.0), // live, in radius → pushed
+            mk([0.95, 0.95, 0.0], 1.0), // live, far → no push
+            mk([0.50, 0.50, 0.0], 0.0), // dead → unchanged
+        ];
+        let n = particles.len() as u32;
+        let (px, py, amp, env, rad) = (0.5f32, 0.5f32, 1.0f32, 1.0f32, 0.4f32);
+        let (time_val, dt) = (1.3f32, 0.5f32);
+
+        // Hand layout: active_count(u32), pad, point_x, point_y, amplitude,
+        //   envelope, radius, time_val, dt_scaled, pad, pad, pad.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&n.to_le_bytes());
+        hand.extend_from_slice(&[0u8; 4]);
+        for v in [px, py, amp, env, rad, time_val, dt] {
+            hand.extend_from_slice(&v.to_le_bytes());
+        }
+        hand.extend_from_slice(&[0u8; 12]);
+
+        // Generated layout: point_x, point_y, amplitude, envelope, radius,
+        //   active_count(i32), time_val, dt_scaled, dispatch_count(u32), 3 pad.
+        let mut gen_bytes = Vec::new();
+        for v in [px, py, amp, env, rad] {
+            gen_bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
+        gen_bytes.extend_from_slice(&time_val.to_le_bytes());
+        gen_bytes.extend_from_slice(&dt.to_le_bytes());
+        gen_bytes.extend_from_slice(&n.to_le_bytes());
+        gen_bytes.extend_from_slice(&[0u8; 12]);
+
+        let hand_wgsl = include_str!("shaders/apply_radial_burst_to_particles.wgsl");
+        let gen_wgsl =
+            crate::node_graph::freeze::codegen::standalone_for_spec::<ApplyRadialBurstToParticles>()
+                .expect("apply_radial_burst_to_particles buffer codegen");
+
+        let from_hand = dispatch_burst(hand_wgsl, &particles, &hand, n, false);
+        let from_gen = dispatch_burst(&gen_wgsl, &particles, &gen_bytes, n, true);
+
+        for i in 0..particles.len() {
+            for c in 0..3 {
+                assert!(
+                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                    "particle {i} position[{c}]: hand={} gen={}",
+                    from_hand[i].position[c],
+                    from_gen[i].position[c]
+                );
+            }
+            assert!((from_hand[i].life - from_gen[i].life).abs() < 1e-6, "particle {i} life");
+        }
     }
 }
