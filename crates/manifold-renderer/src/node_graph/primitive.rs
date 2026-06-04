@@ -490,6 +490,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn wgsl_includes(&self) -> &'static [&'static str] {
         P::WGSL_INCLUDES
     }
+    fn derived_uniforms(&self) -> &'static [&'static str] {
+        P::DERIVED_UNIFORMS
+    }
+    fn atomic_outputs(&self) -> &'static [&'static str] {
+        P::ATOMIC_OUTPUTS
+    }
 }
 
 /// Runtime view of a primitive's const metadata, suitable for

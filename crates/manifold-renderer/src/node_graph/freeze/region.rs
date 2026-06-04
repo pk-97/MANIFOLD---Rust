@@ -183,7 +183,11 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         .filter(|w| {
             eligible.contains(&w.from_node)
                 && eligible.contains(&w.to_node)
-                && is_texture_wire(def, registry, w)
+                // Union over coincident wires of EITHER domain: a texture (pixel)
+                // chain OR an Array (particle / instance) chain. Two eligible
+                // atoms of the same domain are always wired by their own kind
+                // (texture↔texture, Array↔Array), so this never merges domains.
+                && (is_texture_wire(def, registry, w) || is_array_wire(def, registry, w))
                 && wire_coincident_consumed(def, registry, w)
         })
         .map(|w| (w.from_node, w.to_node))
@@ -275,6 +279,13 @@ fn classify_node(
         if param_wgsl_type(p).is_err() {
             return NodeClass::Boundary;
         }
+    }
+
+    // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve):
+    // classify by the buffer rules. The texture arity / 3D / control-wire gates
+    // below are texture-specific; the buffer codegen has its own shape contract.
+    if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        return classify_buffer_node(n.as_ref(), node, def, registry);
     }
 
     // Texture I/O shape: exactly one texture output (the register the region
@@ -389,6 +400,84 @@ fn classify_node(
     }
 }
 
+/// Classify a BUFFER-domain atom (writes an `Array<T>` — particle / instance /
+/// curve element) for fusion eligibility. The buffer twin of the texture gates
+/// in [`classify_node`]: the atom must match the v1 buffer codegen contract
+/// ([`super::codegen::generate_fused`]'s buffer branch) — ≥1 Array input threaded
+/// as an element register, exactly one Array output, no texture I/O, no
+/// `BufferGather`, no frame-derived uniforms, no atomic output — and its
+/// non-Array wires must be region edges or re-anchorable scalar params, and it
+/// must not be a control PRODUCER. Anything else is a `Boundary`. The standalone
+/// naga-parse gate the texture path uses is NOT applied here (it threads no
+/// `wgsl_includes`, so a noise-based buffer body would falsely fail); the install
+/// pass naga-parses the FUSED kernel as the real guard, falling back to unfused.
+fn classify_buffer_node(
+    n: &dyn crate::node_graph::effect_node::EffectNode,
+    node: &EffectGraphNode,
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> NodeClass {
+    let arr_in = n.inputs().iter().filter(|i| matches!(i.ty, PortType::Array(_))).count();
+    let arr_out = n.outputs().iter().filter(|o| matches!(o.ty, PortType::Array(_))).count();
+    // v1 codegen shape: ≥1 Array input, exactly one Array output (fan-out buffer
+    // regions are a follow-on).
+    if arr_in < 1 || arr_out != 1 {
+        return NodeClass::Boundary;
+    }
+    // No texture I/O — the `*_at_particles` volume samplers (texture-gather buffer
+    // atoms) stay boundaries so a particle pipeline cuts cleanly around them.
+    if n.inputs().iter().any(|i| is_texture_port(&i.ty))
+        || n.outputs().iter().any(|o| is_texture_port(&o.ty))
+    {
+        return NodeClass::Boundary;
+    }
+    // A BufferGather input (neighbor_smooth) indexes its global itself — it can't
+    // thread one element register, so it stays a boundary (the gathered producer
+    // is kept external; the finder never unions a gather-consumed wire).
+    if n.input_access().iter().any(|a| a.is_gather()) {
+        return NodeClass::Boundary;
+    }
+    // Frame-derived-uniform integrators (euler_step's dt_scaled, the forces'
+    // frame_count) can't recompute their per-frame values in a fused
+    // `node.wgsl_compute` (no per-member `run()`) — boundary.
+    if !n.derived_uniforms().is_empty() {
+        return NodeClass::Boundary;
+    }
+    // Atomic-accumulator outputs (scatter) write via `atomicAdd`, not a coincident
+    // element write — boundary.
+    if !n.atomic_outputs().is_empty() {
+        return NodeClass::Boundary;
+    }
+    // Wire gate: an Array input wire is a region edge (threads or stays external);
+    // a scalar-param wire is re-anchored onto the fused port-shadow; any other
+    // wire into a non-Array non-scalar-param input cuts; a control PRODUCER stays
+    // a boundary so its scalar survives the rewrite to wire into the fused node.
+    let arr_ports: AHashSet<&str> = n
+        .inputs()
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .map(|i| i.name)
+        .collect();
+    let scalar_params: AHashSet<&str> = n
+        .parameters()
+        .iter()
+        .filter(|p| param_wgsl_type(p).is_ok())
+        .map(|p| p.name)
+        .collect();
+    for w in &def.wires {
+        if w.to_node == node.id
+            && !arr_ports.contains(w.to_port.as_str())
+            && !scalar_params.contains(w.to_port.as_str())
+        {
+            return NodeClass::Boundary;
+        }
+        if w.from_node == node.id && is_scalar_param_wire(def, registry, w) {
+            return NodeClass::Boundary;
+        }
+    }
+    NodeClass::Eligible
+}
+
 /// Assemble a [`Region`] from a connected component's node set, or `None` if it
 /// fails a v1 expressibility gate (too short, multi-output, or an unresolvable
 /// input — all left unfused).
@@ -402,10 +491,13 @@ fn build_region(
         return None;
     }
     let node_set: AHashSet<u32> = nodes.iter().copied().collect();
+    // Texture vs buffer region — drives every port/wire filter below (a region is
+    // homogeneous: texture and Array ports never wire to each other).
+    let is_buffer = region_is_buffer(nodes, def, registry);
 
-    // Topo-sort the members by intra-region texture wires so every Member input
-    // refers to an earlier entry (the codegen threads registers in this order).
-    let order = topo_sort(nodes, def, registry, &node_set)?;
+    // Topo-sort the members by intra-region wires so every Member input refers to
+    // an earlier entry (the codegen threads registers in this order).
+    let order = topo_sort(nodes, def, registry, &node_set, is_buffer)?;
 
     // Resolve external inputs (deduped, first-seen order) + each member's inputs.
     let mut externals: Vec<ExternalRef> = Vec::new();
@@ -417,7 +509,7 @@ fn build_region(
         let tex_ports: Vec<&str> = constructed
             .inputs()
             .iter()
-            .filter(|i| is_texture_port(&i.ty))
+            .filter(|i| region_port_is_member(&i.ty, is_buffer))
             .map(|i| i.name)
             .collect();
         let access_list = constructed.input_access();
@@ -470,7 +562,7 @@ fn build_region(
         for w in &def.wires {
             if w.from_node == id
                 && !node_set.contains(&w.to_node)
-                && is_texture_wire(def, registry, w)
+                && is_region_wire(def, registry, w, is_buffer)
             {
                 if !final_reachable.contains(&w.to_node) {
                     return None; // escaping wire to a dead consumer — don't fuse
@@ -497,6 +589,7 @@ fn topo_sort(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     node_set: &AHashSet<u32>,
+    is_buffer: bool,
 ) -> Option<Vec<u32>> {
     let mut indeg: AHashMap<u32, u32> = nodes.iter().map(|&id| (id, 0)).collect();
     let mut adj: AHashMap<u32, Vec<u32>> = AHashMap::default();
@@ -504,7 +597,7 @@ fn topo_sort(
         if node_set.contains(&w.from_node)
             && node_set.contains(&w.to_node)
             && w.from_node != w.to_node
-            && is_texture_wire(def, registry, w)
+            && is_region_wire(def, registry, w, is_buffer)
         {
             adj.entry(w.from_node).or_default().push(w.to_node);
             *indeg.get_mut(&w.to_node)? += 1;
@@ -540,12 +633,24 @@ fn input_port_access(registry: &PrimitiveRegistry, type_id: &str, port: &str) ->
     let Some(node) = registry.construct(type_id) else {
         return InputAccess::Coincident;
     };
-    let tex_idx = node
-        .inputs()
-        .iter()
-        .filter(|i| is_texture_port(&i.ty))
-        .position(|i| i.name == port);
-    match tex_idx {
+    // `input_access` aligns to the SAME-domain inputs in declaration order:
+    // texture inputs for a texture atom, Array inputs for a buffer atom (the
+    // buffer codegen's `is_gather(i)` indexes the filtered Array inputs). Resolve
+    // the port's index among inputs of its own kind so a `BufferGather` Array
+    // input is detected (not silently treated as coincident).
+    let port_ty = node.inputs().iter().find(|i| i.name == port).map(|i| i.ty);
+    let idx = match port_ty {
+        Some(ty) if is_texture_port(&ty) => {
+            node.inputs().iter().filter(|i| is_texture_port(&i.ty)).position(|i| i.name == port)
+        }
+        Some(PortType::Array(_)) => node
+            .inputs()
+            .iter()
+            .filter(|i| matches!(i.ty, PortType::Array(_)))
+            .position(|i| i.name == port),
+        _ => None,
+    };
+    match idx {
         Some(idx) => node.input_access().get(idx).copied().unwrap_or_default(),
         None => InputAccess::Coincident,
     }
@@ -725,6 +830,63 @@ fn is_texture_port(ty: &PortType) -> bool {
         ty,
         PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D
     )
+}
+
+/// Whether a wire carries an `Array<T>` (buffer / particle / instance / curve)
+/// value, by the producer's output port type. The buffer-domain analogue of
+/// [`is_texture_wire`]; the region grower unions over coincident wires of EITHER
+/// kind so a particle pipeline (Array wires) fuses just like a pixel chain.
+fn is_array_wire(def: &EffectGraphDef, registry: &PrimitiveRegistry, w: &EffectGraphWire) -> bool {
+    let Some(from) = def.nodes.iter().find(|n| n.id == w.from_node) else {
+        return false;
+    };
+    let Some(node) = registry.construct(&from.type_id) else {
+        return false;
+    };
+    node.outputs()
+        .iter()
+        .find(|o| o.name == w.from_port)
+        .map(|o| matches!(o.ty, PortType::Array(_)))
+        .unwrap_or(false)
+}
+
+/// A region's data domain. Texture regions thread `vec4` texel registers and
+/// dispatch over a texture grid; buffer regions thread element-struct registers
+/// and dispatch 1D over an Array length. A region is homogeneous (texture and
+/// Array ports never wire to each other), so one flag drives every port/wire
+/// filter in [`build_region`] / [`topo_sort`].
+fn region_port_is_member(ty: &PortType, is_buffer: bool) -> bool {
+    if is_buffer {
+        matches!(ty, PortType::Array(_))
+    } else {
+        is_texture_port(ty)
+    }
+}
+
+fn is_region_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+    is_buffer: bool,
+) -> bool {
+    if is_buffer {
+        is_array_wire(def, registry, w)
+    } else {
+        is_texture_wire(def, registry, w)
+    }
+}
+
+/// Whether a region's members are buffer-domain (their fused output is an
+/// `Array<T>`). Determined from any member's constructed output ports.
+fn region_is_buffer(nodes: &[u32], def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
+    nodes.iter().any(|&id| {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| registry.construct(&n.type_id))
+            .map(|c| c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))))
+            .unwrap_or(false)
+    })
 }
 
 /// Minimal union-find over a fixed node set (region growing). Path-halving +

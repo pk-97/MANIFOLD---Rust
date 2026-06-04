@@ -64,7 +64,9 @@ use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
 use crate::node_graph::freeze::region::{RegionInput, partition_regions};
 use crate::node_graph::parameters::{ParamDef, ParamValue};
-use crate::node_graph::{LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry};
+use crate::node_graph::{
+    EffectGraphDefExt, LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry, compile,
+};
 
 /// Whether fusion is enabled this process. Default ON — the freeze compiler is
 /// the main render path (Peter's request). The `MANIFOLD_FREEZE` env var is the
@@ -124,6 +126,10 @@ fn fuse_view(base: &LoadedPresetView, registry: &PrimitiveRegistry) -> Option<Lo
         .map(|n| resolve_node_id(n).as_str().to_string())
         .collect();
     let bindings = retarget_bindings(base.bindings, &fused.retarget, &surviving)?;
+    // The fused def must actually build (not just parse) — fall back to unfused otherwise.
+    if !fused_def_builds(&fused.def, registry) {
+        return None;
+    }
     let def_static: &'static EffectGraphDef = Box::leak(Box::new(fused.def));
     Some(LoadedPresetView {
         type_id: base.type_id.clone(),
@@ -196,6 +202,10 @@ pub fn fuse_generator_def(
     let mut out_def = fused.def;
     if let Some(meta) = out_def.preset_metadata.as_mut() {
         meta.bindings = retarget_binding_defs(&meta.bindings, &fused.retarget, &surviving)?;
+    }
+    // The fused def must actually build (not just parse) — fall back to unfused otherwise.
+    if !fused_def_builds(&out_def, registry) {
+        return None;
     }
     Some(out_def)
 }
@@ -530,6 +540,24 @@ pub(crate) fn fuse_canonical_def(
     };
 
     Some(FusedDef { def: fused_def, retarget })
+}
+
+/// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
+/// per-region naga-parse in [`fuse_canonical_def`] catches malformed shader text,
+/// but a fused node can still be a well-formed shader the GRAPH compiler rejects
+/// — e.g. a buffer region whose `var<storage, read_write>` output introspects as
+/// a required-but-unwired aliased input port. The real entry points
+/// ([`fuse_view`] / [`fuse_generator_def`]) run this on their final def and fall
+/// back to unfused on any failure, so a def that can't build never installs.
+/// (Not called from [`fuse_canonical_def`] itself — the install unit tests drive
+/// it with synthetic fixtures that intentionally don't fully compile.) Runs once
+/// at fuse-build (cached), so the cost is negligible.
+fn fused_def_builds(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
+    def.clone()
+        .into_graph(registry)
+        .map_err(|_| ())
+        .and_then(|g| compile(&g).map_err(|_| ()))
+        .is_ok()
 }
 
 /// A node's stable id defaults to its handle when the document carries none —

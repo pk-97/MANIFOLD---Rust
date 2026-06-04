@@ -776,6 +776,24 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Frame-derived uniform field names (e.g. `dt_scaled`, `frame_count`) the
+    /// atom's `run()` packs each frame from `EffectNodeContext` — NOT params,
+    /// NOT graph wires. The buffer fusion finder keeps any atom that declares
+    /// these a boundary (a fused `node.wgsl_compute` has no per-member `run()` to
+    /// recompute them). Default empty; the macro forwards `P::DERIVED_UNIFORMS`.
+    fn derived_uniforms(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Output port names written via `atomicAdd` (scatter accumulators) rather
+    /// than a coincident `out[idx] = body(...)` element write. The buffer fusion
+    /// finder keeps these atoms boundaries (the multi-atom codegen threads
+    /// element registers, not atomics). Default empty; macro forwards
+    /// `P::ATOMIC_OUTPUTS`.
+    fn atomic_outputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —
     /// the primitive runs against whatever the upstream producer
