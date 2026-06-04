@@ -46,7 +46,7 @@ use crate::node_graph::boundary_nodes::{
 };
 use crate::node_graph::freeze::install::{fused_generator_def_by_id, fused_view_by_id};
 use crate::node_graph::{
-    EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry, compile,
+    EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry, StateStore, compile,
     loaded_preset_view_by_id,
 };
 use crate::render_target::RenderTarget;
@@ -143,11 +143,19 @@ fn measure_def(
         frame_count: 0,
     };
 
+    // Dispatch through the StateStore-aware path so a def whose unfused
+    // canonical graph contains a stateful primitive (Feedback / Smoothing /
+    // EnvelopeFollower / Temporal) measures instead of panicking. Generator
+    // presets routinely carry such nodes; effects so far don't, but the
+    // state-aware entry is a superset of `execute_frame_with_gpu`, so this is
+    // correct for both. owner_key=0 mirrors the generator render path.
+    let mut state = StateStore::new();
+
     for _ in 0..WARMUP {
         let mut enc = device.create_encoder("freeze-tune-warmup");
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
-            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            exec.execute_frame_with_state(&mut graph, &plan, frame_time, &mut gpu, &mut state, 0);
         }
         enc.commit_and_wait_completed();
     }
@@ -156,7 +164,7 @@ fn measure_def(
         let mut enc = device.create_encoder("freeze-tune-timed");
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
-            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+            exec.execute_frame_with_state(&mut graph, &plan, frame_time, &mut gpu, &mut state, 0);
         }
         secs += enc.commit_and_wait_completed_timed();
     }
