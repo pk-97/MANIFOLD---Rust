@@ -1675,6 +1675,10 @@ mod gpu_tests {
             ("node.color_lut", "lut1d.wgsl", &[0.5, 1.5]),
             // slope_displace: base (a) + image (b) both gathered; strength/step/weight.
             ("node.slope_displace", "slope_displace.wgsl", &[5.0, 5.0, 0.001]),
+            // texture_advect: in (a) gathered at adv_uv + velocity (b) coincident;
+            // dt + boundary(0=Repeat, body ignores it — the test sampler is Clamp,
+            // but adv samples land in-bounds for this velocity so wrap is moot).
+            ("node.texture_advect", "texture_advect.wgsl", &[2.0, 0.0]),
         ];
         for (type_id, shader_file, params) in cases {
             let node = registry.construct(type_id).unwrap();

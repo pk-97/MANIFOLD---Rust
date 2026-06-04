@@ -64,6 +64,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["advect", "transport", "flow", "fluid"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/texture_advect_body.wgsl"),
+    input_access: [Gather, Coincident],
     extra_fields: {
         sampler_repeat: Option<manifold_gpu::GpuSampler> = None,
         sampler_clamp: Option<manifold_gpu::GpuSampler> = None,
@@ -101,9 +104,14 @@ impl Primitive for TextureAdvect {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `in` is a Gather input (sampled at the advected UV), `velocity` is
+            // coincident. Generated kernel binds uniform(0)/in(1)/velocity(2)/
+            // samp(3)/dst(4); the body ignores the `boundary` param (the sampler
+            // below carries the wrap mode). texture_advect.wgsl is the oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/texture_advect.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.texture_advect standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.texture_advect",
             )
         });
