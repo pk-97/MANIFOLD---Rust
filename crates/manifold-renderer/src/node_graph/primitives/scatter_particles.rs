@@ -25,17 +25,23 @@ use crate::node_graph::primitive::Primitive;
 /// `0 = Wrap` (toroidal); `1 = Discard` (skip the particle).
 pub const SCATTER_BOUNDARY_MODES: &[&str] = &["Wrap", "Discard"];
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order
+/// (`active_count` Int → i32, `scaled_energy` Int → i32, `boundary` Enum → u32),
+/// then the derived `width` / `height` (u32, run() resolves from the wired
+/// scalar inputs), then the codegen-injected `dispatch_count` (u32, the splat
+/// dispatch guard = clamped active_count), padded to a 16-byte multiple. 6
+/// words + 2 pad = 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScatterUniforms {
-    active_count: u32,
+    active_count: i32,
+    scaled_energy: i32,
+    boundary: u32,
     width: u32,
     height: u32,
-    scaled_energy: u32,
-    boundary: u32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -85,6 +91,10 @@ crate::primitive! {
     category: Particles2D,
     role: Filter,
     aliases: ["draw particles", "scatter", "splat", "points"],
+    fusion_kind: Boundary,
+    wgsl_body: include_str!("shaders/scatter_particles_body.wgsl"),
+    derived_uniforms: ["width:u32", "height:u32"],
+    atomic_outputs: ["accum"],
 }
 
 impl Primitive for ScatterParticles {
@@ -137,27 +147,33 @@ impl Primitive for ScatterParticles {
 
         let gpu = ctx.gpu_encoder();
         let pipeline_splat = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // ATOMIC SCATTER — the body computes each particle's target cell and
+            // `atomicAdd`s into the `buf_accum` accumulator; width/height are
+            // derived uniforms). scatter_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/scatter_particles.wgsl"),
-                "splat_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.scatter_particles standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.scatter_particles.splat",
             )
         });
 
         let uniforms = ScatterUniforms {
-            active_count,
+            active_count: active_count as i32,
+            scaled_energy: scaled_energy as i32,
+            boundary,
             width,
             height,
-            scaled_energy,
-            boundary,
+            dispatch_count: active_count,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
-        // Atomic-add splat. 256-particle workgroups along x. The
-        // downstream node.resolve_accumulator self-clears the buffer
-        // after reading it, so no pre-clear is needed here.
+        // Atomic-add splat. 256-particle workgroups along x. Generated binding
+        // order matches the hand kernel: uniform(0), particles(1), accum(2). The
+        // downstream node.resolve_accumulator self-clears the buffer after
+        // reading it, so no pre-clear is needed here.
         gpu.native_enc.dispatch_compute(
             pipeline_splat,
             &[

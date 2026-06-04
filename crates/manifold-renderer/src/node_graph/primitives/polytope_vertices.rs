@@ -33,11 +33,14 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: the `shape` Enum param (u32) then the
+/// codegen-injected `dispatch_count` (= vertex capacity, the guard), padded to
+/// 16 bytes. `nverts` is derived in-shader from `shape` (no separate count).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PolytopeUniforms {
     shape: u32,
-    vert_capacity: u32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -92,6 +95,8 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["platonic solid", "polytope", "vertices", "points"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/polytope_vertices_body.wgsl"),
 }
 
 impl Primitive for PolytopeVertices {
@@ -131,16 +136,20 @@ impl Primitive for PolytopeVertices {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer source
+            // path; per-shape vertex tables inlined). polytope_vertices.wgsl is
+            // the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/polytope_vertices.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.polytope_vertices standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.polytope_vertices",
             )
         });
 
         let uniforms = PolytopeUniforms {
             shape,
-            vert_capacity,
+            dispatch_count: vert_capacity,
             _pad0: 0,
             _pad1: 0,
         };
@@ -158,7 +167,7 @@ impl Primitive for PolytopeVertices {
                     offset: 0,
                 },
             ],
-            [vert_capacity.div_ceil(64), 1, 1],
+            [vert_capacity.div_ceil(256), 1, 1],
             "node.polytope_vertices",
         );
     }

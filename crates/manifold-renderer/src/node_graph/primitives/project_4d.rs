@@ -12,17 +12,19 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`proj_scale`,
+/// `proj_dist`), then the derived `active_count` (declared `derived_uniforms`,
+/// carried as f32 — exact for these small vertex counts), then the codegen-
+/// injected `dispatch_count` (= the output capacity, the dispatch guard). 4
+/// words = 16 bytes. `dispatch_count` is the guard; slots in
+/// `[active_count, dispatch_count)` collapse to origin in the body.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Project4DUniforms {
-    active_count: u32,
-    capacity: u32,
-    _pad0: u32,
-    _pad1: u32,
     proj_scale: f32,
     proj_dist: f32,
-    _pad2: f32,
-    _pad3: f32,
+    active_count: f32,
+    dispatch_count: u32,
 }
 
 crate::primitive! {
@@ -60,6 +62,9 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["project 4d", "flatten", "4d to 3d"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/project_4d_body.wgsl"),
+    derived_uniforms: ["active_count"],
 }
 
 impl Primitive for Project4D {
@@ -105,22 +110,23 @@ impl Primitive for Project4D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path, type-changing in/out + derived active_count).
+            // project_4d.wgsl is the parity oracle (and the existing executor
+            // test compares against generator_math::project_4d).
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/project_4d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.project_4d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.project_4d",
             )
         });
 
         let uniforms = Project4DUniforms {
-            active_count,
-            capacity: out_capacity,
-            _pad0: 0,
-            _pad1: 0,
             proj_scale,
             proj_dist,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            active_count: active_count as f32,
+            dispatch_count: out_capacity,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -141,7 +147,7 @@ impl Primitive for Project4D {
                     offset: 0,
                 },
             ],
-            [out_capacity.div_ceil(64), 1, 1],
+            [out_capacity.div_ceil(256), 1, 1],
             "node.project_4d",
         );
     }

@@ -33,13 +33,22 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`strength`
+/// f32, `active_count` Int → i32), then the derived `frame_count` (u32), then the
+/// injected optional-texture flag `use_strength_modulator` (u32, run() packs
+/// is_some()), then the codegen-injected `dispatch_count`, padded to a 16-byte
+/// multiple. 5 words + 3 pad = 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AntiClumpUniforms {
-    active_count: u32,
-    frame_count: u32,
     strength: f32,
-    has_modulator: u32,
+    active_count: i32,
+    frame_count: u32,
+    use_strength_modulator: u32,
+    dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -80,6 +89,9 @@ crate::primitive! {
     category: Particles2D,
     role: Filter,
     aliases: ["anti-clump", "separation", "spread", "repel"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/anti_clump_particles_body.wgsl"),
+    derived_uniforms: ["frame_count:u32"],
     extra_fields: {
         dummy_modulator: Option<GpuTexture> = None,
     },
@@ -131,9 +143,13 @@ impl Primitive for AntiClumpParticles {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident + OPTIONAL Texture2D + derived frame_count + use-flag).
+            // anti_clump_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/anti_clump_particles.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.anti_clump_particles standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.anti_clump_particles",
             )
         });
@@ -161,12 +177,19 @@ impl Primitive for AntiClumpParticles {
         let modulator_tex = modulator_wire.unwrap_or(dummy);
 
         let uniforms = AntiClumpUniforms {
-            active_count,
-            frame_count,
             strength,
-            has_modulator,
+            active_count: active_count as i32,
+            frame_count,
+            use_strength_modulator: has_modulator,
+            dispatch_count: active_count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
+        // Generated binding order: uniform(0), buf_in(1, particles read),
+        // tex_strength_modulator(2), samp(3), buf_out(4, particles read_write).
+        // `in`/`out` alias the particle buffer → bind it to both 1 and 4.
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -186,6 +209,11 @@ impl Primitive for AntiClumpParticles {
                 GpuBinding::Sampler {
                     binding: 3,
                     sampler,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: particles,
+                    offset: 0,
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
@@ -244,5 +272,141 @@ mod tests {
         let prim = AntiClumpParticles::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.anti_clump_particles");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain OPTIONAL-TEXTURE parity oracle (freeze §12). The generated
+    //! kernel binds the modulator Texture2D + sampler + an injected
+    //! use_strength_modulator flag; with the flag set it weights the kick by the
+    //! sampled modulator, else uniform weight 1. Must reproduce the hand kernel
+    //! particle-for-particle in BOTH modes. Hand binds particles@1/tex@2/samp@3;
+    //! generated adds the aliased particles@4 (in/out).
+    use super::*;
+    use half::f16;
+    use manifold_gpu::GpuTextureFormat as Fmt;
+
+    fn modulator_tex(device: &manifold_gpu::GpuDevice, w: u32, h: u32) -> GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                px[i] = f16::from_f32((x + y) as f32 / (w + h) as f32); // R = a density-ish field
+                px[i + 3] = f16::from_f32(1.0);
+            }
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: Fmt::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "anti-clump-modulator-test",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn dispatch_anticlump(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        particles: &[Particle],
+        modulator: &GpuTexture,
+        uniform: &[u8],
+        count: u32,
+        generated: bool,
+    ) -> Vec<Particle> {
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "anticlump-oracle");
+        let buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
+        unsafe {
+            buf.write(0, bytemuck::cast_slice(particles));
+        }
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let mut bindings = vec![
+            GpuBinding::Bytes { binding: 0, data: uniform },
+            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
+            GpuBinding::Texture { binding: 2, texture: modulator },
+            GpuBinding::Sampler { binding: 3, sampler: &sampler },
+        ];
+        if generated {
+            bindings.push(GpuBinding::Buffer { binding: 4, buffer: &buf, offset: 0 });
+        }
+        let mut enc = device.create_encoder("anticlump-oracle");
+        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "anticlump-oracle");
+        enc.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("shared particle buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_anticlump_matches_hand_kernel_both_modulator_modes() {
+        let device = crate::test_device();
+        let modulator = modulator_tex(&device, 16, 16);
+        let mk = |pos: [f32; 3], life: f32| Particle {
+            position: pos,
+            _pad0: 0.0,
+            velocity: [0.0; 3],
+            life,
+            age: 0.0,
+            _pad1: [0.0; 3],
+            color: [0.0; 4],
+        };
+        let particles = [
+            mk([0.2, 0.3, 0.0], 1.0),
+            mk([0.7, 0.6, 0.0], 1.0),
+            mk([0.9, 0.1, 0.0], 1.0),
+            mk([0.5, 0.5, 0.0], 0.0), // dead → unchanged
+        ];
+        let n = particles.len() as u32;
+        let strength = 0.05f32;
+        let frame_count = 73u32;
+
+        for has_mod in [0u32, 1u32] {
+            // Hand layout: active_count(u32), frame_count(u32), strength(f32), has_modulator(u32).
+            let mut hand = Vec::new();
+            hand.extend_from_slice(&n.to_le_bytes());
+            hand.extend_from_slice(&frame_count.to_le_bytes());
+            hand.extend_from_slice(&strength.to_le_bytes());
+            hand.extend_from_slice(&has_mod.to_le_bytes());
+
+            // Generated layout: strength(f32), active_count(i32), frame_count(u32),
+            //   use_strength_modulator(u32), dispatch_count(u32), 3 pad.
+            let mut gen_bytes = Vec::new();
+            gen_bytes.extend_from_slice(&strength.to_le_bytes());
+            gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
+            gen_bytes.extend_from_slice(&frame_count.to_le_bytes());
+            gen_bytes.extend_from_slice(&has_mod.to_le_bytes());
+            gen_bytes.extend_from_slice(&n.to_le_bytes());
+            gen_bytes.extend_from_slice(&[0u8; 12]);
+
+            let hand_wgsl = include_str!("shaders/anti_clump_particles.wgsl");
+            let gen_wgsl =
+                crate::node_graph::freeze::codegen::standalone_for_spec::<AntiClumpParticles>()
+                    .expect("anti_clump_particles buffer codegen");
+            assert!(gen_wgsl.contains("use_strength_modulator: u32"), "optional-texture use flag injected");
+
+            let from_hand =
+                dispatch_anticlump(&device, hand_wgsl, &particles, &modulator, &hand, n, false);
+            let from_gen =
+                dispatch_anticlump(&device, &gen_wgsl, &particles, &modulator, &gen_bytes, n, true);
+
+            for i in 0..particles.len() {
+                for c in 0..3 {
+                    assert!(
+                        (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                        "has_mod={has_mod} particle {i} position[{c}]: hand={} gen={}",
+                        from_hand[i].position[c],
+                        from_gen[i].position[c]
+                    );
+                }
+            }
+        }
     }
 }

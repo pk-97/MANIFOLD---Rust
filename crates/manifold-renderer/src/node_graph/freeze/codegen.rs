@@ -18,7 +18,7 @@
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::parameters::{ParamDef, ParamType};
-use crate::node_graph::ports::{NodeInput, NodeOutput, PortType};
+use crate::node_graph::ports::{ChannelElementType, ChannelSpec, NodeInput, NodeOutput, PortType};
 use std::fmt::Write as _;
 
 /// Entry-point name every generated kernel uses. Exactly `cs_main`, and no
@@ -47,6 +47,11 @@ pub enum CodegenError {
     /// A region node's `InputSource` references an unknown node, a node that
     /// isn't earlier in topo order, or an out-of-range external input.
     BadInput,
+    /// An `ATOMIC_OUTPUTS`-marked port resolves to a non-integer element. WGSL
+    /// atomics are `u32`/`i32` only, so a multi-channel or float accumulator
+    /// can't be emitted as `array<atomic<…>>` — the atom mis-declared its
+    /// atomic output.
+    AtomicNonInteger { ty: String },
 }
 
 /// Map a (scalar) param type to its WGSL type + 4-byte slot. v1 supports the
@@ -92,6 +97,11 @@ pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
         "true", "false", "bool", "i32", "u32", "f32", "f16", "array", "atomic",
         "ptr", "sampler", "texture", "override", "enable", "discard", "vec2",
         "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4",
+        // WGSL reserved-for-future word a short param name realistically hits
+        // (generate_instance_transforms has a `layout` Enum param). Add others
+        // only when an atom actually collides — adding a word here changes the
+        // generated WGSL of any atom with a param of that name.
+        "layout",
     ];
     if RESERVED.contains(&name) {
         std::borrow::Cow::Owned(format!("p_{name}"))
@@ -163,6 +173,27 @@ fn dim_forms(dim: TexDim) -> DimForms {
 pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
 ) -> Result<String, CodegenError> {
     let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
+    // Buffer atoms (Array output) route directly so they can carry
+    // `DERIVED_UNIFORMS` (frame-derived non-param uniform fields). The texture
+    // path's public `generate_standalone` signature stays untouched.
+    if P::OUTPUTS.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        return generate_standalone_buffer(
+            body,
+            P::INPUTS,
+            P::PARAMS,
+            P::INPUT_ACCESS,
+            P::DERIVED_UNIFORMS,
+            P::WGSL_INCLUDES,
+            P::OUTPUTS,
+            P::ATOMIC_OUTPUTS,
+        );
+    }
+    // BUFFER→TEXTURE resolve: an Array input with a (texture) output — the
+    // accumulator-to-density bridge. Routes to its own self-contained path so
+    // the texture `generate_standalone` never grows an array-input branch.
+    if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_))) {
+        return generate_standalone_resolve(body, P::INPUTS, P::PARAMS, P::OUTPUTS);
+    }
     generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
 }
 
@@ -182,6 +213,20 @@ pub fn generate_standalone(
 ) -> Result<String, CodegenError> {
     if body.is_empty() {
         return Err(CodegenError::NoBody);
+    }
+    // Buffer-domain atoms (Array storage I/O — particle / instance / curve sims)
+    // take a separate codegen path: `var<storage>` array bindings, a 1D
+    // workgroup keyed on an explicit element count (no `textureDimensions`), and
+    // an element struct synthesized from each Array port's Channels signature.
+    // Detected by an Array output port — a buffer atom always writes at least one
+    // storage array. Texture atoms are unaffected (no Array output).
+    if outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        // Direct callers of generate_standalone (texture-path tests) carry no
+        // derived uniforms / atomic outputs; standalone_for_spec routes buffer
+        // atoms with their DERIVED_UNIFORMS / ATOMIC_OUTPUTS before reaching here.
+        return generate_standalone_buffer(
+            body, inputs, params, input_access, &[], &[], outputs, &[],
+        );
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
     // Texture outputs. >1 → the body returns a `BodyOutputs` struct (one vec4 per
@@ -400,7 +445,9 @@ pub fn generate_standalone(
             .unwrap(),
             // Gather / GatherTexel: no pre-read; passed as a texture handle (the
             // body computes its own read coord and samples/loads it itself).
-            InputAccess::Gather | InputAccess::GatherTexel => {}
+            // BufferGather only tags Array inputs (buffer atoms branch away above)
+            // — unreachable on a texture input, no pre-read either way.
+            InputAccess::Gather | InputAccess::GatherTexel | InputAccess::BufferGather => {}
         }
     }
     // body(<per-input args>, uv, dims, params.<p0>, ...). Each input contributes:
@@ -426,6 +473,11 @@ pub fn generate_standalone(
             }
             InputAccess::Coincident | InputAccess::CoincidentTexel => {
                 args.push(format!("c_{}", inp.name));
+            }
+            // Buffer-domain only — the buffer codegen path handles array inputs;
+            // a texture input is never tagged BufferGather.
+            InputAccess::BufferGather => {
+                unreachable!("BufferGather is buffer-domain only — never a texture input")
             }
         }
     }
@@ -468,6 +520,496 @@ pub fn generate_standalone(
     } else {
         writeln!(out, "    textureStore(dst, {}, result);", forms.store_coord).unwrap();
     }
+    out.push_str("}\n");
+
+    Ok(out)
+}
+
+// ===========================================================================
+// Buffer-domain standalone codegen: wrap a buffer atom's `wgsl_body` in the
+// storage-array iteration boilerplate (element structs synthesized from the
+// Channels signature, `var<storage>` bindings, a 1D `@workgroup_size(256)`
+// dispatch keyed on an injected element count). The buffer analogue of
+// `generate_standalone` — same single-source intent (reproduce the hand kernel
+// so it can be deleted), validated per-atom through a buffer-readback oracle.
+//
+// v1 supports the GATHER body shape (the particle / instance sims' dominant
+// form): the body references the input array global(s) `buf_<port>` and computes
+// its own indices, returns the output element. This covers neighbor_smooth and
+// the random-access particle/instance family. The element-passing COINCIDENT
+// shape (`body(elem_in, …) -> elem_out`, fusable) is an additive follow-on for
+// the genuinely-pointwise integrators (euler_step) — a second arg-marshalling
+// path here, no change to anything below.
+// ===========================================================================
+
+/// WGSL scalar / vector type for one channel element type. The std430 layout of
+/// a struct built from these reproduces the `#[repr(C)]` element byte layout
+/// (the Channels SPECS omit explicit pad fields precisely because WGSL's own
+/// std430 alignment re-inserts them — e.g. a `vec3<f32>` field pads to 16).
+fn channel_wgsl_ty(t: ChannelElementType) -> &'static str {
+    match t {
+        ChannelElementType::F32 => "f32",
+        ChannelElementType::I32 => "i32",
+        ChannelElementType::U32 => "u32",
+        ChannelElementType::Vec2F => "vec2<f32>",
+        ChannelElementType::Vec3F => "vec3<f32>",
+        ChannelElementType::Vec4F => "vec4<f32>",
+    }
+}
+
+/// Resolve an Array port's Channels signature to its WGSL element type name,
+/// registering a struct definition when the element has >1 channel.
+///
+/// - 1 channel (`Array(u32)` / `Array(f32)` — accumulators, scalar streams) →
+///   the bare scalar/vector type, no struct (the channel name is the canonical
+///   `value`, which carries no WGSL meaning).
+/// - ≥2 channels (`Particle`, `InstanceTransform`, `[f32; 2]` force pairs) → a
+///   struct named `Element`, `Element2`, … in first-appearance order, deduped by
+///   signature so a same-typed in/out pair shares ONE struct (WGSL is nominally
+///   typed — `buf_out[i] = body(...)` needs the return type to be the *same*
+///   struct the output array holds).
+fn buffer_element_type(
+    specs: &'static [ChannelSpec],
+    structs: &mut Vec<(&'static [ChannelSpec], String)>,
+) -> String {
+    if specs.len() == 1 {
+        return channel_wgsl_ty(specs[0].ty).to_string();
+    }
+    if let Some((_, name)) = structs.iter().find(|(s, _)| *s == specs) {
+        return name.clone();
+    }
+    let name = if structs.is_empty() {
+        "Element".to_string()
+    } else {
+        format!("Element{}", structs.len() + 1)
+    };
+    structs.push((specs, name.clone()));
+    name
+}
+
+/// Emit a WGSL struct definition for a multi-channel element. Field names come
+/// from each channel's debug name (the well-known registry), falling back to
+/// `c{i}` for runtime-introduced names. std430 layout is implicit in the field
+/// types — no explicit pad fields (matching how the `#[repr(C)]` element relies
+/// on WGSL alignment to reproduce its stride).
+fn emit_buffer_struct(specs: &[ChannelSpec], name: &str) -> String {
+    let mut s = format!("struct {name} {{\n");
+    for (i, sp) in specs.iter().enumerate() {
+        let field = sp
+            .name
+            .debug_name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("c{i}"));
+        writeln!(s, "    {field}: {},", channel_wgsl_ty(sp.ty)).unwrap();
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// Generate the standalone `cs_main` kernel for a buffer-domain atom. The body
+/// fragment defines `fn body(idx: u32, count: u32, <params…>) -> <out elem>` and
+/// references the input array global(s) `buf_<port>` (gather form). The wrapper
+/// emits: element structs, the merged param uniform (scalar params + an injected
+/// `dispatch_count` element count + 16-byte pad), `var<storage>` array bindings
+/// (`read` inputs, `read_write` outputs), the body verbatim, and a 1D dispatch
+/// guarded on `dispatch_count`.
+///
+/// Binding layout: `@binding(0)` uniform, then each Array input `read`, then each
+/// Array output `read_write`. Deterministic (PARAMS / port order), so the
+/// generated text is a stable pipeline-cache key.
+#[allow(clippy::too_many_arguments)]
+fn generate_standalone_buffer(
+    body: &str,
+    inputs: &[NodeInput],
+    params: &[ParamDef],
+    input_access: &[InputAccess],
+    derived_uniforms: &[&str],
+    includes: &[&str],
+    outputs: &[NodeOutput],
+    atomic_outputs: &[&str],
+) -> Result<String, CodegenError> {
+    // Per-array-input access (aligned to array inputs in declaration order):
+    //   - BufferGather → the body indexes the input array global `buf_<port>`
+    //     itself (grid neighbours, random access). No pre-read, no element arg.
+    //   - coincident (the default) → the wrapper pre-reads element `[idx]` into
+    //     `e_<port>` and passes it; the body operates on the value (the
+    //     pointwise / per-element integrators, jitters, transforms).
+    let is_gather = |i: usize| matches!(input_access.get(i), Some(InputAccess::BufferGather));
+
+    let array_inputs: Vec<&NodeInput> = inputs
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .collect();
+    // Texture inputs sampled at a body-computed coord (the particle position) —
+    // the buffer analogue of the texture-domain Gather. The body receives each
+    // `tex_<name>` handle + the shared `samp` and samples them itself (the
+    // `*_at_particles` force-sampler family, anti_clump's modulator).
+    let texture_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
+    // Optional texture inputs get an injected `use_<name>: u32` flag (run() packs
+    // `is_some()`); the body falls back to a default when 0. An unwired optional
+    // texture binds a dummy 1×1 so the binding is always present (run()'s job).
+    let optional_textures: Vec<&NodeInput> =
+        texture_inputs.iter().filter(|i| !i.required).copied().collect();
+    let array_outputs: Vec<&NodeOutput> = outputs
+        .iter()
+        .filter(|o| matches!(o.ty, PortType::Array(_)))
+        .collect();
+    if array_outputs.is_empty() {
+        // A buffer atom writes at least one storage array.
+        return Err(CodegenError::NotFusable(FusionKind::Boundary));
+    }
+    // ≥2 array outputs → the body returns a `BufferOutputs` struct the wrapper
+    // unpacks (the buffer analogue of the texture multi-output BodyOutputs path);
+    // 1 keeps the direct `buf_out[idx] = body(...)` write — byte-identical for
+    // every existing single-output atom.
+    let multi_output = array_outputs.len() > 1;
+
+    // Resolve element type names (inputs then outputs) so struct naming is stable
+    // and a same-typed in/out pair dedups to one struct.
+    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    let specs_of = |ty: &PortType| -> &'static [ChannelSpec] {
+        match ty {
+            PortType::Array(at) => at.specs,
+            _ => unreachable!("filtered to Array ports"),
+        }
+    };
+    let in_tys: Vec<String> = array_inputs
+        .iter()
+        .map(|i| buffer_element_type(specs_of(&i.ty), &mut structs))
+        .collect();
+    // Per-output (port name, element type), in declaration order.
+    let out_infos: Vec<(&str, String)> = array_outputs
+        .iter()
+        .map(|o| (o.name, buffer_element_type(specs_of(&o.ty), &mut structs)))
+        .collect();
+    // Output array global name. Normally `buf_<port>`, but if the output port
+    // shares a name with an input port (e.g. instance_position_jitter's
+    // `instances` in AND out — NOT aliased, separate buffers), disambiguate to
+    // `buf_out_<port>` so the two storage globals don't collide. Bodies only ever
+    // reference INPUT globals, so this never affects a body.
+    let out_global = |name: &str| -> String {
+        if array_inputs.iter().any(|i| i.name == name) {
+            format!("buf_out_{name}")
+        } else {
+            format!("buf_{name}")
+        }
+    };
+    // Atomic-accumulator output (scatter, single-output only): emitted as
+    // `array<atomic<u32>>` and written by the body via `atomicAdd` on the global
+    // itself, not the wrapper's `[idx] = body(...)`. WGSL atomics are integer-only.
+    let out_is_atomic = !multi_output && atomic_outputs.contains(&array_outputs[0].name);
+    if out_is_atomic && out_infos[0].1 != "u32" && out_infos[0].1 != "i32" {
+        return Err(CodegenError::AtomicNonInteger { ty: out_infos[0].1.clone() });
+    }
+    // Multi-output atomic isn't a shape any atom needs yet.
+    if multi_output && array_outputs.iter().any(|o| atomic_outputs.contains(&o.name)) {
+        return Err(CodegenError::NotFusable(FusionKind::Boundary));
+    }
+
+    let mut out = String::new();
+
+    // --- element structs (deduped, first-appearance order) ---
+    for (specs, name) in &structs {
+        out.push_str(&emit_buffer_struct(specs, name));
+        out.push('\n');
+    }
+
+    // --- param uniform: scalar params (PARAMS order) + injected element count +
+    // 16-byte pad. The count drives the dispatch guard (buffers have no
+    // `textureDimensions`) and is passed to the body as `count`. ---
+    out.push_str("struct Params {\n");
+    let mut words = 0usize;
+    for p in params {
+        let ty = param_wgsl_type(p)?; // rejects vec/table/string buffer params
+        let f = wgsl_safe_field(p.name);
+        writeln!(out, "    {f}: {ty},").unwrap();
+        words += param_word_count(p)?; // scalar params are 1 word each
+    }
+    // Injected non-param derived fields (frame-derived values like dt_scaled),
+    // after the params. Each entry is `"name"` (f32) or `"name:ty"` for an
+    // explicit scalar type — `"frame_count:u32"` so a frame counter stays an
+    // exact integer rather than losing precision as an f32 past ~16M frames.
+    // run() packs the resolved value each frame.
+    for d in derived_uniforms {
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        if dty == "vec3" {
+            // A vec3 derived field (a camera basis vector) expands to three
+            // consecutive f32 fields, mirroring the texture path's vec3 PARAM
+            // packing — the body receives it reassembled as `vec3<f32>`. Packing
+            // as 3 scalars (not a `vec3<f32>` field) keeps the 4-byte stride the
+            // run()-side `#[repr(C)]` uniform uses, dodging the uniform vec3's
+            // 16-byte alignment.
+            writeln!(out, "    {dname}_x: f32,").unwrap();
+            writeln!(out, "    {dname}_y: f32,").unwrap();
+            writeln!(out, "    {dname}_z: f32,").unwrap();
+            words += 3;
+        } else {
+            writeln!(out, "    {dname}: {dty},").unwrap();
+            words += 1; // every supported derived scalar is one 4-byte word
+        }
+    }
+    // Optional-texture use-flags (run() packs `is_some()`), after the derived
+    // fields. The body multiplies by / branches on these to fall back when an
+    // optional texture is unwired.
+    for tex in &optional_textures {
+        writeln!(out, "    use_{}: u32,", tex.name).unwrap();
+        words += 1;
+    }
+    out.push_str("    dispatch_count: u32,\n");
+    words += 1;
+    let pad_words = (4 - (words % 4)) % 4;
+    for i in 0..pad_words {
+        writeln!(out, "    _pad{i}: u32,").unwrap();
+    }
+    out.push_str("}\n\n");
+
+    // --- bindings: uniform(0), inputs (read), outputs (read_write) ---
+    out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
+    let mut binding = 1u32;
+    for (i, inp) in array_inputs.iter().enumerate() {
+        writeln!(
+            out,
+            "@group(0) @binding({binding}) var<storage, read> buf_{}: array<{}>;",
+            inp.name, in_tys[i]
+        )
+        .unwrap();
+        binding += 1;
+    }
+    // Texture inputs, then ONE shared sampler (after the array inputs, before the
+    // output array) — matching the hand `*_at_particles` binding order.
+    for inp in &texture_inputs {
+        let tex_ty = if inp.ty == PortType::Texture3D {
+            "texture_3d<f32>"
+        } else {
+            "texture_2d<f32>"
+        };
+        writeln!(out, "@group(0) @binding({binding}) var tex_{}: {tex_ty};", inp.name).unwrap();
+        binding += 1;
+    }
+    if !texture_inputs.is_empty() {
+        writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
+        binding += 1;
+    }
+    for (name, ety) in &out_infos {
+        let storage_ty = if out_is_atomic {
+            format!("atomic<{ety}>")
+        } else {
+            ety.clone()
+        };
+        writeln!(
+            out,
+            "@group(0) @binding({binding}) var<storage, read_write> {}: array<{storage_ty}>;",
+            out_global(name)
+        )
+        .unwrap();
+        binding += 1;
+    }
+    out.push('\n');
+
+    // Multi-output body returns a struct with one field per output array (in
+    // declaration order); the wrapper writes each `buf_<port>[idx] = result.<port>`.
+    if multi_output {
+        out.push_str("struct BufferOutputs {\n");
+        for (name, ety) in &out_infos {
+            writeln!(out, "    {name}: {ety},").unwrap();
+        }
+        out.push_str("}\n\n");
+    }
+
+    // --- shared WGSL library includes (e.g. noise_common's simplex3d), prepended
+    // so the body's helper calls resolve — mirrors run()'s format!("{lib}\n{body}").
+    for inc in includes {
+        out.push_str(inc.trim_end());
+        out.push_str("\n\n");
+    }
+
+    // --- the atom's body fragment, verbatim (references buf_<port> + structs) ---
+    out.push_str(body.trim_end());
+    out.push_str("\n\n");
+
+    // --- 1D iteration wrapper: guard on the element count, write one element ---
+    out.push_str("@compute @workgroup_size(256)\n");
+    out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
+    out.push_str("    let idx = gid.x;\n");
+    out.push_str("    if idx >= params.dispatch_count {\n        return;\n    }\n");
+    // Pre-read each COINCIDENT input's own element `[idx]`; gather inputs are
+    // read by the body itself through the bound global.
+    for (i, inp) in array_inputs.iter().enumerate() {
+        if !is_gather(i) {
+            writeln!(out, "    let e_{} = buf_{}[idx];", inp.name, inp.name).unwrap();
+        }
+    }
+    // body(idx, count, <coincident element args, in array-input order>,
+    // <params…>). A gather input contributes NO arg (the body indexes its global
+    // itself); idx + count are always passed (a coincident body that ignores
+    // them lets DCE drop them). Single output element written directly.
+    let mut args: Vec<String> = vec!["idx".to_string(), "params.dispatch_count".to_string()];
+    for (i, inp) in array_inputs.iter().enumerate() {
+        if !is_gather(i) {
+            args.push(format!("e_{}", inp.name));
+        }
+    }
+    // Each texture input contributes its handle + the shared sampler (the body
+    // samples it at a coord it computes from the particle position).
+    for inp in &texture_inputs {
+        args.push(format!("tex_{}", inp.name));
+        args.push("samp".to_string());
+    }
+    for p in params {
+        let f = wgsl_safe_field(p.name);
+        args.push(format!("params.{f}"));
+    }
+    for d in derived_uniforms {
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        if dty == "vec3" {
+            args.push(format!(
+                "vec3<f32>(params.{dname}_x, params.{dname}_y, params.{dname}_z)"
+            ));
+        } else {
+            args.push(format!("params.{dname}"));
+        }
+    }
+    // Optional-texture use-flags, last (matching the body signature).
+    for tex in &optional_textures {
+        args.push(format!("params.use_{}", tex.name));
+    }
+    if out_is_atomic {
+        // Scatter: the body computes its own target cell and `atomicAdd`s into
+        // the accumulator global — no coincident single-element write.
+        writeln!(out, "    body({});", args.join(", ")).unwrap();
+    } else if multi_output {
+        // The body returns one element per output array; unpack into each.
+        writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
+        for (name, _) in &out_infos {
+            writeln!(out, "    {}[idx] = result.{name};", out_global(name)).unwrap();
+        }
+    } else {
+        writeln!(
+            out,
+            "    {}[idx] = body({});",
+            out_global(out_infos[0].0),
+            args.join(", ")
+        )
+        .unwrap();
+    }
+    out.push_str("}\n");
+
+    Ok(out)
+}
+
+/// Generate the standalone kernel for a BUFFER→TEXTURE *resolve* atom — the
+/// bridge that lifts a `u32` fixed-point accumulator (an `Array(u32)` input,
+/// bound `read_write` as `array<atomic<u32>>` because it self-clears) into a
+/// float `Texture2D/3D` density. The dispatch grid is the OUTPUT texture's dims
+/// (read via `textureDimensions(dst)`, like a Source generator); the wrapper
+/// computes the linear cell `idx` from `id` + `dims` and the body does its own
+/// `atomicLoad` + `atomicStore(0)` self-clear, returning the `vec4` density the
+/// wrapper stores. This is the inverse of the atomic SCATTER (texture-grid
+/// dispatch reading one buffer cell, vs particle-grid dispatch writing one).
+///
+/// ABI: `body(idx: u32, <params…>) -> vec4<f32>`, referencing the `buf_<accum>`
+/// global. Self-contained — separate from the texture `generate_standalone` so
+/// the ~40 converted texture atoms emit byte-identical WGSL (no array-input
+/// branch threaded through their path).
+fn generate_standalone_resolve(
+    body: &str,
+    inputs: &[NodeInput],
+    params: &[ParamDef],
+    outputs: &[NodeOutput],
+) -> Result<String, CodegenError> {
+    let array_inputs: Vec<&NodeInput> = inputs
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .collect();
+    let tex_outputs: Vec<&NodeOutput> = outputs.iter().filter(|o| is_texture_port(&o.ty)).collect();
+    // v1 resolve: exactly one accumulator in, one density texture out.
+    if array_inputs.len() != 1 || tex_outputs.len() != 1 {
+        return Err(CodegenError::NotFusable(FusionKind::Boundary));
+    }
+    let accum = array_inputs[0];
+    let out_tex = tex_outputs[0];
+    let accum_specs = match &accum.ty {
+        PortType::Array(at) => at.specs,
+        _ => unreachable!("filtered to Array ports"),
+    };
+    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    let accum_ty = buffer_element_type(accum_specs, &mut structs);
+    // The accumulator is an atomic integer grid (scatter wrote it via atomicAdd;
+    // resolve reads + zeros it). WGSL atomics are integer-only.
+    if accum_ty != "u32" && accum_ty != "i32" {
+        return Err(CodegenError::AtomicNonInteger { ty: accum_ty });
+    }
+    let dim = if out_tex.ty == PortType::Texture3D {
+        TexDim::D3
+    } else {
+        TexDim::D2
+    };
+    let forms = dim_forms(dim);
+
+    let mut out = String::new();
+
+    // --- param uniform (scalar params in PARAMS order + 16-byte pad). No
+    // injected count: the dispatch grid is the texture, guarded on its dims. ---
+    let has_uniform = !params.is_empty();
+    if has_uniform {
+        out.push_str("struct Params {\n");
+        let mut words = 0usize;
+        for p in params {
+            let ty = param_wgsl_type(p)?;
+            let f = wgsl_safe_field(p.name);
+            writeln!(out, "    {f}: {ty},").unwrap();
+            words += param_word_count(p)?;
+        }
+        let pad_words = (4 - (words % 4)) % 4;
+        for i in 0..pad_words {
+            writeln!(out, "    _pad{i}: u32,").unwrap();
+        }
+        out.push_str("}\n\n");
+    }
+
+    // --- bindings: [uniform(0)], accumulator (atomic read_write), output dst. ---
+    let mut binding = 0u32;
+    if has_uniform {
+        out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
+        binding = 1;
+    }
+    writeln!(
+        out,
+        "@group(0) @binding({binding}) var<storage, read_write> buf_{}: array<atomic<{accum_ty}>>;",
+        accum.name
+    )
+    .unwrap();
+    binding += 1;
+    writeln!(
+        out,
+        "@group(0) @binding({binding}) var dst: {};",
+        forms.storage_ty
+    )
+    .unwrap();
+    out.push('\n');
+
+    // --- body verbatim (references buf_<accum>, returns the density vec4) ---
+    out.push_str(body.trim_end());
+    out.push_str("\n\n");
+
+    // --- iteration wrapper: dispatch over the output texture's dims; compute the
+    // linear cell index; body reads/zeros the accumulator and returns the vec4. ---
+    let idx_expr = match dim {
+        TexDim::D2 => "id.y * dims.x + id.x",
+        TexDim::D3 => "id.z * dims.x * dims.y + id.y * dims.x + id.x",
+    };
+    writeln!(out, "@compute @workgroup_size({})", forms.workgroup).unwrap();
+    out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
+    out.push_str("    let dims = textureDimensions(dst);\n");
+    writeln!(out, "    if {} {{\n        return;\n    }}", forms.guard).unwrap();
+    writeln!(out, "    let idx = {idx_expr};").unwrap();
+    let mut args: Vec<String> = vec!["idx".to_string()];
+    for p in params {
+        let f = wgsl_safe_field(p.name);
+        args.push(format!("params.{f}"));
+    }
+    writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
+    writeln!(out, "    textureStore(dst, {}, result);", forms.store_coord).unwrap();
     out.push_str("}\n");
 
     Ok(out)

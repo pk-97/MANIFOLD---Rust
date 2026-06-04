@@ -17,12 +17,15 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`src_cols`,
+/// `src_rows`, both Int → i32) then the codegen-injected `dispatch_count`
+/// (= dst capacity, the guard), padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TriangulateUniforms {
-    src_cols: u32,
-    src_rows: u32,
-    dst_capacity: u32,
+    src_cols: i32,
+    src_rows: i32,
+    dispatch_count: u32,
     _pad0: u32,
 }
 
@@ -61,6 +64,9 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["triangulate", "make triangles", "mesh", "surface"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/triangulate_grid_body.wgsl"),
+    input_access: [BufferGather],
 }
 
 impl Primitive for TriangulateGrid {
@@ -108,17 +114,21 @@ impl Primitive for TriangulateGrid {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer GATHER
+            // path — the body indexes the input grid global). triangulate_grid.wgsl
+            // is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/triangulate_grid.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.triangulate_grid standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.triangulate_grid",
             )
         });
 
         let uniforms = TriangulateUniforms {
-            src_cols,
-            src_rows,
-            dst_capacity,
+            src_cols: src_cols as i32,
+            src_rows: src_rows as i32,
+            dispatch_count: dst_capacity,
             _pad0: 0,
         };
 
@@ -140,7 +150,7 @@ impl Primitive for TriangulateGrid {
                     offset: 0,
                 },
             ],
-            [dst_capacity.div_ceil(64), 1, 1],
+            [dst_capacity.div_ceil(256), 1, 1],
             "node.triangulate_grid",
         );
     }
@@ -174,5 +184,105 @@ mod tests {
         let prim = TriangulateGrid::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.triangulate_grid");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain GATHER parity oracle (freeze §12) — triangulate_grid had no
+    //! GPU test. The generated kernel (the body indexes the input grid global
+    //! buf_in to read each output vertex's quad corner + the finite-difference
+    //! normal neighbours) must reproduce the hand kernel vertex-for-vertex,
+    //! including the padding past the triangle count. Same math → bit-exact.
+    use super::*;
+
+    fn grid_vertex(pos: [f32; 3], uv: [f32; 2]) -> MeshVertex {
+        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0; 3], _pad1: 0.0, uv, _pad2: [0.0; 2] }
+    }
+
+    fn dispatch_tri(
+        wgsl: &str,
+        grid: &[MeshVertex],
+        dst_cap: u32,
+        uniform: &[u8],
+    ) -> Vec<MeshVertex> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "tri-oracle");
+        let src_buf = device.create_buffer_shared(std::mem::size_of_val(grid) as u64);
+        let dst_buf = device.create_buffer_shared(dst_cap as u64 * 48);
+        unsafe {
+            src_buf.write(0, bytemuck::cast_slice(grid));
+        }
+        let mut enc = device.create_encoder("tri-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: 1, buffer: &src_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &dst_buf, offset: 0 },
+            ],
+            [dst_cap.div_ceil(64), 1, 1],
+            "tri-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_triangulate_matches_hand_kernel() {
+        const COLS: u32 = 3;
+        const ROWS: u32 = 3;
+        // 3x3 grid, row-major: idx = row*cols + col. Give heights so normals vary.
+        let mut grid = Vec::new();
+        for row in 0..ROWS {
+            for col in 0..COLS {
+                let x = col as f32 / (COLS - 1) as f32;
+                let y = row as f32 / (ROWS - 1) as f32;
+                let h = (x * 2.0).sin() * (y * 2.0).cos() * 0.3;
+                grid.push(grid_vertex([x, h, y], [x, y]));
+            }
+        }
+        // (3-1)*(3-1)*6 = 24 triangle verts; pad to 30 to exercise the padding.
+        const DST_CAP: u32 = 30;
+
+        // Hand layout: src_cols(u32), src_rows(u32), dst_capacity(u32), pad.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&COLS.to_le_bytes());
+        hand.extend_from_slice(&ROWS.to_le_bytes());
+        hand.extend_from_slice(&DST_CAP.to_le_bytes());
+        hand.extend_from_slice(&0u32.to_le_bytes());
+
+        // Generated layout: src_cols(i32), src_rows(i32), dispatch_count(u32), pad.
+        let mut gen_bytes = Vec::new();
+        gen_bytes.extend_from_slice(&(COLS as i32).to_le_bytes());
+        gen_bytes.extend_from_slice(&(ROWS as i32).to_le_bytes());
+        gen_bytes.extend_from_slice(&DST_CAP.to_le_bytes());
+        gen_bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        let hand_wgsl = include_str!("shaders/triangulate_grid.wgsl");
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
+            .expect("triangulate_grid buffer codegen");
+        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "gather input is read-only global");
+
+        let from_hand = dispatch_tri(hand_wgsl, &grid, DST_CAP, &hand);
+        let from_gen = dispatch_tri(&gen_wgsl, &grid, DST_CAP, &gen_bytes);
+
+        for i in 0..DST_CAP as usize {
+            for c in 0..3 {
+                assert!(
+                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                    "vertex {i} position[{c}]: hand={} gen={}",
+                    from_hand[i].position[c],
+                    from_gen[i].position[c]
+                );
+                assert!(
+                    (from_hand[i].normal[c] - from_gen[i].normal[c]).abs() < 1e-6,
+                    "vertex {i} normal[{c}]"
+                );
+            }
+            assert_eq!(from_hand[i].uv, from_gen[i].uv, "vertex {i} uv");
+        }
     }
 }

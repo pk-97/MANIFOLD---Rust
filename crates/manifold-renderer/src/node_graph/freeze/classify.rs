@@ -107,13 +107,27 @@ pub enum InputAccess {
     /// texture handle (it computes the integer coord from `uv`/`dims`). Same
     /// region-boundary treatment as `Gather`.
     GatherTexel,
+    /// Buffer-domain gather: the body reads arbitrary elements of an input
+    /// storage `array` (grid neighbours, scatter targets, random-access lookups).
+    /// It references the codegen-emitted input array global `buf_<port>` and
+    /// computes its own element indices, so — exactly like the texture
+    /// [`Gather`] — it can't be threaded as a fused register. The buffer
+    /// standalone codegen binds the array as `var<storage, read>` and the body
+    /// owns the indexing; the region-grower treats any buffer atom as a boundary
+    /// (the texture region path already refuses a node with no texture output, so
+    /// buffer atoms are standalone single-source only in v1).
+    BufferGather,
 }
 
 impl InputAccess {
-    /// Whether the body computes its own read coordinate (a dependent read the
-    /// region-grower can't thread as a register). Both gather flavours qualify.
+    /// Whether the body computes its own read coordinate / index (a dependent
+    /// read the region-grower can't thread as a register). Both texture gather
+    /// flavours and the buffer gather qualify.
     pub fn is_gather(self) -> bool {
-        matches!(self, InputAccess::Gather | InputAccess::GatherTexel)
+        matches!(
+            self,
+            InputAccess::Gather | InputAccess::GatherTexel | InputAccess::BufferGather
+        )
     }
 }
 

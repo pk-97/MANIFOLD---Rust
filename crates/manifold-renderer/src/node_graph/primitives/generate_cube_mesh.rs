@@ -19,13 +19,17 @@ use crate::node_graph::primitive::Primitive;
 /// Use this when sizing buffers for downstream consumers.
 pub const CUBE_VERTEX_COUNT: u32 = 36;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order
+/// (`max_capacity` Int → i32 [allocation-only, the shader ignores it but it
+/// occupies a uniform word], `size` f32) then the codegen-injected
+/// `dispatch_count` (= output capacity, the guard), padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CubeUniforms {
-    capacity: u32,
+    max_capacity: i32,
     size: f32,
+    dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
@@ -61,6 +65,8 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["cube mesh", "box", "cube", "Box SOP"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/generate_cube_mesh_body.wgsl"),
 }
 
 impl Primitive for GenerateCubeMesh {
@@ -68,6 +74,12 @@ impl Primitive for GenerateCubeMesh {
         let size = match ctx.params.get("size") {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
+        };
+        // Allocation-only param — not used by the shader, but the generated
+        // uniform lays out every PARAM, so pack it (the body ignores it).
+        let max_capacity = match ctx.params.get("max_capacity") {
+            Some(ParamValue::Float(n)) => n.round() as i32,
+            _ => CUBE_VERTEX_COUNT as i32,
         };
 
         let Some(dst) = ctx.outputs.array("vertices") else {
@@ -81,18 +93,22 @@ impl Primitive for GenerateCubeMesh {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer source
+            // path; const cube tables inlined). generate_cube_mesh.wgsl is the
+            // parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/generate_cube_mesh.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.generate_cube_mesh standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.generate_cube_mesh",
             )
         });
 
         let uniforms = CubeUniforms {
-            capacity,
+            max_capacity,
             size,
+            dispatch_count: capacity,
             _pad0: 0,
-            _pad1: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -108,7 +124,7 @@ impl Primitive for GenerateCubeMesh {
                     offset: 0,
                 },
             ],
-            [capacity.div_ceil(64), 1, 1],
+            [capacity.div_ceil(256), 1, 1],
             "node.generate_cube_mesh",
         );
     }
@@ -151,5 +167,77 @@ mod tests {
         let prim = GenerateCubeMesh::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.generate_cube_mesh");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain SOURCE parity oracle (freeze §12) — generate_cube_mesh had
+    //! no GPU test. The generated kernel (const cube tables inlined in the body)
+    //! must reproduce the hand kernel vertex-for-vertex, including the padding
+    //! vertices past index 36. Compares position/normal/uv (not std430 padding).
+    use super::*;
+
+    fn dispatch_cube(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<MeshVertex> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "cube-oracle");
+        let out_buf = device.create_buffer_shared(capacity as u64 * 48);
+        let mut enc = device.create_encoder("cube-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
+            ],
+            [capacity.div_ceil(64), 1, 1],
+            "cube-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let slice =
+            unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, capacity as usize) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_cube_mesh_matches_hand_kernel() {
+        const CAPACITY: u32 = 40; // 36 cube verts + 4 padding
+        let size = 2.5f32;
+
+        // Hand layout: capacity(u32), size(f32), pad, pad.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&CAPACITY.to_le_bytes());
+        hand.extend_from_slice(&size.to_le_bytes());
+        hand.extend_from_slice(&[0u8; 8]);
+
+        // Generated layout: max_capacity(i32), size(f32), dispatch_count(u32), pad.
+        let mut gen_bytes = Vec::new();
+        gen_bytes.extend_from_slice(&36i32.to_le_bytes());
+        gen_bytes.extend_from_slice(&size.to_le_bytes());
+        gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
+        gen_bytes.extend_from_slice(&[0u8; 4]);
+
+        let hand_wgsl = include_str!("shaders/generate_cube_mesh.wgsl");
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<GenerateCubeMesh>()
+            .expect("generate_cube_mesh buffer codegen");
+
+        let from_hand = dispatch_cube(hand_wgsl, CAPACITY, &hand);
+        let from_gen = dispatch_cube(&gen_wgsl, CAPACITY, &gen_bytes);
+
+        for i in 0..CAPACITY as usize {
+            for c in 0..3 {
+                assert!(
+                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                    "vertex {i} position[{c}]: hand={} gen={}",
+                    from_hand[i].position[c],
+                    from_gen[i].position[c]
+                );
+                assert!(
+                    (from_hand[i].normal[c] - from_gen[i].normal[c]).abs() < 1e-6,
+                    "vertex {i} normal[{c}]"
+                );
+            }
+            assert_eq!(from_hand[i].uv, from_gen[i].uv, "vertex {i} uv");
+        }
     }
 }

@@ -1580,6 +1580,16 @@
           ],
           "tooltip": "How fast the random pattern reshuffles over time. Higher values churn the blocks more often.",
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Time",
+          "name": "time",
+          "range": [
+            "0",
+            "1000000000"
+          ],
+          "type": "float"
         }
       ],
       "purpose": "Generator for a per-block random UV-offset field (the datamosh / block-glitch building block). Quantises the canvas into block_size-pixel blocks, hashes each (animated by time), and emits `offset` (RG = signed per-block UV displacement, gated so only a fraction of blocks move) and `hash` (R = raw per-block hash in [0,1) for downstream per-block accents that must align with the displaced blocks). Feed `offset` into node.remap (Relative mode) — alone or summed with other offset fields via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
@@ -5437,6 +5447,16 @@
         }
       ],
       "params": [
+        {
+          "default": "0",
+          "label": "Time",
+          "name": "time",
+          "range": [
+            "0",
+            "1000000000"
+          ],
+          "type": "float"
+        },
         {
           "default": "0.01",
           "label": "Time Scale",
@@ -12616,6 +12636,16 @@
             "10"
           ],
           "tooltip": "How fast the tearing pattern reshuffles over time, from 0.1 for a slow drift up to 10 for a fast jitter.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Time",
+          "name": "time",
+          "range": [
+            "0",
+            "1000000000"
+          ],
           "type": "float"
         }
       ],

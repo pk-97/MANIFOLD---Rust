@@ -16,13 +16,17 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order
+/// (`active_count` Int → i32, `speed` f32), then the derived `dt_scaled`
+/// (= delta*60, declared `derived_uniforms`), then the codegen-injected
+/// `dispatch_count`. 4 words = 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EulerUniforms {
-    active_count: u32,
+    active_count: i32,
     speed: f32,
     dt_scaled: f32,
-    _pad: u32,
+    dispatch_count: u32,
 }
 
 crate::primitive! {
@@ -63,6 +67,9 @@ crate::primitive! {
     category: Particles3D,
     role: Filter,
     aliases: ["move particles 3d", "integrate 3d", "step", "euler"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/euler_step_particles_3d_body.wgsl"),
+    derived_uniforms: ["dt_scaled"],
 }
 
 impl Primitive for EulerStepParticles3D {
@@ -111,20 +118,28 @@ impl Primitive for EulerStepParticles3D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path, derived dt_scaled). euler_step_particles_3d.wgsl is
+            // the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/euler_step_particles_3d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.euler_step_particles_3d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.euler_step_particles_3d",
             )
         });
 
         let uniforms = EulerUniforms {
-            active_count,
+            active_count: active_count as i32,
             speed,
             dt_scaled,
-            _pad: 0,
+            dispatch_count: active_count,
         };
 
+        // `in`/`out` alias one particle buffer (aliased_array_io). The generated
+        // kernel binds buf_in (read, 1), buf_forces (read, 2), buf_out
+        // (read_write, 3); bind the particle buffer to BOTH 1 and 3 (pointwise →
+        // race-free).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -140,6 +155,11 @@ impl Primitive for EulerStepParticles3D {
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: forces,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: particles,
                     offset: 0,
                 },
             ],
@@ -199,5 +219,110 @@ mod tests {
         let prim = EulerStepParticles3D::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.euler_step_particles_3d");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain parity oracle (freeze §12) — euler_3d had no GPU test. Like
+    //! euler (2D): two coincident inputs (Particle + [f32;3] forces), derived
+    //! dt_scaled, aliased in/out (the particle buffer bound to both the read slot
+    //! 1 and read_write slot 3). Reproduces the hand kernel particle-for-particle
+    //! (3D step, dead pass-through, channel carry-through).
+    use super::*;
+
+    fn dispatch_euler3d(
+        wgsl: &str,
+        particles: &[Particle],
+        forces: &[[f32; 3]],
+        uniform: &[u8],
+        count: u32,
+        is_generated: bool,
+    ) -> Vec<Particle> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "euler3d-oracle");
+        let p_buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
+        let f_buf = device.create_buffer_shared(std::mem::size_of_val(forces) as u64);
+        unsafe {
+            p_buf.write(0, bytemuck::cast_slice(particles));
+            f_buf.write(0, bytemuck::cast_slice(forces));
+        }
+        let mut bindings = vec![
+            GpuBinding::Bytes { binding: 0, data: uniform },
+            GpuBinding::Buffer { binding: 1, buffer: &p_buf, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &f_buf, offset: 0 },
+        ];
+        if is_generated {
+            bindings.push(GpuBinding::Buffer { binding: 3, buffer: &p_buf, offset: 0 });
+        }
+        let mut enc = device.create_encoder("euler3d-oracle");
+        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "euler3d-oracle");
+        enc.commit_and_wait_completed();
+        let ptr = p_buf.mapped_ptr().expect("shared particle buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_euler3d_matches_hand_kernel() {
+        let mk = |pos: [f32; 3], life: f32| Particle {
+            position: pos,
+            _pad0: 0.0,
+            velocity: [0.1, -0.2, 0.3],
+            life,
+            age: 0.5,
+            _pad1: [0.0; 3],
+            color: [0.2, 0.4, 0.6, 1.0],
+        };
+        let particles = [
+            mk([0.30, 0.70, 0.20], 1.0),
+            mk([0.45, 0.10, -0.30], 1.0),
+            mk([0.90, 0.50, 0.40], 0.5),
+            mk([0.50, 0.50, 0.50], 0.0), // dead → unchanged
+        ];
+        let forces: [[f32; 3]; 4] =
+            [[0.02, -0.05, 0.01], [-0.10, 0.03, -0.02], [0.07, 0.07, 0.07], [0.99, 0.99, 0.99]];
+        let n = particles.len() as u32;
+        let speed = 2.0f32;
+        let dt_scaled = 0.5f32;
+
+        // Hand layout: active_count(u32), speed(f32), dt_scaled(f32), pad.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&n.to_le_bytes());
+        hand.extend_from_slice(&speed.to_le_bytes());
+        hand.extend_from_slice(&dt_scaled.to_le_bytes());
+        hand.extend_from_slice(&0u32.to_le_bytes());
+
+        // Generated layout: active_count(i32), speed(f32), dt_scaled(f32), dispatch_count(u32).
+        let mut gen_bytes = Vec::new();
+        gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
+        gen_bytes.extend_from_slice(&speed.to_le_bytes());
+        gen_bytes.extend_from_slice(&dt_scaled.to_le_bytes());
+        gen_bytes.extend_from_slice(&n.to_le_bytes());
+
+        let hand_wgsl = include_str!("shaders/euler_step_particles_3d.wgsl");
+        let gen_wgsl =
+            crate::node_graph::freeze::codegen::standalone_for_spec::<EulerStepParticles3D>()
+                .expect("euler_step_particles_3d buffer codegen");
+        assert!(gen_wgsl.contains("struct Element2"), "force-triple struct synthesized");
+
+        let from_hand = dispatch_euler3d(hand_wgsl, &particles, &forces, &hand, n, false);
+        let from_gen = dispatch_euler3d(&gen_wgsl, &particles, &forces, &gen_bytes, n, true);
+
+        for i in 0..particles.len() {
+            for c in 0..3 {
+                assert!(
+                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                    "particle {i} position[{c}]: hand={} gen={}",
+                    from_hand[i].position[c],
+                    from_gen[i].position[c]
+                );
+                assert!(
+                    (from_hand[i].velocity[c] - from_gen[i].velocity[c]).abs() < 1e-6,
+                    "particle {i} velocity[{c}] passthrough"
+                );
+            }
+            assert!((from_hand[i].life - from_gen[i].life).abs() < 1e-6, "particle {i} life");
+        }
     }
 }
