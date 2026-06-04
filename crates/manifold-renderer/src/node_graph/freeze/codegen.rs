@@ -163,6 +163,19 @@ fn dim_forms(dim: TexDim) -> DimForms {
 pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
 ) -> Result<String, CodegenError> {
     let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
+    // Buffer atoms (Array output) route directly so they can carry
+    // `DERIVED_UNIFORMS` (frame-derived non-param uniform fields). The texture
+    // path's public `generate_standalone` signature stays untouched.
+    if P::OUTPUTS.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        return generate_standalone_buffer(
+            body,
+            P::INPUTS,
+            P::PARAMS,
+            P::INPUT_ACCESS,
+            P::DERIVED_UNIFORMS,
+            P::OUTPUTS,
+        );
+    }
     generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
 }
 
@@ -190,7 +203,10 @@ pub fn generate_standalone(
     // Detected by an Array output port — a buffer atom always writes at least one
     // storage array. Texture atoms are unaffected (no Array output).
     if outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return generate_standalone_buffer(body, inputs, params, input_access, outputs);
+        // Direct callers of generate_standalone (texture-path tests) carry no
+        // derived uniforms; standalone_for_spec routes buffer atoms with their
+        // DERIVED_UNIFORMS before reaching here.
+        return generate_standalone_buffer(body, inputs, params, input_access, &[], outputs);
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
     // Texture outputs. >1 → the body returns a `BodyOutputs` struct (one vec4 per
@@ -586,6 +602,7 @@ fn generate_standalone_buffer(
     inputs: &[NodeInput],
     params: &[ParamDef],
     input_access: &[InputAccess],
+    derived_uniforms: &[&str],
     outputs: &[NodeOutput],
 ) -> Result<String, CodegenError> {
     // Per-array-input access (aligned to array inputs in declaration order):
@@ -645,6 +662,12 @@ fn generate_standalone_buffer(
         writeln!(out, "    {f}: {ty},").unwrap();
         words += param_word_count(p)?; // scalar params are 1 word each
     }
+    // Injected non-param derived fields (frame-derived f32s like dt_scaled),
+    // after the params. run() packs the resolved value each frame.
+    for d in derived_uniforms {
+        writeln!(out, "    {d}: f32,").unwrap();
+        words += 1;
+    }
     out.push_str("    dispatch_count: u32,\n");
     words += 1;
     let pad_words = (4 - (words % 4)) % 4;
@@ -702,6 +725,9 @@ fn generate_standalone_buffer(
     for p in params {
         let f = wgsl_safe_field(p.name);
         args.push(format!("params.{f}"));
+    }
+    for d in derived_uniforms {
+        args.push(format!("params.{d}"));
     }
     writeln!(
         out,

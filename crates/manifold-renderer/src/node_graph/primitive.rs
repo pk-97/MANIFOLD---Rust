@@ -110,6 +110,17 @@ pub trait PrimitiveSpec: Send {
     /// also defaults to `Coincident`.
     const INPUT_ACCESS: &'static [crate::node_graph::freeze::classify::InputAccess] = &[];
 
+    /// Buffer-domain ONLY: names of injected non-param `f32` uniform fields the
+    /// generated kernel needs that aren't user params — frame-derived values
+    /// like a particle integrator's `dt_scaled` (= `delta * 60`). The buffer
+    /// standalone codegen lays each out as a uniform field after the params and
+    /// passes it to the body (after the params), and `run()` packs the resolved
+    /// value each frame. Keeps these off the param surface (no descriptor /
+    /// catalog / preset-binding churn) while still feeding the body. Empty (the
+    /// default) for every texture atom and every param-only buffer atom. Set via
+    /// the macro's `derived_uniforms:` field.
+    const DERIVED_UNIFORMS: &'static [&'static str] = &[];
+
     /// Returns a process-wide `EffectNodeType` instance for this
     /// primitive, allocated lazily on first call.
     ///
@@ -564,6 +575,7 @@ macro_rules! primitive {
         $( fusion_kind: $fusion_kind:ident, )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
+        $( derived_uniforms: [ $($derived:literal),* $(,)? ], )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -614,6 +626,7 @@ macro_rules! primitive {
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
+            $( const DERIVED_UNIFORMS: &'static [&'static str] = &[ $($derived),* ]; )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =
