@@ -27,15 +27,19 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`frequency`,
+/// `amplitude`, `time_uvx_drift`, `z_coord`, `axis_seed`), then the codegen-
+/// injected `dispatch_count` (= element count, the guard), padded to a 16-byte
+/// multiple. 6 words + 2 pad = 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    count: u32,
     frequency: f32,
     amplitude: f32,
     time_uvx_drift: f32,
     z_coord: f32,
     axis_seed: f32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -107,6 +111,9 @@ crate::primitive! {
     category: Particles2D,
     role: Filter,
     aliases: ["position jitter", "offset", "scatter", "noise"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/instance_position_jitter_body.wgsl"),
+    wgsl_includes: [NOISE_COMMON],
 }
 
 impl Primitive for InstancePositionJitter {
@@ -154,29 +161,30 @@ impl Primitive for InstancePositionJitter {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            let source = format!(
-                "{}\n{}",
-                NOISE_COMMON,
-                include_str!("shaders/instance_position_jitter.wgsl"),
-            );
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path; noise_common prepended via wgsl_includes for
+            // simplex3d). instance_position_jitter.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                &source,
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.instance_position_jitter standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.instance_position_jitter",
             )
         });
 
         let uniforms = Uniforms {
-            count,
             frequency,
             amplitude,
             time_uvx_drift,
             z_coord,
             axis_seed,
+            dispatch_count: count,
             _pad0: 0,
             _pad1: 0,
         };
 
+        // Generated binding order follows the INPUTS declaration (array inputs:
+        // `instances` then `uv`), so bind instances at 1, uv at 2, output at 3.
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -186,12 +194,12 @@ impl Primitive for InstancePositionJitter {
                 },
                 GpuBinding::Buffer {
                     binding: 1,
-                    buffer: uv_buf,
+                    buffer: in_inst_buf,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 2,
-                    buffer: in_inst_buf,
+                    buffer: uv_buf,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
@@ -273,5 +281,110 @@ mod tests {
         let prim = InstancePositionJitter::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.instance_position_jitter");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain parity oracle (freeze §12) — instance_position_jitter had no
+    //! GPU test. The generated kernel (which prepends noise_common via
+    //! wgsl_includes for simplex3d, and disambiguates the same-named in/out
+    //! `instances` port to buf_out_instances) must reproduce the hand kernel
+    //! instance-for-instance: jittered pos.xyz, scale + rotation passed through.
+    //! Same simplex3d on-GPU both ways → bit-identical.
+    use super::*;
+
+    /// Dispatch a jitter kernel and read the output instances back. The hand
+    /// kernel binds uv@1/inst@2; the generated binds inst@1/uv@2 (INPUTS order).
+    fn dispatch_jitter(
+        wgsl: &str,
+        instances: &[InstanceTransform],
+        uvs: &[[f32; 2]],
+        uniform: &[u8],
+        count: u32,
+        generated: bool,
+    ) -> Vec<InstanceTransform> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "jitter-oracle");
+        let inst_buf = device.create_buffer_shared(std::mem::size_of_val(instances) as u64);
+        let uv_buf = device.create_buffer_shared(std::mem::size_of_val(uvs) as u64);
+        let out_buf = device.create_buffer_shared(std::mem::size_of_val(instances) as u64);
+        unsafe {
+            inst_buf.write(0, bytemuck::cast_slice(instances));
+            uv_buf.write(0, bytemuck::cast_slice(uvs));
+        }
+        let (inst_b, uv_b) = if generated { (1u32, 2u32) } else { (2u32, 1u32) };
+        let mut enc = device.create_encoder("jitter-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: inst_b, buffer: &inst_buf, offset: 0 },
+                GpuBinding::Buffer { binding: uv_b, buffer: &uv_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: &out_buf, offset: 0 },
+            ],
+            [count.div_ceil(256), 1, 1],
+            "jitter-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let slice =
+            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, instances.len()) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_jitter_matches_hand_kernel() {
+        let instances = [
+            InstanceTransform { pos_scale: [0.2, 0.3, 0.1, 1.5], rot_pad: [0.1, 0.2, 0.3, 0.0] },
+            InstanceTransform { pos_scale: [-0.4, 0.6, -0.2, 2.0], rot_pad: [0.4, -0.1, 0.0, 0.0] },
+            InstanceTransform { pos_scale: [0.7, -0.5, 0.4, 0.8], rot_pad: [-0.2, 0.3, 0.1, 0.0] },
+        ];
+        let uvs: [[f32; 2]; 3] = [[0.1, 0.2], [0.5, 0.6], [0.9, 0.3]];
+        let n = instances.len() as u32;
+        // Large amplitude so the noise visibly moves pos.xyz.
+        let (freq, amp, drift, zc, seed) = (10.0f32, 0.5f32, 0.0f32, 0.0f32, 100.0f32);
+
+        // Hand layout: count(u32), frequency, amplitude, time_uvx_drift, z_coord, axis_seed, pad, pad.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&n.to_le_bytes());
+        for v in [freq, amp, drift, zc, seed] {
+            hand.extend_from_slice(&v.to_le_bytes());
+        }
+        hand.extend_from_slice(&[0u8; 8]);
+
+        // Generated layout: frequency, amplitude, time_uvx_drift, z_coord, axis_seed, dispatch_count(u32), pad, pad.
+        let mut gen_bytes = Vec::new();
+        for v in [freq, amp, drift, zc, seed] {
+            gen_bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        gen_bytes.extend_from_slice(&n.to_le_bytes());
+        gen_bytes.extend_from_slice(&[0u8; 8]);
+
+        let hand_wgsl =
+            format!("{}\n{}", NOISE_COMMON, include_str!("shaders/instance_position_jitter.wgsl"));
+        let gen_wgsl =
+            crate::node_graph::freeze::codegen::standalone_for_spec::<InstancePositionJitter>()
+                .expect("instance_position_jitter buffer codegen");
+        assert!(gen_wgsl.contains("buf_out_instances"), "same-named in/out disambiguated");
+        assert!(gen_wgsl.contains("fn simplex3d"), "noise_common prepended");
+
+        let from_hand = dispatch_jitter(&hand_wgsl, &instances, &uvs, &hand, n, false);
+        let from_gen = dispatch_jitter(&gen_wgsl, &instances, &uvs, &gen_bytes, n, true);
+
+        for i in 0..instances.len() {
+            for c in 0..4 {
+                assert!(
+                    (from_hand[i].pos_scale[c] - from_gen[i].pos_scale[c]).abs() < 1e-6,
+                    "instance {i} pos_scale[{c}]: hand={} gen={}",
+                    from_hand[i].pos_scale[c],
+                    from_gen[i].pos_scale[c]
+                );
+                assert!(
+                    (from_hand[i].rot_pad[c] - from_gen[i].rot_pad[c]).abs() < 1e-6,
+                    "instance {i} rot_pad[{c}] passthrough"
+                );
+            }
+        }
     }
 }

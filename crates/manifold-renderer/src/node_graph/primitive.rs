@@ -121,6 +121,15 @@ pub trait PrimitiveSpec: Send {
     /// the macro's `derived_uniforms:` field.
     const DERIVED_UNIFORMS: &'static [&'static str] = &[];
 
+    /// Shared WGSL library source the generated kernel must prepend before the
+    /// `wgsl_body` (e.g. `noise_common.wgsl`'s `simplex3d`). Each entry is the
+    /// full source text (typically `include_str!`). The buffer standalone codegen
+    /// emits them ahead of the body so its helper calls resolve, mirroring the
+    /// `format!("{NOISE_COMMON}\n{shader}")` the hand `run()` does. Empty (the
+    /// default) for self-contained bodies. Set via the macro's `wgsl_includes:`
+    /// field.
+    const WGSL_INCLUDES: &'static [&'static str] = &[];
+
     /// Returns a process-wide `EffectNodeType` instance for this
     /// primitive, allocated lazily on first call.
     ///
@@ -576,6 +585,7 @@ macro_rules! primitive {
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
         $( derived_uniforms: [ $($derived:literal),* $(,)? ], )?
+        $( wgsl_includes: [ $($inc:expr),* $(,)? ], )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -627,6 +637,7 @@ macro_rules! primitive {
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
             $( const DERIVED_UNIFORMS: &'static [&'static str] = &[ $($derived),* ]; )?
+            $( const WGSL_INCLUDES: &'static [&'static str] = &[ $($inc),* ]; )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =

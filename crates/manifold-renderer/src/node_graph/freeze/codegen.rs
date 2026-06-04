@@ -173,6 +173,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
             P::PARAMS,
             P::INPUT_ACCESS,
             P::DERIVED_UNIFORMS,
+            P::WGSL_INCLUDES,
             P::OUTPUTS,
         );
     }
@@ -206,7 +207,7 @@ pub fn generate_standalone(
         // Direct callers of generate_standalone (texture-path tests) carry no
         // derived uniforms; standalone_for_spec routes buffer atoms with their
         // DERIVED_UNIFORMS before reaching here.
-        return generate_standalone_buffer(body, inputs, params, input_access, &[], outputs);
+        return generate_standalone_buffer(body, inputs, params, input_access, &[], &[], outputs);
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
     // Texture outputs. >1 → the body returns a `BodyOutputs` struct (one vec4 per
@@ -603,6 +604,7 @@ fn generate_standalone_buffer(
     params: &[ParamDef],
     input_access: &[InputAccess],
     derived_uniforms: &[&str],
+    includes: &[&str],
     outputs: &[NodeOutput],
 ) -> Result<String, CodegenError> {
     // Per-array-input access (aligned to array inputs in declaration order):
@@ -642,6 +644,18 @@ fn generate_standalone_buffer(
         .map(|i| buffer_element_type(specs_of(&i.ty), &mut structs))
         .collect();
     let out_ty = buffer_element_type(specs_of(&array_outputs[0].ty), &mut structs);
+
+    // Output array global name. Normally `buf_<port>`, but if the output port
+    // shares a name with an input port (e.g. instance_position_jitter's
+    // `instances` in AND out — NOT aliased, separate buffers), disambiguate to
+    // `buf_out_<port>` so the two storage globals don't collide. Bodies only ever
+    // reference INPUT globals, so this never affects a body.
+    let out_port = array_outputs[0].name;
+    let out_global = if array_inputs.iter().any(|i| i.name == out_port) {
+        format!("buf_out_{out_port}")
+    } else {
+        format!("buf_{out_port}")
+    };
 
     let mut out = String::new();
 
@@ -690,11 +704,17 @@ fn generate_standalone_buffer(
     }
     writeln!(
         out,
-        "@group(0) @binding({binding}) var<storage, read_write> buf_{}: array<{}>;",
-        array_outputs[0].name, out_ty
+        "@group(0) @binding({binding}) var<storage, read_write> {out_global}: array<{out_ty}>;"
     )
     .unwrap();
     out.push('\n');
+
+    // --- shared WGSL library includes (e.g. noise_common's simplex3d), prepended
+    // so the body's helper calls resolve — mirrors run()'s format!("{lib}\n{body}").
+    for inc in includes {
+        out.push_str(inc.trim_end());
+        out.push_str("\n\n");
+    }
 
     // --- the atom's body fragment, verbatim (references buf_<port> + structs) ---
     out.push_str(body.trim_end());
@@ -729,13 +749,7 @@ fn generate_standalone_buffer(
     for d in derived_uniforms {
         args.push(format!("params.{d}"));
     }
-    writeln!(
-        out,
-        "    buf_{}[idx] = body({});",
-        array_outputs[0].name,
-        args.join(", ")
-    )
-    .unwrap();
+    writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
     out.push_str("}\n");
 
     Ok(out)
