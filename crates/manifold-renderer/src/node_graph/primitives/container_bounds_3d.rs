@@ -20,13 +20,16 @@ use crate::node_graph::primitive::Primitive;
 
 use super::container_repel_force_3d::CONTAINER_3D_MODES;
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`container`
+/// Enum → u32, `ctr_scale` f32, `active_count` Int → i32) then the codegen-
+/// injected `dispatch_count`. 4 words = 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BoundsUniforms {
-    active_count: u32,
     container: u32,
     ctr_scale: f32,
-    _pad0: u32,
+    active_count: i32,
+    dispatch_count: u32,
 }
 
 crate::primitive! {
@@ -74,6 +77,8 @@ crate::primitive! {
     category: Particles3D,
     role: Filter,
     aliases: ["keep in box", "bounds", "contain", "clamp"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/container_bounds_3d_body.wgsl"),
 }
 
 impl Primitive for ContainerBounds3D {
@@ -123,20 +128,26 @@ impl Primitive for ContainerBounds3D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path; SDF helpers inlined). container_bounds_3d.wgsl is
+            // the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/container_bounds_3d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.container_bounds_3d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.container_bounds_3d",
             )
         });
 
         let uniforms = BoundsUniforms {
-            active_count,
             container,
             ctr_scale,
-            _pad0: 0,
+            active_count: active_count as i32,
+            dispatch_count: active_count,
         };
 
+        // `in`/`out` alias one particle buffer; the generated kernel binds buf_in
+        // (read, 1) + buf_out (read_write, 2) — bind it to both (pointwise).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -146,6 +157,11 @@ impl Primitive for ContainerBounds3D {
                 },
                 GpuBinding::Buffer {
                     binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
                     buffer: particles,
                     offset: 0,
                 },
@@ -192,5 +208,104 @@ mod tests {
         let prim = ContainerBounds3D::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.container_bounds_3d");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain parity oracle (freeze §12) — container_bounds_3d had no GPU
+    //! test. The generated kernel (SDF helpers inlined; aliased in/out on slots 1
+    //! and 2) must reproduce the hand kernel particle-for-particle across all four
+    //! container modes (None wrap + Cube/Sphere/Torus SDF reflect+clamp),
+    //! including the dead pass-through. Same math → bit-exact.
+    use super::*;
+    use crate::generators::compute_common::Particle;
+
+    fn dispatch_bounds(
+        wgsl: &str,
+        particles: &[Particle],
+        uniform: &[u8],
+        count: u32,
+        is_generated: bool,
+    ) -> Vec<Particle> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "bounds-oracle");
+        let buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
+        unsafe {
+            buf.write(0, bytemuck::cast_slice(particles));
+        }
+        let mut bindings = vec![
+            GpuBinding::Bytes { binding: 0, data: uniform },
+            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
+        ];
+        if is_generated {
+            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &buf, offset: 0 });
+        }
+        let mut enc = device.create_encoder("bounds-oracle");
+        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "bounds-oracle");
+        enc.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("shared particle buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_bounds_matches_hand_kernel_all_modes() {
+        let mk = |pos: [f32; 3], life: f32| Particle {
+            position: pos,
+            _pad0: 0.0,
+            velocity: [0.1, -0.2, 0.3],
+            life,
+            age: 0.5,
+            _pad1: [0.0; 3],
+            color: [0.2, 0.4, 0.6, 1.0],
+        };
+        let particles = [
+            mk([1.2, -0.3, 0.5], 1.0), // out of [0,1] → wrap / pushed
+            mk([0.95, 0.95, 0.95], 1.0), // near corner → escapes most containers
+            mk([0.5, 0.5, 0.5], 1.0),  // centre → inside all
+            mk([1.5, 1.5, 1.5], 0.0),  // dead → unchanged
+        ];
+        let n = particles.len() as u32;
+        let ctr_scale = 0.8f32;
+
+        for container in 0u32..4u32 {
+            // Hand layout: active_count(u32), container(u32), ctr_scale(f32), pad.
+            let mut hand = Vec::new();
+            hand.extend_from_slice(&n.to_le_bytes());
+            hand.extend_from_slice(&container.to_le_bytes());
+            hand.extend_from_slice(&ctr_scale.to_le_bytes());
+            hand.extend_from_slice(&0u32.to_le_bytes());
+
+            // Generated layout: container(u32), ctr_scale(f32), active_count(i32), dispatch_count(u32).
+            let mut gen_bytes = Vec::new();
+            gen_bytes.extend_from_slice(&container.to_le_bytes());
+            gen_bytes.extend_from_slice(&ctr_scale.to_le_bytes());
+            gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
+            gen_bytes.extend_from_slice(&n.to_le_bytes());
+
+            let hand_wgsl = include_str!("shaders/container_bounds_3d.wgsl");
+            let gen_wgsl =
+                crate::node_graph::freeze::codegen::standalone_for_spec::<ContainerBounds3D>()
+                    .expect("container_bounds_3d buffer codegen");
+
+            let from_hand = dispatch_bounds(hand_wgsl, &particles, &hand, n, false);
+            let from_gen = dispatch_bounds(&gen_wgsl, &particles, &gen_bytes, n, true);
+
+            for i in 0..particles.len() {
+                for c in 0..3 {
+                    assert!(
+                        (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                        "container {container} particle {i} position[{c}]: hand={} gen={}",
+                        from_hand[i].position[c],
+                        from_gen[i].position[c]
+                    );
+                }
+                assert!(
+                    (from_hand[i].life - from_gen[i].life).abs() < 1e-6,
+                    "container {container} particle {i} life"
+                );
+            }
+        }
     }
 }
