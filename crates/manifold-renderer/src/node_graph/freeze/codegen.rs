@@ -2910,6 +2910,52 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
+    /// lic_integrate parity: 2-input gather (source + velocity both walked along
+    /// the streamline). `steps` is an Int param (i32), so it can't go through
+    /// pack_f32 (f32 bits would mis-read as int) — hand-pack steps=16 (i32) + dt=2
+    /// (f32). Both kernels read the same bits; dispatch_coincident binds
+    /// uniform(0)/source(1)/velocity(2)/samp(3)/dst(4) for both.
+    #[test]
+    fn generated_lic_integrate_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let ga = gradient(&device, w, h); // source
+        let gb = gradient_b(&device, w, h); // velocity (.rg)
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.lic_integrate").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("lic_integrate generates");
+        let original = include_str!("../primitives/shaders/lic_integrate.wgsl");
+
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&16i32.to_le_bytes()); // steps
+        bytes[4..8].copy_from_slice(&2.0f32.to_le_bytes()); // dt
+
+        let from_original = dispatch_coincident(&device, original, &ga, &gb, &bytes);
+        let from_generated = dispatch_coincident(&device, &generated, &ga, &gb, &bytes);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated lic_integrate must reproduce the hand kernel (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
     /// outputs get their own texture (no aliasing) so each can be diffed.
     fn dispatch_two_output_source(

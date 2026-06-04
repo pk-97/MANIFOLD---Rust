@@ -60,6 +60,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["flow lines", "lic", "streamlines", "flow viz"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/lic_integrate_body.wgsl"),
+    input_access: [Gather, Gather],
 }
 
 impl Primitive for LicIntegrate {
@@ -96,9 +99,13 @@ impl Primitive for LicIntegrate {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `source` + `velocity` are both Gather inputs (sampled along the
+            // body-walked streamline). Generated kernel binds uniform(0)/source(1)/
+            // velocity(2)/samp(3)/dst(4). lic_integrate.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/lic_integrate.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.lic_integrate standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.lic_integrate",
             )
         });
