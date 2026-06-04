@@ -214,6 +214,126 @@ fn main() {
     profile_perf_gate(&device);
     profile_generators(&registry, &device);
     profile_fluidsim_particle_sweep(&registry, &device);
+    profile_synthetic_buffer(&device);
+}
+
+/// Buffer-domain fusion BREAK-EVEN (the analog of profile_synthetic_pointwise +
+/// profile_fused_colorgrade for the particle lane). A storage buffer of M
+/// particles (vec4) is stepped by a representative per-particle op (a force +
+/// integrate-ish block: 3 trig + FMAs). We time the SAME op chain two ways:
+///   - separate: N in-place dispatches of the 1-op kernel (Metal hazard-tracks
+///     the shared buffer, so the N dispatches serialise — each reads what the
+///     prior wrote, exactly like a real particle pipeline's stages);
+///   - fused: ONE dispatch of an N-op kernel (read particle once, N ops in
+///     registers, write once).
+/// The question this answers (design §11.E / Phase-0): buffer chains are
+/// IN-PLACE ALIASED, so unlike textures there is no fresh-VRAM round-trip to
+/// eliminate — fusion only saves the (N-1) re-reads/re-writes of the SAME
+/// buffer + per-dispatch overhead, and risks lower occupancy from register
+/// pressure. If speedup stays ~flat, buffer fusion does NOT pay (build a
+/// different lever); if it climbs with N, it does. MEASURED, not inferred.
+fn profile_synthetic_buffer(device: &GpuDevice) {
+    use manifold_gpu::GpuBinding;
+
+    const M: u64 = 2_000_000; // particles
+    let buf_bytes = M * 16; // vec4<f32> each
+    println!(
+        "\n--- synthetic buffer chains ({M} particles, vec4, in-place): N separate dispatches \
+         vs 1 fused kernel, real GPU time ---"
+    );
+    println!("{:<8} {:>13} {:>13} {:>10}", "N ops", "separate ms", "fused ms", "speedup");
+    println!("{}", "-".repeat(48));
+
+    // Representative per-particle step (force + integrate): non-trivial compute so
+    // the bench isn't purely memory-bound (which would overstate the fusion win).
+    let op_block = "    p = p * 1.001 + vec4<f32>(0.0001, 0.0001, 0.0001, 0.0);\n\
+                        p.x = p.x + sin(p.y * 6.28318) * 0.01;\n\
+                        p.y = p.y + cos(p.z * 6.28318) * 0.01;\n\
+                        p.z = p.z + sin(p.x * 3.14159) * 0.01;\n";
+
+    let make_kernel = |n: u32| -> String {
+        let mut body = String::new();
+        for _ in 0..n {
+            body.push_str(op_block);
+        }
+        format!(
+            "@group(0) @binding(0) var<storage, read_write> particles: array<vec4<f32>>;\n\
+@compute @workgroup_size(256)\n\
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+    let i = gid.x;\n\
+    if i >= arrayLength(&particles) {{ return; }}\n\
+    var p = particles[i];\n\
+{body}    particles[i] = p;\n\
+}}\n"
+        )
+    };
+
+    let groups = (M as u32).div_ceil(256);
+    let buffer = device.create_buffer(buf_bytes);
+    let step_pipe = device.create_compute_pipeline(&make_kernel(1), "cs_main", "syn-buf-step");
+
+    for n in 1..=6u32 {
+        // separate: N in-place dispatches of the 1-op kernel.
+        for _ in 0..WARMUP {
+            let mut enc = device.create_encoder("syn-buf-sep-warmup");
+            for _ in 0..n {
+                enc.dispatch_compute(
+                    &step_pipe,
+                    &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                    [groups, 1, 1],
+                    "syn-buf-step",
+                );
+            }
+            enc.commit_and_wait_completed();
+        }
+        let mut sep_secs = 0.0_f64;
+        for _ in 0..FRAMES {
+            let mut enc = device.create_encoder("syn-buf-sep-timed");
+            for _ in 0..n {
+                enc.dispatch_compute(
+                    &step_pipe,
+                    &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                    [groups, 1, 1],
+                    "syn-buf-step",
+                );
+            }
+            sep_secs += enc.commit_and_wait_completed_timed();
+        }
+        let sep_ms = sep_secs * 1000.0 / f64::from(FRAMES);
+
+        // fused: ONE dispatch of the N-op kernel.
+        let fused_pipe =
+            device.create_compute_pipeline(&make_kernel(n), "cs_main", "syn-buf-fused");
+        for _ in 0..WARMUP {
+            let mut enc = device.create_encoder("syn-buf-fused-warmup");
+            enc.dispatch_compute(
+                &fused_pipe,
+                &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                [groups, 1, 1],
+                "syn-buf-fused",
+            );
+            enc.commit_and_wait_completed();
+        }
+        let mut fus_secs = 0.0_f64;
+        for _ in 0..FRAMES {
+            let mut enc = device.create_encoder("syn-buf-fused-timed");
+            enc.dispatch_compute(
+                &fused_pipe,
+                &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                [groups, 1, 1],
+                "syn-buf-fused",
+            );
+            fus_secs += enc.commit_and_wait_completed_timed();
+        }
+        let fus_ms = fus_secs * 1000.0 / f64::from(FRAMES);
+
+        let speedup = if fus_ms > 0.0 { sep_ms / fus_ms } else { 0.0 };
+        println!("{:<8} {:>13.4} {:>13.4} {:>9.2}x", n, sep_ms, fus_ms, speedup);
+    }
+    println!(
+        "speedup climbing with N → buffer fusion pays (saves re-reads/writes + dispatch overhead); \
+         ~flat → in-place aliasing leaves no round-trip to remove (per design Phase-0)."
+    );
 }
 
 /// Exercise the production perf gate end-to-end: run the startup tuner on this
