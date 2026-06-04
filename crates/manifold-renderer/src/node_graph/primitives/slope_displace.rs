@@ -67,6 +67,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["slope displace", "emboss warp", "paint"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/slope_displace_body.wgsl"),
+    input_access: [Gather, Gather],
 }
 
 impl Primitive for SlopeDisplace {
@@ -97,9 +100,14 @@ impl Primitive for SlopeDisplace {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `base` + `image` are both Gather inputs (neighbour taps + a final
+            // dependent sample of image at the displaced UV). Generated kernel binds
+            // uniform(0)/base(1)/image(2)/samp(3)/dst(4). slope_displace.wgsl is the
+            // parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/slope_displace.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.slope_displace standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.slope_displace",
             )
         });
