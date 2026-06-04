@@ -588,11 +588,13 @@ fn generate_standalone_buffer(
     input_access: &[InputAccess],
     outputs: &[NodeOutput],
 ) -> Result<String, CodegenError> {
-    // v1 buffer path is gather-only: the body owns its indexing. `input_access`
-    // (BufferGather markers) documents intent and gates the region-grower; the
-    // codegen assumes gather for every array input. The coincident element-pass
-    // path will branch on these markers.
-    let _ = input_access;
+    // Per-array-input access (aligned to array inputs in declaration order):
+    //   - BufferGather → the body indexes the input array global `buf_<port>`
+    //     itself (grid neighbours, random access). No pre-read, no element arg.
+    //   - coincident (the default) → the wrapper pre-reads element `[idx]` into
+    //     `e_<port>` and passes it; the body operates on the value (the
+    //     pointwise / per-element integrators, jitters, transforms).
+    let is_gather = |i: usize| matches!(input_access.get(i), Some(InputAccess::BufferGather));
 
     let array_inputs: Vec<&NodeInput> = inputs
         .iter()
@@ -680,9 +682,23 @@ fn generate_standalone_buffer(
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
     out.push_str("    let idx = gid.x;\n");
     out.push_str("    if idx >= params.dispatch_count {\n        return;\n    }\n");
-    // body(idx, count, <params in PARAMS order>). The body reads input arrays via
-    // the bound globals and computes its own indices (gather).
+    // Pre-read each COINCIDENT input's own element `[idx]`; gather inputs are
+    // read by the body itself through the bound global.
+    for (i, inp) in array_inputs.iter().enumerate() {
+        if !is_gather(i) {
+            writeln!(out, "    let e_{} = buf_{}[idx];", inp.name, inp.name).unwrap();
+        }
+    }
+    // body(idx, count, <coincident element args, in array-input order>,
+    // <params…>). A gather input contributes NO arg (the body indexes its global
+    // itself); idx + count are always passed (a coincident body that ignores
+    // them lets DCE drop them). Single output element written directly.
     let mut args: Vec<String> = vec!["idx".to_string(), "params.dispatch_count".to_string()];
+    for (i, inp) in array_inputs.iter().enumerate() {
+        if !is_gather(i) {
+            args.push(format!("e_{}", inp.name));
+        }
+    }
     for p in params {
         let f = wgsl_safe_field(p.name);
         args.push(format!("params.{f}"));
