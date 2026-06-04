@@ -985,6 +985,30 @@ fn fusion_coverage_baseline() {
     );
 }
 
+/// Grouped presets must fuse. The fuse entry (`fuse_canonical_def`) flattens its
+/// input the way the live loader does — otherwise a preset organised into node
+/// groups silently never fuses (`partition_regions` refuses any def still
+/// carrying a group node). Glitch (a grouped EFFECT) and FluidSimulation (a
+/// grouped GENERATOR) are the two shipped grouped presets whose flattened forms
+/// have regions; both must produce a fused view/def through the real entry
+/// points. Guards the flatten-before-fuse fix against regression.
+#[test]
+fn grouped_presets_fuse_through_entry_points() {
+    use super::install::{fused_generator_def_by_id, fused_view_by_id};
+    use manifold_core::{EffectTypeId, GeneratorTypeId};
+
+    assert!(
+        fused_view_by_id(&EffectTypeId::new("Glitch")).is_some(),
+        "Glitch is a grouped effect with fusable regions once flattened — \
+         fuse_canonical_def must flatten before partitioning"
+    );
+    assert!(
+        fused_generator_def_by_id(&GeneratorTypeId::new("FluidSimulation")).is_some(),
+        "FluidSimulation is a grouped generator with a fusable region once flattened — \
+         the generator fuse path must flatten too"
+    );
+}
+
 /// Library-wide safety net for the LIVE generator fused path (the registry now
 /// loads bundled generators through their fused def when the gate keeps it). Every
 /// generator the finder fuses must build + render one frame through the real

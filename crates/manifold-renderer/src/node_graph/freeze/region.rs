@@ -1214,3 +1214,99 @@ mod tests {
     }
 
 }
+
+/// Whole-library fusion audit. Not a pass/fail gate — a `--nocapture` report that
+/// runs the REAL region finder over every bundled effect + generator preset and
+/// prints, per preset: grouped?, region count + sizes on the FLATTENED def, plus
+/// flags for 3D-port and Array/buffer-domain atoms (the two domains the v1 finder
+/// can't fuse yet). Run:
+///   cargo test -p manifold-renderer --lib freeze::region::audit -- --nocapture
+#[cfg(test)]
+mod audit {
+    use super::*;
+    use crate::node_graph::PrimitiveRegistry;
+    use crate::node_graph::ports::PortType;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+
+    fn domain_flags(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> (usize, usize, usize) {
+        // Count worker atoms (non-boundary-by-identity), and how many touch a 3D
+        // texture port or an Array port — the work the finder skips today.
+        let mut workers = 0;
+        let mut tex3d = 0;
+        let mut arr = 0;
+        for n in &def.nodes {
+            if n.type_id == SOURCE_TYPE_ID || n.type_id == FINAL_OUTPUT_TYPE_ID {
+                continue;
+            }
+            let Some(node) = registry.construct(&n.type_id) else {
+                continue;
+            };
+            workers += 1;
+            let ports = node.inputs().iter().map(|p| &p.ty).chain(node.outputs().iter().map(|p| &p.ty));
+            let mut has3d = false;
+            let mut hasarr = false;
+            for ty in ports {
+                if *ty == PortType::Texture3D {
+                    has3d = true;
+                }
+                if matches!(ty, PortType::Array(_)) {
+                    hasarr = true;
+                }
+            }
+            if has3d {
+                tex3d += 1;
+            }
+            if hasarr {
+                arr += 1;
+            }
+        }
+        (workers, tex3d, arr)
+    }
+
+    fn audit_one(name: &str, json: &str, registry: &PrimitiveRegistry) {
+        let Ok(def) = serde_json::from_str::<EffectGraphDef>(json) else {
+            eprintln!("[audit] {name}: PARSE FAILED");
+            return;
+        };
+        let grouped = def.nodes.iter().any(|n| n.group.is_some());
+        let raw = partition_regions(&def, registry).len();
+        let flat = match manifold_core::flatten::flatten_groups(&def) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[audit] {name}: FLATTEN ERR {e:?}");
+                return;
+            }
+        };
+        let (workers, tex3d, arr) = domain_flags(&flat, registry);
+        let regions = partition_regions(&flat, registry);
+        let sizes: Vec<usize> = regions.iter().map(|r| r.members.len()).collect();
+        let fused_atoms: usize = sizes.iter().sum();
+        eprintln!(
+            "[audit] {name:<26} grouped={grouped:<5} workers={workers:<3} 3d={tex3d:<3} arr={arr:<3} \
+             raw_regions={raw:<2} flat_regions={:<2} fused_atoms={fused_atoms:<3} sizes={sizes:?}",
+            regions.len(),
+        );
+    }
+
+    #[test]
+    #[ignore = "on-demand whole-library fusion report, not a pass/fail gate (~40s)"]
+    fn audit_all_presets() {
+        let registry = PrimitiveRegistry::with_builtin();
+        eprintln!("=== EFFECT PRESETS ===");
+        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+            if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
+                let json = serde_json::to_string(view.canonical_def).unwrap();
+                audit_one(type_id.as_str(), &json, &registry);
+            }
+        }
+        eprintln!("=== GENERATOR PRESETS ===");
+        use crate::generators::bundled_generator_presets::{
+            bundled_generator_preset_json, bundled_generator_preset_type_ids,
+        };
+        for type_id in bundled_generator_preset_type_ids() {
+            if let Some(json) = bundled_generator_preset_json(&type_id) {
+                audit_one(type_id.as_str(), json, &registry);
+            }
+        }
+    }
+}

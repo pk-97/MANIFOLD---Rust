@@ -289,6 +289,18 @@ pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<FusedDef> {
+    // The finder operates on a FLATTENED graph: `partition_regions` refuses any
+    // def still carrying a group node (group boundary nodes would fragment every
+    // region), and the live loader (`graph_loader`) flattens before building. So
+    // flatten here too — otherwise a grouped preset (Glitch, FluidSimulation)
+    // silently never fuses even though its flattened form has regions. Flatten
+    // PRESERVES each node's stable `node_id` (only the debug handle is prefixed),
+    // so the binding retarget downstream — which keys on `node_id` via
+    // `resolve_node_id` — still lands correctly. An ungrouped def is returned
+    // clone-equal (ids byte-identical), making this a no-op for the common case;
+    // a malformed group def errors out to "render unfused", always safe.
+    let flattened = manifold_core::flatten::flatten_groups(def).ok()?;
+    let def = &flattened;
     let regions = partition_regions(def, registry);
     if regions.is_empty() {
         return None;
