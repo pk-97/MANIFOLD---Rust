@@ -235,9 +235,19 @@ pub(crate) fn fuse_canonical_def(
         let fusion_region = FusionRegion {
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
-            output: NodeInstanceId(region.output),
+            outputs: region.outputs.iter().map(|&d| NodeInstanceId(d)).collect(),
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
+        // Defense in depth: the fused kernel must parse through the plain pipeline
+        // compiler — the same `naga` front-end the live `WgslCompute` node uses. The
+        // classify gate already keeps specialization / free-identifier atoms out of
+        // regions, but two bodies could still collide at module scope (e.g. two
+        // same-named consts with different values, which dedup can't merge). If the
+        // kernel doesn't parse, leave the whole card unfused rather than ship a
+        // node whose introspection silently fails back to its default shape.
+        if naga::front::wgsl::parse_str(&generated.wgsl).is_err() {
+            return None;
+        }
 
         // ── Seed the fused node's params (def override else atom default) + the
         // retarget map. The field `n{idx}_{param}` matches the codegen's
@@ -286,11 +296,34 @@ pub(crate) fn fuse_canonical_def(
         }
     }
 
-    // ── Rewire. Distinct regions are never directly texture-wired (a wire
-    // between two eligible nodes would have merged them into one region), so
-    // every region's external producer and output consumer is a SURVIVING node
-    // — each rewrite is local. ──
+    // ── Rewire. Two distinct regions can only be directly texture-wired through a
+    // GATHER (a coincident eligible→eligible wire would have merged them into one
+    // region) — region A's output member is region B's gathered external. So an
+    // external producer may itself be a fused-away member; `resolve_producer`
+    // repoints it onto its region's fused `dst_<k>`. Output consumers are always
+    // surviving nodes (a member consumer is the OTHER region's external, handled
+    // from that side), so the output rewrite stays local. ──
     let mut new_wires: Vec<EffectGraphWire> = Vec::new();
+    // Where a texture producer lands in the rewritten def: itself if it survived,
+    // else its region's fused node at the dst slot for its output index. A
+    // fused-away producer is always one of its region's outputs (it escaped the
+    // region to be read here), so the slot lookup resolves — `?` bails to unfused
+    // if that invariant is ever violated.
+    let resolve_producer = |from_node: u32, from_port: &str| -> Option<(u32, String)> {
+        match member_region.get(&from_node) {
+            None => Some((from_node, from_port.to_string())),
+            Some(&r) => {
+                let producer = &regions[r];
+                let k = producer.outputs.iter().position(|&o| o == from_node)?;
+                let port = if producer.outputs.len() > 1 {
+                    format!("dst_{k}")
+                } else {
+                    "dst".to_string()
+                };
+                Some((fused_docs[r], port))
+            }
+        }
+    };
     // (a) surviving → surviving wires pass through.
     for w in &def.wires {
         if !member_region.contains_key(&w.from_node) && !member_region.contains_key(&w.to_node) {
@@ -300,24 +333,36 @@ pub(crate) fn fuse_canonical_def(
     for (i, region) in regions.iter().enumerate() {
         let fused_doc = fused_docs[i];
         // (b) each external producer → the fused node's `src_<slot>` (read once,
-        // even if several members read the same external — the finder deduped).
+        // even if several members read the same external — the finder deduped). A
+        // producer that was itself fused away (cross-region gather) is repointed
+        // onto its region's fused dst.
         for (e, ext) in region.externals.iter().enumerate() {
+            let (from_node, from_port) = resolve_producer(ext.from_node, &ext.from_port)?;
             new_wires.push(EffectGraphWire {
-                from_node: ext.from_node,
-                from_port: ext.from_port.clone(),
+                from_node,
+                from_port,
                 to_node: fused_doc,
                 to_port: format!("src_{e}"),
             });
         }
-        // (c) the fused node's `dst` → every consumer the region output fed.
-        for w in &def.wires {
-            if w.from_node == region.output && !member_region.contains_key(&w.to_node) {
-                new_wires.push(EffectGraphWire {
-                    from_node: fused_doc,
-                    from_port: "dst".to_string(),
-                    to_node: w.to_node,
-                    to_port: w.to_port.clone(),
-                });
+        // (c) each region output → every consumer it fed. A single-output region
+        // exposes the `dst` port (byte-identical to v1); a FAN-OUT region routes
+        // each escaping member through its own `dst_<k>` (k = its index in
+        // `region.outputs`, matching the codegen's binding order). The finder
+        // already guaranteed every such consumer is a live surviving node, so each
+        // `dst_<k>` lands on a texture the executor allocates.
+        let multi = region.outputs.len() > 1;
+        for (k, &out_doc) in region.outputs.iter().enumerate() {
+            let from_port = if multi { format!("dst_{k}") } else { "dst".to_string() };
+            for w in &def.wires {
+                if w.from_node == out_doc && !member_region.contains_key(&w.to_node) {
+                    new_wires.push(EffectGraphWire {
+                        from_node: fused_doc,
+                        from_port: from_port.clone(),
+                        to_node: w.to_node,
+                        to_port: w.to_port.clone(),
+                    });
+                }
             }
         }
     }
@@ -617,5 +662,74 @@ mod tests {
             fuse_canonical_def(&def, &registry()).is_none(),
             "a card with no fusable region must not fuse"
         );
+    }
+
+    /// Fan-out — a region with two escaping members fuses to ONE node exposing
+    /// two output ports (`dst_0`, `dst_1`), each wired to the boundary its member
+    /// fed. gain forks into invert and contrast; each runs into its own threshold,
+    /// which re-merge at a mix. The rewrite keeps both thresholds + the mix as
+    /// surviving nodes and routes `dst_0 → thr_a`, `dst_1 → thr_b`.
+    #[test]
+    fn fanout_region_wires_two_dst_ports() {
+        let json = r#"{
+            "version": 1, "name": "fanout", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 4, "typeId": "node.threshold", "nodeId": "thr_a" },
+                { "id": 5, "typeId": "node.threshold", "nodeId": "thr_b" },
+                { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "source" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "source" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
+                { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let fused = fuse_canonical_def(&def, &registry()).expect("the fan-out region fuses");
+
+        // Exactly one fused node (gain+invert+contrast), both thresholds + the mix
+        // survive.
+        let wgsl_nodes: Vec<_> =
+            fused.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").collect();
+        assert_eq!(wgsl_nodes.len(), 1, "the fork is one fused node");
+        let fused_doc = wgsl_nodes[0].id;
+        assert_eq!(
+            fused.def.nodes.iter().filter(|n| n.type_id == "node.threshold").count(),
+            2,
+            "both threshold boundaries survive"
+        );
+
+        // The fused node exposes two outputs, each routed to its member's boundary.
+        let id_of =
+            |nid: &str| fused.def.nodes.iter().find(|n| n.node_id.as_str() == nid).map(|n| n.id);
+        let thr_a = id_of("thr_a").unwrap();
+        let thr_b = id_of("thr_b").unwrap();
+        let port_into = |to: u32| -> Option<String> {
+            fused
+                .def
+                .wires
+                .iter()
+                .find(|w| w.from_node == fused_doc && w.to_node == to)
+                .map(|w| w.from_port.clone())
+        };
+        // invert(2) < contrast(3) by doc-id, so invert → dst_0, contrast → dst_1.
+        assert_eq!(port_into(thr_a).as_deref(), Some("dst_0"), "invert's output drives thr_a via dst_0");
+        assert_eq!(port_into(thr_b).as_deref(), Some("dst_1"), "contrast's output drives thr_b via dst_1");
+
+        // Retarget still routes both members' params onto the one fused node.
+        let region_of = |nid: &str, p: &str| {
+            fused.retarget.get(&(nid.into(), p.into())).map(|(id, _)| id.as_str().to_string())
+        };
+        assert_eq!(region_of("gain", "gain").as_deref(), Some("fused_region_0"));
+        assert_eq!(region_of("invert", "intensity").as_deref(), Some("fused_region_0"));
+        assert_eq!(region_of("contrast", "contrast").as_deref(), Some("fused_region_0"));
     }
 }

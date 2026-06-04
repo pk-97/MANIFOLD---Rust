@@ -931,3 +931,70 @@ fn fused_warp_region_matches_unfused() {
         r.over_fraction()
     );
 }
+
+/// Fan-out oracle — a region with TWO outputs renders identically fused vs
+/// unfused, end-to-end through the executor. gain forks into invert and contrast;
+/// each runs into its own `threshold` boundary; the two re-merge at a `mix`. The
+/// fused def collapses {gain, invert, contrast} into ONE `node.wgsl_compute` that
+/// writes `dst_0` (invert) and `dst_1` (contrast), each wired to its threshold —
+/// so this exercises the multi-output codegen + the per-output executor
+/// allocation (both outputs must be bound, or the whole dispatch early-returns).
+/// Comparing the final `mix` output proves both branches are threaded correctly.
+#[test]
+fn fused_fanout_region_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "fanout", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
+            { "id": 4, "typeId": "node.threshold", "nodeId": "thr_a" },
+            { "id": 5, "typeId": "node.threshold", "nodeId": "thr_b" },
+            { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
+            { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "source" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "source" },
+            { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
+            { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
+            { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the fan-out region fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, find_node(&fused, "node.mix"), "out");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.02),
+        "fused fan-out region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}

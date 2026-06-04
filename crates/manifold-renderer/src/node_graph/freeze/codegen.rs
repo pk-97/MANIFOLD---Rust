@@ -512,12 +512,20 @@ pub struct RegionNode<'a> {
 }
 
 /// A maximal fusable region: nodes in topo order, the external inputs they read,
-/// and which node's register is the region output.
+/// and which node register(s) leave the region as its output(s).
 #[derive(Debug, Clone)]
 pub struct FusionRegion<'a> {
     pub nodes: Vec<RegionNode<'a>>,
     pub num_external_inputs: usize,
-    pub output: NodeInstanceId,
+    /// The member register(s) the region exposes, in dst-slot order. A region
+    /// usually has exactly one (the tail of a linear chain) — fused to a single
+    /// `dst` binding, byte-identical to the v1 codegen. A FAN-OUT region (an
+    /// interior member feeds two distinct downstream boundaries) has several:
+    /// each escaping member's register is stored to its own `dst_<k>` binding,
+    /// in this vec's order, and every one is wired to a live consumer by the
+    /// install pass (so no store ever lands on an unallocated output). Must be
+    /// non-empty; each id must name a node in [`Self::nodes`].
+    pub outputs: Vec<NodeInstanceId>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -682,11 +690,31 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         next_binding += 1;
     }
-    writeln!(
-        out,
-        "@group(0) @binding({next_binding}) var dst: texture_storage_2d<rgba16float, write>;"
-    )
-    .unwrap();
+    // Output storage texture(s). A single-output region keeps the binding named
+    // `dst` so its generated WGSL — and the cross-session pipeline-cache key — is
+    // byte-identical to the v1 codegen. A FAN-OUT region (an interior member feeds
+    // two distinct downstream boundaries) names each `dst_<k>` in `outputs` order;
+    // the install pass wires each to that escaping member's live consumers, so no
+    // store ever lands on an unallocated output (which would early-return the whole
+    // `WgslCompute` dispatch). All outputs are coincident (same canvas), so any one
+    // gives the dispatch dims.
+    let multi_output = region.outputs.len() > 1;
+    if multi_output {
+        for k in 0..region.outputs.len() {
+            writeln!(
+                out,
+                "@group(0) @binding({}) var dst_{k}: texture_storage_2d<rgba16float, write>;",
+                next_binding + k
+            )
+            .unwrap();
+        }
+    } else {
+        writeln!(
+            out,
+            "@group(0) @binding({next_binding}) var dst: texture_storage_2d<rgba16float, write>;"
+        )
+        .unwrap();
+    }
     out.push('\n');
 
     // --- shared prelude (deduped top-level consts/structs the bodies declare),
@@ -710,7 +738,8 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // --- cs_main: read external inputs once, thread registers, store output ---
     out.push_str("@compute @workgroup_size(16, 16)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
-    out.push_str("    let dims = textureDimensions(dst);\n");
+    let dims_tex = if multi_output { "dst_0" } else { "dst" };
+    writeln!(out, "    let dims = textureDimensions({dims_tex});").unwrap();
     out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
     out.push_str("    let coord = vec2<i32>(i32(id.x), i32(id.y));\n");
     // Ambient fragment context, computed once and threaded to every body after
@@ -772,10 +801,21 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         }
         writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
     }
-    let Some(out_idx) = index_of(region.output) else {
-        return Err(CodegenError::BadInput);
-    };
-    writeln!(out, "    textureStore(dst, coord, r{out_idx});").unwrap();
+    if multi_output {
+        // Fan-out: each escaping member's register stores to its own `dst_<k>`,
+        // in `outputs` order (every one wired to a live consumer by install).
+        for (k, out_id) in region.outputs.iter().enumerate() {
+            let Some(idx) = index_of(*out_id) else {
+                return Err(CodegenError::BadInput);
+            };
+            writeln!(out, "    textureStore(dst_{k}, coord, r{idx});").unwrap();
+        }
+    } else {
+        let Some(out_idx) = region.outputs.first().and_then(|id| index_of(*id)) else {
+            return Err(CodegenError::BadInput);
+        };
+        writeln!(out, "    textureStore(dst, coord, r{out_idx});").unwrap();
+    }
     out.push_str("}\n");
 
     Ok(GeneratedFusion { wgsl: out, param_order })
@@ -959,7 +999,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            output: id(1),
+            outputs: vec![id(1)],
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -1002,7 +1042,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            output: id(1),
+            outputs: vec![id(1)],
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -1015,6 +1055,59 @@ mod gpu_tests {
             "a gather-only external is never pre-read into a register"
         );
         assert!(g.wgsl.contains("fn n1_body"), "invert namespaced + threads sharpen's register");
+    }
+
+    /// Fan-out — a region with two escaping members emits two `dst_<k>` storage
+    /// bindings and two `textureStore`s (one per output register), and takes its
+    /// dispatch dims from `dst_0`. gain forks into invert (output 0) and contrast
+    /// (output 1); both thread gain's register. The single-output path is
+    /// unchanged (every other test asserts the byte-identical `var dst`).
+    #[test]
+    fn fused_fanout_emits_two_dst_bindings() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::{Contrast, Gain, Invert};
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: Gain::FUSION_KIND,
+                    body: Gain::WGSL_BODY.unwrap(),
+                    params: Gain::PARAMS,
+                    inputs: vec![InputSource::External(0)],
+                    input_access: vec![],
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: Invert::FUSION_KIND,
+                    body: Invert::WGSL_BODY.unwrap(),
+                    params: Invert::PARAMS,
+                    inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![],
+                },
+                RegionNode {
+                    node_id: id(2),
+                    fusion_kind: Contrast::FUSION_KIND,
+                    body: Contrast::WGSL_BODY.unwrap(),
+                    params: Contrast::PARAMS,
+                    inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![],
+                },
+            ],
+            num_external_inputs: 1,
+            outputs: vec![id(1), id(2)],
+        };
+        let g = generate_fused(&region).expect("fan-out region fuses");
+        assert!(g.wgsl.contains("var dst_0:"), "first output binding");
+        assert!(g.wgsl.contains("var dst_1:"), "second output binding");
+        assert!(!g.wgsl.contains("var dst:"), "no single-output `dst` in a fan-out kernel");
+        assert!(
+            g.wgsl.contains("textureDimensions(dst_0)"),
+            "dims come from the first output (all outputs are coincident)"
+        );
+        // invert = output 0 (register r1), contrast = output 1 (register r2).
+        assert!(g.wgsl.contains("textureStore(dst_0, coord, r1)"), "invert → dst_0");
+        assert!(g.wgsl.contains("textureStore(dst_1, coord, r2)"), "contrast → dst_1");
     }
 
     /// The generated standalone gain kernel reproduces the hand-written
@@ -1201,7 +1294,7 @@ mod gpu_tests {
                 RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![] },
             ],
             num_external_inputs: 1,
-            output: id(6),
+            outputs: vec![id(6)],
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

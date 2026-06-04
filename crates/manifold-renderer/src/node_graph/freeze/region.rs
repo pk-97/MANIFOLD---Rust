@@ -23,10 +23,11 @@
 //! 2. **Grow** maximal connected components over texture wires between eligible
 //!    nodes. Each component is a candidate region; boundaries are the cuts.
 //! 3. **Resolve** each region's *external* inputs (texture wires entering it from
-//!    a non-member — read once as `src_e`) and its *output* (the member whose
-//!    texture output leaves the region). Conservative gates (single output,
-//!    length ≥ 2) skip anything the v1 codegen can't yet express — left unfused,
-//!    never miscompiled.
+//!    a non-member — read once as `src_e`) and its *output(s)* (each member whose
+//!    texture output leaves the region — one for a linear chain, several for a
+//!    fan-out, each stored to its own `dst_<k>`). Conservative gates (length ≥ 2,
+//!    every escaping consumer live) skip anything the codegen can't yet express or
+//!    the executor wouldn't allocate — left unfused, never miscompiled.
 //!
 //! Everything here is a pure function over the def + registry — no GPU — so the
 //! partition is unit-tested structurally (design §7's "cheap GPU-free layer
@@ -105,7 +106,8 @@ pub struct ExternalRef {
 }
 
 /// A maximal fusable region: members in topo order, the external textures they
-/// read, and the single member whose output leaves the region.
+/// read, and the member(s) whose output leaves the region (one for a linear
+/// chain, several for a fan-out).
 #[derive(Debug, Clone)]
 pub struct Region {
     /// Members in topological order (every `Member` input refers to an earlier
@@ -113,10 +115,15 @@ pub struct Region {
     pub members: Vec<RegionMember>,
     /// External inputs, indexed by the slot a [`RegionInput::External`] names.
     pub externals: Vec<ExternalRef>,
-    /// The member whose texture output is consumed outside the region (feeds a
-    /// boundary or `final_output`). v1 is single-output; a region with several
-    /// escaping members is dropped (multi-output codegen is a follow-on).
-    pub output: u32,
+    /// The member(s) whose texture output is consumed outside the region (feeds a
+    /// boundary or `final_output`), in stable doc-id order. Usually one — the tail
+    /// of a linear chain. A FAN-OUT region has several: an interior member whose
+    /// output feeds two distinct downstream boundaries appears once here and is
+    /// stored to its own `dst_<k>` slot (this vec's index). Every output's
+    /// consumers are reachable from `final_output` (live), so the install pass can
+    /// wire each `dst_<k>` to an allocated texture — a region with any escaping
+    /// wire to a dead (non-final-reachable) consumer is dropped, not fused.
+    pub outputs: Vec<u32>,
 }
 
 /// Partition a flattened def into its maximal pointwise-fusion regions. Returns
@@ -145,25 +152,64 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         return Vec::new();
     }
 
-    // ── Grow connected components over texture wires between eligible nodes. ──
-    // A texture wire eligible→eligible means the consumer can thread the
-    // producer's register, so the two belong to one region. Union-find over
-    // those edges; each set is a candidate region.
-    // Only a COINCIDENT-consumed wire unions two atoms into one region: the
-    // consumer threads the producer's register. A GATHER-consumed wire does NOT
-    // union — a gather samples the whole texture at a coord it computes, which a
-    // single register can't carry, so the gathered producer must stay external
-    // (it becomes a bound `src_e` the body samples). This is what makes
-    // gather-into-region safe: the gather atom fuses with its coincident inputs +
-    // its downstream, but never swallows the texture it gathers.
+    // ── Grow regions over texture wires between eligible nodes — but only when
+    // the merge keeps the collapsed graph ACYCLIC (convexity). ──
+    //
+    // A coincident texture wire eligible→eligible means the consumer can thread
+    // the producer's register, so the two *want* to be one region. (A GATHER-
+    // consumed wire does NOT union — a gather samples the whole texture at a coord
+    // it computes, which a single register can't carry, so the gathered producer
+    // stays an external the body samples; that's what makes gather-into-region
+    // safe.) But two register-adjacent atoms still can't fuse if an *external*
+    // path runs from one, out through a boundary, and back into the other:
+    // collapsing them to one node would make that boundary both read from and
+    // write to the fused node — a cycle the graph builder rejects (Watercolor's
+    // uv_displace → blur → slope_displace is exactly this). So we merge greedily
+    // and accept a union only if the region partition stays convex.
+    //
+    // "Acyclic" is measured on the FORWARD dependency graph: a state-capture wire
+    // (a feedback node's captured input — last frame's value, not this frame's) is
+    // a back edge the planner already excludes, so we exclude it too. Otherwise a
+    // legal feedback loop would look like a cycle and we'd over-split.
+    let forward: Vec<(u32, u32)> = def
+        .wires
+        .iter()
+        .filter(|w| !is_state_capture_wire(def, registry, w))
+        .map(|w| (w.from_node, w.to_node))
+        .collect();
+    let mut candidates: Vec<(u32, u32)> = def
+        .wires
+        .iter()
+        .filter(|w| {
+            eligible.contains(&w.from_node)
+                && eligible.contains(&w.to_node)
+                && is_texture_wire(def, registry, w)
+                && wire_coincident_consumed(def, registry, w)
+        })
+        .map(|w| (w.from_node, w.to_node))
+        .collect();
+    candidates.sort_unstable(); // deterministic merge order → reproducible regions
+    candidates.dedup();
+
     let mut uf = UnionFind::new(&eligible);
-    for w in &def.wires {
-        if eligible.contains(&w.from_node)
-            && eligible.contains(&w.to_node)
-            && is_texture_wire(def, registry, w)
-            && wire_coincident_consumed(def, registry, w)
-        {
-            uf.union(w.from_node, w.to_node);
+    for (a, b) in candidates {
+        if uf.find(a) == uf.find(b) {
+            continue;
+        }
+        // Region key of each node under a TENTATIVE merge of a's and b's regions:
+        // an eligible node maps to its region rep (with b's rep folded onto a's);
+        // a boundary maps to itself. Unifying via the rep keeps the test O(V+E).
+        let finds: AHashMap<u32, u32> = eligible.iter().map(|&n| (n, uf.find(n))).collect();
+        let (ra, rb) = (uf.find(a), uf.find(b));
+        let key = |n: u32| -> u32 {
+            match finds.get(&n) {
+                Some(&r) if r == rb => ra,
+                Some(&r) => r,
+                None => n,
+            }
+        };
+        if !collapsed_has_cycle(&forward, &key) {
+            uf.union(a, b);
         }
     }
     let mut components: AHashMap<u32, Vec<u32>> = AHashMap::default();
@@ -171,11 +217,16 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         components.entry(uf.find(id)).or_default().push(id);
     }
 
+    // Nodes that reach a `final_output` (live). A region output's consumer must
+    // be in here, so each fused `dst_<k>` lands on a texture the executor actually
+    // allocates — see `build_region`.
+    let final_reachable = final_reachable_nodes(def);
+
     // ── Build a region from each component; drop the ones v1 can't express. ──
     let mut regions: Vec<Region> = Vec::new();
     for (_, mut nodes) in components {
         nodes.sort_unstable();
-        if let Some(region) = build_region(def, registry, &nodes) {
+        if let Some(region) = build_region(def, registry, &nodes, &final_reachable) {
             regions.push(region);
         }
     }
@@ -294,13 +345,40 @@ fn classify_node(
         }
     }
 
-    NodeClass::Eligible
+    // Final gate: the body must produce a kernel the PLAIN pipeline compiler
+    // (naga) accepts. A few atoms — gaussian_blur_variable_width, the separable
+    // gaussian — compile only through `create_specialized_compute_pipeline`, which
+    // textually substitutes specialization tokens (QUALITY_LEVEL, WEIGHTING_MODE)
+    // BEFORE naga sees the source; their bodies reference those tokens as free
+    // identifiers. The fused node is a `node.wgsl_compute`, which parses +
+    // dispatches through the plain (non-specialized) path, so such a body can't
+    // fuse there. Detect it generically — generate this atom's standalone kernel
+    // and parse it; if it can't parse on its own, it can't parse inside a fused
+    // kernel either → boundary. No hard-coded atom list, so any future
+    // specialization / free-identifier body is caught the same way.
+    let standalone = crate::node_graph::freeze::codegen::generate_standalone(
+        n.fusion_kind(),
+        n.wgsl_body().unwrap_or(""),
+        n.inputs(),
+        n.parameters(),
+        n.input_access(),
+        n.outputs(),
+    );
+    match standalone {
+        Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => NodeClass::Eligible,
+        _ => NodeClass::Boundary,
+    }
 }
 
 /// Assemble a [`Region`] from a connected component's node set, or `None` if it
 /// fails a v1 expressibility gate (too short, multi-output, or an unresolvable
 /// input — all left unfused).
-fn build_region(def: &EffectGraphDef, registry: &PrimitiveRegistry, nodes: &[u32]) -> Option<Region> {
+fn build_region(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    nodes: &[u32],
+    final_reachable: &AHashSet<u32>,
+) -> Option<Region> {
     if nodes.len() < MIN_REGION_LEN {
         return None;
     }
@@ -358,25 +436,39 @@ fn build_region(def: &EffectGraphDef, registry: &PrimitiveRegistry, nodes: &[u32
         members.push(RegionMember { doc_id, inputs, input_access });
     }
 
-    // The region output(s): members with ≥1 texture wire to a non-member. v1
-    // supports exactly one; a region whose value escapes at several members
-    // needs multi-output codegen — drop it (left unfused) for now.
-    let mut outputs: Vec<u32> = nodes
-        .iter()
-        .copied()
-        .filter(|&id| {
-            def.wires
-                .iter()
-                .any(|w| w.from_node == id && !node_set.contains(&w.to_node))
-        })
-        .collect();
+    // The region output(s): each member with ≥1 texture wire to a non-member. A
+    // single-output linear chain has one; a FAN-OUT region (an interior member
+    // feeds two distinct downstream boundaries) has several — each stored to its
+    // own `dst_<k>`. Every escaping consumer MUST be live (reach `final_output`):
+    // the executor only allocates a texture a live node reads, and the fused
+    // `WgslCompute` early-returns its WHOLE dispatch if any storage output is
+    // unbound — so a `dst_<k>` feeding a dead consumer would silently kill the
+    // live outputs too. If any escaping wire targets a dead consumer, drop the
+    // whole region (it renders unfused, always correct).
+    let mut outputs: Vec<u32> = Vec::new();
+    for &id in nodes {
+        let mut escapes = false;
+        for w in &def.wires {
+            if w.from_node == id
+                && !node_set.contains(&w.to_node)
+                && is_texture_wire(def, registry, w)
+            {
+                if !final_reachable.contains(&w.to_node) {
+                    return None; // escaping wire to a dead consumer — don't fuse
+                }
+                escapes = true;
+            }
+        }
+        if escapes {
+            outputs.push(id);
+        }
+    }
     outputs.sort_unstable();
-    let output = match outputs.as_slice() {
-        [single] => *single,
-        _ => return None, // 0 = dead region; >1 = multi-output (follow-on)
-    };
+    if outputs.is_empty() {
+        return None; // dead region — nothing leaves it, nothing to fuse
+    }
 
-    Some(Region { members, externals, output })
+    Some(Region { members, externals, outputs })
 }
 
 /// Kahn topo-sort of a region's members by intra-region texture wires. `None` on
@@ -453,6 +545,113 @@ fn wire_coincident_consumed(
         return false;
     };
     !input_port_access(registry, &to.type_id, &w.to_port).is_gather()
+}
+
+/// Nodes with a directed path to a `final_output` node, over ALL wires (texture
+/// and control alike). A region output's downstream consumer must be in this set:
+/// the executor only allocates an output texture some live node reads, and the
+/// fused [`super::codegen::generate_fused`] kernel — a `node.wgsl_compute` —
+/// early-returns its WHOLE dispatch if any of its storage outputs is unbound. So a
+/// `dst_<k>` wired to a dead consumer would silently kill the region's live
+/// outputs too; `build_region` refuses to fuse a region with such a wire.
+///
+/// `final_output`-reachability is a safe SUBSET of the executor's full liveness
+/// (which also roots at `aliased_array_io` sims): a node we mark live here is
+/// always allocated, and an exotic live-but-not-final node only makes us skip the
+/// region (unfused), never miscompile.
+fn final_reachable_nodes(def: &EffectGraphDef) -> AHashSet<u32> {
+    // Reverse adjacency (consumer → producers), so a backward BFS from every
+    // final_output node visits exactly the nodes that can reach it.
+    let mut rev: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    for w in &def.wires {
+        rev.entry(w.to_node).or_default().push(w.from_node);
+    }
+    let mut live: AHashSet<u32> = AHashSet::default();
+    let mut queue: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == FINAL_OUTPUT_TYPE_ID)
+        .map(|n| n.id)
+        .collect();
+    for &id in &queue {
+        live.insert(id);
+    }
+    while let Some(id) = queue.pop() {
+        if let Some(producers) = rev.get(&id) {
+            for &p in producers {
+                if live.insert(p) {
+                    queue.push(p);
+                }
+            }
+        }
+    }
+    live
+}
+
+/// Whether wire `w` feeds a STATE-CAPTURE input port of its target (a feedback
+/// node's captured input — last frame's value). The planner treats these as back
+/// edges that don't form cycles ([`Graph::is_state_capture_wire`] /
+/// `WireWalkMode::ForwardOnly`), so the convexity test excludes them too —
+/// otherwise a legal feedback loop reads as a cycle and we over-split.
+fn is_state_capture_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    let Some(node) = registry.construct(&to.type_id) else {
+        return false;
+    };
+    node.state_capture_input_ports().contains(&w.to_port.as_str())
+}
+
+/// Whether the collapsed forward graph has a directed cycle. `key` maps each def
+/// node to its collapsed identity — an eligible node to its region rep, a boundary
+/// to itself — so a self-edge (both endpoints in one region) is dropped and an
+/// inter-identity edge is kept. Iterative three-colour DFS; the graphs are tiny
+/// (one effect's nodes), so rebuilding per tentative merge is free.
+fn collapsed_has_cycle(forward: &[(u32, u32)], key: &impl Fn(u32) -> u32) -> bool {
+    let mut adj: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    let mut nodes: AHashSet<u32> = AHashSet::default();
+    for &(u, v) in forward {
+        let (ku, kv) = (key(u), key(v));
+        nodes.insert(ku);
+        nodes.insert(kv);
+        if ku != kv {
+            adj.entry(ku).or_default().push(kv);
+        }
+    }
+    // 0 = white (unvisited), 1 = grey (on stack), 2 = black (done).
+    let mut color: AHashMap<u32, u8> = nodes.iter().map(|&n| (n, 0u8)).collect();
+    for &start in &nodes {
+        if color[&start] != 0 {
+            continue;
+        }
+        let mut stack: Vec<(u32, usize)> = vec![(start, 0)];
+        color.insert(start, 1);
+        while let Some(&(n, idx)) = stack.last() {
+            if let Some(succs) = adj.get(&n)
+                && idx < succs.len()
+            {
+                stack.last_mut().unwrap().1 += 1;
+                let m = succs[idx];
+                match color[&m] {
+                    1 => return true,                          // grey → back edge → cycle
+                    0 => {
+                        color.insert(m, 1);
+                        stack.push((m, 0));
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            color.insert(n, 2);
+            stack.pop();
+        }
+    }
+    false
 }
 
 /// Whether a wire carries a texture (vs a scalar/control value), determined by
@@ -558,7 +757,7 @@ mod tests {
             .find(|n| n.type_id == "node.clamp_texture")
             .map(|n| n.id)
             .unwrap();
-        assert_eq!(r.output, out_node, "clamp is the region output");
+        assert_eq!(r.outputs, vec![out_node], "clamp is the region output");
         // mix reads the external fork AND colorize's register: an External + a
         // Member input, proving the fork resolves.
         let mix_id = colorgrade_def()
@@ -612,14 +811,14 @@ mod tests {
         assert_eq!(r1.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(r1.externals.len(), 1, "region 1 reads the source");
         assert_eq!(r1.externals[0].from_node, 0);
-        assert_eq!(r1.output, 2, "contrast feeds the threshold");
+        assert_eq!(r1.outputs, vec![2], "contrast feeds the threshold");
 
         // Region 2: saturation(4) → clamp(5), reads the threshold, output = clamp.
         let r2 = &regions[1];
         assert_eq!(r2.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![4, 5]);
         assert_eq!(r2.externals.len(), 1, "region 2 reads the threshold output");
         assert_eq!(r2.externals[0].from_node, 3, "the threshold is region 2's external");
-        assert_eq!(r2.output, 5, "clamp feeds final_output");
+        assert_eq!(r2.outputs, vec![5], "clamp feeds final_output");
     }
 
     /// Tier 3 — a gather atom folds INTO a region (it does NOT split it). source →
@@ -749,7 +948,7 @@ mod tests {
         let r = &regions[0];
         assert_eq!(r.members.len(), 2, "checkerboard + invert");
         assert!(r.externals.is_empty(), "a pure-generator region reads no external texture");
-        assert_eq!(r.output, 2, "invert feeds final_output");
+        assert_eq!(r.outputs, vec![2], "invert feeds final_output");
         let checker = r.members.iter().find(|m| m.doc_id == 1).unwrap();
         assert!(checker.inputs.is_empty(), "the Source head reads nothing");
         let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
@@ -781,6 +980,162 @@ mod tests {
         assert_eq!(r.members.len(), 2, "checkerboard + mix");
         assert_eq!(r.externals.len(), 1, "the system source is the one external");
         assert_eq!(r.externals[0].from_node, 0);
-        assert_eq!(r.output, 2, "mix feeds final_output");
+        assert_eq!(r.outputs, vec![2], "mix feeds final_output");
+    }
+
+    /// Fan-out — an interior member feeds two distinct downstream boundaries, so
+    /// the region has TWO outputs (each stored to its own `dst_<k>`). gain forks
+    /// into invert and contrast; each feeds its own `threshold` boundary, which
+    /// re-merge at a `mix` before final. {gain, invert, contrast} is one region
+    /// whose outputs are invert + contrast (gain is purely interior). Both
+    /// thresholds reach final, so both outputs are live (allocatable).
+    #[test]
+    fn fanout_region_has_two_outputs() {
+        let json = r#"{
+            "version": 1, "name": "fanout", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 4, "typeId": "node.threshold", "nodeId": "thr_a" },
+                { "id": 5, "typeId": "node.threshold", "nodeId": "thr_b" },
+                { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "source" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "source" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
+                { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        // mix reads two boundaries, so it's a lone 1-node component (dropped);
+        // the thresholds are boundaries. Exactly one real region: the fork.
+        assert_eq!(regions.len(), 1, "the gain fork is the one region (mix is dropped)");
+        let r = &regions[0];
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "gain (head) + the two forked atoms"
+        );
+        assert_eq!(r.externals.len(), 1, "only the source enters the region");
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(
+            r.outputs,
+            vec![2, 3],
+            "invert and contrast each escape to their own threshold — two outputs"
+        );
+    }
+
+    /// A fan-out output whose consumer is DEAD (doesn't reach final_output) makes
+    /// the whole region unfusable: the executor wouldn't allocate that output's
+    /// texture, and the fused kernel early-returns its whole dispatch on the
+    /// unbound store — killing the live output too. So the finder drops it
+    /// (renders unfused, always correct) rather than emit an unallocated `dst_<k>`.
+    #[test]
+    fn fanout_to_dead_consumer_is_not_fused() {
+        // gain → invert → final (live) ; gain → contrast → threshold (DEAD: the
+        // threshold goes nowhere, never reaching final_output).
+        let json = r#"{
+            "version": 1, "name": "deadfork", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 4, "typeId": "node.threshold", "nodeId": "dead" },
+                { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "source" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "a region with an escaping wire to a dead consumer must not fuse"
+        );
+    }
+
+    /// Convexity — two register-adjacent atoms that ALSO have an external path
+    /// between them (out through a boundary and back) must NOT land in one region:
+    /// collapsing them would make the boundary both read from and write to the
+    /// fused node, a cycle the graph builder rejects (Watercolor's real failure).
+    /// gain forks into invert and a downstream mix; invert runs through a
+    /// `threshold` boundary into contrast, and contrast also feeds the mix. A naive
+    /// connected-component grouping unions {gain, invert, contrast, mix}, but
+    /// invert→threshold→contrast makes that non-convex. The convex partition splits
+    /// it: {gain, invert} before the threshold, {contrast, mix} after.
+    #[test]
+    fn convexity_splits_a_region_that_would_cycle() {
+        let json = r#"{
+            "version": 1, "name": "convex", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "node.threshold", "nodeId": "thr" },
+                { "id": 4, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 5, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "source" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "a" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let mut regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 2, "the non-convex group splits at the threshold");
+        regions.sort_by_key(|r| r.members[0].doc_id);
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2],
+            "gain + invert before the threshold"
+        );
+        assert_eq!(
+            regions[1].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![4, 5],
+            "contrast + mix after the threshold"
+        );
+    }
+
+    /// A specialization-constant atom is a BOUNDARY. `gaussian_blur_variable_width`
+    /// compiles only through `create_specialized_compute_pipeline` (its body
+    /// references `QUALITY_LEVEL` / `WEIGHTING_MODE` as free tokens substituted
+    /// before naga sees the source); a fused `node.wgsl_compute` parses plain, so
+    /// the atom can't fuse there. The classify gate catches it generically (its
+    /// standalone kernel doesn't parse), so a chain through it forms no region.
+    #[test]
+    fn specialization_atom_is_a_boundary() {
+        let json = r#"{
+            "version": 1, "name": "spec", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.invert", "nodeId": "inv_a" },
+                { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "inv_b" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "the specialization blur is a boundary, leaving both inverts lone atoms"
+        );
     }
 }
