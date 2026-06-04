@@ -69,16 +69,24 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["pack rgba", "combine channels", "merge channels"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/pack_channels_body.wgsl"),
 }
 
+// Standalone-codegen uniform layout: PARAMS order (default_r..default_a) first,
+// then the injected use_r/g/b/a flags — contiguous, unlike the hand uniform which
+// put the use flags first and the defaults as a trailing vec4.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PackUniforms {
+    default_r: f32,
+    default_g: f32,
+    default_b: f32,
+    default_a: f32,
     use_r: u32,
     use_g: u32,
     use_b: u32,
     use_a: u32,
-    defaults: [f32; 4],
 }
 
 impl Primitive for PackChannels {
@@ -115,9 +123,14 @@ impl Primitive for PackChannels {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // 4-input Coincident with optional-input use-flags. Generated kernel
+            // binds uniform(0)/r(1)/g(2)/b(3)/a(4)/samp(5)/dst(6); the body reads
+            // each channel only when its injected use flag is set, else the default.
+            // pack_channels.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/pack_channels.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.pack_channels standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.pack_channels",
             )
         });
@@ -126,11 +139,14 @@ impl Primitive for PackChannels {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
         let uniforms = PackUniforms {
+            default_r,
+            default_g,
+            default_b,
+            default_a,
             use_r: r_tex.is_some() as u32,
             use_g: g_tex.is_some() as u32,
             use_b: b_tex.is_some() as u32,
             use_a: a_tex.is_some() as u32,
-            defaults: [default_r, default_g, default_b, default_a],
         };
 
         // The shader always binds 4 input texture slots; unwired inputs

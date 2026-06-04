@@ -225,11 +225,21 @@ pub fn generate_standalone(
     let needs_sampler =
         (0..tex_inputs.len()).any(|i| matches!(access_of(i), InputAccess::Coincident | InputAccess::Gather));
     let any_texel = (0..tex_inputs.len()).any(|i| access_of(i) == InputAccess::CoincidentTexel);
+    // Optional texture inputs get a derived `use_<name>: u32` flag injected into
+    // the uniform (run() packs `input.is_some()`); the body falls back to a default
+    // when the flag is 0. An unwired optional input binds a dummy texture (run()'s
+    // job), so the unconditional pre-read is harmless — the body just ignores it.
+    // Mirrors the multi-output write-flag injection. (Only pack_channels uses this
+    // today; no converted atom has an optional texture input.)
+    let optional_tex_inputs: Vec<&NodeInput> =
+        tex_inputs.iter().filter(|i| !i.required).copied().collect();
     // A paramless atom (e.g. abs_texture) binds NO uniform and NO Params struct,
     // so its textures start at binding 0 — matching the hand shader, which has no
     // uniform either. The body simply takes no param args (the param loop below
-    // is empty).
-    let has_uniform = !params.is_empty();
+    // is empty). A uniform is also needed when there are injected flags (multi-
+    // output write flags or optional-input use flags) even if there are no params.
+    let has_uniform =
+        !params.is_empty() || multi_output || !optional_tex_inputs.is_empty();
 
     let mut out = String::new();
 
@@ -275,6 +285,10 @@ pub fn generate_standalone(
                 writeln!(out, "    write_{}: u32,", o.name).unwrap();
                 header_words += 1;
             }
+        }
+        for inp in &optional_tex_inputs {
+            writeln!(out, "    use_{}: u32,", inp.name).unwrap();
+            header_words += 1;
         }
         let pad_words = (4 - (header_words % 4)) % 4;
         for i in 0..pad_words {
@@ -429,6 +443,10 @@ pub fn generate_standalone(
     for t in &table_params {
         args.push(format!("params.{}_count", t.name));
         args.push(format!("params.{}", t.name));
+    }
+    // Optional-input use-flags last (after the params), matching the body sig.
+    for inp in &optional_tex_inputs {
+        args.push(format!("params.use_{}", inp.name));
     }
     writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
     if multi_output {
@@ -2681,6 +2699,74 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         assert_eq!(
             r.over_count, 0,
             "generated hash_field_by_seed must reproduce the hand kernel (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
+    /// OPTIONAL-INPUT use-flag parity: node.pack_channels combines 4 optional
+    /// coincident inputs (r/g/b/a) into RGBA, falling back to default_* when an
+    /// input is unwired (use_*==0). The codegen injects a use_<name> flag per
+    /// optional input. Dual-packed: the hand uniform is {use_r..use_a, defaults[4]}
+    /// (use first), the generated is {default_r..a, use_r..a} (params then injected
+    /// flags). use=[1,0,1,1] exercises both the wired-read and default-fallback
+    /// paths. Binding layout uniform(0)/r(1)/g(2)/b(3)/a(4)/samp(5)/dst(6) for both.
+    #[test]
+    fn generated_pack_channels_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let ga = gradient(&device, w, h);
+        let gb = gradient_b(&device, w, h);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.pack_channels").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("pack_channels generates");
+        assert!(
+            generated.contains("use_r: u32"),
+            "optional-input use flag missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/pack_channels.wgsl");
+
+        let use_flags = [1u32, 0, 1, 1]; // g unwired → falls back to default_g
+        let defaults = [0.1f32, 0.5, 0.2, 1.0];
+        // Hand: {use_r..use_a, defaults[4]}.
+        let mut hand = Vec::new();
+        for u in use_flags {
+            hand.extend_from_slice(&u.to_le_bytes());
+        }
+        for d in defaults {
+            hand.extend_from_slice(&d.to_le_bytes());
+        }
+        // Generated: {default_r..a, use_r..a}.
+        let mut gen_bytes = Vec::new();
+        for d in defaults {
+            gen_bytes.extend_from_slice(&d.to_le_bytes());
+        }
+        for u in use_flags {
+            gen_bytes.extend_from_slice(&u.to_le_bytes());
+        }
+
+        let inputs = [&ga, &gb, &ga, &gb];
+        let from_original = dispatch_coincident_n(&device, original, &inputs, &hand);
+        let from_generated = dispatch_coincident_n(&device, &generated, &inputs, &gen_bytes);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated pack_channels must reproduce the hand kernel (max_abs={}, max_rel={})",
             r.max_abs, r.max_rel
         );
     }
