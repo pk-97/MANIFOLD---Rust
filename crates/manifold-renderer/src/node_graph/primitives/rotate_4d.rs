@@ -14,17 +14,16 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: the three Angle params (f32) in PARAMS
+/// order, then the codegen-injected `dispatch_count` (= vertex capacity, the
+/// guard). 4 words = 16 bytes. `active_count == capacity` (full pass).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RotateUniforms {
-    active_count: u32,
-    capacity: u32,
-    _pad0: u32,
-    _pad1: u32,
     angle_xy: f32,
     angle_zw: f32,
     angle_xw: f32,
-    _pad2: f32,
+    dispatch_count: u32,
 }
 
 crate::primitive! {
@@ -77,6 +76,8 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["rotate 4d", "4d spin", "hyperrotation"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/rotate_4d_body.wgsl"),
 }
 
 impl Primitive for Rotate4D {
@@ -108,26 +109,24 @@ impl Primitive for Rotate4D {
         };
         let item_size = std::mem::size_of::<Vec4Vertex>() as u64;
         let capacity = (in_buf.size.min(out_buf.size) / item_size) as u32;
-        let active_count = capacity;
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident path). rotate_4d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/rotate_4d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.rotate_4d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.rotate_4d",
             )
         });
 
         let uniforms = RotateUniforms {
-            active_count,
-            capacity,
-            _pad0: 0,
-            _pad1: 0,
             angle_xy,
             angle_zw,
             angle_xw,
-            _pad2: 0.0,
+            dispatch_count: capacity,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -148,7 +147,7 @@ impl Primitive for Rotate4D {
                     offset: 0,
                 },
             ],
-            [capacity.div_ceil(64), 1, 1],
+            [capacity.div_ceil(256), 1, 1],
             "node.rotate_4d",
         );
     }
@@ -189,5 +188,87 @@ mod tests {
         let prim = Rotate4D::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.rotate_4d");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain parity oracle (freeze §12) — rotate_4d had no GPU test
+    //! before the cutover. The generated kernel must reproduce the hand
+    //! `rotate_4d.wgsl` vertex-for-vertex across the XY/ZW/XW rotation planes.
+    //! Trig on-GPU both ways → bit-identical.
+    use super::*;
+
+    fn dispatch_rotate4d(wgsl: &str, verts: &[Vec4Vertex], uniform: &[u8]) -> Vec<Vec4Vertex> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "rot4d-oracle");
+        let n = verts.len() as u32;
+        let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
+        let out_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
+        unsafe {
+            in_buf.write(0, bytemuck::cast_slice(verts));
+        }
+        let mut enc = device.create_encoder("rot4d-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+            ],
+            [n.div_ceil(64), 1, 1],
+            "rot4d-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Vec4Vertex, verts.len()) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_rotate4d_matches_hand_kernel() {
+        let verts = [
+            Vec4Vertex { position: [0.25, 0.0, 0.0, 0.0] },
+            Vec4Vertex { position: [0.1, -0.1, 0.1, 0.1] },
+            Vec4Vertex { position: [-0.2, 0.2, -0.2, 0.2] },
+            Vec4Vertex { position: [0.3, 0.2, 0.1, 0.4] },
+        ];
+        let n = verts.len() as u32;
+        let (axy, azw, axw) = (0.6f32, 0.4f32, 0.25f32);
+
+        // Hand layout: active_count(u32)=n, capacity(u32)=n, pad, pad, xy, zw, xw, pad.
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&n.to_le_bytes());
+        hand.extend_from_slice(&n.to_le_bytes());
+        hand.extend_from_slice(&[0u8; 8]);
+        hand.extend_from_slice(&axy.to_le_bytes());
+        hand.extend_from_slice(&azw.to_le_bytes());
+        hand.extend_from_slice(&axw.to_le_bytes());
+        hand.extend_from_slice(&[0u8; 4]);
+
+        // Generated layout: xy, zw, xw, dispatch_count(u32).
+        let mut gen_bytes = Vec::new();
+        gen_bytes.extend_from_slice(&axy.to_le_bytes());
+        gen_bytes.extend_from_slice(&azw.to_le_bytes());
+        gen_bytes.extend_from_slice(&axw.to_le_bytes());
+        gen_bytes.extend_from_slice(&n.to_le_bytes());
+
+        let hand_wgsl = include_str!("shaders/rotate_4d.wgsl");
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Rotate4D>()
+            .expect("rotate_4d buffer codegen");
+
+        let from_hand = dispatch_rotate4d(hand_wgsl, &verts, &hand);
+        let from_gen = dispatch_rotate4d(&gen_wgsl, &verts, &gen_bytes);
+
+        for i in 0..verts.len() {
+            for c in 0..4 {
+                assert!(
+                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
+                    "vertex {i} position[{c}]: hand={} gen={}",
+                    from_hand[i].position[c],
+                    from_gen[i].position[c]
+                );
+            }
+        }
     }
 }
