@@ -226,6 +226,7 @@ fn main() {
 ///     prior wrote, exactly like a real particle pipeline's stages);
 ///   - fused: ONE dispatch of an N-op kernel (read particle once, N ops in
 ///     registers, write once).
+///
 /// The question this answers (design §11.E / Phase-0): buffer chains are
 /// IN-PLACE ALIASED, so unlike textures there is no fresh-VRAM round-trip to
 /// eliminate — fusion only saves the (N-1) re-reads/re-writes of the SAME
