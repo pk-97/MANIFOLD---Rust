@@ -767,6 +767,15 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Shared WGSL library snippets this primitive's `wgsl_body` depends on
+    /// (e.g. `noise_common`'s simplex helpers). The standalone codegen prepends
+    /// them; the BUFFER fusion codegen prepends the deduped union across a
+    /// region's members so their helper calls resolve. Default empty; the macro
+    /// forwards `P::WGSL_INCLUDES`.
+    fn wgsl_includes(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —
     /// the primitive runs against whatever the upstream producer

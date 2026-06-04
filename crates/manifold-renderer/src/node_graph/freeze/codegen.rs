@@ -1051,6 +1051,21 @@ pub struct RegionNode<'a> {
     /// entries default to `Coincident`, so every all-coincident region keeps
     /// constructing this as `vec![]` and emits byte-identical WGSL.
     pub input_access: Vec<InputAccess>,
+    /// The member's full input port defs (texture/array ports in declaration
+    /// order, same order as [`Self::inputs`] after filtering to the relevant kind).
+    /// Carried so the BUFFER codegen path can read each `Array` input's element
+    /// `ChannelSpec`s to synthesize the element struct. The texture path ignores
+    /// this (it only needs `inputs` + `input_access`). Empty ⇒ texture-domain
+    /// construction stays byte-identical.
+    pub node_inputs: &'a [NodeInput],
+    /// The member's full output port defs. The buffer codegen reads the output
+    /// `Array` element type for the result struct + write. Empty ⇒ texture path.
+    pub node_outputs: &'a [NodeOutput],
+    /// Shared WGSL library snippets the member's body depends on (noise_common,
+    /// …). The buffer codegen prepends the deduped union across the region so
+    /// every member's helper calls resolve. Empty for the texture path (texture
+    /// atoms inline their helpers).
+    pub node_includes: &'a [&'static str],
 }
 
 /// A maximal fusable region: nodes in topo order, the external inputs they read,
@@ -1127,10 +1142,246 @@ fn is_top_level_decl(line: &str) -> bool {
         || t.starts_with("override ")
 }
 
+/// Buffer-domain multi-atom fusion: chain a region of per-element (particle /
+/// instance / curve-point) atom bodies into ONE `var<storage>` kernel. The
+/// buffer analogue of [`generate_fused`]: pre-read each external array element
+/// `[idx]` once, thread each body's output element as a register to the next,
+/// write the region output array once. A 1D dispatch over the output array's
+/// `arrayLength` (the convention `node.wgsl_compute` keys its buffer dispatch on
+/// — NO `dispatch_count` uniform, unlike the standalone buffer path).
+///
+/// v1 scope — anything outside it returns `Err` so the card renders unfused
+/// (always correct; the install pass also naga-parses the result as a final
+/// guard): every member is a coincident per-element atom (no `BufferGather`, no
+/// texture input — those stay boundaries), each writes exactly ONE Array output,
+/// and its scalar params are port-shadow uniforms (frame-derived-uniform atoms
+/// like euler_step are kept boundaries by the finder, so none reach here).
+fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, CodegenError> {
+    let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
+    let specs_of = |ty: &PortType| -> Option<&'static [ChannelSpec]> {
+        match ty {
+            PortType::Array(at) => Some(at.specs),
+            _ => None,
+        }
+    };
+
+    // Per-member: validate the v1 shape and capture each member's Array input
+    // element specs (in node.inputs order) + its single Array output specs.
+    struct MemberIo {
+        in_specs: Vec<&'static [ChannelSpec]>,
+        out_specs: &'static [ChannelSpec],
+    }
+    let mut member_io: Vec<MemberIo> = Vec::with_capacity(region.nodes.len());
+    let mut prelude: Vec<String> = Vec::new();
+    let mut helpers: Vec<FnBlock> = Vec::new();
+    let mut bodies: Vec<String> = Vec::new();
+    let mut includes: Vec<&'static str> = Vec::new(); // deduped shared WGSL libs (noise_common, …)
+    for (i, node) in region.nodes.iter().enumerate() {
+        if !node.fusion_kind.is_fusable() {
+            return Err(CodegenError::NotFusable(node.fusion_kind));
+        }
+        if node.body.is_empty() {
+            return Err(CodegenError::NoBody);
+        }
+        for inc in node.node_includes {
+            if !includes.contains(inc) {
+                includes.push(inc);
+            }
+        }
+        // No gather / no texture input in v1 (those atoms stay boundaries).
+        if node.input_access.iter().any(|a| a.is_gather())
+            || node.node_inputs.iter().any(is_texture_input)
+        {
+            return Err(CodegenError::BadInput);
+        }
+        let arr_in: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        // node.inputs (the finder's resolved sources) must align 1:1 with the
+        // member's Array input ports — else an input is unwired / mis-resolved.
+        if node.inputs.len() != arr_in.len() {
+            return Err(CodegenError::BadInput);
+        }
+        let arr_out: Vec<&NodeOutput> =
+            node.node_outputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        if arr_out.len() != 1 {
+            return Err(CodegenError::BadInput); // v1: single Array output per member
+        }
+        let in_specs: Vec<&'static [ChannelSpec]> =
+            arr_in.iter().map(|p| specs_of(&p.ty)).collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
+        let out_specs = specs_of(&arr_out[0].ty).ok_or(CodegenError::BadInput)?;
+        member_io.push(MemberIo { in_specs, out_specs });
+
+        // Split body into prelude / helpers / the n{i}_body fn (same as texture).
+        let (pre, blocks) = split_fns(node.body);
+        for line in pre {
+            if !prelude.contains(&line) {
+                prelude.push(line);
+            }
+        }
+        let mut found_body = false;
+        for fb in blocks {
+            if fb.name == "body" {
+                bodies.push(fb.text.replacen("fn body(", &format!("fn n{i}_body("), 1));
+                found_body = true;
+            } else {
+                match helpers.iter().find(|h| h.name == fb.name) {
+                    Some(existing) if existing.text == fb.text => {}
+                    Some(_) => return Err(CodegenError::HelperCollision(fb.name)),
+                    None => helpers.push(fb),
+                }
+            }
+        }
+        if !found_body {
+            return Err(CodegenError::NoBody);
+        }
+    }
+    // v1: single output region (fan-out buffer regions are a follow-on).
+    if region.outputs.len() != 1 {
+        return Err(CodegenError::BadInput);
+    }
+
+    // Element type per external slot: from a member that reads it (consumer's
+    // array-input specs). Every external is read by ≥1 member (the finder built
+    // the slot because a member reads it), so each resolves.
+    let mut ext_specs: Vec<Option<&'static [ChannelSpec]>> = vec![None; region.num_external_inputs];
+    for (mi, node) in region.nodes.iter().enumerate() {
+        for (k, src) in node.inputs.iter().enumerate() {
+            if let InputSource::External(e) = src {
+                if *e >= region.num_external_inputs {
+                    return Err(CodegenError::BadInput);
+                }
+                ext_specs[*e] = Some(member_io[mi].in_specs[k]);
+            }
+        }
+    }
+    let ext_specs: Vec<&'static [ChannelSpec]> =
+        ext_specs.into_iter().collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
+
+    // --- element structs (deduped, first-appearance order across all I/O). ---
+    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    let ext_tys: Vec<String> =
+        ext_specs.iter().map(|s| buffer_element_type(s, &mut structs)).collect();
+    let out_ty = buffer_element_type(member_io[index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?].out_specs, &mut structs);
+
+    // --- merged param uniform (node-namespaced scalar fields, padded to 16). ---
+    let mut param_order: Vec<(NodeInstanceId, &'static str)> = Vec::new();
+    let mut struct_body = String::new();
+    let mut field_count = 0usize;
+    for (i, node) in region.nodes.iter().enumerate() {
+        for p in node.params {
+            let ty = param_wgsl_type(p)?;
+            writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
+            param_order.push((node.node_id, p.name));
+            field_count += 1;
+        }
+    }
+    let pad_words = (4 - (field_count % 4)) % 4;
+    for k in 0..pad_words {
+        writeln!(struct_body, "    _pad{k}: u32,").unwrap();
+    }
+    if field_count == 0 {
+        struct_body.push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
+    }
+
+    let mut out = String::new();
+    // element structs first (a struct may be referenced by a binding below).
+    for (specs, name) in &structs {
+        out.push_str(&emit_buffer_struct(specs, name));
+        out.push('\n');
+    }
+    out.push_str("struct Params {\n");
+    out.push_str(&struct_body);
+    out.push_str("}\n\n");
+
+    // --- bindings: uniform(0), external read arrays(1..), output read_write. ---
+    out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
+    let mut binding = 1u32;
+    for (e, ty) in ext_tys.iter().enumerate() {
+        writeln!(out, "@group(0) @binding({binding}) var<storage, read> src_{e}: array<{ty}>;").unwrap();
+        binding += 1;
+    }
+    writeln!(out, "@group(0) @binding({binding}) var<storage, read_write> dst: array<{out_ty}>;").unwrap();
+    out.push('\n');
+
+    // --- shared library includes (noise_common, …), prepended so the bodies'
+    // helper calls resolve — the deduped union across the region's members. ---
+    for inc in &includes {
+        out.push_str(inc.trim_end());
+        out.push_str("\n\n");
+    }
+
+    // --- shared prelude, helpers, namespaced bodies ---
+    for line in &prelude {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !prelude.is_empty() {
+        out.push('\n');
+    }
+    for h in &helpers {
+        out.push_str(h.text.trim_end());
+        out.push_str("\n\n");
+    }
+    for b in &bodies {
+        out.push_str(b.trim_end());
+        out.push_str("\n\n");
+    }
+
+    // --- cs_main: 1D element dispatch keyed on the output array's length (the
+    // convention node.wgsl_compute uses for buffer dispatch), pre-read coincident
+    // externals once, thread each body's output element register, write once. ---
+    out.push_str("@compute @workgroup_size(256)\n");
+    out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
+    out.push_str("    let idx = gid.x;\n");
+    out.push_str("    let count = arrayLength(&dst);\n");
+    out.push_str("    if idx >= count {\n        return;\n    }\n");
+    for e in 0..region.num_external_inputs {
+        writeln!(out, "    let e_{e} = src_{e}[idx];").unwrap();
+    }
+    for (i, node) in region.nodes.iter().enumerate() {
+        let mut args: Vec<String> = vec!["idx".to_string(), "count".to_string()];
+        for src in node.inputs.iter() {
+            match src {
+                InputSource::External(e) => args.push(format!("e_{e}")),
+                InputSource::Node(id) => {
+                    let Some(j) = index_of(*id) else {
+                        return Err(CodegenError::BadInput);
+                    };
+                    if j >= i {
+                        return Err(CodegenError::BadInput); // not earlier in topo order
+                    }
+                    args.push(format!("r{j}"));
+                }
+            }
+        }
+        for p in node.params {
+            args.push(format!("params.n{i}_{}", p.name));
+        }
+        writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
+    }
+    let out_idx = index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?;
+    writeln!(out, "    dst[idx] = r{out_idx};").unwrap();
+    out.push_str("}\n");
+
+    Ok(GeneratedFusion { wgsl: out, param_order })
+}
+
 /// Generate one fused kernel for a region. Errors if a node isn't fusable, a
 /// body lacks `fn body`, an input references an unknown/later node, or two
 /// helpers share a name with different bodies (un-dedupable collision).
 pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, CodegenError> {
+    // BUFFER-domain region (the members' output is an Array<T>, not a texture):
+    // route to the buffer multi-atom path — `var<storage>` bindings, a 1D
+    // particle/element dispatch, element structs threaded as registers. A region
+    // is homogeneous (texture and Array wires never connect — different port
+    // types), so the output member's output kind decides the whole region.
+    if region
+        .nodes
+        .iter()
+        .any(|n| n.node_outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))))
+    {
+        return generate_fused_buffer(region);
+    }
     // node_id -> region index (for resolving InputSource::Node to a register).
     let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
 
@@ -1530,6 +1781,9 @@ mod gpu_tests {
                     params: &[],
                     inputs: vec![InputSource::External(0)],
                     input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1538,6 +1792,9 @@ mod gpu_tests {
                     params: &[],
                     inputs: vec![InputSource::Node(id(0))],
                     input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
             ],
             num_external_inputs: 1,
@@ -1551,6 +1808,56 @@ mod gpu_tests {
         );
         assert!(g.wgsl.contains("fn n0_body"), "first body namespaced");
         assert!(g.wgsl.contains("fn n1_body"), "second body namespaced");
+    }
+
+    /// Buffer-domain multi-atom fusion: a chain of two per-element instance atoms
+    /// fuses into one `var<storage>` kernel. The element struct is synthesized,
+    /// every input and the output bind as storage arrays, the dispatch is a 1D
+    /// `arrayLength`-guarded loop (the `node.wgsl_compute` buffer convention, with
+    /// no `dispatch_count` uniform), the first body's element register threads
+    /// into the second, and the shared `noise_common` include is prepended once
+    /// (so parse resolves the helper calls; were the include dropped, naga parse
+    /// would fail here). The buffer analogue of
+    /// `fused_gather_binds_sampler_and_passes_texture`. End-to-end numerical
+    /// parity rides the render-parity oracle once the finder emits buffer regions
+    /// on the live path.
+    #[test]
+    fn fused_buffer_region_threads_element_registers() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::InstanceRotationJitter as J;
+        let id = NodeInstanceId;
+        let mk = |i: u32, src: InputSource| RegionNode {
+            node_id: id(i),
+            fusion_kind: J::FUSION_KIND,
+            body: J::WGSL_BODY.unwrap(),
+            params: J::PARAMS,
+            inputs: vec![src],
+            input_access: J::INPUT_ACCESS.to_vec(),
+            node_inputs: J::INPUTS,
+            node_outputs: J::OUTPUTS,
+            node_includes: J::WGSL_INCLUDES,
+        };
+        let region = FusionRegion {
+            nodes: vec![mk(0, InputSource::External(0)), mk(1, InputSource::Node(id(0)))],
+            num_external_inputs: 1,
+            outputs: vec![id(1)],
+        };
+        let g = generate_fused(&region).expect("buffer region fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused buffer kernel parses through naga (validates the body ABI + includes):\n{}",
+            g.wgsl
+        );
+        assert!(g.wgsl.contains("var<storage, read> src_0"), "input bound as read storage array");
+        assert!(
+            g.wgsl.contains("var<storage, read_write> dst"),
+            "output bound as read_write storage array"
+        );
+        assert!(g.wgsl.contains("arrayLength(&dst)"), "1D dispatch keyed on output array length");
+        assert!(g.wgsl.contains("let e_0 = src_0[idx];"), "external element pre-read once");
+        assert!(g.wgsl.contains("let r0 = n0_body"), "first member's element register");
+        assert!(g.wgsl.contains("let r1 = n1_body"), "second member threads r0");
+        assert!(g.wgsl.contains("dst[idx] = r1;"), "region output written once");
     }
 
     /// Tier 3 — a gather input binds a sampler and is passed to the body as a
@@ -1573,6 +1880,9 @@ mod gpu_tests {
                     params: Sharpen::PARAMS,
                     inputs: vec![InputSource::External(0)],
                     input_access: vec![InputAccess::Gather],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1581,6 +1891,9 @@ mod gpu_tests {
                     params: Invert::PARAMS,
                     inputs: vec![InputSource::Node(id(0))],
                     input_access: vec![InputAccess::Coincident],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
             ],
             num_external_inputs: 1,
@@ -1618,6 +1931,9 @@ mod gpu_tests {
                     params: Gain::PARAMS,
                     inputs: vec![InputSource::External(0)],
                     input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1626,6 +1942,9 @@ mod gpu_tests {
                     params: Invert::PARAMS,
                     inputs: vec![InputSource::Node(id(0))],
                     input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
                 RegionNode {
                     node_id: id(2),
@@ -1634,6 +1953,9 @@ mod gpu_tests {
                     params: Contrast::PARAMS,
                     inputs: vec![InputSource::Node(id(0))],
                     input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
                 },
             ],
             num_external_inputs: 1,
@@ -1827,13 +2149,13 @@ mod gpu_tests {
         // atom types' consts.
         let region = FusionRegion {
             nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![] },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![] },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![] },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![] },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![] },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![] },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![] },
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
             ],
             num_external_inputs: 1,
             outputs: vec![id(6)],

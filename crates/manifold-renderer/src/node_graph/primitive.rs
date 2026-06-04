@@ -487,6 +487,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
         P::INPUT_ACCESS
     }
+    fn wgsl_includes(&self) -> &'static [&'static str] {
+        P::WGSL_INCLUDES
+    }
 }
 
 /// Runtime view of a primitive's const metadata, suitable for

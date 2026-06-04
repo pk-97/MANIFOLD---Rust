@@ -346,6 +346,12 @@ pub(crate) fn fuse_canonical_def(
                 params: leak_params(node.parameters()),
                 inputs,
                 input_access: member.input_access.clone(),
+                // Leaked so the buffer codegen path can read each Array port's
+                // element ChannelSpecs after `node` drops. Texture regions ignore
+                // these. One-time at fuse-build, cached &'static, so the leak is bounded.
+                node_inputs: leak_ports(node.inputs()),
+                node_outputs: leak_ports(node.outputs()),
+                node_includes: node.wgsl_includes(),
             });
         }
         let fusion_region = FusionRegion {
@@ -576,6 +582,14 @@ fn param_value_to_f32(v: &ParamValue) -> Option<f32> {
 /// can hold it for the codegen call. Bounded leak (one per atom per fused view).
 fn leak_params(params: &[ParamDef]) -> &'static [ParamDef] {
     let owned: Vec<ParamDef> = params.to_vec();
+    Box::leak(owned.into_boxed_slice())
+}
+
+/// Leak a node's port defs to `&'static` so a [`RegionNode`] can carry them past
+/// the constructed node's drop (the buffer codegen reads Array element specs from
+/// them). One-time at fuse-build, the result is cached `&'static`, so bounded.
+fn leak_ports(ports: &[crate::node_graph::ports::NodePort]) -> &'static [crate::node_graph::ports::NodePort] {
+    let owned: Vec<crate::node_graph::ports::NodePort> = ports.to_vec();
     Box::leak(owned.into_boxed_slice())
 }
 
