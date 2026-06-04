@@ -629,6 +629,11 @@ fn generate_standalone_buffer(
     // `tex_<name>` handle + the shared `samp` and samples them itself (the
     // `*_at_particles` force-sampler family, anti_clump's modulator).
     let texture_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
+    // Optional texture inputs get an injected `use_<name>: u32` flag (run() packs
+    // `is_some()`); the body falls back to a default when 0. An unwired optional
+    // texture binds a dummy 1×1 so the binding is always present (run()'s job).
+    let optional_textures: Vec<&NodeInput> =
+        texture_inputs.iter().filter(|i| !i.required).copied().collect();
     let array_outputs: Vec<&NodeOutput> = outputs
         .iter()
         .filter(|o| matches!(o.ty, PortType::Array(_)))
@@ -695,6 +700,13 @@ fn generate_standalone_buffer(
         let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
         writeln!(out, "    {dname}: {dty},").unwrap();
         words += 1; // every supported derived scalar is one 4-byte word
+    }
+    // Optional-texture use-flags (run() packs `is_some()`), after the derived
+    // fields. The body multiplies by / branches on these to fall back when an
+    // optional texture is unwired.
+    for tex in &optional_textures {
+        writeln!(out, "    use_{}: u32,", tex.name).unwrap();
+        words += 1;
     }
     out.push_str("    dispatch_count: u32,\n");
     words += 1;
@@ -784,6 +796,10 @@ fn generate_standalone_buffer(
     for d in derived_uniforms {
         let dname = d.split_once(':').map(|(n, _)| n).unwrap_or(d);
         args.push(format!("params.{dname}"));
+    }
+    // Optional-texture use-flags, last (matching the body signature).
+    for tex in &optional_textures {
+        args.push(format!("params.use_{}", tex.name));
     }
     writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
     out.push_str("}\n");
