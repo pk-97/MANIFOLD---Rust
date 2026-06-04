@@ -19,13 +19,15 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: the `active_count` param (Int → i32) then
+/// the codegen-injected `dispatch_count`, padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SampleUniforms {
-    active_count: u32,
+    active_count: i32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -57,6 +59,8 @@ crate::primitive! {
     category: Particles3D,
     role: Filter,
     aliases: ["sample volume", "read 3d texture", "trilinear"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/sample_texture_3d_at_particles_body.wgsl"),
 }
 
 impl Primitive for SampleTexture3DAtParticles {
@@ -98,9 +102,13 @@ impl Primitive for SampleTexture3DAtParticles {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer
+            // coincident + Texture3D path). sample_texture_3d_at_particles.wgsl is
+            // the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/sample_texture_3d_at_particles.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.sample_texture_3d_at_particles standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.sample_texture_3d_at_particles",
             )
         });
@@ -109,10 +117,10 @@ impl Primitive for SampleTexture3DAtParticles {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
         let uniforms = SampleUniforms {
-            active_count,
+            active_count: active_count as i32,
+            dispatch_count: active_count,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -193,5 +201,135 @@ mod tests {
             node.type_id().as_str(),
             "node.sample_texture_3d_at_particles"
         );
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain TEXTURE-COINCIDENT (3D) parity oracle (freeze §12). The
+    //! generated kernel binds a Texture3D + sampler into the buffer kernel and
+    //! the body trilinear-samples it at each particle's position.xyz; it must
+    //! reproduce the hand kernel force-for-force. Both sample the same volume +
+    //! sampler → identical regardless of content.
+    use super::*;
+    use crate::generators::compute_common::Particle;
+    use half::f16;
+    use manifold_gpu::{
+        GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    };
+
+    fn gradient_volume(device: &manifold_gpu::GpuDevice, n: u32) -> GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (n * n * n * 4) as usize];
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    let i = (((z * n + y) * n + x) * 4) as usize;
+                    px[i] = f16::from_f32(x as f32 / (n - 1) as f32);
+                    px[i + 1] = f16::from_f32(y as f32 / (n - 1) as f32);
+                    px[i + 2] = f16::from_f32(z as f32 / (n - 1) as f32);
+                    px[i + 3] = f16::from_f32(1.0);
+                }
+            }
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: n,
+            height: n,
+            depth: n,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D3,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "sample-3d-at-particles-test",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn dispatch_sample3d(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        particles: &[Particle],
+        tex: &GpuTexture,
+        uniform: &[u8],
+        count: u32,
+    ) -> Vec<[f32; 3]> {
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "sample3d-oracle");
+        let p_buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
+        let out_buf = device.create_buffer_shared(count as u64 * 12);
+        unsafe {
+            p_buf.write(0, bytemuck::cast_slice(particles));
+        }
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let mut enc = device.create_encoder("sample3d-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: 1, buffer: &p_buf, offset: 0 },
+                GpuBinding::Texture { binding: 2, texture: tex },
+                GpuBinding::Sampler { binding: 3, sampler: &sampler },
+                GpuBinding::Buffer { binding: 4, buffer: &out_buf, offset: 0 },
+            ],
+            [count.div_ceil(256), 1, 1],
+            "sample3d-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const [f32; 3], count as usize) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_sample3d_matches_hand_kernel() {
+        let device = crate::test_device();
+        let vol = gradient_volume(&device, 8);
+        let mk = |pos: [f32; 3]| Particle {
+            position: pos,
+            _pad0: 0.0,
+            velocity: [0.0; 3],
+            life: 1.0,
+            age: 0.0,
+            _pad1: [0.0; 3],
+            color: [0.0; 4],
+        };
+        let particles = [
+            mk([0.1, 0.2, 0.3]),
+            mk([0.5, 0.6, 0.7]),
+            mk([0.9, 0.3, 0.1]),
+            mk([0.33, 0.77, 0.5]),
+        ];
+        let n = particles.len() as u32;
+
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&n.to_le_bytes());
+        hand.extend_from_slice(&[0u8; 12]);
+
+        let mut gen_bytes = Vec::new();
+        gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
+        gen_bytes.extend_from_slice(&n.to_le_bytes());
+        gen_bytes.extend_from_slice(&[0u8; 8]);
+
+        let hand_wgsl = include_str!("shaders/sample_texture_3d_at_particles.wgsl");
+        let gen_wgsl =
+            crate::node_graph::freeze::codegen::standalone_for_spec::<SampleTexture3DAtParticles>()
+                .expect("sample_texture_3d_at_particles buffer codegen");
+        assert!(gen_wgsl.contains("var tex_field: texture_3d<f32>"), "Texture3D bound into the kernel");
+
+        let from_hand = dispatch_sample3d(&device, hand_wgsl, &particles, &vol, &hand, n);
+        let from_gen = dispatch_sample3d(&device, &gen_wgsl, &particles, &vol, &gen_bytes, n);
+
+        for i in 0..n as usize {
+            for c in 0..3 {
+                assert!(
+                    (from_hand[i][c] - from_gen[i][c]).abs() < 1e-5,
+                    "particle {i} force[{c}]: hand={} gen={}",
+                    from_hand[i][c],
+                    from_gen[i][c]
+                );
+            }
+        }
     }
 }
