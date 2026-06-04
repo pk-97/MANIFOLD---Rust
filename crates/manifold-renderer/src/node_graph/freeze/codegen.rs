@@ -3096,6 +3096,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let mut strip_bytes = vec![0u8; 16];
         strip_bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // width
         strip_bytes[4..8].copy_from_slice(&2u32.to_le_bytes()); // mode = Both
+        // scanline_jitter_field [amount, scanline, speed, time], 16B. GPU sin →
+        // bit-exact; time is a backing param packed by run().
+        let scanline_bytes = pack_f32(&[0.8, 0.3, 2.0, 1.0]);
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -3114,6 +3117,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             ("node.noise", "noise.wgsl", Some(noise_random.as_slice())),
             ("node.radial_offset_field", "radial_offset_field.wgsl", Some(radial_offset_bytes.as_slice())),
             ("node.uv_strip_clamp", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
+            ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

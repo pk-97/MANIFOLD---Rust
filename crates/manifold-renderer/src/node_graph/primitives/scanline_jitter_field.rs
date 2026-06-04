@@ -64,6 +64,16 @@ crate::primitive! {
             range: Some((0.1, 10.0)),
             enum_values: &[],
         },
+        // Backing param for the `time` input (port-shadow); run() packs the
+        // resolved FrameTime/wired value, so the default below is never live.
+        ParamDef {
+            name: "time",
+            label: "Time",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1e9)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Sum it with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp). G/B are 0 so a relative remap leaves the vertical axis untouched.",
     examples: ["preset.effect.glitch"],
@@ -72,6 +82,8 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Source,
     aliases: ["scanline jitter", "vhs", "tearing", "glitch"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/scanline_jitter_field_body.wgsl"),
 }
 
 impl Primitive for ScanlineJitterField {
@@ -103,9 +115,12 @@ impl Primitive for ScanlineJitterField {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Source generator: uniform(0)/dst(1). `time` is a backing param the
+            // body reads. scanline_jitter_field.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/scanline_jitter_field.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.scanline_jitter_field standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.scanline_jitter_field",
             )
         });
