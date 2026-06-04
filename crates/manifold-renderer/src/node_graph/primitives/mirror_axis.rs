@@ -60,6 +60,9 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Filter,
     aliases: ["flip", "mirror", "reflect", "Flip TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/mirror_axis_body.wgsl"),
+    input_access: [Gather],
 }
 
 impl Primitive for MirrorAxis {
@@ -85,9 +88,14 @@ impl Primitive for MirrorAxis {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `in` is a Gather input (sampled at a body-computed mirrored UV).
+            // Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3); the body
+            // computes cos/sin from angle on the GPU (matching the hand).
+            // mirror_axis.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/mirror_axis.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.mirror_axis standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.mirror_axis",
             )
         });

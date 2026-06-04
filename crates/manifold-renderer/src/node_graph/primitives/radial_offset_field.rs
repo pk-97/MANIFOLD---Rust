@@ -72,6 +72,8 @@ crate::primitive! {
     summary: "Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node.",
     category: DistortAndWarp,
     role: Map,
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/radial_offset_field_body.wgsl"),
 }
 
 impl Primitive for RadialOffsetField {
@@ -94,9 +96,12 @@ impl Primitive for RadialOffsetField {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Source generator: 0 texture inputs, output at binding 1. Generated
+            // kernel binds uniform(0)/dst(1). radial_offset_field.wgsl is the oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/radial_offset_field.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.radial_offset_field standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.radial_offset_field",
             )
         });
