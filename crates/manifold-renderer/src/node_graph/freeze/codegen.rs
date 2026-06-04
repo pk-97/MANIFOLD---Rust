@@ -624,6 +624,11 @@ fn generate_standalone_buffer(
         .iter()
         .filter(|i| matches!(i.ty, PortType::Array(_)))
         .collect();
+    // Texture inputs sampled at a body-computed coord (the particle position) —
+    // the buffer analogue of the texture-domain Gather. The body receives each
+    // `tex_<name>` handle + the shared `samp` and samples them itself (the
+    // `*_at_particles` force-sampler family, anti_clump's modulator).
+    let texture_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
     let array_outputs: Vec<&NodeOutput> = outputs
         .iter()
         .filter(|o| matches!(o.ty, PortType::Array(_)))
@@ -711,6 +716,21 @@ fn generate_standalone_buffer(
         .unwrap();
         binding += 1;
     }
+    // Texture inputs, then ONE shared sampler (after the array inputs, before the
+    // output array) — matching the hand `*_at_particles` binding order.
+    for inp in &texture_inputs {
+        let tex_ty = if inp.ty == PortType::Texture3D {
+            "texture_3d<f32>"
+        } else {
+            "texture_2d<f32>"
+        };
+        writeln!(out, "@group(0) @binding({binding}) var tex_{}: {tex_ty};", inp.name).unwrap();
+        binding += 1;
+    }
+    if !texture_inputs.is_empty() {
+        writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
+        binding += 1;
+    }
     writeln!(
         out,
         "@group(0) @binding({binding}) var<storage, read_write> {out_global}: array<{out_ty}>;"
@@ -750,6 +770,12 @@ fn generate_standalone_buffer(
         if !is_gather(i) {
             args.push(format!("e_{}", inp.name));
         }
+    }
+    // Each texture input contributes its handle + the shared sampler (the body
+    // samples it at a coord it computes from the particle position).
+    for inp in &texture_inputs {
+        args.push(format!("tex_{}", inp.name));
+        args.push("samp".to_string());
     }
     for p in params {
         let f = wgsl_safe_field(p.name);
