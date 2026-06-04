@@ -2771,6 +2771,85 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
+    /// trig_texture parity: 3 coincident inputs (in + optional freq_tex/phase_tex)
+    /// with injected use-flags. The uniform layout already matches (params then
+    /// flags), but the HAND shader binds its output at 3 (before the optional
+    /// textures) while the generated kernel is regular (textures/sampler/output),
+    /// so the hand needs a custom dispatch and the generated uses
+    /// dispatch_coincident_n. use_freq_tex=1 (per-pixel freq) + use_phase_tex=0
+    /// (scalar phase) exercises both paths; GPU sin matches bit-exact.
+    #[test]
+    fn generated_trig_texture_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let in_tex = gradient(&device, w, h);
+        let freq_t = gradient_b(&device, w, h);
+        let phase_t = gradient(&device, w, h); // unused (use_phase_tex=0)
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.trig_texture").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("trig_texture generates");
+        assert!(
+            generated.contains("use_freq_tex: u32") && generated.contains("use_phase_tex: u32"),
+            "optional-input use flags missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/trig_texture.wgsl");
+
+        // {freq, phase, mode, use_freq_tex, use_phase_tex, _pad×3} = 32B.
+        let mut bytes = vec![0u8; 32];
+        bytes[0..4].copy_from_slice(&2.0f32.to_le_bytes()); // freq
+        bytes[4..8].copy_from_slice(&0.5f32.to_le_bytes()); // phase
+        // mode = 0 (Sin)
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes()); // use_freq_tex = per-pixel
+        // use_phase_tex = 0 (scalar)
+
+        let from_generated =
+            dispatch_coincident_n(&device, &generated, &[&in_tex, &freq_t, &phase_t], &bytes);
+        // Hand layout: uniform(0), in(1), sampler(2), out(3), freq_tex(4), phase_tex(5).
+        let hand_out = {
+            let pipeline = device.create_compute_pipeline(original, ENTRY, "trig-hand");
+            let sampler = device.create_sampler(&GpuSamplerDesc::default());
+            let out = RenderTarget::new(&device, w, h, FMT, "trig-hand-out");
+            let mut enc = device.create_encoder("trig-hand");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &in_tex },
+                    GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                    GpuBinding::Texture { binding: 3, texture: &out.texture },
+                    GpuBinding::Texture { binding: 4, texture: &freq_t },
+                    GpuBinding::Texture { binding: 5, texture: &phase_t },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "trig-hand",
+            );
+            enc.commit_and_wait_completed();
+            out
+        };
+        let r = differ.compare(
+            &device,
+            &hand_out.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated trig_texture must reproduce the hand kernel (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
     /// outputs get their own texture (no aliasing) so each can be diffed.
     fn dispatch_two_output_source(

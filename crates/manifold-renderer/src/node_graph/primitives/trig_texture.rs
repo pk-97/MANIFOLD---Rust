@@ -76,6 +76,8 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["sine", "cosine", "sin", "cos", "wave"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/trig_texture_body.wgsl"),
 }
 
 impl Primitive for TrigTexture {
@@ -112,9 +114,16 @@ impl Primitive for TrigTexture {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // 3 coincident texture inputs (in + optional freq_tex/phase_tex). The
+            // generated kernel binds uniform(0)/in(1)/freq_tex(2)/phase_tex(3)/
+            // samp(4)/dst(5) — textures-then-sampler-then-output, which reorders the
+            // hand layout (output was at 3). The injected use_freq_tex/use_phase_tex
+            // flags select per-pixel texture vs scalar. trig_texture.wgsl is the
+            // parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/trig_texture.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.trig_texture standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.trig_texture",
             )
         });
@@ -147,10 +156,10 @@ impl Primitive for TrigTexture {
                     data: bytemuck::bytes_of(&uniforms),
                 },
                 GpuBinding::Texture { binding: 1, texture: in_tex },
-                GpuBinding::Sampler { binding: 2, sampler },
-                GpuBinding::Texture { binding: 3, texture: out_tex },
-                GpuBinding::Texture { binding: 4, texture: freq_bind },
-                GpuBinding::Texture { binding: 5, texture: phase_bind },
+                GpuBinding::Texture { binding: 2, texture: freq_bind },
+                GpuBinding::Texture { binding: 3, texture: phase_bind },
+                GpuBinding::Sampler { binding: 4, sampler },
+                GpuBinding::Texture { binding: 5, texture: out_tex },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "node.trig_texture",
