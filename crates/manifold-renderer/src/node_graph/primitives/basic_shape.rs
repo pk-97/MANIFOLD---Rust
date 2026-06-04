@@ -24,17 +24,22 @@ use crate::node_graph::primitive::Primitive;
 
 pub const BASIC_SHAPE_SHAPES: &[&str] = &["Square", "Diamond", "Octagon"];
 
+// Standalone-codegen uniform layout: the generated `Params` struct lays out the
+// PARAMS in declaration order (shape, aspect, scale, line, rotation,
+// is_wireframe) padded to 32 bytes. The body now does the preprocessing the hand
+// path packed into its uniform (uv_scale = 1/scale, shape index from the enum,
+// wireframe from a >0.5 test), so these fields are the RAW param values.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BasicShapeUniforms {
-    aspect_ratio: f32,
-    line_thickness: f32,
-    uv_scale: f32,
-    shape_idx: f32,
-    is_wireframe: f32,
+    shape: u32,
+    aspect: f32,
+    scale: f32,
+    line: f32,
     rotation: f32,
-    _pad0: f32,
-    _pad1: f32,
+    is_wireframe: f32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 crate::primitive! {
@@ -108,6 +113,8 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["basic shape", "square", "diamond", "octagon"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/basic_shape_body.wgsl"),
 }
 
 impl Primitive for BasicShape {
@@ -118,15 +125,13 @@ impl Primitive for BasicShape {
         let rotation = ctx.scalar_or_param("rotation", 0.0);
         let is_wireframe = ctx.scalar_or_param("is_wireframe", 0.0);
 
-        let shape_idx = match ctx.params.get("shape") {
+        let shape = match ctx.params.get("shape") {
             Some(ParamValue::Enum(v)) => (*v).min((BASIC_SHAPE_SHAPES.len() - 1) as u32),
             Some(ParamValue::Float(f)) => {
                 (f.round().clamp(0.0, (BASIC_SHAPE_SHAPES.len() - 1) as f32)) as u32
             }
             _ => 0,
         };
-
-        let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
 
         let Some(out_tex) = ctx.outputs.texture_2d("out") else {
             return;
@@ -138,22 +143,27 @@ impl Primitive for BasicShape {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Source generator: 0 texture inputs, output at binding 1. The body
+            // does the preprocessing (uv_scale = 1/scale, enum→idx, wireframe
+            // threshold) the hand path used to bake into the uniform, so run()
+            // packs the raw params in PARAMS order. basic_shape.wgsl is the oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/basic_shape.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.basic_shape standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.basic_shape",
             )
         });
 
         let uniforms = BasicShapeUniforms {
-            aspect_ratio: aspect,
-            line_thickness: line,
-            uv_scale,
-            shape_idx: shape_idx as f32,
-            is_wireframe: if is_wireframe > 0.5 { 1.0 } else { 0.0 },
+            shape,
+            aspect,
+            scale,
+            line,
             rotation,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            is_wireframe,
+            _pad0: 0,
+            _pad1: 0,
         };
 
         gpu.native_enc.dispatch_compute(

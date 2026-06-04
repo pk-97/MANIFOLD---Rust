@@ -1684,6 +1684,85 @@ mod gpu_tests {
         }
     }
 
+    /// Dual-packed SOURCE parity: node.basic_shape is a generator whose run()
+    /// used to preprocess its params before packing (uv_scale = 1/scale, shape
+    /// index as f32, wireframe thresholded) into a reordered hand uniform. The
+    /// body now does that preprocessing, so the generated Params carry the RAW
+    /// params in declaration order. The two kernels take DIFFERENT 32-byte
+    /// layouts for the same logical inputs — pack each, dispatch as a Source, and
+    /// diff across all three shapes (solid + wireframe + rotated).
+    #[test]
+    fn generated_basic_shape_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.basic_shape").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("basic_shape generates");
+        let original = include_str!("../primitives/shaders/basic_shape.wgsl");
+
+        // Hand layout: {aspect, line, uv_scale=1/scale, shape_idx(f32), is_wireframe
+        // (thresholded 0/1), rotation, _pad, _pad}.
+        let pack_hand = |shape: u32, aspect: f32, scale: f32, line: f32, rot: f32, wf: f32| -> Vec<u8> {
+            let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+            let wf_flag = if wf > 0.5 { 1.0f32 } else { 0.0 };
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&aspect.to_le_bytes());
+            b[4..8].copy_from_slice(&line.to_le_bytes());
+            b[8..12].copy_from_slice(&uv_scale.to_le_bytes());
+            b[12..16].copy_from_slice(&(shape as f32).to_le_bytes());
+            b[16..20].copy_from_slice(&wf_flag.to_le_bytes());
+            b[20..24].copy_from_slice(&rot.to_le_bytes());
+            b
+        };
+        // Generated layout: {shape(u32), aspect, scale, line, rotation, is_wireframe
+        // (raw), _pad, _pad}.
+        let pack_gen = |shape: u32, aspect: f32, scale: f32, line: f32, rot: f32, wf: f32| -> Vec<u8> {
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&shape.to_le_bytes());
+            b[4..8].copy_from_slice(&aspect.to_le_bytes());
+            b[8..12].copy_from_slice(&scale.to_le_bytes());
+            b[12..16].copy_from_slice(&line.to_le_bytes());
+            b[16..20].copy_from_slice(&rot.to_le_bytes());
+            b[20..24].copy_from_slice(&wf.to_le_bytes());
+            b
+        };
+
+        // (shape, aspect, scale, line, rotation, is_wireframe).
+        let sets: &[(u32, f32, f32, f32, f32, f32)] = &[
+            (0, 1.0, 1.0, 0.015, 0.0, 0.0),  // Square, solid
+            (1, 1.5, 0.8, 0.02, 0.5, 1.0),   // Diamond, wireframe, rotated, aspect
+            (2, 1.0, 1.2, 0.01, -0.3, 0.0),  // Octagon, solid, rotated, scaled
+        ];
+        for &(shape, aspect, scale, line, rot, wf) in sets {
+            let hand_bytes = pack_hand(shape, aspect, scale, line, rot, wf);
+            let gen_bytes = pack_gen(shape, aspect, scale, line, rot, wf);
+            let from_original = dispatch_source(&device, original, Some(&hand_bytes), w, h);
+            let from_generated = dispatch_source(&device, &generated, Some(&gen_bytes), w, h);
+            let r = differ.compare(
+                &device,
+                &from_original.texture,
+                &from_generated.texture,
+                1e-5,
+                1e-5,
+            );
+            assert_eq!(
+                r.over_count, 0,
+                "basic_shape (shape={shape}, scale={scale}, wf={wf}): generated must \
+                 reproduce basic_shape.wgsl (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
+
     /// Dispatch a SOURCE (generator) kernel: [uniform(0)], output. No texture
     /// inputs, no sampler — a paramless source binds only its output at binding 0.
     fn dispatch_source(
