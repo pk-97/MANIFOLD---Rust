@@ -160,6 +160,16 @@ enum BindingKind {
     /// `var<storage, read_write>` of `array<atomic<u32>>` — atomic
     /// accumulator output (the scatter pattern).
     StorageAtomicAccumOut { port: String },
+    /// `var<storage, read_write>` of `array<T>` carrying a `// @fused_output`
+    /// marker — a FRESH OUTPUT-ONLY array, NOT an aliased in/out. WGSL has no
+    /// write-only storage access mode, so the buffer-fusion codegen declares the
+    /// output read_write and tags it with the marker; this binding makes the node
+    /// expose it as an output port only (no input port, no `aliased_pairs`
+    /// entry), so the node's read-only inputs stay forward dependencies and the
+    /// loader allocates a fresh output buffer. Fixes the buffer-fusion ordering
+    /// bug where an aliased output made the producer wire read as a feedback
+    /// back-edge. Bound from `ctx.outputs.array(port)`.
+    StorageArrayWriteOut { port: String, _item: ArrayType },
 }
 
 #[derive(Clone, Debug)]
@@ -362,6 +372,11 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // has to be recovered from the original text and merged into the
     // struct walk below. Pure transform of the source; no I/O.
     let skip_map = extract_channel_skip(source);
+    // `// @fused_output` markers: storage `array<T>` globals tagged as a fresh
+    // output-only buffer (the buffer-fusion codegen's dst). WGSL has no
+    // write-only storage mode, so these are declared `read_write` but must NOT be
+    // treated as aliased in/out — see `BindingKind::StorageArrayWriteOut`.
+    let fused_outputs = extract_fused_outputs(source);
 
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
@@ -549,7 +564,28 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     // source.
                     let item = element_to_array_type(element, stride, &module, &skip_map)?;
                     let port_name = leak_str(&name);
-                    if read && write {
+                    if fused_outputs.contains(&name) {
+                        // `// @fused_output` — a fresh OUTPUT-ONLY array (the
+                        // buffer-fusion dst). Declared read_write (WGSL has no
+                        // write-only storage), but exposed as an output port only:
+                        // no input port, no aliased pair. The node's read-only
+                        // inputs stay forward deps (correct execution order) and
+                        // the loader allocates a fresh buffer via
+                        // `array_output_capacity`.
+                        outputs.push(NodePort {
+                            name: port_name,
+                            ty: PortType::Array(item),
+                            kind: PortKind::Output,
+                            required: false,
+                        });
+                        if default_dispatch_port.is_none() && first_array_out.is_none() {
+                            first_array_out = Some(name.clone());
+                        }
+                        bindings.push(BindingSlot {
+                            binding: binding.binding,
+                            kind: BindingKind::StorageArrayWriteOut { port: name, _item: item },
+                        });
+                    } else if read && write {
                         // Aliased in/out — declare an input AND an
                         // output with the same name, register the
                         // pair in aliased_array_io.
@@ -1033,6 +1069,51 @@ fn is_channel_skip_marker(comment: &str) -> bool {
     comment.trim() == "@channel_skip"
 }
 
+/// Scan for `// @fused_output` markers preceding a `var<storage, ...> NAME:`
+/// global, returning the marked storage-array global NAMES. These are fresh
+/// OUTPUT-ONLY buffers (the buffer-fusion dst) — declared `read_write` because
+/// WGSL has no write-only storage access mode, but exposed as output ports only
+/// (see [`BindingKind::StorageArrayWriteOut`]). Same conventions as
+/// `// @channel_skip`: block comments stripped first, own-line marker, exact
+/// match (trailing text not accepted). The marker applies to the next storage
+/// global declaration line.
+fn extract_fused_outputs(source: &str) -> std::collections::HashSet<String> {
+    let stripped = strip_block_comments(source);
+    let mut set = std::collections::HashSet::new();
+    let mut pending = false;
+    for raw_line in stripped.lines() {
+        let line = raw_line.trim_start();
+        let (code, comment) = split_line_comment(line);
+        let code = code.trim();
+        if code.is_empty() {
+            if let Some(c) = comment
+                && c.trim() == "@fused_output"
+            {
+                pending = true;
+            }
+            continue;
+        }
+        if pending {
+            if let Some(name) = parse_storage_global_name(code) {
+                set.insert(name);
+            }
+            pending = false;
+        }
+    }
+    set
+}
+
+/// Parse `NAME` from a `... var<storage, ...> NAME: array<...>;` declaration, or
+/// `None` if the line isn't a storage global.
+fn parse_storage_global_name(code: &str) -> Option<String> {
+    let idx = code.find("var<storage")?;
+    let after = &code[idx..];
+    let gt = after.find('>')?; // close of `var<storage, ...>`
+    let rest = after[gt + 1..].trim_start(); // `NAME: array<...>;`
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    (!name.is_empty()).then_some(name)
+}
+
 /// If `code` begins with `struct <ident>`, return the identifier. Used
 /// to detect the start of a struct declaration so the brace walker can
 /// associate the upcoming `{...}` body with this name.
@@ -1164,6 +1245,33 @@ impl EffectNode for WgslCompute {
 
     fn canvas_sized_array_outputs(&self) -> &[&str] {
         &self.canvas_sized_outputs
+    }
+
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        // A `@fused_output` (write-only) array is coincident with the region's
+        // inputs — one element per input element — so size it to the largest
+        // input array's element count. (All inputs in a coincident buffer region
+        // share a count; `max` is robust if they ever differ.)
+        let is_fused_out = self.bindings.iter().any(|b| {
+            matches!(&b.kind, BindingKind::StorageArrayWriteOut { port, .. } if port == port_name)
+        });
+        if is_fused_out {
+            return input_capacities.iter().map(|(_, c)| *c).max();
+        }
+        // Otherwise fall back to the trait default (explicit `max_capacity` param).
+        let is_array_output = self
+            .outputs
+            .iter()
+            .any(|p| p.name == port_name && matches!(p.ty, PortType::Array(_)));
+        if !is_array_output {
+            return None;
+        }
+        params.get("max_capacity").and_then(|v| v.as_u32_clamped(1))
     }
 
     fn requires(&self) -> NodeRequires {
@@ -1324,6 +1432,17 @@ impl EffectNode for WgslCompute {
                     };
                     buf_refs.push((slot.binding, buf));
                 }
+                BindingKind::StorageArrayWriteOut { port, .. } => {
+                    // Fresh output-only array (buffer-fusion dst) — bind the
+                    // loader-allocated output buffer; the kernel only writes it.
+                    let Some(buf) = ctx.outputs.array(port) else {
+                        log::warn!(
+                            "[node.wgsl_compute] fused output array '{port}' not allocated"
+                        );
+                        return;
+                    };
+                    buf_refs.push((slot.binding, buf));
+                }
             }
         }
 
@@ -1360,7 +1479,8 @@ impl EffectNode for WgslCompute {
                 }
                 BindingKind::StorageArrayRead { .. }
                 | BindingKind::StorageArrayReadWrite { .. }
-                | BindingKind::StorageAtomicAccumOut { .. } => {
+                | BindingKind::StorageAtomicAccumOut { .. }
+                | BindingKind::StorageArrayWriteOut { .. } => {
                     let (_, buf) = buf_refs
                         .iter()
                         .find(|(b, _)| *b == slot.binding)

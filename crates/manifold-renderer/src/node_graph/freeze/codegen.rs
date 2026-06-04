@@ -1083,13 +1083,6 @@ pub struct FusionRegion<'a> {
     /// install pass (so no store ever lands on an unallocated output). Must be
     /// non-empty; each id must name a node in [`Self::nodes`].
     pub outputs: Vec<NodeInstanceId>,
-    /// BUFFER regions only: the external input slot (`0..num_external_inputs`)
-    /// whose `Array` buffer is reused IN PLACE as the fused output — bound
-    /// `var<storage, read_write>` so `node.wgsl_compute` exposes it as an aliased
-    /// in/out port, read at `[idx]` and written back with the region result.
-    /// `None` for texture regions (fresh `dst` storage texture) and for buffer
-    /// regions the finder couldn't give a safe in-place target (those don't fuse).
-    pub aliased_external: Option<usize>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -1264,24 +1257,14 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     let ext_specs: Vec<&'static [ChannelSpec]> =
         ext_specs.into_iter().collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
 
-    // The aliased external (`region.aliased_external`) is the in-place output:
-    // its `Array` buffer is bound read_write and the region result is written back
-    // to it. The finder guarantees it matches the output element size and is
-    // region-exclusive (overwriting it corrupts nothing downstream).
-    let aliased = region.aliased_external.ok_or(CodegenError::BadInput)?;
-    if aliased >= region.num_external_inputs {
-        return Err(CodegenError::BadInput);
-    }
-
     // --- element structs (deduped, first-appearance order across all I/O). The
-    // output member's element type registers too; it must equal the aliased
-    // external's type (same struct) or the write-back below is a type mismatch the
-    // build-check rejects (→ unfused). ---
+    // fused output is a FRESH write-only `dst` array (not aliased onto an input):
+    // its element type is the output member's Array output type. ---
     let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
     let ext_tys: Vec<String> =
         ext_specs.iter().map(|s| buffer_element_type(s, &mut structs)).collect();
     let out_member = index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?;
-    let _out_ty = buffer_element_type(member_io[out_member].out_specs, &mut structs);
+    let out_ty = buffer_element_type(member_io[out_member].out_specs, &mut structs);
 
     // --- merged param uniform (node-namespaced scalar fields, padded to 16). ---
     let mut param_order: Vec<(NodeInstanceId, &'static str)> = Vec::new();
@@ -1313,21 +1296,29 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     out.push_str(&struct_body);
     out.push_str("}\n\n");
 
-    // --- bindings: uniform(0), then each external array. The aliased external
-    // binds read_write (it IS the in-place output — node.wgsl_compute exposes a
-    // read_write array as an aliased in/out port); the rest bind read. No separate
-    // `dst` binding. ---
+    // --- bindings: uniform(0), each external array as READ-ONLY input (forward
+    // dependencies — correctly ordered after their producers), then a FRESH
+    // write-only `dst` output tagged `// @fused_output`. WGSL has no write-only
+    // storage access mode, so dst is declared read_write but the marker makes
+    // node.wgsl_compute treat it as output-only (not aliased), so the loader
+    // allocates it fresh and the inputs stay forward deps. This is the fix for the
+    // aliased-output ordering bug. ---
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
     let mut binding = 1u32;
     for (e, ty) in ext_tys.iter().enumerate() {
-        let access = if e == aliased { "read_write" } else { "read" };
         writeln!(
             out,
-            "@group(0) @binding({binding}) var<storage, {access}> src_{e}: array<{ty}>;"
+            "@group(0) @binding({binding}) var<storage, read> src_{e}: array<{ty}>;"
         )
         .unwrap();
         binding += 1;
     }
+    out.push_str("// @fused_output\n");
+    writeln!(
+        out,
+        "@group(0) @binding({binding}) var<storage, read_write> dst: array<{out_ty}>;"
+    )
+    .unwrap();
     out.push('\n');
 
     // --- shared library includes (noise_common, …), prepended so the bodies'
@@ -1354,18 +1345,16 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         out.push_str("\n\n");
     }
 
-    // --- cs_main: 1D element dispatch keyed on the output array's length (the
-    // convention node.wgsl_compute uses for buffer dispatch), pre-read coincident
-    // externals once, thread each body's output element register, write once. ---
+    // --- cs_main: 1D element dispatch. Count from an INPUT array (src_0) — it's
+    // coincident with the output (one output element per input element), and src_0
+    // is a plain read input so it never re-introduces a read on dst. Pre-read each
+    // external element [idx] once, thread each body's output element register,
+    // write the result to the fresh dst once. ---
     out.push_str("@compute @workgroup_size(256)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
     out.push_str("    let idx = gid.x;\n");
-    // Count from the aliased (read_write) output array — its length is the element
-    // count node.wgsl_compute keys the dispatch on.
-    writeln!(out, "    let count = arrayLength(&src_{aliased});").unwrap();
+    out.push_str("    let count = arrayLength(&src_0);\n");
     out.push_str("    if idx >= count {\n        return;\n    }\n");
-    // Pre-read each external element [idx] once (including the aliased buffer — its
-    // incoming data is read before any write-back below).
     for e in 0..region.num_external_inputs {
         writeln!(out, "    let e_{e} = src_{e}[idx];").unwrap();
     }
@@ -1390,8 +1379,8 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         }
         writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
     }
-    // Write the region result back to the aliased buffer in place.
-    writeln!(out, "    src_{aliased}[idx] = r{out_member};").unwrap();
+    // Write the region result to the fresh output array.
+    writeln!(out, "    dst[idx] = r{out_member};").unwrap();
     out.push_str("}\n");
 
     Ok(GeneratedFusion { wgsl: out, param_order })
@@ -1830,7 +1819,6 @@ mod gpu_tests {
             ],
             num_external_inputs: 1,
             outputs: vec![id(1)],
-            aliased_external: None,
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -1873,8 +1861,6 @@ mod gpu_tests {
             nodes: vec![mk(0, InputSource::External(0)), mk(1, InputSource::Node(id(0)))],
             num_external_inputs: 1,
             outputs: vec![id(1)],
-            // External 0 (the instances buffer) is the in-place output.
-            aliased_external: Some(0),
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -1882,19 +1868,25 @@ mod gpu_tests {
             "fused buffer kernel parses through naga (validates the body ABI + includes):\n{}",
             g.wgsl
         );
-        // External 0 is the aliased in-place output: bound read_write, written
-        // back at the end. No separate `dst`.
+        // Inputs are read-only (forward deps); the output is a FRESH write-only
+        // `dst` tagged `// @fused_output` (not aliased). This is what keeps the
+        // node ordered after its producers.
         assert!(
-            g.wgsl.contains("var<storage, read_write> src_0"),
-            "aliased external bound read_write (the in-place output):\n{}",
+            g.wgsl.contains("var<storage, read> src_0"),
+            "external input bound read-only:\n{}",
             g.wgsl
         );
-        assert!(!g.wgsl.contains(" dst:"), "no separate dst binding for a buffer region");
-        assert!(g.wgsl.contains("arrayLength(&src_0)"), "1D dispatch keyed on the aliased array length");
+        assert!(g.wgsl.contains("// @fused_output"), "fresh output tagged @fused_output");
+        assert!(
+            g.wgsl.contains("var<storage, read_write> dst:"),
+            "fresh dst output array declared:\n{}",
+            g.wgsl
+        );
+        assert!(g.wgsl.contains("arrayLength(&src_0)"), "1D dispatch keyed on an input array length");
         assert!(g.wgsl.contains("let e_0 = src_0[idx];"), "external element pre-read once");
         assert!(g.wgsl.contains("let r0 = n0_body"), "first member's element register");
         assert!(g.wgsl.contains("let r1 = n1_body"), "second member threads r0");
-        assert!(g.wgsl.contains("src_0[idx] = r1;"), "region result written back to the aliased buffer");
+        assert!(g.wgsl.contains("dst[idx] = r1;"), "region result written to the fresh output");
     }
 
     /// Tier 3 — a gather input binds a sampler and is passed to the body as a
@@ -1935,7 +1927,6 @@ mod gpu_tests {
             ],
             num_external_inputs: 1,
             outputs: vec![id(1)],
-            aliased_external: None,
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -1998,7 +1989,6 @@ mod gpu_tests {
             ],
             num_external_inputs: 1,
             outputs: vec![id(1), id(2)],
-            aliased_external: None,
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -2198,7 +2188,6 @@ mod gpu_tests {
             ],
             num_external_inputs: 1,
             outputs: vec![id(6)],
-            aliased_external: None,
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

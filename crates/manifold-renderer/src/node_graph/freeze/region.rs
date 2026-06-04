@@ -124,16 +124,6 @@ pub struct Region {
     /// wire each `dst_<k>` to an allocated texture — a region with any escaping
     /// wire to a dead (non-final-reachable) consumer is dropped, not fused.
     pub outputs: Vec<u32>,
-    /// BUFFER regions only: the external slot ([`Self::externals`] index) whose
-    /// `Array<T>` buffer is reused IN PLACE as the fused output. `node.wgsl_compute`
-    /// models a `var<storage, read_write>` array as an aliased in/out port, and the
-    /// executor has no fresh-array-output allocation (its Array model is aliased
-    /// in-place), so a buffer region writes its result back over one of its inputs.
-    /// The chosen external matches the output element size AND is region-exclusive
-    /// (its producer feeds only region members), so overwriting it corrupts nothing
-    /// downstream. `None` for texture regions (their output is a fresh storage
-    /// texture); a buffer region with no safe in-place target isn't built.
-    pub aliased_external: Option<usize>,
 }
 
 /// Partition a flattened def into its maximal pointwise-fusion regions. Returns
@@ -292,27 +282,19 @@ fn classify_node(
     }
 
     // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve).
-    // GATED OFF (2026-06-04). ROOT-CAUSED via runtime instrumentation: the
-    // in-place ALIASED-OUTPUT model is the bug. Binding the fused output as
-    // `var<storage, read_write>` makes the executor treat the wire from the output
-    // buffer's PRODUCER as a feedback BACK-EDGE (the same exclusion real feedback
-    // sims rely on for last-frame state), so it drops that forward dependency from
-    // the execution order. The fused node then runs BEFORE its producers populate
-    // the buffers — reading zeros on frame 1, stale data after (DigitalPlants:
-    // src_0/src_1/src_2 all-zero at dispatch on frame 1 → ~59-61% pixel divergence,
-    // see the #[ignore]d oracle `digitalplants_buffer_fusion_renders_like_unfused`).
-    // Everything else (finder, codegen, element-register threading, control-wire
-    // re-anchor, binding retarget, param seeding, buffer sizes, dispatch count) is
-    // VERIFIED CORRECT. THE FIX is not aliasing: give the fused buffer node a fresh
-    // WRITE-ONLY array output (read-only inputs stay forward deps, correctly
-    // ordered). That needs (a) node.wgsl_compute to accept a write-only storage
-    // array as an output-only port — today its `write && !read` branch errors — and
-    // (b) the executor to allocate that fresh output buffer sized to the element
-    // count. Until then buffer atoms stay boundaries (texture/3D fusion
-    // unaffected). To re-enable: implement the write-only output path, switch
-    // generate_fused_buffer off the aliased model, restore
-    // `return classify_buffer_node(n.as_ref(), node, def, registry);` here, and
-    // un-ignore the oracle (it must pass).
+    // GATED (2026-06-04): the write-only-output model below fixed the major
+    // execution-ORDERING bug (fused output as `@fused_output` instead of an
+    // aliased read_write array, so the node's read-only inputs stay forward deps
+    // and run after their producers) — DigitalPlants divergence fell 61% → 11.9%.
+    // But a ~12% residual remains (constant per-frame, the fused WGSL + data flow
+    // are verified correct, so it's a graph-rewrite / downstream-consumer
+    // interaction, not the fused math). Until `digitalplants_buffer_fusion_renders
+    // _like_unfused` is bit-clean, buffer atoms stay boundaries so nothing renders
+    // wrong (texture/3D fusion unaffected; DigitalPlants renders correct unfused).
+    // The whole write-only pipeline (wgsl_compute @fused_output port,
+    // generate_fused_buffer, finder, oracle) stays wired — re-enable by calling
+    // `classify_buffer_node(n.as_ref(), node, def, registry)` here + un-ignoring
+    // the oracle once the residual is found.
     if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         return NodeClass::Boundary;
     }
@@ -440,7 +422,7 @@ fn classify_node(
 /// naga-parse gate the texture path uses is NOT applied here (it threads no
 /// `wgsl_includes`, so a noise-based buffer body would falsely fail); the install
 /// pass naga-parses the FUSED kernel as the real guard, falling back to unfused.
-#[allow(dead_code)] // GATED: reachable again once the call site in classify_node is un-gated (see there).
+#[allow(dead_code)] // Re-enabled when the buffer-fusion call site in classify_node is un-gated.
 fn classify_buffer_node(
     n: &dyn crate::node_graph::effect_node::EffectNode,
     node: &EffectGraphNode,
@@ -609,81 +591,14 @@ fn build_region(
         return None; // dead region — nothing leaves it, nothing to fuse
     }
 
-    // Buffer regions need an in-place output buffer (the executor has no fresh
-    // array-output allocation): alias the fused output onto a region-exclusive
-    // external of the same element size. v1 supports a single-output buffer
-    // region; fan-out buffer regions are a follow-on.
-    let aliased_external = if is_buffer {
-        if outputs.len() != 1 {
-            return None;
-        }
-        let out_id = outputs[0];
-        let out_size = array_output_item_size(out_id, def, registry)?;
-        // First external (deterministic) whose element size matches the output AND
-        // whose producer feeds ONLY region members (so writing its buffer in place
-        // can't corrupt a downstream reader). None ⇒ no safe in-place target ⇒
-        // don't fuse this buffer region.
-        let chosen = externals.iter().position(|ext| {
-            array_producer_item_size(ext, def, registry) == Some(out_size)
-                && external_is_region_exclusive(ext, def, &node_set)
-        })?;
-        Some(chosen)
-    } else {
-        None
-    };
+    // v1 buffer regions are single-output (the fused node writes one fresh `dst`
+    // array). Fan-out buffer regions are a follow-on. Texture regions allow
+    // multi-output (fan-out) as before.
+    if is_buffer && outputs.len() != 1 {
+        return None;
+    }
 
-    Some(Region { members, externals, outputs, aliased_external })
-}
-
-/// The element byte size of a member node's (single) `Array` output, or `None` if
-/// it has no Array output. Used to match a buffer region's output against an
-/// external buffer it can reuse in place.
-fn array_output_item_size(
-    node_id: u32,
-    def: &EffectGraphDef,
-    registry: &PrimitiveRegistry,
-) -> Option<u32> {
-    let node = def.nodes.iter().find(|n| n.id == node_id)?;
-    let constructed = registry.construct(&node.type_id)?;
-    constructed.outputs().iter().find_map(|o| match o.ty {
-        PortType::Array(at) => Some(at.item_size),
-        _ => None,
-    })
-}
-
-/// The element byte size of an external's producer output port, if it's an Array.
-fn array_producer_item_size(
-    ext: &ExternalRef,
-    def: &EffectGraphDef,
-    registry: &PrimitiveRegistry,
-) -> Option<u32> {
-    let node = def.nodes.iter().find(|n| n.id == ext.from_node)?;
-    let constructed = registry.construct(&node.type_id)?;
-    constructed.outputs().iter().find_map(|o| {
-        if o.name == ext.from_port {
-            match o.ty {
-                PortType::Array(at) => Some(at.item_size),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    })
-}
-
-/// Whether an external's producer output feeds ONLY region members — so reusing
-/// its buffer as the fused region's in-place output overwrites nothing a
-/// downstream (non-region) node still reads.
-fn external_is_region_exclusive(
-    ext: &ExternalRef,
-    def: &EffectGraphDef,
-    node_set: &AHashSet<u32>,
-) -> bool {
-    !def.wires.iter().any(|w| {
-        w.from_node == ext.from_node
-            && w.from_port == ext.from_port
-            && !node_set.contains(&w.to_node)
-    })
+    Some(Region { members, externals, outputs })
 }
 
 /// Kahn topo-sort of a region's members by intra-region texture wires. `None` on

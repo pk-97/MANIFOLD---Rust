@@ -368,7 +368,6 @@ pub(crate) fn fuse_canonical_def(
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
             outputs: region.outputs.iter().map(|&d| NodeInstanceId(d)).collect(),
-            aliased_external: region.aliased_external,
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline
@@ -500,17 +499,12 @@ pub(crate) fn fuse_canonical_def(
         // `region.outputs`, matching the codegen's binding order). The finder
         // already guaranteed every such consumer is a live surviving node, so each
         // `dst_<k>` lands on a texture the executor allocates.
+        // Single-output regions (every buffer region, and the common texture
+        // case) expose `dst`; a texture FAN-OUT region exposes `dst_<k>`. A buffer
+        // region's fresh `// @fused_output` array is also named `dst`.
         let multi = region.outputs.len() > 1;
         for (k, &out_doc) in region.outputs.iter().enumerate() {
-            // A BUFFER region's output is its aliased read_write array — exposed by
-            // node.wgsl_compute under that input's `src_<a>` name (the in/out port),
-            // NOT a fresh `dst`. A texture region uses `dst` (single) / `dst_<k>`
-            // (fan-out). Buffer regions are single-output in v1.
-            let from_port = match region.aliased_external {
-                Some(a) => format!("src_{a}"),
-                None if multi => format!("dst_{k}"),
-                None => "dst".to_string(),
-            };
+            let from_port = if multi { format!("dst_{k}") } else { "dst".to_string() };
             for w in &def.wires {
                 if w.from_node == out_doc && !member_region.contains_key(&w.to_node) {
                     new_wires.push(EffectGraphWire {
