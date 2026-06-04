@@ -1173,6 +1173,89 @@ fn fused_generator_renders_like_unfused() {
     );
 }
 
+/// BUFFER-domain fusion end-to-end parity: the real DigitalPlants generator —
+/// whose GPU per-instance chain (instance_position_jitter → lerp_instance_fields
+/// → instance_rotation_jitter) fuses into one `var<storage>` kernel writing back
+/// to the aliased instance buffer in place — must render frame-for-frame like the
+/// unfused preset. Drives the REAL JsonGraphGenerator path (CPU curve atoms,
+/// particle/instance buffers, the fused kernel, the line renderer) with a short
+/// warmup so the instance buffers populate, then compares the rendered frame. A
+/// wrong buffer fuse (mis-threaded register, wrong alias target, corrupted
+/// in-place write) diverges the geometry → the rendered lines move → fails.
+/// This is the buffer analogue of `fused_generator_renders_like_unfused`.
+///
+/// IGNORED while buffer fusion is gated off in `region::classify_buffer_node`
+/// (the executor renders the fused buffer node with deterministic divergence —
+/// this oracle is what proved it, and it's the gate for the fix). Un-ignore this
+/// the moment the gate is removed; it must pass before buffer fusion ships.
+#[test]
+#[ignore = "buffer fusion gated off in classify_buffer_node pending the executor fix this oracle gates"]
+fn digitalplants_buffer_fusion_renders_like_unfused() {
+    use super::install::fuse_generator_def;
+    use crate::generator::Generator;
+    use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+    use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
+    use crate::generators::json_graph_generator::JsonGraphGenerator;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+
+    let json = bundled_generator_preset_json(&manifold_core::GeneratorTypeId::new("DigitalPlants"))
+        .expect("DigitalPlants preset bundled");
+    let canonical: EffectGraphDef = serde_json::from_str(json).unwrap();
+    // The whole point: DigitalPlants' GPU per-instance chain must fuse into a
+    // buffer kernel that BUILDS (the aliased-output model). If this is None the
+    // buffer-fusion activation regressed.
+    let fused_def =
+        fuse_generator_def(&canonical, &registry).expect("DigitalPlants buffer region fuses + builds");
+
+    let ctx = |t: f64| GeneratorContext {
+        time: t,
+        beat: t * 2.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    // Warm up a few frames (instance/particle buffers populate), then capture.
+    let render = |def: EffectGraphDef| -> RenderTarget {
+        let mut g = JsonGraphGenerator::from_def_with_device(def, &registry, &device, w, h, FMT)
+            .expect("generator builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "freeze-dp-out");
+        for i in 0..6u32 {
+            let mut enc = device.create_encoder("freeze-dp");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+        target
+    };
+
+    let unfused = render(canonical);
+    let fused = render(fused_def);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.01) && r.over_count < 256,
+        "fused DigitalPlants must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Render an effect graph whose bound output is at a REDUCED resolution
 /// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as
 /// [`render_graph`] but the output target — and the copy-out — are sized to the
