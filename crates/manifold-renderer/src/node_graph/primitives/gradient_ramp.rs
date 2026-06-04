@@ -27,11 +27,17 @@ use crate::node_graph::primitive::Primitive;
 /// finely-broken ramps (e.g. a procedural rainbow laid out as breakpoints).
 const MAX_STOPS: usize = 16;
 
+// Standalone-codegen uniform layout: the generated `Params` struct lays out the
+// scalar params (domain) first, then one `_count` word per Table param, pads the
+// header to 16 bytes, then appends each table's `array<vec4<f32>, 16>`. So the
+// field order here is {domain, count, _pad, _pad, stops} — domain ahead of count,
+// unlike the hand gradient_ramp.wgsl ({count, domain, …}). The body recovers the
+// column t from uv.x, so there is no width field.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GradientRampUniforms {
-    count: u32,
     domain: f32,
+    count: u32,
     _pad0: u32,
     _pad1: u32,
     /// Each stop is (position, r, g, b).
@@ -77,6 +83,8 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["gradient", "color ramp", "lut", "palette"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/gradient_ramp_body.wgsl"),
 }
 
 impl Primitive for GradientRamp {
@@ -113,16 +121,21 @@ impl Primitive for GradientRamp {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Source generator with a Table param: the generated kernel binds
+            // uniform(0)/dst(1); the `stops` Table expands to a count word + a
+            // 16-entry vec4 array. The body recovers the column t from uv.x.
+            // gradient_ramp.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/gradient_ramp.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.gradient_ramp standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.gradient_ramp",
             )
         });
 
         let uniforms = GradientRampUniforms {
-            count,
             domain,
+            count,
             _pad0: 0,
             _pad1: 0,
             stops,

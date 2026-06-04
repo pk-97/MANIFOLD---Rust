@@ -163,10 +163,22 @@ pub fn generate_standalone(
 
     // --- param uniform struct (scalar fields in PARAMS order, padded to a
     // 16-byte multiple to match the setBytes buffer size). Omitted entirely when
-    // the atom has no params. ---
+    // the atom has no params. A Table param (gradient_ramp's `stops`) expands to a
+    // `<name>_count: u32` header word plus a fixed `array<vec4<f32>, TABLE_LEN>`
+    // appended after the 16-byte-aligned header; the body receives it as
+    // `<name>_count: u32, <name>: array<vec4<f32>, TABLE_LEN>`. param_wgsl_type
+    // still rejects Table, so the fused region-grower keeps treating a table atom
+    // as a boundary — only this standalone path lays one out. ---
+    const TABLE_LEN: usize = 16;
+    let table_params: Vec<&ParamDef> =
+        params.iter().filter(|p| p.ty == ParamType::Table).collect();
     if has_uniform {
         out.push_str("struct Params {\n");
+        let mut header_words = 0usize;
         for p in params {
+            if p.ty == ParamType::Table {
+                continue; // emitted as count (here) + array (below)
+            }
             let f = wgsl_safe_field(p.name);
             if p.ty == ParamType::Vec3 {
                 // A vec3 param expands to three consecutive f32 fields.
@@ -177,12 +189,18 @@ pub fn generate_standalone(
                 let ty = param_wgsl_type(p)?;
                 writeln!(out, "    {f}: {ty},").unwrap();
             }
+            header_words += param_word_count(p)?;
         }
-        let field_words: usize =
-            params.iter().map(param_word_count).sum::<Result<usize, CodegenError>>()?;
-        let pad_words = (4 - (field_words % 4)) % 4;
+        for t in &table_params {
+            writeln!(out, "    {}_count: u32,", t.name).unwrap();
+            header_words += 1;
+        }
+        let pad_words = (4 - (header_words % 4)) % 4;
         for i in 0..pad_words {
             writeln!(out, "    _pad{i}: u32,").unwrap();
+        }
+        for t in &table_params {
+            writeln!(out, "    {}: array<vec4<f32>, {TABLE_LEN}>,", t.name).unwrap();
         }
         out.push_str("}\n\n");
     }
@@ -276,13 +294,22 @@ pub fn generate_standalone(
     }
     args.push("uv".to_string());
     args.push("vec2<f32>(dims)".to_string());
+    // Scalar params first (PARAMS order; Vec3 reassembled), then each table as
+    // (count, array) — matching the body signature `…, <t>_count, <t>` per table.
     for p in params {
+        if p.ty == ParamType::Table {
+            continue;
+        }
         let f = wgsl_safe_field(p.name);
         if p.ty == ParamType::Vec3 {
             args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
         } else {
             args.push(format!("params.{f}"));
         }
+    }
+    for t in &table_params {
+        args.push(format!("params.{}_count", t.name));
+        args.push(format!("params.{}", t.name));
     }
     writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
     out.push_str("    textureStore(dst, vec2<i32>(id.xy), result);\n");
@@ -1761,6 +1788,84 @@ mod gpu_tests {
                 r.max_abs, r.max_rel
             );
         }
+    }
+
+    /// TABLE-param SOURCE parity: node.gradient_ramp's `stops` Table param expands
+    /// in the generated uniform to a `stops_count` header word + a fixed
+    /// `array<vec4<f32>, 16>` after the aligned header, and the body receives
+    /// (stops_count, stops). The hand uniform is {count, domain, _pad, _pad, stops}
+    /// (count first); the generated layout is {domain, count, _pad, _pad, stops}
+    /// (scalar params before table counts) — the array sits at the same offset 16
+    /// in both, only the two header scalars swap. Pack each, dispatch as a Source,
+    /// diff. domain=2 exercises the past-last-stop extrapolation tail.
+    #[test]
+    fn generated_gradient_ramp_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.gradient_ramp").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+        )
+        .expect("gradient_ramp generates");
+        // Structural: the Table param expands to a count word + a vec4 array.
+        assert!(
+            generated.contains("stops_count: u32"),
+            "table count word missing:\n{generated}"
+        );
+        assert!(
+            generated.contains("stops: array<vec4<f32>, 16>"),
+            "table array missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/gradient_ramp.wgsl");
+
+        let count: u32 = 3;
+        let domain: f32 = 2.0;
+        let stops: [[f32; 4]; 3] = [
+            [0.0, 0.0, 0.0, 0.0], // black at t=0
+            [0.5, 1.0, 0.0, 0.0], // red at t=0.5
+            [1.0, 1.0, 1.0, 0.0], // yellow at t=1.0 (then extrapolated to t=2)
+        ];
+        // 16 vec4 array = 256 bytes, first 3 stops filled.
+        let mut stops_bytes = vec![0u8; 256];
+        for (i, s) in stops.iter().enumerate() {
+            for (j, v) in s.iter().enumerate() {
+                let off = i * 16 + j * 4;
+                stops_bytes[off..off + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        // Hand header: {count, domain, _pad, _pad}.
+        let mut hand = vec![0u8; 16];
+        hand[0..4].copy_from_slice(&count.to_le_bytes());
+        hand[4..8].copy_from_slice(&domain.to_le_bytes());
+        hand.extend_from_slice(&stops_bytes);
+        // Generated header: {domain, count, _pad, _pad}.
+        let mut gen_bytes = vec![0u8; 16];
+        gen_bytes[0..4].copy_from_slice(&domain.to_le_bytes());
+        gen_bytes[4..8].copy_from_slice(&count.to_le_bytes());
+        gen_bytes.extend_from_slice(&stops_bytes);
+
+        let from_original = dispatch_source(&device, original, Some(&hand), w, h);
+        let from_generated = dispatch_source(&device, &generated, Some(&gen_bytes), w, h);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated gradient_ramp must reproduce gradient_ramp.wgsl \
+             (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
     }
 
     /// Dispatch a SOURCE (generator) kernel: [uniform(0)], output. No texture
