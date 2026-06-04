@@ -205,6 +205,10 @@ pub(crate) fn fuse_canonical_def(
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
     let mut fused_docs: Vec<u32> = Vec::with_capacity(regions.len());
+    // Control wires re-anchored onto a fused node's port-shadow: (fused_doc,
+    // producer node, producer port, `n{idx}_<param>` field). Emitted after the
+    // texture rewrite so the producer (a surviving boundary) is already in place.
+    let mut control_wires: Vec<(u32, u32, String, String)> = Vec::new();
 
     for (i, region) in regions.iter().enumerate() {
         // ── Build the codegen region from this component's members (topo order),
@@ -266,7 +270,23 @@ pub(crate) fn fuse_canonical_def(
                     (fused_id.clone(), field.clone()),
                 );
                 let value = effective_param_f32(doc_node.params.get(p.name), &p.default)?;
-                fused_params.insert(field, SerializedParamValue::Float { value });
+                fused_params.insert(field.clone(), SerializedParamValue::Float { value });
+
+                // A control wire driving this param (LFO → gain.gain) is re-anchored
+                // onto the fused node's port-shadow `n{idx}_<param>`, so the producer
+                // keeps driving it every frame (DD-A5). The seeded value above is the
+                // fallback the shadow port overrides. The producer is a control
+                // producer and so a boundary (survives) — guard defensively.
+                if let Some(cw) = def
+                    .wires
+                    .iter()
+                    .find(|w| w.to_node == member.doc_id && w.to_port == p.name)
+                {
+                    if member_region.contains_key(&cw.from_node) {
+                        return None; // producer fused away — can't route its scalar
+                    }
+                    control_wires.push((fused_doc, cw.from_node, cw.from_port.clone(), field));
+                }
             }
         }
 
@@ -365,6 +385,19 @@ pub(crate) fn fuse_canonical_def(
                 }
             }
         }
+    }
+    // (d) control wires: the surviving producer drives the fused node's port-shadow
+    // `n{idx}_<param>`, so a graph-wired param (LFO → gain.gain) keeps modulating
+    // after the atom folds into the kernel. WgslCompute shadows every uniform field
+    // as an optional ScalarF32 input, and reads the wire when present (else the
+    // seeded fallback), so this is a plain control wire onto the fused node.
+    for (fused_doc, from_node, from_port, field) in control_wires {
+        new_wires.push(EffectGraphWire {
+            from_node,
+            from_port,
+            to_node: fused_doc,
+            to_port: field,
+        });
     }
 
     let fused_def = EffectGraphDef {
@@ -731,5 +764,58 @@ mod tests {
         assert_eq!(region_of("gain", "gain").as_deref(), Some("fused_region_0"));
         assert_eq!(region_of("invert", "intensity").as_deref(), Some("fused_region_0"));
         assert_eq!(region_of("contrast", "contrast").as_deref(), Some("fused_region_0"));
+    }
+
+    /// A control wire driving a fused-away atom's param is re-anchored onto the
+    /// fused node's port-shadow `n{idx}_<param>`. texture_dimensions.aspect drives
+    /// gain.gain; gain is member 0 of its region, so after fusion the wire runs
+    /// texture_dimensions → fused.n0_gain — keeping the modulation live.
+    #[test]
+    fn control_wire_reanchors_onto_fused_shadow_port() {
+        let json = r#"{
+            "version": 1, "name": "ctrl", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
+                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "aspect", "toNode": 2, "toPort": "gain" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let fused = fuse_canonical_def(&def, &registry()).expect("the control-wired region fuses");
+        let fused_doc =
+            fused.def.nodes.iter().find(|n| n.type_id == "node.wgsl_compute").unwrap().id;
+        let dims_doc =
+            fused.def.nodes.iter().find(|n| n.type_id == "node.texture_dimensions").unwrap().id;
+        let cw = fused
+            .def
+            .wires
+            .iter()
+            .find(|w| w.from_node == dims_doc && w.to_node == fused_doc)
+            .expect("texture_dimensions still drives the fused node");
+        assert_eq!(cw.from_port, "aspect", "the producer's aspect output");
+        assert_eq!(cw.to_port, "n0_gain", "re-anchored onto gain's shadow field (member 0)");
+        // The fused WgslCompute must actually expose that shadow port.
+        use crate::node_graph::effect_node::EffectNode;
+        use crate::node_graph::primitives::WgslCompute;
+        let src = fused
+            .def
+            .nodes
+            .iter()
+            .find(|n| n.id == fused_doc)
+            .and_then(|n| n.wgsl_source.as_deref())
+            .unwrap();
+        let mut wc = WgslCompute::new();
+        wc.set_wgsl_source(src);
+        assert!(
+            wc.inputs().iter().any(|i| i.name == "n0_gain"),
+            "the fused node exposes n0_gain as a control input"
+        );
     }
 }

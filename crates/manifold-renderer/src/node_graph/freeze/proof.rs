@@ -1044,6 +1044,68 @@ fn fused_quarter_res_chain_matches_unfused() {
     );
 }
 
+/// Control-wire oracle — a param driven by a graph WIRE (not a slider) keeps
+/// modulating after its atom folds into a fused kernel. texture_dimensions.aspect
+/// drives gain.gain; the input is 256×128 so aspect = 2.0, materially different
+/// from gain's default 1.0 — so if fusion dropped the wire (falling back to the
+/// seeded default) the fused result would diverge. gain + invert fuse; the
+/// producer survives and feeds the fused node's port-shadow n0_gain. Fused vs
+/// unfused must agree, proving the re-anchored control wire actually drives the
+/// kernel.
+#[test]
+fn fused_control_wired_param_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 128u32); // non-square → aspect = 2.0 (≠ gain default 1.0)
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "ctrl", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
+            { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "aspect", "toNode": 2, "toPort": "gain" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the control-wired region fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 16,
+        "fused control-wired param must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Fan-out oracle — a region with TWO outputs renders identically fused vs
 /// unfused, end-to-end through the executor. gain forks into invert and contrast;
 /// each runs into its own `threshold` boundary; the two re-merge at a `mix`. The

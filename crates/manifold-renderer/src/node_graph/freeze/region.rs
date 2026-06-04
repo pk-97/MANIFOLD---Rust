@@ -328,19 +328,38 @@ fn classify_node(
         return NodeClass::Boundary;
     }
 
-    // No control wire into a non-texture port: a scalar/control wire (LFO →
-    // gain.gain) would dangle when the node folds into the kernel — v1 cuts
-    // rather than re-anchors it (re-anchoring a boundary-driven param as a
-    // per-dispatch uniform is a documented follow-on, §11.B). A live PARAM
-    // binding (slider/MIDI) is fine — it's retargeted onto the fused uniform.
+    // Control wires (a scalar driving a param port — LFO → gain.gain, a focus
+    // distance → scale_offset.offset — not a texture):
+    //   - INTO this node's scalar param: fine. After fusion the producer feeds the
+    //     fused node's port-shadow `n{i}_<param>` (DD-A5), so the param keeps being
+    //     driven every frame. A wire into any OTHER non-texture input (an
+    //     Array/buffer port the fused uniform can't carry) still cuts.
+    //   - OUT of this node into someone else's param makes this a control PRODUCER.
+    //     It must stay a boundary so it survives the rewrite and can wire its scalar
+    //     into the fused node — folding it away would strand the scalar (the fused
+    //     node only exposes its members' texture output). Pure scalar nodes are
+    //     already boundaries by arity; this also catches a texture atom that
+    //     additionally emits a control scalar, keeping the install rewrite local.
     let tex_ports: AHashSet<&str> = n
         .inputs()
         .iter()
         .filter(|i| is_texture_port(&i.ty))
         .map(|i| i.name)
         .collect();
+    let scalar_params: AHashSet<&str> = n
+        .parameters()
+        .iter()
+        .filter(|p| param_wgsl_type(p).is_ok())
+        .map(|p| p.name)
+        .collect();
     for w in &def.wires {
-        if w.to_node == node.id && !tex_ports.contains(w.to_port.as_str()) {
+        if w.to_node == node.id
+            && !tex_ports.contains(w.to_port.as_str())
+            && !scalar_params.contains(w.to_port.as_str())
+        {
+            return NodeClass::Boundary;
+        }
+        if w.from_node == node.id && is_scalar_param_wire(def, registry, w) {
             return NodeClass::Boundary;
         }
     }
@@ -586,6 +605,29 @@ fn final_reachable_nodes(def: &EffectGraphDef) -> AHashSet<u32> {
         }
     }
     live
+}
+
+/// Whether wire `w` is a CONTROL wire — it drives a scalar param port of its
+/// target (LFO → gain.gain), as opposed to feeding a texture input. The target's
+/// scalar params shadow as same-named input ports, and texture inputs have
+/// distinct names, so a `to_port` that names a scalar param is unambiguously a
+/// control wire. Used by `classify_node` to keep control PRODUCERS as boundaries
+/// (so they survive and can wire into the fused node's port-shadow) and by
+/// `install` to re-anchor those wires onto `n{i}_<param>`.
+fn is_scalar_param_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    let Some(node) = registry.construct(&to.type_id) else {
+        return false;
+    };
+    node.parameters()
+        .iter()
+        .any(|p| p.name == w.to_port && param_wgsl_type(p).is_ok())
 }
 
 /// Whether wire `w` feeds a STATE-CAPTURE input port of its target (a feedback
@@ -1138,4 +1180,37 @@ mod tests {
             "the specialization blur is a boundary, leaving both inverts lone atoms"
         );
     }
+
+    /// A control wire into a scalar PARAM no longer cuts the consumer — it fuses,
+    /// and the producer stays a boundary. `texture_dimensions` (a scalar reducer,
+    /// boundary) drives `gain.gain`; gain + invert still form one region. The
+    /// producer being a control producer keeps it surviving so install can route
+    /// its scalar onto the fused node's port-shadow.
+    #[test]
+    fn control_wired_param_atom_still_fuses() {
+        let json = r#"{
+            "version": 1, "name": "ctrl", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
+                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "aspect", "toNode": 2, "toPort": "gain" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "gain (control-wired) + invert are one region");
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![2, 3],
+            "gain + invert fuse; texture_dimensions stays a boundary producer"
+        );
+    }
+
 }
