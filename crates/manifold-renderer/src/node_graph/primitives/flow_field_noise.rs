@@ -195,8 +195,11 @@ mod tests {
 
     #[test]
     fn flow_field_noise_has_z_scale_warp_scale_and_resolution_params() {
+        // `time` leads the list: the freeze fusion regularized the frame-time
+        // input as a port-shadowed `time` param (the time-param pattern) so the
+        // generated kernel can read it as a uniform field.
         let names: Vec<&str> = FlowFieldNoise::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["z_scale", "warp_scale", "resolution"]);
+        assert_eq!(names, vec!["time", "z_scale", "warp_scale", "resolution"]);
     }
 
     #[test]

@@ -228,8 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn uniform_struct_is_48_bytes() {
-        assert_eq!(std::mem::size_of::<CurlSlope3DUniforms>(), 48);
+    fn uniform_struct_is_32_bytes() {
+        // 8 scalar words (the freeze fusion flattened the old vec3 ref_axis to
+        // three f32s to match the generated codegen's scalar layout); 32 is a
+        // 16-byte multiple so it binds as a uniform without tail padding.
+        assert_eq!(std::mem::size_of::<CurlSlope3DUniforms>(), 32);
     }
 
     #[test]
