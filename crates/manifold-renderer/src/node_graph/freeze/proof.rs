@@ -816,3 +816,118 @@ fn every_fused_generator_kernel_compiles() {
         "tier 2: {fused_generators} generator presets fused {fused_kernels} kernel(s)"
     );
 }
+
+/// Tier 3 oracle — a gather atom folded into a region renders identically fused
+/// vs unfused. source → sharpen(Gather) → invert → final: in the fused kernel,
+/// sharpen samples the source (bound `src_0` + the internal sampler) at the
+/// neighbour offsets it computes, then threads its register to invert; unfused,
+/// it's two passes. Both run the same `sharpen`/`invert` bodies, so they must
+/// agree (the discontinuity-aware budget absorbs any edge-sampler f16 drift).
+#[test]
+fn fused_gather_region_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "warp", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.sharpen", "nodeId": "sharp" },
+            { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the gather region fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.02),
+        "fused gather region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// Tiers 2 + 3 together — the canonical UV-warp. `remap` reads `source` as a
+/// GATHER (samples it at coords from a field) and `uv_field` as a COINCIDENT
+/// register; `uv_field` is a SOURCE generator producing those coords. So
+/// source → remap.source, uv_field → remap.uv_field, remap → final fuses the
+/// Source head + the mixed gather/coincident atom into ONE kernel: uv_field
+/// produces the coords register, remap samples the bound external source at them.
+/// This is the warp family's fusion path, proven to match its two-pass form.
+#[test]
+fn fused_warp_region_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "warp2", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.uv_field", "nodeId": "uvf" },
+            { "id": 2, "typeId": "node.remap", "nodeId": "remap" },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "uv_field" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.remap"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the warp region fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.02),
+        "fused warp region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}

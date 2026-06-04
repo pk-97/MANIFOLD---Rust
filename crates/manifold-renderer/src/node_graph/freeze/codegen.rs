@@ -500,8 +500,15 @@ pub struct RegionNode<'a> {
     pub fusion_kind: FusionKind,
     pub body: &'a str,
     pub params: &'a [ParamDef],
-    /// Texture inputs in body-arg order (Pointwise: 1; MultiInputCoincident: ≥2).
+    /// Texture inputs in body-arg order (Pointwise: 1; MultiInputCoincident: ≥2;
+    /// Source: 0). Each pairs with the same index in [`Self::input_access`].
     pub inputs: Vec<InputSource>,
+    /// How each input is read, aligned to [`Self::inputs`]. A `Gather` input is
+    /// bound as a texture (+ a shared sampler) the body samples itself at a coord
+    /// it computes — NOT pre-read into a register. Empty (or short) ⇒ the missing
+    /// entries default to `Coincident`, so every all-coincident region keeps
+    /// constructing this as `vec![]` and emits byte-identical WGSL.
+    pub input_access: Vec<InputAccess>,
 }
 
 /// A maximal fusable region: nodes in topo order, the external inputs they read,
@@ -644,16 +651,40 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     out.push_str(&struct_body);
     out.push_str("}\n\n");
 
-    // --- bindings: uniform(0), external inputs(1..), output. textureLoad reads
-    // (exact texel, read-once) so no sampler. ---
+    // --- which inputs are gathered (the body samples a bound texture itself) vs
+    // coincident (a register threaded in). A sampler is bound iff some input is a
+    // sampler-`Gather`; an external is pre-read into a register only if some node
+    // reads it coincidentally — a gather-only external is never load-into-register
+    // (the body samples it at a coord it computes). ---
+    let mut needs_sampler = false;
+    let mut coincident_ext: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for node in &region.nodes {
+        for (idx, src) in node.inputs.iter().enumerate() {
+            let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            if access == InputAccess::Gather {
+                needs_sampler = true;
+            }
+            if !access.is_gather()
+                && let InputSource::External(e) = src
+            {
+                coincident_ext.insert(*e);
+            }
+        }
+    }
+
+    // --- bindings: uniform(0), external input textures(1..), [sampler], output. ---
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
     for e in 0..region.num_external_inputs {
         writeln!(out, "@group(0) @binding({}) var src_{e}: texture_2d<f32>;", e + 1).unwrap();
     }
-    let out_binding = region.num_external_inputs + 1;
+    let mut next_binding = region.num_external_inputs + 1;
+    if needs_sampler {
+        writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
+        next_binding += 1;
+    }
     writeln!(
         out,
-        "@group(0) @binding({out_binding}) var dst: texture_storage_2d<rgba16float, write>;"
+        "@group(0) @binding({next_binding}) var dst: texture_storage_2d<rgba16float, write>;"
     )
     .unwrap();
     out.push('\n');
@@ -685,20 +716,45 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // Ambient fragment context, computed once and threaded to every body after
     // its inputs (matches the standalone wrapper). `dims` is already bound above.
     out.push_str("    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n");
-    for e in 0..region.num_external_inputs {
+    for &e in &coincident_ext {
         writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
     }
     for (i, node) in region.nodes.iter().enumerate() {
         let mut args: Vec<String> = Vec::new();
-        for src in &node.inputs {
-            match src {
-                InputSource::External(e) => {
+        for (idx, src) in node.inputs.iter().enumerate() {
+            let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            match (access, src) {
+                // A gathered input: the body samples the bound texture itself at a
+                // coord it computes, so it gets the texture handle (+ the shared
+                // sampler for the sampler-Gather flavour). It MUST read an external
+                // — a register is one texel, not a whole texture — which the finder
+                // guarantees by never unioning across a gather-consumed wire.
+                (InputAccess::Gather, InputSource::External(e)) => {
+                    if *e >= region.num_external_inputs {
+                        return Err(CodegenError::BadInput);
+                    }
+                    args.push(format!("src_{e}"));
+                    args.push("samp".to_string());
+                }
+                (InputAccess::GatherTexel, InputSource::External(e)) => {
+                    if *e >= region.num_external_inputs {
+                        return Err(CodegenError::BadInput);
+                    }
+                    args.push(format!("src_{e}"));
+                }
+                // A gather reading a region register can't be expressed.
+                (InputAccess::Gather | InputAccess::GatherTexel, InputSource::Node(_)) => {
+                    return Err(CodegenError::BadInput);
+                }
+                // Coincident / texel: the pre-read external register, or an earlier
+                // node's threaded register.
+                (_, InputSource::External(e)) => {
                     if *e >= region.num_external_inputs {
                         return Err(CodegenError::BadInput);
                     }
                     args.push(format!("ext_{e}"));
                 }
-                InputSource::Node(id) => {
+                (_, InputSource::Node(id)) => {
                     let Some(j) = index_of(*id) else {
                         return Err(CodegenError::BadInput);
                     };
@@ -891,6 +947,7 @@ mod gpu_tests {
                     body,
                     params: &[],
                     inputs: vec![InputSource::External(0)],
+                    input_access: vec![],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -898,6 +955,7 @@ mod gpu_tests {
                     body,
                     params: &[],
                     inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![],
                 },
             ],
             num_external_inputs: 1,
@@ -911,6 +969,52 @@ mod gpu_tests {
         );
         assert!(g.wgsl.contains("fn n0_body"), "first body namespaced");
         assert!(g.wgsl.contains("fn n1_body"), "second body namespaced");
+    }
+
+    /// Tier 3 — a gather input binds a sampler and is passed to the body as a
+    /// texture handle (the body samples it itself at a coord it computes), and is
+    /// NOT pre-read into a register. sharpen (a Gather) → invert (Coincident): the
+    /// kernel binds `samp`, calls `n0_body(src_0, samp, …)`, never emits
+    /// `let ext_0`, and threads sharpen's register into invert.
+    #[test]
+    fn fused_gather_binds_sampler_and_passes_texture() {
+        use crate::node_graph::freeze::classify::InputAccess;
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::{Invert, Sharpen};
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: Sharpen::FUSION_KIND,
+                    body: Sharpen::WGSL_BODY.unwrap(),
+                    params: Sharpen::PARAMS,
+                    inputs: vec![InputSource::External(0)],
+                    input_access: vec![InputAccess::Gather],
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: Invert::FUSION_KIND,
+                    body: Invert::WGSL_BODY.unwrap(),
+                    params: Invert::PARAMS,
+                    inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![InputAccess::Coincident],
+                },
+            ],
+            num_external_inputs: 1,
+            output: id(1),
+        };
+        let g = generate_fused(&region).expect("gather region fuses");
+        assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
+        assert!(
+            g.wgsl.contains("n0_body(src_0, samp,"),
+            "sharpen receives the texture + shared sampler and samples it itself"
+        );
+        assert!(
+            !g.wgsl.contains("let ext_0 ="),
+            "a gather-only external is never pre-read into a register"
+        );
+        assert!(g.wgsl.contains("fn n1_body"), "invert namespaced + threads sharpen's register");
     }
 
     /// The generated standalone gain kernel reproduces the hand-written
@@ -1088,13 +1192,13 @@ mod gpu_tests {
         // atom types' consts.
         let region = FusionRegion {
             nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)] },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))] },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))] },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))] },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))] },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))] },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))] },
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![] },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![] },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![] },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![] },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![] },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![] },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![] },
             ],
             num_external_inputs: 1,
             output: id(6),

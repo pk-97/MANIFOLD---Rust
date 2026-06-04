@@ -229,6 +229,7 @@ pub(crate) fn fuse_canonical_def(
                 body,
                 params: leak_params(node.parameters()),
                 inputs,
+                input_access: member.input_access.clone(),
             });
         }
         let fusion_region = FusionRegion {
@@ -460,10 +461,11 @@ mod tests {
         }
     }
 
-    /// A boundary in the middle splits the card into TWO fused nodes — the
+    /// A true boundary in the middle splits the card into TWO fused nodes — the
     /// headline generalisation past whole-card fusion. source → gain → contrast
-    /// → gaussian_blur(boundary) → saturation → clamp → final rewrites to
-    /// source → fused_region_0 → blur → fused_region_1 → final_output.
+    /// → threshold(boundary) → saturation → clamp → final rewrites to
+    /// source → fused_region_0 → threshold → fused_region_1 → final_output. (A
+    /// gather like gaussian_blur would instead fold IN — see the region tests.)
     #[test]
     fn boundary_splits_into_two_fused_nodes() {
         let json = r#"{
@@ -471,7 +473,7 @@ mod tests {
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 3, "typeId": "node.gaussian_blur", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
                 { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -487,7 +489,7 @@ mod tests {
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let fused = fuse_canonical_def(&def, &registry()).expect("two regions fuse");
 
-        // Nodes: source, fused_region_0, blur, fused_region_1, final_output = 5.
+        // Nodes: source, fused_region_0, threshold, fused_region_1, final_output.
         let wgsl_nodes: Vec<_> = fused
             .def
             .nodes
@@ -496,8 +498,8 @@ mod tests {
             .collect();
         assert_eq!(wgsl_nodes.len(), 2, "two fused regions");
         assert!(
-            fused.def.nodes.iter().any(|n| n.type_id == "node.gaussian_blur"),
-            "the blur boundary survives between the two fused nodes"
+            fused.def.nodes.iter().any(|n| n.type_id == "node.threshold"),
+            "the threshold boundary survives between the two fused nodes"
         );
 
         // Routing: gain/contrast → fused_region_0; sat/clamp → fused_region_1.
@@ -512,16 +514,16 @@ mod tests {
         assert_eq!(region_of("sat", "saturation").as_deref(), Some("fused_region_1"));
         assert_eq!(region_of("clamp", "max").as_deref(), Some("fused_region_1"));
 
-        // The chain reconnects: source → r0, r0 → blur, blur → r1, r1 → final.
+        // The chain reconnects: source → r0, r0 → threshold, threshold → r1 → final.
         let id_of =
             |nid: &str| fused.def.nodes.iter().find(|n| n.node_id.as_str() == nid).map(|n| n.id);
-        let blur = id_of("blur").unwrap();
+        let thresh = id_of("thresh").unwrap();
         let r0 = id_of("fused_region_0").unwrap();
         let r1 = id_of("fused_region_1").unwrap();
         let has_wire =
             |from: u32, to: u32| fused.def.wires.iter().any(|w| w.from_node == from && w.to_node == to);
-        assert!(has_wire(r0, blur), "fused_region_0 feeds the blur");
-        assert!(has_wire(blur, r1), "the blur feeds fused_region_1");
+        assert!(has_wire(r0, thresh), "fused_region_0 feeds the threshold");
+        assert!(has_wire(thresh, r1), "the threshold feeds fused_region_1");
     }
 
     /// Every seeded field name + every retarget target exists as a real param on

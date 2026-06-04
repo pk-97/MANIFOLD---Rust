@@ -44,6 +44,7 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 
 use crate::node_graph::PrimitiveRegistry;
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+use crate::node_graph::freeze::classify::InputAccess;
 use crate::node_graph::freeze::codegen::param_wgsl_type;
 use crate::node_graph::ports::PortType;
 
@@ -77,6 +78,10 @@ pub struct RegionMember {
     /// Texture inputs in body-arg order (the atom's `inputs()` filtered to
     /// texture ports). Each resolves to an external slot or an earlier member.
     pub inputs: Vec<RegionInput>,
+    /// How each input in [`Self::inputs`] is read (aligned by index). A `Gather`
+    /// entry's input is always an [`RegionInput::External`] — the codegen binds
+    /// it as a texture (+ sampler) the body samples itself.
+    pub input_access: Vec<InputAccess>,
 }
 
 /// Where one of a member's texture inputs comes from.
@@ -144,11 +149,19 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     // A texture wire eligible→eligible means the consumer can thread the
     // producer's register, so the two belong to one region. Union-find over
     // those edges; each set is a candidate region.
+    // Only a COINCIDENT-consumed wire unions two atoms into one region: the
+    // consumer threads the producer's register. A GATHER-consumed wire does NOT
+    // union — a gather samples the whole texture at a coord it computes, which a
+    // single register can't carry, so the gathered producer must stay external
+    // (it becomes a bound `src_e` the body samples). This is what makes
+    // gather-into-region safe: the gather atom fuses with its coincident inputs +
+    // its downstream, but never swallows the texture it gathers.
     let mut uf = UnionFind::new(&eligible);
     for w in &def.wires {
         if eligible.contains(&w.from_node)
             && eligible.contains(&w.to_node)
             && is_texture_wire(def, registry, w)
+            && wire_coincident_consumed(def, registry, w)
         {
             uf.union(w.from_node, w.to_node);
         }
@@ -228,12 +241,21 @@ fn classify_node(
         return NodeClass::Boundary;
     }
 
-    // No gather inputs: a gather reads at a coord the body computes, which can't
-    // be a threaded register, so a gather-input atom bounds the region (it still
-    // runs standalone). `input_access` is aligned to the texture inputs.
-    let access = n.input_access();
-    for i in 0..tex_in {
-        if access.get(i).copied().unwrap_or_default().is_gather() {
+    // A gather input (the body samples at a coord it computes) IS eligible now:
+    // the codegen binds the gathered texture + a sampler and the body samples it,
+    // and the finder keeps the gathered producer external (it never unions across
+    // a gather-consumed wire — see `partition_regions`). But a RESAMPLE — a gather
+    // whose output resolution differs from the canvas (downsample, a
+    // resolution-setting generator) — must stay a boundary: the fused node would
+    // inherit the canvas dst size, not the resample's, and iterate at the wrong
+    // resolution. Detect it generically via an `output_canvas_scale` override
+    // (≠ 1:1), never a hard-coded atom list. (Fusing a resample correctly =
+    // propagating the fused node's output scale — the element-space follow-on.)
+    let default_params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
+    for o in n.outputs().iter().filter(|o| is_texture_port(&o.ty)) {
+        if let Some(scale) = n.output_canvas_scale(o.name, &default_params)
+            && scale != (1, 1)
+        {
             return NodeClass::Boundary;
         }
     }
@@ -301,14 +323,24 @@ fn build_region(def: &EffectGraphDef, registry: &PrimitiveRegistry, nodes: &[u32
             .filter(|i| is_texture_port(&i.ty))
             .map(|i| i.name)
             .collect();
+        let access_list = constructed.input_access();
         let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
-        for port in &tex_ports {
+        let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
+        for (idx, port) in tex_ports.iter().enumerate() {
+            let access = access_list.get(idx).copied().unwrap_or(InputAccess::Coincident);
             let wire = def
                 .wires
                 .iter()
                 .find(|w| w.to_node == doc_id && w.to_port == *port)?;
-            if node_set.contains(&wire.from_node) {
-                inputs.push(RegionInput::Member(wire.from_node));
+            let resolved = if node_set.contains(&wire.from_node) {
+                // A gather input must read an external texture, never a region
+                // register (a register is one texel). The finder never unions
+                // across a gather-consumed wire, so a gathered producer should
+                // never be a member — bail defensively if one slipped through.
+                if access.is_gather() {
+                    return None;
+                }
+                RegionInput::Member(wire.from_node)
             } else {
                 let key = (wire.from_node, wire.from_port.clone());
                 let slot = *ext_index.entry(key).or_insert_with(|| {
@@ -318,10 +350,12 @@ fn build_region(def: &EffectGraphDef, registry: &PrimitiveRegistry, nodes: &[u32
                     });
                     externals.len() - 1
                 });
-                inputs.push(RegionInput::External(slot));
-            }
+                RegionInput::External(slot)
+            };
+            inputs.push(resolved);
+            input_access.push(access);
         }
-        members.push(RegionMember { doc_id, inputs });
+        members.push(RegionMember { doc_id, inputs, input_access });
     }
 
     // The region output(s): members with ≥1 texture wire to a non-member. v1
@@ -386,6 +420,39 @@ fn topo_sort(
         }
     }
     (order.len() == nodes.len()).then_some(order)
+}
+
+/// The read-access of `type_id`'s texture input `port` (Coincident if the atom
+/// is unknown or the port isn't one of its texture inputs). `input_access()` is
+/// aligned to the atom's TEXTURE inputs in `inputs()` order.
+fn input_port_access(registry: &PrimitiveRegistry, type_id: &str, port: &str) -> InputAccess {
+    let Some(node) = registry.construct(type_id) else {
+        return InputAccess::Coincident;
+    };
+    let tex_idx = node
+        .inputs()
+        .iter()
+        .filter(|i| is_texture_port(&i.ty))
+        .position(|i| i.name == port);
+    match tex_idx {
+        Some(idx) => node.input_access().get(idx).copied().unwrap_or_default(),
+        None => InputAccess::Coincident,
+    }
+}
+
+/// Whether wire `w` is consumed COINCIDENTALLY by its target (a register-threaded
+/// read) rather than GATHERED (the target samples it at a coord it computes).
+/// Only coincident-consumed wires union two atoms into one region — see
+/// `partition_regions`.
+fn wire_coincident_consumed(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    !input_port_access(registry, &to.type_id, &w.to_port).is_gather()
 }
 
 /// Whether a wire carries a texture (vs a scalar/control value), determined by
@@ -508,10 +575,13 @@ mod tests {
         );
     }
 
-    /// A boundary in the middle splits the graph into TWO regions — the headline
-    /// generalisation. source → gain → contrast → gaussian_blur(boundary, gather
-    /// input) → saturation → clamp → final yields {gain, contrast} feeding the
-    /// blur, then {saturation, clamp} reading the blur's output.
+    /// A true boundary in the middle splits the graph into TWO regions — the
+    /// headline generalisation. source → gain → contrast → threshold(boundary) →
+    /// saturation → clamp → final yields {gain, contrast} feeding the threshold,
+    /// then {saturation, clamp} reading the threshold's output. (`node.threshold`
+    /// is unconverted, so it has no `wgsl_body` and stays a boundary — unlike a
+    /// gather such as `gaussian_blur`, which tier 3 folds IN; see the gather
+    /// tests below.)
     #[test]
     fn boundary_splits_into_two_regions() {
         let json = r#"{
@@ -519,7 +589,7 @@ mod tests {
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 3, "typeId": "node.gaussian_blur", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
                 { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -534,7 +604,7 @@ mod tests {
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         let mut regions = partition_regions(&def, &registry());
-        assert_eq!(regions.len(), 2, "the blur splits the graph into two regions");
+        assert_eq!(regions.len(), 2, "the threshold boundary splits the graph in two");
         regions.sort_by_key(|r| r.members[0].doc_id);
 
         // Region 1: gain(1) → contrast(2), reads the source, output = contrast.
@@ -542,14 +612,78 @@ mod tests {
         assert_eq!(r1.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(r1.externals.len(), 1, "region 1 reads the source");
         assert_eq!(r1.externals[0].from_node, 0);
-        assert_eq!(r1.output, 2, "contrast feeds the blur");
+        assert_eq!(r1.output, 2, "contrast feeds the threshold");
 
-        // Region 2: saturation(4) → clamp(5), reads the blur, output = clamp.
+        // Region 2: saturation(4) → clamp(5), reads the threshold, output = clamp.
         let r2 = &regions[1];
         assert_eq!(r2.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![4, 5]);
-        assert_eq!(r2.externals.len(), 1, "region 2 reads the blur output");
-        assert_eq!(r2.externals[0].from_node, 3, "the blur is region 2's external");
+        assert_eq!(r2.externals.len(), 1, "region 2 reads the threshold output");
+        assert_eq!(r2.externals[0].from_node, 3, "the threshold is region 2's external");
         assert_eq!(r2.output, 5, "clamp feeds final_output");
+    }
+
+    /// Tier 3 — a gather atom folds INTO a region (it does NOT split it). source →
+    /// gain → sharpen(Gather) → invert → final fuses into ONE region: gain threads
+    /// to sharpen, sharpen gathers gain's register? No — a gather can't read a
+    /// register, so the finder does NOT union gain→sharpen (a gather-consumed
+    /// wire), leaving gain a lone 1-node region (dropped), and {sharpen, invert}
+    /// the real region where sharpen gathers gain's output as an EXTERNAL and
+    /// threads its result to invert.
+    #[test]
+    fn gather_atom_folds_into_a_region() {
+        let json = r#"{
+            "version": 1, "name": "warp", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.sharpen", "nodeId": "sharp" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "sharpen (gather) + invert are one region");
+        let r = &regions[0];
+        assert_eq!(r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(r.externals.len(), 1, "sharpen gathers the source as an external");
+        assert_eq!(r.externals[0].from_node, 0);
+        // sharpen's one input is Gather, resolved to the external; invert reads
+        // sharpen's register coincidentally.
+        let sharp = r.members.iter().find(|m| m.doc_id == 1).unwrap();
+        assert_eq!(sharp.input_access, vec![InputAccess::Gather]);
+        assert_eq!(sharp.inputs, vec![RegionInput::External(0)]);
+        let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
+        assert_eq!(invert.inputs, vec![RegionInput::Member(1)]);
+    }
+
+    /// A gather never unions across its gathered wire: gain → sharpen, where
+    /// sharpen GATHERS gain, must NOT pull gain into sharpen's region (a register
+    /// can't carry a whole texture). gain is left a lone atom (dropped), so the
+    /// only region is {sharpen, invert} from the test above — here we assert the
+    /// negative directly: a chain gain → sharpen with nothing downstream produces
+    /// no region (both are 1-node after the gather cut).
+    #[test]
+    fn gather_wire_does_not_union() {
+        let json = r#"{
+            "version": 1, "name": "cut", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.sharpen", "nodeId": "sharp" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "the gather cut leaves gain and sharpen as lone atoms — neither fuses"
+        );
     }
 
     /// A lone fusable atom is not a region (fusing one node changes nothing). The
