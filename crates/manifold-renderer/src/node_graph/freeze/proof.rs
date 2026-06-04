@@ -932,6 +932,59 @@ fn fused_warp_region_matches_unfused() {
     );
 }
 
+/// Coverage baseline — a regression guard on how much of the shipped library the
+/// finder fuses. Walks every bundled effect preset, partitions it, and tallies
+/// the presets that fuse + the total atoms folded into kernels. A future change
+/// that silently turns the partition conservative (everything a boundary) would
+/// drop these counts below the floor and trip here. The floor is deliberately
+/// loose — it tracks "fusion is broadly alive", not an exact number that churns
+/// as the atom vocabulary lands. The exact counts are logged, never asserted.
+#[test]
+fn fusion_coverage_baseline() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut fused_presets = 0usize;
+    let mut total_fused_atoms = 0usize;
+    let mut total_regions = 0usize;
+    let mut detail: Vec<String> = Vec::new();
+
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+        let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
+            continue;
+        };
+        let regions = super::region::partition_regions(base.canonical_def, &registry);
+        if regions.is_empty() {
+            continue;
+        }
+        let atoms: usize = regions.iter().map(|r| r.members.len()).sum();
+        fused_presets += 1;
+        total_regions += regions.len();
+        total_fused_atoms += atoms;
+        detail.push(format!(
+            "  {}: {} region(s), {atoms} atom(s)",
+            type_id.as_str(),
+            regions.len()
+        ));
+    }
+    detail.sort();
+    eprintln!(
+        "[freeze coverage] {fused_presets} preset(s) fuse, {total_regions} region(s), \
+         {total_fused_atoms} atom(s) folded:\n{}",
+        detail.join("\n")
+    );
+
+    // Loose floors: fusion must stay broadly alive across the library. (At the
+    // time of writing: well above these — fan-out, gather, source, and
+    // control-wire coverage all contribute.)
+    assert!(
+        fused_presets >= 8,
+        "expected ≥8 bundled presets to fuse, got {fused_presets} — partition regressed?"
+    );
+    assert!(
+        total_fused_atoms >= 30,
+        "expected ≥30 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
+    );
+}
+
 /// Render an effect graph whose bound output is at a REDUCED resolution
 /// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as
 /// [`render_graph`] but the output target — and the copy-out — are sized to the
