@@ -17,13 +17,19 @@ use crate::node_graph::primitive::Primitive;
 
 pub const INSTANCE_LAYOUTS: &[&str] = &["Grid", "Ring", "Spiral", "Random"];
 
+/// Generated-codegen uniform layout: scalar params in PARAMS order
+/// (`max_capacity` Int → i32 [allocation-only, the shader ignores it but it
+/// occupies a uniform word], `active_count` Int → i32 [the inactive threshold],
+/// `layout` Enum → u32, `seed` Int → i32, then the f32 extents / base_scale /
+/// rotations), then the codegen-injected `dispatch_count` (= output capacity,
+/// the guard). 12 words = 48 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct InstanceUniforms {
-    active_count: u32,
-    capacity: u32,
+    max_capacity: i32,
+    active_count: i32,
     layout: u32,
-    seed: u32,
+    seed: i32,
     extent_x: f32,
     extent_y: f32,
     extent_z: f32,
@@ -31,7 +37,7 @@ struct InstanceUniforms {
     rot_x: f32,
     rot_y: f32,
     rot_z: f32,
-    _pad: f32,
+    dispatch_count: u32,
 }
 
 crate::primitive! {
@@ -139,10 +145,18 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["arrange copies", "instance layout", "scatter", "place"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/generate_instance_transforms_body.wgsl"),
 }
 
 impl Primitive for GenerateInstanceTransforms {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Allocation-only param — not used by the shader, but the generated
+        // uniform lays out every PARAM, so pack it (the body ignores it).
+        let max_capacity = match ctx.params.get("max_capacity") {
+            Some(ParamValue::Float(n)) => n.round() as i32,
+            _ => 65_536,
+        };
         let active_count = match ctx.params.get("active_count") {
             Some(ParamValue::Float(n)) => n.round().max(0_f32) as u32,
             _ => 64,
@@ -193,18 +207,22 @@ impl Primitive for GenerateInstanceTransforms {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Single-source: kernel generated from the `wgsl_body` (buffer source
+            // path; self-contained wang_hash). generate_instance_transforms.wgsl
+            // is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/generate_instance_transforms.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.generate_instance_transforms standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.generate_instance_transforms",
             )
         });
 
         let uniforms = InstanceUniforms {
-            active_count,
-            capacity,
+            max_capacity,
+            active_count: active_count as i32,
             layout,
-            seed,
+            seed: seed as i32,
             extent_x,
             extent_y,
             extent_z,
@@ -212,7 +230,7 @@ impl Primitive for GenerateInstanceTransforms {
             rot_x,
             rot_y,
             rot_z,
-            _pad: 0.0,
+            dispatch_count: capacity,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -228,7 +246,7 @@ impl Primitive for GenerateInstanceTransforms {
                     offset: 0,
                 },
             ],
-            [capacity.div_ceil(64), 1, 1],
+            [capacity.div_ceil(256), 1, 1],
             "node.generate_instance_transforms",
         );
     }
@@ -272,5 +290,96 @@ mod tests {
         let prim = GenerateInstanceTransforms::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.generate_instance_transforms");
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Buffer-domain SOURCE parity oracle (freeze §12) — generate_instance_
+    //! transforms had no GPU test. The generated kernel (self-contained
+    //! wang_hash; active_count is a param; two-count inactive collapse) must
+    //! reproduce the hand kernel transform-for-transform across ALL four layouts,
+    //! including the inactive-slot zeroing. Deterministic math/hash on-GPU both
+    //! ways → bit-identical.
+    use super::*;
+
+    fn dispatch_git(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<InstanceTransform> {
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "git-oracle");
+        let out_buf = device.create_buffer_shared(capacity as u64 * 32);
+        let mut enc = device.create_encoder("git-oracle");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
+            ],
+            [capacity.div_ceil(64), 1, 1],
+            "git-oracle",
+        );
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
+        let slice =
+            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize) };
+        slice.to_vec()
+    }
+
+    #[test]
+    fn generated_instance_transforms_match_hand_kernel_all_layouts() {
+        const CAPACITY: u32 = 16;
+        let active = 10u32; // < capacity → exercises inactive collapse
+        let seed = 42u32;
+        let (ex, ey, ez) = (4.0f32, 3.0f32, 5.0f32);
+        let base_scale = 1.25f32;
+        let (rx, ry, rz) = (0.1f32, 0.2f32, 0.3f32);
+
+        for layout in 0u32..4u32 {
+            // Hand layout: active_count(u32), capacity(u32), layout(u32), seed(u32),
+            //   extent_x/y/z, base_scale, rot_x/y/z, pad.
+            let mut hand = Vec::new();
+            hand.extend_from_slice(&active.to_le_bytes());
+            hand.extend_from_slice(&CAPACITY.to_le_bytes());
+            hand.extend_from_slice(&layout.to_le_bytes());
+            hand.extend_from_slice(&seed.to_le_bytes());
+            for v in [ex, ey, ez, base_scale, rx, ry, rz] {
+                hand.extend_from_slice(&v.to_le_bytes());
+            }
+            hand.extend_from_slice(&[0u8; 4]);
+
+            // Generated layout: max_capacity(i32), active_count(i32), layout(u32),
+            //   seed(i32), extent_x/y/z, base_scale, rot_x/y/z, dispatch_count(u32).
+            let mut gen_bytes = Vec::new();
+            gen_bytes.extend_from_slice(&65_536i32.to_le_bytes());
+            gen_bytes.extend_from_slice(&(active as i32).to_le_bytes());
+            gen_bytes.extend_from_slice(&layout.to_le_bytes());
+            gen_bytes.extend_from_slice(&(seed as i32).to_le_bytes());
+            for v in [ex, ey, ez, base_scale, rx, ry, rz] {
+                gen_bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
+
+            let hand_wgsl = include_str!("shaders/generate_instance_transforms.wgsl");
+            let gen_wgsl =
+                crate::node_graph::freeze::codegen::standalone_for_spec::<GenerateInstanceTransforms>()
+                    .expect("generate_instance_transforms buffer codegen");
+
+            let from_hand = dispatch_git(hand_wgsl, CAPACITY, &hand);
+            let from_gen = dispatch_git(&gen_wgsl, CAPACITY, &gen_bytes);
+
+            for i in 0..CAPACITY as usize {
+                for c in 0..4 {
+                    assert!(
+                        (from_hand[i].pos_scale[c] - from_gen[i].pos_scale[c]).abs() < 1e-6,
+                        "layout {layout} slot {i} pos_scale[{c}]: hand={} gen={}",
+                        from_hand[i].pos_scale[c],
+                        from_gen[i].pos_scale[c]
+                    );
+                    assert!(
+                        (from_hand[i].rot_pad[c] - from_gen[i].rot_pad[c]).abs() < 1e-6,
+                        "layout {layout} slot {i} rot_pad[{c}]"
+                    );
+                }
+            }
+        }
     }
 }

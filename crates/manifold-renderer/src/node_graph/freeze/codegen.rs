@@ -92,6 +92,11 @@ pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
         "true", "false", "bool", "i32", "u32", "f32", "f16", "array", "atomic",
         "ptr", "sampler", "texture", "override", "enable", "discard", "vec2",
         "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4",
+        // WGSL reserved-for-future word a short param name realistically hits
+        // (generate_instance_transforms has a `layout` Enum param). Add others
+        // only when an atom actually collides — adding a word here changes the
+        // generated WGSL of any atom with a param of that name.
+        "layout",
     ];
     if RESERVED.contains(&name) {
         std::borrow::Cow::Owned(format!("p_{name}"))
