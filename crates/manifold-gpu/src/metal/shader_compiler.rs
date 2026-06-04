@@ -406,6 +406,18 @@ fn compile_spirv_entry_to_msl(
     options.platform = msl::MetalPlatform::MacOS;
     options.force_native_arrays = true;
 
+    // Pin the `arrayLength()` buffer-size buffer to the SAME Metal index our
+    // SlotMap reserved (one past the user buffers). SPIRV-Cross otherwise emits
+    // it at its hard-coded default (25), but our encoder uploads the sizes array
+    // to the slot-map index — a mismatch that left `arrayLength()` reading an
+    // unbound slot (returns 0 on Apple Silicon, silently collapsing every
+    // length-guarded loop). The `BufferSizeBuffer` resource-binding API does not
+    // override this default (it keys on a magic descriptor set), so the option is
+    // the only lever that actually moves the emitted `[[buffer(N)]]`.
+    if let Some(sizes_slot) = slot_map.get(SIZES_BUFFER_BINDING) {
+        options.buffer_size_buffer_index = sizes_slot.metal_index;
+    }
+
     let artifact = compiler
         .compile(&options)
         .unwrap_or_else(|e| panic!("{label}: SPIRV-Cross MSL compilation error: {e}"));

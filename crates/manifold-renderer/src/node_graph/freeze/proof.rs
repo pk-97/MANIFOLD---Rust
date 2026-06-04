@@ -1184,12 +1184,10 @@ fn fused_generator_renders_like_unfused() {
 /// in-place write) diverges the geometry → the rendered lines move → fails.
 /// This is the buffer analogue of `fused_generator_renders_like_unfused`.
 ///
-/// IGNORED: buffer fusion is gated in `region::classify_node` pending a ~12%
-/// residual (the write-only-output fix took it from 61% → 11.9%; the fused WGSL
-/// is verified correct, so the residual is a graph-rewrite / downstream-consumer
-/// interaction). Un-ignore + un-gate together once it's bit-clean.
+/// Bit-exact: the write-only-output model fixed the execution-ordering bug and
+/// the compute `arrayLength()` buffer-size-buffer index fix (manifold-gpu) closed
+/// the residual — fused renders identically to unfused (0/160000 instance diffs).
 #[test]
-#[ignore = "buffer fusion gated in classify_node pending the ~12% residual this oracle gates"]
 fn digitalplants_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
     use crate::generator::Generator;

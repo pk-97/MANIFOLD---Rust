@@ -282,21 +282,15 @@ fn classify_node(
     }
 
     // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve).
-    // GATED (2026-06-04): the write-only-output model below fixed the major
-    // execution-ORDERING bug (fused output as `@fused_output` instead of an
-    // aliased read_write array, so the node's read-only inputs stay forward deps
-    // and run after their producers) — DigitalPlants divergence fell 61% → 11.9%.
-    // But a ~12% residual remains (constant per-frame, the fused WGSL + data flow
-    // are verified correct, so it's a graph-rewrite / downstream-consumer
-    // interaction, not the fused math). Until `digitalplants_buffer_fusion_renders
-    // _like_unfused` is bit-clean, buffer atoms stay boundaries so nothing renders
-    // wrong (texture/3D fusion unaffected; DigitalPlants renders correct unfused).
-    // The whole write-only pipeline (wgsl_compute @fused_output port,
-    // generate_fused_buffer, finder, oracle) stays wired — re-enable by calling
-    // `classify_buffer_node(n.as_ref(), node, def, registry)` here + un-ignoring
-    // the oracle once the residual is found.
+    // The write-only-output model (fused output as a `@fused_output` array, not an
+    // aliased read_write one, so the node's read-only inputs stay forward deps and
+    // run after their producers) fixed the execution-ORDERING bug, and the
+    // compute `arrayLength()` buffer-size-buffer index fix (manifold-gpu pins
+    // SPIRV-Cross's `buffer_size_buffer_index` to the slot it actually binds)
+    // closed the residual — `digitalplants_buffer_fusion_renders_like_unfused` is
+    // now bit-exact (0/160000 differing). Buffer atoms fuse on the live path.
     if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return NodeClass::Boundary;
+        return classify_buffer_node(n.as_ref(), node, def, registry);
     }
 
     // Texture I/O shape: exactly one texture output (the register the region
