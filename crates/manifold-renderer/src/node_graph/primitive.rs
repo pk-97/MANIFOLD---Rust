@@ -130,6 +130,18 @@ pub trait PrimitiveSpec: Send {
     /// field.
     const WGSL_INCLUDES: &'static [&'static str] = &[];
 
+    /// Buffer-domain ONLY: names of Array OUTPUT ports that are atomic
+    /// accumulators — emitted as `array<atomic<u32>>` (or `atomic<i32>`) and
+    /// written by the body itself via `atomicAdd` on the `buf_<port>` global,
+    /// NOT through the wrapper's single-element `buf_out[idx] = body(...)`
+    /// assignment. A scatter atom's output index is data-dependent (the splat
+    /// target), so it can't be a coincident write; the body computes the cell
+    /// and accumulates. The wrapper then calls `body(...)` as a statement (no
+    /// return value). Empty (the default) for every coincident/gather buffer
+    /// atom. Set via the macro's `atomic_outputs:` field. The element must be a
+    /// single-channel u32 / i32 (WGSL atomics are integer-only).
+    const ATOMIC_OUTPUTS: &'static [&'static str] = &[];
+
     /// Returns a process-wide `EffectNodeType` instance for this
     /// primitive, allocated lazily on first call.
     ///
@@ -586,6 +598,7 @@ macro_rules! primitive {
         $( input_access: [ $($access:ident),* $(,)? ], )?
         $( derived_uniforms: [ $($derived:literal),* $(,)? ], )?
         $( wgsl_includes: [ $($inc:expr),* $(,)? ], )?
+        $( atomic_outputs: [ $($atomic_out:literal),* $(,)? ], )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -638,6 +651,7 @@ macro_rules! primitive {
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
             $( const DERIVED_UNIFORMS: &'static [&'static str] = &[ $($derived),* ]; )?
             $( const WGSL_INCLUDES: &'static [&'static str] = &[ $($inc),* ]; )?
+            $( const ATOMIC_OUTPUTS: &'static [&'static str] = &[ $($atomic_out),* ]; )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =

@@ -47,6 +47,11 @@ pub enum CodegenError {
     /// A region node's `InputSource` references an unknown node, a node that
     /// isn't earlier in topo order, or an out-of-range external input.
     BadInput,
+    /// An `ATOMIC_OUTPUTS`-marked port resolves to a non-integer element. WGSL
+    /// atomics are `u32`/`i32` only, so a multi-channel or float accumulator
+    /// can't be emitted as `array<atomic<…>>` — the atom mis-declared its
+    /// atomic output.
+    AtomicNonInteger { ty: String },
 }
 
 /// Map a (scalar) param type to its WGSL type + 4-byte slot. v1 supports the
@@ -180,6 +185,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
             P::DERIVED_UNIFORMS,
             P::WGSL_INCLUDES,
             P::OUTPUTS,
+            P::ATOMIC_OUTPUTS,
         );
     }
     generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
@@ -210,9 +216,11 @@ pub fn generate_standalone(
     // storage array. Texture atoms are unaffected (no Array output).
     if outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         // Direct callers of generate_standalone (texture-path tests) carry no
-        // derived uniforms; standalone_for_spec routes buffer atoms with their
-        // DERIVED_UNIFORMS before reaching here.
-        return generate_standalone_buffer(body, inputs, params, input_access, &[], &[], outputs);
+        // derived uniforms / atomic outputs; standalone_for_spec routes buffer
+        // atoms with their DERIVED_UNIFORMS / ATOMIC_OUTPUTS before reaching here.
+        return generate_standalone_buffer(
+            body, inputs, params, input_access, &[], &[], outputs, &[],
+        );
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
     // Texture outputs. >1 → the body returns a `BodyOutputs` struct (one vec4 per
@@ -603,6 +611,7 @@ fn emit_buffer_struct(specs: &[ChannelSpec], name: &str) -> String {
 /// Binding layout: `@binding(0)` uniform, then each Array input `read`, then each
 /// Array output `read_write`. Deterministic (PARAMS / port order), so the
 /// generated text is a stable pipeline-cache key.
+#[allow(clippy::too_many_arguments)]
 fn generate_standalone_buffer(
     body: &str,
     inputs: &[NodeInput],
@@ -611,6 +620,7 @@ fn generate_standalone_buffer(
     derived_uniforms: &[&str],
     includes: &[&str],
     outputs: &[NodeOutput],
+    atomic_outputs: &[&str],
 ) -> Result<String, CodegenError> {
     // Per-array-input access (aligned to array inputs in declaration order):
     //   - BufferGather → the body indexes the input array global `buf_<port>`
@@ -671,6 +681,13 @@ fn generate_standalone_buffer(
     } else {
         format!("buf_{out_port}")
     };
+    // Atomic-accumulator output (scatter): emitted as `array<atomic<u32>>` and
+    // written by the body via `atomicAdd` on `out_global` itself, not the
+    // wrapper's `out_global[idx] = body(...)`. WGSL atomics are integer-only.
+    let out_is_atomic = atomic_outputs.contains(&out_port);
+    if out_is_atomic && out_ty != "u32" && out_ty != "i32" {
+        return Err(CodegenError::AtomicNonInteger { ty: out_ty.clone() });
+    }
 
     let mut out = String::new();
 
@@ -698,8 +715,21 @@ fn generate_standalone_buffer(
     // run() packs the resolved value each frame.
     for d in derived_uniforms {
         let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
-        writeln!(out, "    {dname}: {dty},").unwrap();
-        words += 1; // every supported derived scalar is one 4-byte word
+        if dty == "vec3" {
+            // A vec3 derived field (a camera basis vector) expands to three
+            // consecutive f32 fields, mirroring the texture path's vec3 PARAM
+            // packing — the body receives it reassembled as `vec3<f32>`. Packing
+            // as 3 scalars (not a `vec3<f32>` field) keeps the 4-byte stride the
+            // run()-side `#[repr(C)]` uniform uses, dodging the uniform vec3's
+            // 16-byte alignment.
+            writeln!(out, "    {dname}_x: f32,").unwrap();
+            writeln!(out, "    {dname}_y: f32,").unwrap();
+            writeln!(out, "    {dname}_z: f32,").unwrap();
+            words += 3;
+        } else {
+            writeln!(out, "    {dname}: {dty},").unwrap();
+            words += 1; // every supported derived scalar is one 4-byte word
+        }
     }
     // Optional-texture use-flags (run() packs `is_some()`), after the derived
     // fields. The body multiplies by / branches on these to fall back when an
@@ -743,9 +773,14 @@ fn generate_standalone_buffer(
         writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
         binding += 1;
     }
+    let out_storage_ty = if out_is_atomic {
+        format!("atomic<{out_ty}>")
+    } else {
+        out_ty.clone()
+    };
     writeln!(
         out,
-        "@group(0) @binding({binding}) var<storage, read_write> {out_global}: array<{out_ty}>;"
+        "@group(0) @binding({binding}) var<storage, read_write> {out_global}: array<{out_storage_ty}>;"
     )
     .unwrap();
     out.push('\n');
@@ -794,14 +829,26 @@ fn generate_standalone_buffer(
         args.push(format!("params.{f}"));
     }
     for d in derived_uniforms {
-        let dname = d.split_once(':').map(|(n, _)| n).unwrap_or(d);
-        args.push(format!("params.{dname}"));
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        if dty == "vec3" {
+            args.push(format!(
+                "vec3<f32>(params.{dname}_x, params.{dname}_y, params.{dname}_z)"
+            ));
+        } else {
+            args.push(format!("params.{dname}"));
+        }
     }
     // Optional-texture use-flags, last (matching the body signature).
     for tex in &optional_textures {
         args.push(format!("params.use_{}", tex.name));
     }
-    writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
+    if out_is_atomic {
+        // Scatter: the body computes its own target cell and `atomicAdd`s into
+        // the `out_global` accumulator — no coincident single-element write.
+        writeln!(out, "    body({});", args.join(", ")).unwrap();
+    } else {
+        writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
+    }
     out.push_str("}\n");
 
     Ok(out)
