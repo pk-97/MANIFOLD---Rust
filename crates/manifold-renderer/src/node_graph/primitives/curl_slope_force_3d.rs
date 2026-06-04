@@ -23,21 +23,21 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+// Standalone-codegen uniform layout: PARAMS order (vol_res, vol_depth, curl_
+// strength, slope_strength, ref_axis_x/y/z) padded to 32 bytes — contiguous,
+// unlike the hand uniform which padded vol_res/vol_depth to 16. ref_axis is the
+// CPU-normalized unit vector (run() normalizes; the body uses it directly).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CurlSlope3DUniforms {
     vol_res: u32,
     vol_depth: u32,
-    _pad0: u32,
-    _pad1: u32,
     curl_strength: f32,
     slope_strength: f32,
     ref_axis_x: f32,
     ref_axis_y: f32,
     ref_axis_z: f32,
-    _pad2: f32,
-    _pad3: f32,
-    _pad4: f32,
+    _pad: f32,
 }
 
 crate::primitive! {
@@ -120,6 +120,9 @@ crate::primitive! {
     category: Particles3D,
     role: Filter,
     aliases: ["swirl force", "curl", "vortex", "smoke"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/curl_slope_force_3d_body.wgsl"),
+    input_access: [CoincidentTexel],
 }
 
 impl Primitive for CurlSlopeForce3D {
@@ -158,9 +161,13 @@ impl Primitive for CurlSlopeForce3D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `gradient` is a 3D CoincidentTexel input (own-voxel integer
+            // textureLoad, no sampler). Generated kernel binds uniform(0)/tex(1)/
+            // dst(2). curl_slope_force_3d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/curl_slope_force_3d.wgsl"),
-                "main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.curl_slope_force_3d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.curl_slope_force_3d",
             )
         });
@@ -168,16 +175,12 @@ impl Primitive for CurlSlopeForce3D {
         let uniforms = CurlSlope3DUniforms {
             vol_res,
             vol_depth,
-            _pad0: 0,
-            _pad1: 0,
             curl_strength,
             slope_strength,
             ref_axis_x,
             ref_axis_y,
             ref_axis_z,
-            _pad2: 0.0,
-            _pad3: 0.0,
-            _pad4: 0.0,
+            _pad: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

@@ -99,6 +99,22 @@ pub enum InputAccess {
     /// Gather input as a boundary — v1 Gather is standalone-only (single-source);
     /// fusing a gather INTO a multi-atom region is a deeper follow-on.
     Gather,
+    /// Like [`Gather`], but the body reads via INTEGER `textureLoad` at a voxel/
+    /// texel coordinate it computes — NO sampler, no filtering. The neighbourhood
+    /// finite-difference / toroidal-wrap family that loads exact integer texels
+    /// (gradient_central_diff_3d, curl_slope_force_3d, the wrap-modulo fields). The
+    /// codegen binds the texture but no sampler, and the body receives only the
+    /// texture handle (it computes the integer coord from `uv`/`dims`). Same
+    /// region-boundary treatment as `Gather`.
+    GatherTexel,
+}
+
+impl InputAccess {
+    /// Whether the body computes its own read coordinate (a dependent read the
+    /// region-grower can't thread as a register). Both gather flavours qualify.
+    pub fn is_gather(self) -> bool {
+        matches!(self, InputAccess::Gather | InputAccess::GatherTexel)
+    }
 }
 
 #[cfg(test)]

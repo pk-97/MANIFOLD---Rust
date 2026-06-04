@@ -57,7 +57,7 @@ use manifold_core::effect_graph_def::{
 
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
+use crate::node_graph::freeze::classify::FusionKind;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::ports::{NodeInput, PortType};
@@ -247,7 +247,7 @@ pub(crate) fn fuse_canonical_def(
         // multi-atom region yet: treat it as a boundary and leave the whole card
         // unfused (its standalone single-source kernel still runs). Fusing a
         // gather INTO a region is a deeper follow-on (design §11.B).
-        if node.input_access().contains(&InputAccess::Gather) {
+        if node.input_access().iter().any(|a| a.is_gather()) {
             return None;
         }
         // Every param must lay out as a scalar uniform field, or the codegen

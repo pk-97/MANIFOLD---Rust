@@ -380,7 +380,9 @@ pub fn generate_standalone(
                 inp.name, inp.name
             )
             .unwrap(),
-            InputAccess::Gather => {} // no pre-read; passed as a texture handle
+            // Gather / GatherTexel: no pre-read; passed as a texture handle (the
+            // body computes its own read coord and samples/loads it itself).
+            InputAccess::Gather | InputAccess::GatherTexel => {}
         }
     }
     // body(<per-input args>, uv, dims, params.<p0>, ...). Each input contributes:
@@ -394,9 +396,15 @@ pub fn generate_standalone(
     let mut args: Vec<String> = Vec::new();
     for (i, inp) in tex_inputs.iter().enumerate() {
         match access_of(i) {
+            // Sampler-gather: the body owns the filter, so it gets the texture +
+            // the shared sampler.
             InputAccess::Gather => {
                 args.push(format!("tex_{}", inp.name));
                 args.push("samp".to_string());
+            }
+            // Integer-load gather: no sampler — the body does textureLoad itself.
+            InputAccess::GatherTexel => {
+                args.push(format!("tex_{}", inp.name));
             }
             InputAccess::Coincident | InputAccess::CoincidentTexel => {
                 args.push(format!("c_{}", inp.name));
@@ -2299,6 +2307,221 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
                  (max_abs={max_abs})"
             );
         }
+    }
+
+    /// Fill an n³ density volume on-GPU with a 3D gradient (varies along x/y/z).
+    fn fill_volume_gradient(device: &GpuDevice, vol: &GpuTexture, n: u32) {
+        let fill_wgsl = "\
+@group(0) @binding(0) var vol: texture_storage_3d<rgba16float, write>;\n\
+@compute @workgroup_size(4, 4, 4)\n\
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
+    let d = textureDimensions(vol);\n\
+    if id.x >= d.x || id.y >= d.y || id.z >= d.z { return; }\n\
+    let f = vec3<f32>(id) / vec3<f32>(d);\n\
+    textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
+}\n";
+        let pipeline = device.create_compute_pipeline(fill_wgsl, ENTRY, "vol-fill");
+        let mut enc = device.create_encoder("vol-fill");
+        enc.dispatch_compute(
+            &pipeline,
+            &[GpuBinding::Texture { binding: 0, texture: vol }],
+            [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
+            "vol-fill",
+        );
+        enc.commit_and_wait_completed();
+    }
+
+    /// Read back a full n³ volume as f16 bits.
+    fn readback_volume(device: &GpuDevice, vol: &GpuTexture, n: u32) -> Vec<u16> {
+        let bytes_per_row = n * 8; // rgba16float
+        let total = u64::from(bytes_per_row) * u64::from(n) * u64::from(n);
+        let buf = device.create_buffer_shared(total);
+        let mut renc = device.create_encoder("vol-readback");
+        renc.copy_texture_3d_to_buffer(vol, &buf, n, n, n, bytes_per_row);
+        renc.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("shared buffer pointer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (n * n * n * 4) as usize) };
+        halves.to_vec()
+    }
+
+    /// 3D GatherTexel parity: node.gradient_central_diff_3d reads its density
+    /// volume via integer textureLoad (6-tap central difference, toroidal wrap, NO
+    /// sampler). The generated kernel binds uniform(0)/tex(1)/dst(2) — identical to
+    /// the hand layout (GatherTexel emits no sampler) — so one uniform drives both.
+    /// The hand entry is `main`; the generated is `cs_main`.
+    #[test]
+    fn generated_gradient_central_diff_3d_matches_original() {
+        let device = crate::test_device();
+        let n = 32u32;
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+
+        let node = registry.construct("node.gradient_central_diff_3d").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("gradient_central_diff_3d generates");
+        assert!(
+            !generated.contains("var samp: sampler"),
+            "a GatherTexel input must bind no sampler:\n{generated}"
+        );
+        assert!(
+            generated.contains("var tex_density: texture_3d<f32>"),
+            "3D sampled input missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/gradient_central_diff_3d.wgsl");
+
+        let density = make_3d_texture(
+            &device,
+            n,
+            GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            "grad3d-in",
+        );
+        fill_volume_gradient(&device, &density, n);
+
+        // {vol_res, vol_depth, _pad, _pad} — same bits for hand (u32) + generated (i32).
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&n.to_le_bytes());
+        bytes[4..8].copy_from_slice(&n.to_le_bytes());
+
+        let run = |wgsl: &str, entry: &str| -> Vec<u16> {
+            let pipeline = device.create_compute_pipeline(wgsl, entry, "grad3d");
+            let out = make_3d_texture(
+                &device,
+                n,
+                GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+                "grad3d-out",
+            );
+            let mut enc = device.create_encoder("grad3d");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &density },
+                    GpuBinding::Texture { binding: 2, texture: &out },
+                ],
+                [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
+                "grad3d",
+            );
+            enc.commit_and_wait_completed();
+            readback_volume(&device, &out, n)
+        };
+
+        let hand_vol = run(original, "main");
+        let gen_vol = run(&generated, ENTRY);
+        let mut max_abs = 0.0f32;
+        for (a, b) in hand_vol.iter().zip(gen_vol.iter()) {
+            let fa = half::f16::from_bits(*a).to_f32();
+            let fb = half::f16::from_bits(*b).to_f32();
+            max_abs = max_abs.max((fa - fb).abs());
+        }
+        assert!(
+            max_abs < 1e-3,
+            "gradient_central_diff_3d: generated must reproduce the hand kernel (max_abs={max_abs})"
+        );
+    }
+
+    /// 3D CoincidentTexel parity (dual-packed): node.curl_slope_force_3d reads its
+    /// gradient volume at the OWN voxel (integer textureLoad, no sampler) and
+    /// combines curl + slope. ref_axis is CPU-normalized in run(), so the body
+    /// uses it directly (no GPU rsqrt — bit-exact). The hand uniform pads
+    /// vol_res/vol_depth to 16 (48 bytes); the generated Params are contiguous (32
+    /// bytes) — pack each from the same logical values.
+    #[test]
+    fn generated_curl_slope_force_3d_matches_original() {
+        let device = crate::test_device();
+        let n = 32u32;
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+
+        let node = registry.construct("node.curl_slope_force_3d").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("curl_slope_force_3d generates");
+        assert!(
+            !generated.contains("var samp: sampler"),
+            "a CoincidentTexel input binds no sampler:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/curl_slope_force_3d.wgsl");
+
+        let gradient = make_3d_texture(
+            &device,
+            n,
+            GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            "curl3d-in",
+        );
+        fill_volume_gradient(&device, &gradient, n);
+
+        // Pre-normalized ref_axis (CPU), curl=2, slope=-1.
+        let raw = [0.3f32, 0.8, 0.5];
+        let inv = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt().recip();
+        let ax = [raw[0] * inv, raw[1] * inv, raw[2] * inv];
+        let (curl, slope) = (2.0f32, -1.0f32);
+
+        // Hand layout: {vol_res, vol_depth, _pad, _pad, curl, slope, ax, ay, az, _pad×3} = 48B.
+        let mut hand = vec![0u8; 48];
+        hand[0..4].copy_from_slice(&n.to_le_bytes());
+        hand[4..8].copy_from_slice(&n.to_le_bytes());
+        hand[16..20].copy_from_slice(&curl.to_le_bytes());
+        hand[20..24].copy_from_slice(&slope.to_le_bytes());
+        hand[24..28].copy_from_slice(&ax[0].to_le_bytes());
+        hand[28..32].copy_from_slice(&ax[1].to_le_bytes());
+        hand[32..36].copy_from_slice(&ax[2].to_le_bytes());
+        // Generated layout: {vol_res, vol_depth, curl, slope, ax, ay, az, _pad} = 32B.
+        let mut gen_bytes = vec![0u8; 32];
+        gen_bytes[0..4].copy_from_slice(&n.to_le_bytes());
+        gen_bytes[4..8].copy_from_slice(&n.to_le_bytes());
+        gen_bytes[8..12].copy_from_slice(&curl.to_le_bytes());
+        gen_bytes[12..16].copy_from_slice(&slope.to_le_bytes());
+        gen_bytes[16..20].copy_from_slice(&ax[0].to_le_bytes());
+        gen_bytes[20..24].copy_from_slice(&ax[1].to_le_bytes());
+        gen_bytes[24..28].copy_from_slice(&ax[2].to_le_bytes());
+
+        let run = |wgsl: &str, entry: &str, bytes: &[u8]| -> Vec<u16> {
+            let pipeline = device.create_compute_pipeline(wgsl, entry, "curl3d");
+            let out = make_3d_texture(
+                &device,
+                n,
+                GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+                "curl3d-out",
+            );
+            let mut enc = device.create_encoder("curl3d");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: bytes },
+                    GpuBinding::Texture { binding: 1, texture: &gradient },
+                    GpuBinding::Texture { binding: 2, texture: &out },
+                ],
+                [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
+                "curl3d",
+            );
+            enc.commit_and_wait_completed();
+            readback_volume(&device, &out, n)
+        };
+
+        let hand_vol = run(original, "main", &hand);
+        let gen_vol = run(&generated, ENTRY, &gen_bytes);
+        let mut max_abs = 0.0f32;
+        for (a, b) in hand_vol.iter().zip(gen_vol.iter()) {
+            let fa = half::f16::from_bits(*a).to_f32();
+            let fb = half::f16::from_bits(*b).to_f32();
+            max_abs = max_abs.max((fa - fb).abs());
+        }
+        assert!(
+            max_abs < 1e-3,
+            "curl_slope_force_3d: generated must reproduce the hand kernel (max_abs={max_abs})"
+        );
     }
 
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both

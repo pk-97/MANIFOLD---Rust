@@ -63,6 +63,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["gradient 3d", "edge slope", "volume gradient"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/gradient_central_diff_3d_body.wgsl"),
+    input_access: [GatherTexel],
 }
 
 impl Primitive for GradientCentralDiff3D {
@@ -85,9 +88,14 @@ impl Primitive for GradientCentralDiff3D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `density` is a 3D GatherTexel input (6-tap integer textureLoad with
+            // toroidal wrap, no sampler). Generated kernel binds uniform(0)/tex(1)/
+            // dst(2) — identical to the hand layout. gradient_central_diff_3d.wgsl
+            // is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/gradient_central_diff_3d.wgsl"),
-                "main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.gradient_central_diff_3d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.gradient_central_diff_3d",
             )
         });
