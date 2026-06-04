@@ -485,7 +485,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
 
         for (nid, p, v) in &vals {
             set_unfused(&mut unfused_graph, nid, p, ParamValue::Float(*v));
-            let field = retarget
+            let (_, field) = retarget
                 .get(&((*nid).to_string(), (*p).to_string()))
                 .unwrap_or_else(|| panic!("retarget missing {nid}.{p}"));
             fused_graph
@@ -496,7 +496,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
         // fused kernel (WgslCompute carries it as Int/Float — see the storage
         // collapse). Drives the blend_rgb switch across all 8 branches.
         set_unfused(&mut unfused_graph, "grade_mix", "mode", ParamValue::Enum(mode));
-        let mode_field = retarget
+        let (_, mode_field) = retarget
             .get(&("grade_mix".to_string(), "mode".to_string()))
             .expect("retarget has grade_mix.mode");
         fused_graph
@@ -597,7 +597,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     for (node_id, param, v) in fixture {
-        let field = retarget
+        let (_, field) = retarget
             .get(&((*node_id).to_string(), (*param).to_string()))
             .unwrap_or_else(|| panic!("retarget missing {node_id}.{param}"));
         fused_graph
@@ -623,5 +623,78 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
         r.over_count,
         r.total,
         r.over_fraction()
+    );
+}
+
+/// Broad safety net for activating partial-region fusion library-wide: every
+/// bundled preset the finder fuses must render one frame through its fused view
+/// without panicking — the structural-breakage class (invalid generated WGSL, a
+/// binding/dispatch mismatch in the multi-region wiring, a stranded resource).
+/// This is the fused twin of `bundled_presets::every_bundled_preset_executes_
+/// one_frame` (which renders the UNFUSED canonical defs and so never exercises
+/// fusion). Renders only — numerical agreement vs unfused is the per-effect
+/// oracle's job + Peter's visual sign-off; this catches the "does it even run"
+/// class across the whole library, which is exactly what broadening fusion past
+/// ColorGrade puts at risk.
+#[test]
+fn every_fused_preset_executes_one_frame() {
+    use crate::node_graph::state_store::StateStore;
+    use std::panic::AssertUnwindSafe;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (192u32, 192u32);
+    let ft = frame_time();
+    let mut failures: Vec<String> = Vec::new();
+    let mut fused_count = 0usize;
+
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+        let preset_id = type_id.as_str().to_string();
+        // WireframeDepthGraph carries a documented, fusion-unrelated pre-existing
+        // bug (a 42×42 vs 256×256 same-size-blit panic in its depth path); it
+        // would panic with or without fusion, so testing it here measures noise.
+        if preset_id == "WireframeDepthGraph" {
+            continue;
+        }
+        let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
+            continue;
+        };
+        let Some(fused) = super::install::fuse_canonical_def(base.canonical_def, &registry) else {
+            continue; // no fusable region — nothing to validate
+        };
+        fused_count += 1;
+
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut graph = fused.def.into_graph(&registry).expect("fused def builds a graph");
+            let plan = compile(&graph).expect("fused graph compiles");
+            let r_src = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
+            let src_target = RenderTarget::new(&device, w, h, FMT, "fused-smoke-src");
+            let mut backend = MetalBackend::new(&device, w, h, FMT);
+            backend.pre_bind_texture_2d(r_src, src_target);
+            let mut exec = Executor::new(Box::new(backend));
+            let mut state = StateStore::new();
+            let mut native_enc = device.create_encoder("fused-smoke");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+                exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+            }
+            native_enc.commit_and_wait_completed();
+        }));
+
+        if let Err(panic) = result {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "<non-string panic>".to_string());
+            failures.push(format!("{preset_id}: {msg}"));
+        }
+    }
+
+    assert!(fused_count > 0, "expected at least ColorGrade to produce a fused view");
+    assert!(
+        failures.is_empty(),
+        "{fused_count} presets fuse; these panicked rendering their fused view:\n  - {}",
+        failures.join("\n  - "),
     );
 }
