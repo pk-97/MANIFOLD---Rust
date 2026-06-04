@@ -1945,6 +1945,152 @@ mod gpu_tests {
         );
     }
 
+    /// RESAMPLE GATHER parity: node.downsample's output is SMALLER than its input
+    /// (a box filter), so it can't reuse dispatch_pointwise (which sizes output ==
+    /// input). The body is a single-input Gather that reads `in` via textureLoad at
+    /// input-pixel coords, recovering its output pixel id from uv and the box
+    /// factor from in_dims/out_dims. Dispatch a 128→64 (factor 2) reduction for
+    /// both the hand and generated kernels and diff. The uniform `factor` is
+    /// diagnostic (the shader uses the dim ratio), so one 16-byte payload drives
+    /// both.
+    #[test]
+    fn generated_downsample_matches_original() {
+        let device = crate::test_device();
+        let input = gradient(&device, 128, 128);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.downsample").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("downsample generates");
+        assert!(
+            !generated.contains("let c_in"),
+            "a Gather input must not be pre-sampled:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/downsample.wgsl");
+
+        let dispatch = |wgsl: &str| -> RenderTarget {
+            let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-downsample");
+            let sampler = device.create_sampler(&GpuSamplerDesc::default());
+            let out = RenderTarget::new(&device, 64, 64, FMT, "codegen-out-downsample");
+            let mut bytes = [0u8; 16];
+            bytes[0..4].copy_from_slice(&4u32.to_le_bytes()); // diagnostic factor
+            let mut enc = device.create_encoder("codegen-downsample");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &input },
+                    GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                    GpuBinding::Texture { binding: 3, texture: &out.texture },
+                ],
+                [64u32.div_ceil(16), 64u32.div_ceil(16), 1],
+                "codegen-downsample",
+            );
+            enc.commit_and_wait_completed();
+            out
+        };
+
+        let from_original = dispatch(original);
+        let from_generated = dispatch(&generated);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated downsample must reproduce downsample.wgsl (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
+    /// SPECIALIZATION + 2-input GATHER parity: node.gaussian_blur_variable_width
+    /// gathers `in` + `width` along one axis and selects its tap count / weighting
+    /// via the QUALITY_LEVEL / WEIGHTING_MODE specialization tokens (run() compiles
+    /// the GENERATED WGSL through create_specialized_compute_pipeline, same as the
+    /// hand kernel). Both kernels take the identical binding layout (uniform0/in1/
+    /// width2/samp3/dst4) and the body reads only direction+max_radius from the
+    /// uniform, so one 16-byte payload drives both; specialize each with the SAME
+    /// (quality, weighting) and diff across three combos.
+    #[test]
+    fn generated_gaussian_blur_variable_width_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let src = gradient(&device, w, h);
+        let width = gradient_b(&device, w, h); // R channel varies → CoC varies
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.gaussian_blur_variable_width").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("variable-width blur generates");
+        assert!(
+            !generated.contains("let c_in") && !generated.contains("let c_width"),
+            "both gather inputs must avoid pre-sampling:\n{generated}"
+        );
+        let original =
+            include_str!("../primitives/shaders/gaussian_blur_variable_width.wgsl");
+
+        // {direction (0=H), max_radius, _pad, _pad}; the body reads only these two.
+        let mut bytes = [0u8; 16];
+        bytes[4..8].copy_from_slice(&12.0f32.to_le_bytes());
+
+        let dispatch = |wgsl: &str, q: &str, wt: &str| -> RenderTarget {
+            let pipeline = device.create_specialized_compute_pipeline(
+                wgsl,
+                ENTRY,
+                &[("QUALITY_LEVEL", q), ("WEIGHTING_MODE", wt)],
+                "vbw-test",
+            );
+            let sampler = device.create_sampler(&GpuSamplerDesc::default());
+            let out = RenderTarget::new(&device, w, h, FMT, "vbw-out");
+            let mut enc = device.create_encoder("vbw-test");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &src },
+                    GpuBinding::Texture { binding: 2, texture: &width },
+                    GpuBinding::Sampler { binding: 3, sampler: &sampler },
+                    GpuBinding::Texture { binding: 4, texture: &out.texture },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "vbw-test",
+            );
+            enc.commit_and_wait_completed();
+            out
+        };
+
+        for (q, wt) in [("1u", "0u"), ("2u", "1u"), ("0u", "0u")] {
+            let h_out = dispatch(original, q, wt);
+            let g_out = dispatch(&generated, q, wt);
+            let r = differ.compare(&device, &h_out.texture, &g_out.texture, 1e-5, 1e-5);
+            assert_eq!(
+                r.over_count, 0,
+                "variable-width blur (Q={q}, W={wt}): generated must reproduce the hand \
+                 kernel (max_abs={}, max_rel={})",
+                r.max_abs, r.max_rel
+            );
+        }
+    }
+
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
     /// outputs get their own texture (no aliasing) so each can be diffed.
     fn dispatch_two_output_source(

@@ -66,6 +66,9 @@ crate::primitive! {
     category: Routing,
     role: Filter,
     aliases: ["downsample", "downscale", "shrink", "Resolution TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/downsample_body.wgsl"),
+    input_access: [Gather],
 }
 
 /// Decode the `factor` enum param into the integer downsample factor.
@@ -155,9 +158,15 @@ impl Primitive for Downsample {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `in` is a Gather input (the body reads it via textureLoad at input-
+            // pixel coords, deriving the box factor from in_dims/out_dims). The
+            // generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3) — the sampler
+            // is bound but unused (textureLoad), matching the hand shader.
+            // downsample.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/downsample.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.downsample standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.downsample",
             )
         });

@@ -38,9 +38,6 @@ struct BlurUniforms {
     _pad1: u32,
 }
 
-const BLUR_WGSL: &str =
-    include_str!("shaders/gaussian_blur_variable_width.wgsl");
-
 crate::primitive! {
     name: GaussianBlurVariableWidth,
     type_id: "node.gaussian_blur_variable_width",
@@ -93,6 +90,9 @@ crate::primitive! {
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["variable blur", "depth blur", "selective blur", "depth of field"],
+    fusion_kind: MultiInputCoincident,
+    wgsl_body: include_str!("shaders/gaussian_blur_variable_width_body.wgsl"),
+    input_access: [Gather, Gather],
     extra_fields: {
         pipelines: AHashMap<u32, GpuComputePipeline> = AHashMap::new(),
     },
@@ -141,6 +141,15 @@ impl Primitive for GaussianBlurVariableWidth {
             .pipelines
             .entry(key)
             .or_insert_with(|| {
+                // Single-source: `in` + `width` are both Gather inputs (sampled at
+                // body-computed tap offsets); generated kernel binds uniform(0)/
+                // tex_in(1)/tex_width(2)/samp(3)/dst(4), matching the set below. The
+                // body references the QUALITY_LEVEL/WEIGHTING_MODE specialization
+                // tokens, so we still specialize the GENERATED WGSL per (quality,
+                // weighting) — dead tap branches flatten away, perf preserved.
+                // gaussian_blur_variable_width.wgsl is the parity oracle.
+                let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.gaussian_blur_variable_width standalone codegen");
                 let quality_str = match quality {
                     0 => "0u",
                     2 => "2u",
@@ -151,8 +160,8 @@ impl Primitive for GaussianBlurVariableWidth {
                     "node.gaussian_blur_variable_width.q{quality}.w{weighting}"
                 );
                 gpu.device.create_specialized_compute_pipeline(
-                    BLUR_WGSL,
-                    "cs_main",
+                    &wgsl,
+                    crate::node_graph::freeze::codegen::ENTRY,
                     &[
                         ("QUALITY_LEVEL", quality_str),
                         ("WEIGHTING_MODE", weighting_str),
