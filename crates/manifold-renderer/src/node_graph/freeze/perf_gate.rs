@@ -37,12 +37,14 @@ use std::sync::OnceLock;
 
 use ahash::AHashMap;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::{Beats, EffectTypeId, Seconds};
+use manifold_core::{Beats, EffectTypeId, GeneratorTypeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
-use crate::node_graph::freeze::install::fused_view_by_id;
+use crate::node_graph::boundary_nodes::{
+    FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
+};
+use crate::node_graph::freeze::install::{fused_generator_def_by_id, fused_view_by_id};
 use crate::node_graph::{
     EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry, compile,
     loaded_preset_view_by_id,
@@ -66,6 +68,9 @@ const MIN_SPEEDUP: f64 = 1.3;
 
 /// `type_id → fuse?`. Set once by [`tune_all`]; read lock-free thereafter.
 static VERDICTS: OnceLock<AHashMap<EffectTypeId, bool>> = OnceLock::new();
+/// Generator twin of [`VERDICTS`] — same set-once lifecycle, keyed by generator
+/// type. Separate map because generators and effects use distinct id newtypes.
+static GEN_VERDICTS: OnceLock<AHashMap<GeneratorTypeId, bool>> = OnceLock::new();
 
 /// Whether to render `type_id` through its fused kernel.
 ///
@@ -82,6 +87,15 @@ pub fn should_fuse(type_id: &EffectTypeId) -> bool {
     }
 }
 
+/// Generator twin of [`should_fuse`] — optimistic (`true`) until [`tune_all`]
+/// records a measured verdict, then the device's fuse/keep decision.
+pub fn should_fuse_generator(type_id: &GeneratorTypeId) -> bool {
+    match GEN_VERDICTS.get() {
+        Some(map) => map.get(type_id).copied().unwrap_or(true),
+        None => true,
+    }
+}
+
 /// Whether the perf gate has finished tuning this process.
 pub fn is_tuned() -> bool {
     VERDICTS.get().is_some()
@@ -89,29 +103,38 @@ pub fn is_tuned() -> bool {
 
 /// Measure one def's mean GPU time (ms/frame) through the real executor at the
 /// tuning resolution: warm up, then average real GPU time over [`FRAMES`].
-/// `None` if the graph can't be built or compiled.
+/// `None` if the graph can't be built or compiled. `input_boundary` is the type
+/// id of the node the host pre-binds an input texture to — `system.source` for an
+/// effect, `system.generator_input` for a generator. If that boundary's output
+/// isn't a live resource (a pure-generation graph that ignores its input), the
+/// pre-bind is skipped and the graph renders from scratch.
 fn measure_def(
     device: &GpuDevice,
     registry: &PrimitiveRegistry,
     def: &EffectGraphDef,
+    input_boundary: &str,
 ) -> Option<f64> {
     let mut graph = def.clone().into_graph(registry).ok()?;
     let plan = compile(&graph).ok()?;
-    let source_id = graph
+    let input_res = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == SOURCE_TYPE_ID)
-        .map(|n| n.id)?;
-    let source_res = plan.steps().iter().find_map(|step| {
-        if step.node == source_id {
-            step.outputs.iter().find(|(name, _)| *name == "out").map(|(_, id)| *id)
-        } else {
-            None
-        }
-    })?;
+        .find(|n| n.node.type_id().as_str() == input_boundary)
+        .map(|n| n.id)
+        .and_then(|boundary_id| {
+            plan.steps().iter().find_map(|step| {
+                if step.node == boundary_id {
+                    step.outputs.iter().find(|(name, _)| *name == "out").map(|(_, id)| *id)
+                } else {
+                    None
+                }
+            })
+        });
 
-    let input = RenderTarget::new(device, TUNE_W, TUNE_H, FMT, "freeze-tune-input");
     let mut backend = MetalBackend::new(device, TUNE_W, TUNE_H, FMT);
-    backend.pre_bind_texture_2d(source_res, input);
+    if let Some(res) = input_res {
+        let input = RenderTarget::new(device, TUNE_W, TUNE_H, FMT, "freeze-tune-input");
+        backend.pre_bind_texture_2d(res, input);
+    }
     let mut exec = Executor::new(Box::new(backend));
     let frame_time = FrameTime {
         beats: Beats(1.0),
@@ -181,8 +204,8 @@ pub fn tune_all(device: &GpuDevice) {
             continue;
         };
         let atoms = worker_atom_count(base_view.canonical_def);
-        let unfused = measure_def(device, &registry, base_view.canonical_def);
-        let fused = measure_def(device, &registry, fused_view.canonical_def);
+        let unfused = measure_def(device, &registry, base_view.canonical_def, SOURCE_TYPE_ID);
+        let fused = measure_def(device, &registry, fused_view.canonical_def, SOURCE_TYPE_ID);
 
         let verdict = match (unfused, fused) {
             (Some(u), Some(f)) => {
@@ -209,6 +232,49 @@ pub fn tune_all(device: &GpuDevice) {
 
     log::info!("[freeze] perf-gate tuned {} fusable effect(s) on {dev}", map.len());
     let _ = VERDICTS.set(map);
+
+    // ── Generators: same measure/decide, against the fused generator def. ──
+    use crate::generators::bundled_generator_presets::{
+        bundled_generator_preset_json, bundled_generator_preset_type_ids,
+    };
+    let mut gen_map: AHashMap<GeneratorTypeId, bool> = AHashMap::default();
+    for type_id in bundled_generator_preset_type_ids() {
+        let Some(fused_def) = fused_generator_def_by_id(&type_id) else {
+            continue; // no fusable region
+        };
+        let Some(json) = bundled_generator_preset_json(&type_id) else {
+            continue;
+        };
+        let Ok(canonical) = serde_json::from_str::<EffectGraphDef>(json) else {
+            continue;
+        };
+        let atoms = worker_atom_count(&canonical);
+        let unfused = measure_def(device, &registry, &canonical, GENERATOR_INPUT_TYPE_ID);
+        let fused = measure_def(device, &registry, fused_def, GENERATOR_INPUT_TYPE_ID);
+        let verdict = match (unfused, fused) {
+            (Some(u), Some(f)) => {
+                let pays = decides_fuse(u, f, atoms);
+                let speedup = if f > 0.0 { u / f } else { 0.0 };
+                let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
+                log::info!(
+                    "[freeze] tune generator {} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
+                     {speedup:.2}x, {atoms} atoms -> {outcome}",
+                    type_id.as_str()
+                );
+                pays
+            }
+            _ => {
+                log::warn!(
+                    "[freeze] tune generator {} on {dev}: measurement failed -> keep unfused",
+                    type_id.as_str(),
+                );
+                false
+            }
+        };
+        gen_map.insert(type_id, verdict);
+    }
+    log::info!("[freeze] perf-gate tuned {} fusable generator(s) on {dev}", gen_map.len());
+    let _ = GEN_VERDICTS.set(gen_map);
 }
 
 #[cfg(test)]

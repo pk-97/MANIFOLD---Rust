@@ -154,6 +154,36 @@ impl GeneratorRegistry {
             }
         }
 
+        // Fused bundled path: when the freeze compiler produced a fused def for
+        // this generator AND the perf gate kept it (never-worse on this device)
+        // AND fusion is enabled, render through the fused def. It loads through the
+        // SAME `from_def` path as the unfused preset — only the def changed (fused
+        // kernels + bindings retargeted onto them), so modulation keeps flowing.
+        // The override path above is intentionally NOT fused: a per-layer graph
+        // edit renders unfused so editing stays live (mirrors the effect rule).
+        if crate::node_graph::freeze::install::freeze_enabled()
+            && crate::node_graph::freeze::perf_gate::should_fuse_generator(gen_type)
+            && let Some(fused_def) =
+                crate::node_graph::freeze::install::fused_generator_def_by_id(gen_type)
+        {
+            match JsonGraphGenerator::from_def_with_device(
+                fused_def.clone(),
+                &registry,
+                device,
+                width,
+                height,
+                self.target_format,
+            ) {
+                Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
+                Err(e) => {
+                    log::warn!(
+                        "Fused generator {} failed to load: {e} — falling back to unfused preset",
+                        gen_type.as_str(),
+                    );
+                }
+            }
+        }
+
         // Bundled JSON preset path.
         if let Some(json) = bundled_generator_preset_json(gen_type) {
             match JsonGraphGenerator::from_json_str_with_device(

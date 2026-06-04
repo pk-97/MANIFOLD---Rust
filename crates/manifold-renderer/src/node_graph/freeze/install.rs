@@ -53,10 +53,11 @@ use std::sync::OnceLock;
 
 use ahash::{AHashMap, AHashSet};
 use manifold_core::EffectTypeId;
+use manifold_core::GeneratorTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode, EffectGraphWire,
-    SerializedParamValue,
+    BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode,
+    EffectGraphWire, SerializedParamValue,
 };
 
 use crate::node_graph::effect_node::NodeInstanceId;
@@ -130,6 +131,105 @@ fn fuse_view(base: &LoadedPresetView, registry: &PrimitiveRegistry) -> Option<Lo
         bindings: Box::leak(bindings.into_boxed_slice()),
         skip_mode: base.skip_mode,
     })
+}
+
+// ===========================================================================
+// Generator fusion. A generator preset is the SAME `EffectGraphDef` as an
+// effect, but its live render path ([`JsonGraphGenerator::from_def`]) reads its
+// modulation bindings straight from the def's `preset_metadata.bindings`
+// (`BindingDef`s) rather than from a separate `LoadedPresetView.bindings` list.
+// So fusing a generator means rewriting the def with fused kernels (the shared
+// `fuse_canonical_def`) AND retargeting those `BindingDef`s onto the fused node —
+// the generator analog of `retarget_bindings`. The fused generator def then loads
+// through the unchanged `from_def` path, so a wired generator param keeps
+// modulating after its atom folds into a kernel.
+// ===========================================================================
+
+/// Look up the fused generator def for a generator type, building + caching the
+/// whole map on first call. `None` for any generator whose canonical graph has no
+/// fusable region, or whose modulation bindings can't be retargeted (stranded) —
+/// either way it renders unfused, always correct. Mirrors [`fused_view_by_id`].
+pub fn fused_generator_def_by_id(id: &GeneratorTypeId) -> Option<&'static EffectGraphDef> {
+    static MAP: OnceLock<AHashMap<GeneratorTypeId, &'static EffectGraphDef>> = OnceLock::new();
+    let map = MAP.get_or_init(build_fused_generator_map);
+    map.get(id).copied()
+}
+
+fn build_fused_generator_map() -> AHashMap<GeneratorTypeId, &'static EffectGraphDef> {
+    use crate::generators::bundled_generator_presets::{
+        bundled_generator_preset_json, bundled_generator_preset_type_ids,
+    };
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut m: AHashMap<GeneratorTypeId, &'static EffectGraphDef> = AHashMap::default();
+    for type_id in bundled_generator_preset_type_ids() {
+        let Some(json) = bundled_generator_preset_json(&type_id) else {
+            continue;
+        };
+        let Ok(def) = serde_json::from_str::<EffectGraphDef>(json) else {
+            continue;
+        };
+        if let Some(fused) = fuse_generator_def(&def, &registry) {
+            m.insert(type_id, &*Box::leak(Box::new(fused)));
+        }
+    }
+    m
+}
+
+/// Fuse a generator's canonical def + retarget its `preset_metadata.bindings`
+/// onto the fused nodes. `None` if nothing fuses or a binding strands. The result
+/// loads through the same `from_def` path as the unfused preset — only the def
+/// changed.
+pub fn fuse_generator_def(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> Option<EffectGraphDef> {
+    let fused = fuse_canonical_def(def, registry)?;
+    // Node ids that survive (boundaries + fused nodes) — a binding targeting one
+    // is left as-is; one targeting a fused-away member is retargeted; anything
+    // else strands, so refuse to fuse (render unfused).
+    let surviving: AHashSet<String> = fused
+        .def
+        .nodes
+        .iter()
+        .map(|n| resolve_node_id(n).as_str().to_string())
+        .collect();
+    let mut out_def = fused.def;
+    if let Some(meta) = out_def.preset_metadata.as_mut() {
+        meta.bindings = retarget_binding_defs(&meta.bindings, &fused.retarget, &surviving)?;
+    }
+    Some(out_def)
+}
+
+/// Rewrite each `preset_metadata` `BindingDef` so it lands right after fusion: a
+/// binding that drove a fused-away inner node is repointed at that node's fused
+/// uniform field (`n{idx}_<param>`); one driving a surviving boundary is left
+/// alone; one that hits neither strands modulation, so `None` (unfused fallback).
+/// The generator twin of [`retarget_bindings`] — same routing, `BindingDef`
+/// instead of `ParamBinding`.
+fn retarget_binding_defs(
+    bindings: &[BindingDef],
+    retarget: &AHashMap<(String, String), (NodeId, String)>,
+    surviving: &AHashSet<String>,
+) -> Option<Vec<BindingDef>> {
+    let mut out = Vec::with_capacity(bindings.len());
+    for b in bindings {
+        let mut nb = b.clone();
+        if let BindingTarget::Node { node_id, param } = &b.target {
+            let key = (node_id.as_str().to_string(), param.clone());
+            if let Some((fused_id, field)) = retarget.get(&key) {
+                nb.target = BindingTarget::Node {
+                    node_id: fused_id.clone(),
+                    param: field.clone(),
+                };
+            } else if !surviving.contains(node_id.as_str()) {
+                return None; // stranded binding — refuse to fuse this generator
+            }
+            // else: drives a surviving boundary node — leave it exactly as-is.
+        }
+        // Composite targets route by outer name, never by a fused-away id.
+        out.push(nb);
+    }
+    Some(out)
 }
 
 /// Rewrite each outer-card binding so it lands on the right place after fusion.
@@ -817,5 +917,46 @@ mod tests {
             wc.inputs().iter().any(|i| i.name == "n0_gain"),
             "the fused node exposes n0_gain as a control input"
         );
+    }
+
+    /// A generator's `preset_metadata` binding is retargeted onto the fused node.
+    /// checkerboard (Source) → gain → invert fuse into one region; the binding that
+    /// drove `gain.gain` is repointed at the fused node's `n1_gain` field (gain is
+    /// member 1), so the generator's modulation surface keeps driving the kernel.
+    #[test]
+    fn generator_binding_def_retargets_onto_fused() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        let json = r#"{
+            "version": 1, "name": "FuseGen",
+            "presetMetadata": {
+                "id": "FuseGen", "displayName": "Fuse Gen", "category": "Diagnostic",
+                "oscPrefix": "fuse_gen",
+                "params": [{ "id": "g", "name": "Gain", "min": 0.0, "max": 4.0, "defaultValue": 2.0 }],
+                "bindings": [{ "id": "g", "label": "Gain", "defaultValue": 2.0,
+                    "target": { "kind": "node", "nodeId": "gain", "param": "gain" } }]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
+                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
+                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let fused = fuse_generator_def(&def, &registry()).expect("the generator fuses");
+        let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
+        assert_eq!(meta.bindings.len(), 1);
+        match &meta.bindings[0].target {
+            BindingTarget::Node { node_id, param } => {
+                assert_eq!(node_id.as_str(), "fused_region_0", "binding re-anchored to the fused node");
+                assert_eq!(param, "n1_gain", "gain is member 1, so its field is n1_gain");
+            }
+            other => panic!("binding not retargeted to a node: {other:?}"),
+        }
     }
 }

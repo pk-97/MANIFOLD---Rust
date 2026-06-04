@@ -985,6 +985,170 @@ fn fusion_coverage_baseline() {
     );
 }
 
+/// Library-wide safety net for the LIVE generator fused path (the registry now
+/// loads bundled generators through their fused def when the gate keeps it). Every
+/// generator the finder fuses must build + render one frame through the real
+/// [`JsonGraphGenerator`] path without panicking — the generator twin of
+/// `every_fused_preset_executes_one_frame`. Renders only; per-generator numerical
+/// agreement is `fused_generator_renders_like_unfused`'s job. This catches the
+/// "does the live fused generator even run" class across the whole library.
+#[test]
+fn every_fused_generator_executes_one_frame() {
+    use super::install::fused_generator_def_by_id;
+    use crate::generator::Generator;
+    use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+    use crate::generators::bundled_generator_presets::bundled_generator_preset_type_ids;
+    use crate::generators::json_graph_generator::JsonGraphGenerator;
+    use std::panic::AssertUnwindSafe;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (192u32, 192u32);
+    let ctx = GeneratorContext {
+        time: 0.0,
+        beat: 0.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: 1.0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    let mut failures: Vec<String> = Vec::new();
+    let mut fused_count = 0usize;
+
+    for type_id in bundled_generator_preset_type_ids() {
+        let Some(fused_def) = fused_generator_def_by_id(&type_id) else {
+            continue;
+        };
+        fused_count += 1;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut g = JsonGraphGenerator::from_def_with_device(
+                fused_def.clone(),
+                &registry,
+                &device,
+                w,
+                h,
+                FMT,
+            )
+            .expect("fused generator builds");
+            let target = RenderTarget::new(&device, w, h, FMT, "fused-gen-smoke");
+            let mut enc = device.create_encoder("fused-gen-smoke");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                g.render(&mut gpu, &target.texture, &ctx);
+            }
+            enc.commit_and_wait_completed();
+        }));
+        if let Err(panic) = result {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "<non-string panic>".to_string());
+            failures.push(format!("{}: {msg}", type_id.as_str()));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{fused_count} generators fuse; these panicked rendering their fused view:\n  - {}",
+        failures.join("\n  - "),
+    );
+}
+
+/// Generator fusion oracle — a generator renders identically fused vs unfused
+/// through the REAL [`JsonGraphGenerator`] path, including a `preset_metadata`
+/// binding driving a fused-away inner param. checkerboard (Source, non-black) →
+/// gain → invert; the binding sets gain to 2.0 (≠ the atom default 1.0), so on the
+/// non-black pattern the gain materially changes the pixels. Unfused applies the
+/// binding to `gain.gain`; fused applies it to the re-anchored `n1_gain` on the
+/// fused kernel. If the binding retarget were wrong, the fused gain would fall
+/// back to its default and the frames would diverge. This drives the actual
+/// generator render + binding-application path the live registry uses.
+#[test]
+fn fused_generator_renders_like_unfused() {
+    use super::install::fuse_generator_def;
+    use crate::generator::Generator;
+    use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+    use crate::generators::json_graph_generator::JsonGraphGenerator;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+
+    let json = r#"{
+        "version": 1, "name": "FuseGen",
+        "presetMetadata": {
+            "id": "FuseGen", "displayName": "Fuse Gen", "category": "Diagnostic",
+            "oscPrefix": "fuse_gen",
+            "params": [{ "id": "g", "name": "Gain", "min": 0.0, "max": 4.0, "defaultValue": 2.0 }],
+            "bindings": [{ "id": "g", "label": "Gain", "defaultValue": 2.0,
+                "target": { "kind": "node", "nodeId": "gain", "param": "gain" } }]
+        },
+        "nodes": [
+            { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
+            { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
+            { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let canonical: EffectGraphDef = serde_json::from_str(json).unwrap();
+    let fused_def = fuse_generator_def(&canonical, &registry).expect("the generator fuses");
+
+    let ctx = GeneratorContext {
+        time: 0.0,
+        beat: 0.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    let render = |def: EffectGraphDef| -> RenderTarget {
+        let mut g =
+            JsonGraphGenerator::from_def_with_device(def, &registry, &device, w, h, FMT)
+                .expect("generator builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "freeze-gen-out");
+        let mut enc = device.create_encoder("freeze-gen");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            g.render(&mut gpu, &target.texture, &ctx);
+        }
+        enc.commit_and_wait_completed();
+        target
+    };
+
+    let unfused = render(canonical);
+    let fused = render(fused_def);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "fused generator must match unfused (binding applied): max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Render an effect graph whose bound output is at a REDUCED resolution
 /// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as
 /// [`render_graph`] but the output target — and the copy-out — are sized to the
