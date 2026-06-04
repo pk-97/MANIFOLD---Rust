@@ -77,6 +77,9 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Filter,
     aliases: ["sample volume", "slice", "3d to 2d"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/sample_volume_2d_body.wgsl"),
+    input_access: [Gather],
 }
 
 impl Primitive for SampleVolume2D {
@@ -112,9 +115,13 @@ impl Primitive for SampleVolume2D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // MIXED-DIM: 2D output (2D wrapper), 3D `in` volume gathered at a body-
+            // computed slice coord. Generated kernel binds uniform(0)/tex_in(1)/
+            // samp(2)/dst(3). sample_volume_2d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/sample_volume_2d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.sample_volume_2d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.sample_volume_2d",
             )
         });

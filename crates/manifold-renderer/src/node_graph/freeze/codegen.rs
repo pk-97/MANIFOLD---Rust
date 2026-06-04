@@ -124,9 +124,9 @@ enum TexDim {
     D3,
 }
 
-/// Per-dimension WGSL fragments for the iteration wrapper.
+/// Per-dimension WGSL fragments for the iteration wrapper. (Input texture types
+/// are emitted per-input, not here, so a 3D input can feed a 2D-output atom.)
 struct DimForms {
-    tex_ty: &'static str,
     storage_ty: &'static str,
     workgroup: &'static str,
     guard: &'static str,
@@ -138,7 +138,6 @@ struct DimForms {
 fn dim_forms(dim: TexDim) -> DimForms {
     match dim {
         TexDim::D2 => DimForms {
-            tex_ty: "texture_2d<f32>",
             storage_ty: "texture_storage_2d<rgba16float, write>",
             workgroup: "16, 16",
             guard: "id.x >= dims.x || id.y >= dims.y",
@@ -147,7 +146,6 @@ fn dim_forms(dim: TexDim) -> DimForms {
             store_coord: "vec2<i32>(id.xy)",
         },
         TexDim::D3 => DimForms {
-            tex_ty: "texture_3d<f32>",
             storage_ty: "texture_storage_3d<rgba16float, write>",
             workgroup: "4, 4, 4",
             guard: "id.x >= dims.x || id.y >= dims.y || id.z >= dims.z",
@@ -193,11 +191,11 @@ pub fn generate_standalone(
     // single `dst` path — byte-identical to before for every existing atom.
     let tex_outputs: Vec<&NodeOutput> = outputs.iter().filter(|o| is_texture_port(&o.ty)).collect();
     let multi_output = tex_outputs.len() > 1;
-    // 3D iff any texture port is a Texture3D volume (blur_3d_separable). Drives
-    // the texture types, workgroup, and id/uv/store coordinate forms below.
-    let dim = if tex_outputs.iter().any(|o| o.ty == PortType::Texture3D)
-        || tex_inputs.iter().any(|i| i.ty == PortType::Texture3D)
-    {
+    // The WRAPPER dimensionality follows the OUTPUT (the dispatch grid / store
+    // coord / uv): a Texture3D output → 3D wrapper (blur_3d_separable), else 2D.
+    // Input texture types are PER-INPUT (a 3D input can feed a 2D-output atom —
+    // sample_volume_2d gathers a Texture3D at a body-computed coord and writes 2D).
+    let dim = if tex_outputs.iter().any(|o| o.ty == PortType::Texture3D) {
         TexDim::D3
     } else {
         TexDim::D2
@@ -310,10 +308,16 @@ pub fn generate_standalone(
         next_binding = 1;
     }
     for inp in tex_inputs.iter() {
+        // Per-input texture dimensionality (a 3D input may feed a 2D-output atom).
+        let inp_ty = if inp.ty == PortType::Texture3D {
+            "texture_3d<f32>"
+        } else {
+            "texture_2d<f32>"
+        };
         writeln!(
             out,
             "@group(0) @binding({next_binding}) var tex_{}: {};",
-            inp.name, forms.tex_ty
+            inp.name, inp_ty
         )
         .unwrap();
         next_binding += 1;
@@ -2952,6 +2956,88 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         assert_eq!(
             r.over_count, 0,
             "generated lic_integrate must reproduce the hand kernel (max_abs={}, max_rel={})",
+            r.max_abs, r.max_rel
+        );
+    }
+
+    /// MIXED-DIM parity: node.sample_volume_2d gathers a Texture3D `in` at a slice
+    /// coord and writes a Texture2D `out`. The generated kernel must bind tex_in as
+    /// texture_3d (per-input dim) while the wrapper stays 2D (output dim). Fill a
+    /// 32^3 volume, sample it into a 2D output; both kernels share uniform(0)/
+    /// volume(1)/samp(2)/dst(3) and the same payload.
+    #[test]
+    fn generated_sample_volume_2d_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let n = 32u32;
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.sample_volume_2d").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("sample_volume_2d generates");
+        assert!(
+            generated.contains("var tex_in: texture_3d<f32>"),
+            "3D input binding missing:\n{generated}"
+        );
+        assert!(
+            generated.contains("var dst: texture_storage_2d<rgba16float, write>"),
+            "2D output binding missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/sample_volume_2d.wgsl");
+
+        let volume = make_3d_texture(
+            &device,
+            n,
+            GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            "svol-in",
+        );
+        fill_volume_gradient(&device, &volume, n);
+
+        // {slice_z, uv_scale, center_x, center_y}.
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // slice_z
+        bytes[4..8].copy_from_slice(&1.0f32.to_le_bytes()); // uv_scale
+
+        let run = |wgsl: &str| -> RenderTarget {
+            let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "svol");
+            let sampler = device.create_sampler(&GpuSamplerDesc::default());
+            let out = RenderTarget::new(&device, w, h, FMT, "svol-out");
+            let mut enc = device.create_encoder("svol");
+            enc.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: &bytes },
+                    GpuBinding::Texture { binding: 1, texture: &volume },
+                    GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                    GpuBinding::Texture { binding: 3, texture: &out.texture },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "svol",
+            );
+            enc.commit_and_wait_completed();
+            out
+        };
+
+        let from_original = run(original);
+        let from_generated = run(&generated);
+        let r = differ.compare(
+            &device,
+            &from_original.texture,
+            &from_generated.texture,
+            1e-5,
+            1e-5,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "generated sample_volume_2d must reproduce the hand kernel (max_abs={}, max_rel={})",
             r.max_abs, r.max_rel
         );
     }
