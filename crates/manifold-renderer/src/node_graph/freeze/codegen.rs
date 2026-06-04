@@ -188,6 +188,12 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
             P::ATOMIC_OUTPUTS,
         );
     }
+    // BUFFER→TEXTURE resolve: an Array input with a (texture) output — the
+    // accumulator-to-density bridge. Routes to its own self-contained path so
+    // the texture `generate_standalone` never grows an array-input branch.
+    if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_))) {
+        return generate_standalone_resolve(body, P::INPUTS, P::PARAMS, P::OUTPUTS);
+    }
     generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
 }
 
@@ -849,6 +855,124 @@ fn generate_standalone_buffer(
     } else {
         writeln!(out, "    {out_global}[idx] = body({});", args.join(", ")).unwrap();
     }
+    out.push_str("}\n");
+
+    Ok(out)
+}
+
+/// Generate the standalone kernel for a BUFFER→TEXTURE *resolve* atom — the
+/// bridge that lifts a `u32` fixed-point accumulator (an `Array(u32)` input,
+/// bound `read_write` as `array<atomic<u32>>` because it self-clears) into a
+/// float `Texture2D/3D` density. The dispatch grid is the OUTPUT texture's dims
+/// (read via `textureDimensions(dst)`, like a Source generator); the wrapper
+/// computes the linear cell `idx` from `id` + `dims` and the body does its own
+/// `atomicLoad` + `atomicStore(0)` self-clear, returning the `vec4` density the
+/// wrapper stores. This is the inverse of the atomic SCATTER (texture-grid
+/// dispatch reading one buffer cell, vs particle-grid dispatch writing one).
+///
+/// ABI: `body(idx: u32, <params…>) -> vec4<f32>`, referencing the `buf_<accum>`
+/// global. Self-contained — separate from the texture `generate_standalone` so
+/// the ~40 converted texture atoms emit byte-identical WGSL (no array-input
+/// branch threaded through their path).
+fn generate_standalone_resolve(
+    body: &str,
+    inputs: &[NodeInput],
+    params: &[ParamDef],
+    outputs: &[NodeOutput],
+) -> Result<String, CodegenError> {
+    let array_inputs: Vec<&NodeInput> = inputs
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .collect();
+    let tex_outputs: Vec<&NodeOutput> = outputs.iter().filter(|o| is_texture_port(&o.ty)).collect();
+    // v1 resolve: exactly one accumulator in, one density texture out.
+    if array_inputs.len() != 1 || tex_outputs.len() != 1 {
+        return Err(CodegenError::NotFusable(FusionKind::Boundary));
+    }
+    let accum = array_inputs[0];
+    let out_tex = tex_outputs[0];
+    let accum_specs = match &accum.ty {
+        PortType::Array(at) => at.specs,
+        _ => unreachable!("filtered to Array ports"),
+    };
+    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    let accum_ty = buffer_element_type(accum_specs, &mut structs);
+    // The accumulator is an atomic integer grid (scatter wrote it via atomicAdd;
+    // resolve reads + zeros it). WGSL atomics are integer-only.
+    if accum_ty != "u32" && accum_ty != "i32" {
+        return Err(CodegenError::AtomicNonInteger { ty: accum_ty });
+    }
+    let dim = if out_tex.ty == PortType::Texture3D {
+        TexDim::D3
+    } else {
+        TexDim::D2
+    };
+    let forms = dim_forms(dim);
+
+    let mut out = String::new();
+
+    // --- param uniform (scalar params in PARAMS order + 16-byte pad). No
+    // injected count: the dispatch grid is the texture, guarded on its dims. ---
+    let has_uniform = !params.is_empty();
+    if has_uniform {
+        out.push_str("struct Params {\n");
+        let mut words = 0usize;
+        for p in params {
+            let ty = param_wgsl_type(p)?;
+            let f = wgsl_safe_field(p.name);
+            writeln!(out, "    {f}: {ty},").unwrap();
+            words += param_word_count(p)?;
+        }
+        let pad_words = (4 - (words % 4)) % 4;
+        for i in 0..pad_words {
+            writeln!(out, "    _pad{i}: u32,").unwrap();
+        }
+        out.push_str("}\n\n");
+    }
+
+    // --- bindings: [uniform(0)], accumulator (atomic read_write), output dst. ---
+    let mut binding = 0u32;
+    if has_uniform {
+        out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
+        binding = 1;
+    }
+    writeln!(
+        out,
+        "@group(0) @binding({binding}) var<storage, read_write> buf_{}: array<atomic<{accum_ty}>>;",
+        accum.name
+    )
+    .unwrap();
+    binding += 1;
+    writeln!(
+        out,
+        "@group(0) @binding({binding}) var dst: {};",
+        forms.storage_ty
+    )
+    .unwrap();
+    out.push('\n');
+
+    // --- body verbatim (references buf_<accum>, returns the density vec4) ---
+    out.push_str(body.trim_end());
+    out.push_str("\n\n");
+
+    // --- iteration wrapper: dispatch over the output texture's dims; compute the
+    // linear cell index; body reads/zeros the accumulator and returns the vec4. ---
+    let idx_expr = match dim {
+        TexDim::D2 => "id.y * dims.x + id.x",
+        TexDim::D3 => "id.z * dims.x * dims.y + id.y * dims.x + id.x",
+    };
+    writeln!(out, "@compute @workgroup_size({})", forms.workgroup).unwrap();
+    out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
+    out.push_str("    let dims = textureDimensions(dst);\n");
+    writeln!(out, "    if {} {{\n        return;\n    }}", forms.guard).unwrap();
+    writeln!(out, "    let idx = {idx_expr};").unwrap();
+    let mut args: Vec<String> = vec!["idx".to_string()];
+    for p in params {
+        let f = wgsl_safe_field(p.name);
+        args.push(format!("params.{f}"));
+    }
+    writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
+    writeln!(out, "    textureStore(dst, {}, result);", forms.store_coord).unwrap();
     out.push_str("}\n");
 
     Ok(out)
