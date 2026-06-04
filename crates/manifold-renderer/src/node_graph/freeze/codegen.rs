@@ -3099,6 +3099,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         // scanline_jitter_field [amount, scanline, speed, time], 16B. GPU sin →
         // bit-exact; time is a backing param packed by run().
         let scanline_bytes = pack_f32(&[0.8, 0.3, 2.0, 1.0]);
+        // flow_field_noise [time, z_scale, warp_scale, resolution], 16B. warp=0.5
+        // exercises the domain warp; resolution slot ignored by the body.
+        let flow_bytes = pack_f32(&[1.0, 0.01, 0.5, 0.0]);
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -3118,6 +3121,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             ("node.radial_offset_field", "radial_offset_field.wgsl", Some(radial_offset_bytes.as_slice())),
             ("node.uv_strip_clamp", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
             ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_bytes.as_slice())),
+            ("node.flow_field_noise", "flow_field_noise.wgsl", Some(flow_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

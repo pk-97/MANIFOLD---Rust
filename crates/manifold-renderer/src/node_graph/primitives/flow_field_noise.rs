@@ -53,6 +53,16 @@ crate::primitive! {
         flow: Texture2D,
     },
     params: [
+        // Backing param for time (run() packs FrameTime.seconds). First so the
+        // generated uniform layout matches the hand {time, z_scale, warp_scale}.
+        ParamDef {
+            name: "time",
+            label: "Time",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1e9)),
+            enum_values: &[],
+        },
         ParamDef {
             name: "z_scale",
             label: "Time Scale",
@@ -85,6 +95,8 @@ crate::primitive! {
     category: Noise,
     role: Source,
     aliases: ["flow field", "noise flow", "velocity", "curl"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/flow_field_noise_body.wgsl"),
 }
 
 impl Primitive for FlowFieldNoise {
@@ -128,9 +140,14 @@ impl Primitive for FlowFieldNoise {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Source generator: uniform(0)/dst(1). The body reads time/z_scale/
+            // warp_scale; the `resolution` param (output-size control, handled
+            // Rust-side) maps to the uniform's pad slot and is ignored by the body.
+            // flow_field_noise.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/flow_field_noise.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.flow_field_noise standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.flow_field_noise",
             )
         });
