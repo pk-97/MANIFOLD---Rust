@@ -83,6 +83,9 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Filter,
     aliases: ["surface bumps", "normal map", "bump map", "heightmap"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/heightmap_to_normal_body.wgsl"),
+    input_access: [Gather],
 }
 
 impl Primitive for HeightmapToNormal {
@@ -116,9 +119,13 @@ impl Primitive for HeightmapToNormal {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // `in` is a Gather input (4-neighbour central difference). Generated
+            // kernel binds uniform(0)/tex(1)/samp(2)/dst(3); the body recovers the
+            // texel step from dims. heightmap_to_normal.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/heightmap_to_normal.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.heightmap_to_normal standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.heightmap_to_normal",
             )
         });

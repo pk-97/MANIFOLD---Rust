@@ -1733,12 +1733,16 @@ mod gpu_tests {
         // mirror_axis PARAMS: [angle] — Gather sampled at the mirrored UV; the body
         // computes cos/sin from angle on the GPU (matching the hand), bit-exact.
         let mirror_bytes = pack_f32(&[std::f32::consts::FRAC_PI_4]);
+        // heightmap_to_normal PARAMS: [z_scale, aspect, coord_space]; coord_space=0
+        // (TangentZ) packs as f32 0.0 = u32 0.
+        let heightmap_bytes = pack_f32(&[0.5, 1.0, 0.0]);
         let cases: &[(&str, &str, &[u8])] = &[
             ("node.sharpen", "sharpen.wgsl", sharpen_bytes.as_slice()),
             ("node.edge_detect", "edge_detect.wgsl", edge_bytes.as_slice()),
             ("node.gradient_central_diff", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
             ("node.convolution_2d_9tap", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
             ("node.mirror_axis", "mirror_axis.wgsl", mirror_bytes.as_slice()),
+            ("node.heightmap_to_normal", "heightmap_to_normal.wgsl", heightmap_bytes.as_slice()),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();
@@ -2867,6 +2871,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let mut radial_offset_bytes = vec![0u8; 16];
         radial_offset_bytes[0..4].copy_from_slice(&0u32.to_le_bytes()); // mode = Radial
         radial_offset_bytes[8..12].copy_from_slice(&0.5f32.to_le_bytes()); // falloff
+        // uv_strip_clamp [width, mode (u32)], 16B; mode=2 (Both).
+        let mut strip_bytes = vec![0u8; 16];
+        strip_bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // width
+        strip_bytes[4..8].copy_from_slice(&2u32.to_le_bytes()); // mode = Both
         let cases: &[(&str, &str, Option<&[u8]>)] = &[
             ("node.checkerboard", "checkerboard.wgsl", Some(checker_bytes.as_slice())),
             ("node.uv_field", "uv_field.wgsl", None),
@@ -2884,6 +2892,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             ("node.noise", "noise.wgsl", Some(noise_simplex.as_slice())),
             ("node.noise", "noise.wgsl", Some(noise_random.as_slice())),
             ("node.radial_offset_field", "radial_offset_field.wgsl", Some(radial_offset_bytes.as_slice())),
+            ("node.uv_strip_clamp", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

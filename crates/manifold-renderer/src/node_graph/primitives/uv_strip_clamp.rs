@@ -61,6 +61,8 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Map,
     aliases: ["edge stretch", "slit scan", "smear", "stretch"],
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/uv_strip_clamp_body.wgsl"),
 }
 
 impl Primitive for UvStripClamp {
@@ -81,9 +83,12 @@ impl Primitive for UvStripClamp {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Source generator: 0 texture inputs, output at binding 1. Generated
+            // kernel binds uniform(0)/dst(1). uv_strip_clamp.wgsl is the oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/uv_strip_clamp.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.uv_strip_clamp standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.uv_strip_clamp",
             )
         });
