@@ -2850,6 +2850,62 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
+    /// TIME-PARAM + MULTI-OUTPUT SOURCE parity: node.block_displace_field emits
+    /// `offset` + `hash` from a per-block hash animated by `time` (now a backing
+    /// param so the generated body reads it from the uniform). Dual-packed: the
+    /// hand uniform is {amount, block_size, speed, time} (16B), the generated adds
+    /// the multi-output write flags (32B). Both bind uniform(0)/out(1)/out(2); diff
+    /// each output. bdf_hash2 uses GPU sin, so it's bit-exact.
+    #[test]
+    fn generated_block_displace_field_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.block_displace_field").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("block_displace_field generates");
+        assert!(
+            generated.contains("struct BodyOutputs") && generated.contains("write_offset: u32"),
+            "multi-output struct/flags missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/block_displace_field.wgsl");
+
+        let (amount, block_size, speed, time) = (0.8f32, 16.0f32, 2.0f32, 1.0f32);
+        let mut hand = vec![0u8; 16];
+        hand[0..4].copy_from_slice(&amount.to_le_bytes());
+        hand[4..8].copy_from_slice(&block_size.to_le_bytes());
+        hand[8..12].copy_from_slice(&speed.to_le_bytes());
+        hand[12..16].copy_from_slice(&time.to_le_bytes());
+        let mut gen_bytes = vec![0u8; 32];
+        gen_bytes[0..16].copy_from_slice(&hand);
+        gen_bytes[16..20].copy_from_slice(&1u32.to_le_bytes()); // write_offset
+        gen_bytes[20..24].copy_from_slice(&1u32.to_le_bytes()); // write_hash
+
+        let (h_off, h_hash) = dispatch_two_output_source(&device, original, &hand, w, h);
+        let (g_off, g_hash) = dispatch_two_output_source(&device, &generated, &gen_bytes, w, h);
+        let r_off = differ.compare(&device, &h_off.texture, &g_off.texture, 1e-5, 1e-5);
+        assert_eq!(
+            r_off.over_count, 0,
+            "block_displace `offset`: generated must reproduce the hand kernel (max_abs={})",
+            r_off.max_abs
+        );
+        let r_hash = differ.compare(&device, &h_hash.texture, &g_hash.texture, 1e-5, 1e-5);
+        assert_eq!(
+            r_hash.over_count, 0,
+            "block_displace `hash`: generated must reproduce the hand kernel (max_abs={})",
+            r_hash.max_abs
+        );
+    }
+
     /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
     /// outputs get their own texture (no aliasing) so each can be diffed.
     fn dispatch_two_output_source(
