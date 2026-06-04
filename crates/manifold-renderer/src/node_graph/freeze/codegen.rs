@@ -18,7 +18,7 @@
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::parameters::{ParamDef, ParamType};
-use crate::node_graph::ports::{NodeInput, PortType};
+use crate::node_graph::ports::{NodeInput, NodeOutput, PortType};
 use std::fmt::Write as _;
 
 /// Entry-point name every generated kernel uses. Exactly `cs_main`, and no
@@ -111,7 +111,7 @@ fn is_texture_input(i: &NodeInput) -> bool {
 pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
 ) -> Result<String, CodegenError> {
     let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
-    generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS)
+    generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
 }
 
 /// Generate the standalone `cs_main` kernel for one atom. `body` is the atom's
@@ -126,11 +126,22 @@ pub fn generate_standalone(
     inputs: &[NodeInput],
     params: &[ParamDef],
     input_access: &[InputAccess],
+    outputs: &[NodeOutput],
 ) -> Result<String, CodegenError> {
     if body.is_empty() {
         return Err(CodegenError::NoBody);
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
+    // Texture outputs. >1 → the body returns a `BodyOutputs` struct (one vec4 per
+    // output port) and the wrapper gates each store on an injected `write_<name>`
+    // uniform flag (the executor aliases an unconsumed output slot onto a live
+    // one, so an ungated double-write would clobber it). 1 (or 0) keeps the
+    // single `dst` path — byte-identical to before for every existing atom.
+    let tex_outputs: Vec<&NodeOutput> = outputs
+        .iter()
+        .filter(|o| matches!(o.ty, PortType::Texture2D | PortType::Texture2DTyped(_)))
+        .collect();
+    let multi_output = tex_outputs.len() > 1;
     match fusion_kind {
         FusionKind::Pointwise if tex_inputs.len() == 1 => {}
         FusionKind::MultiInputCoincident if tex_inputs.len() >= 2 => {}
@@ -195,6 +206,15 @@ pub fn generate_standalone(
             writeln!(out, "    {}_count: u32,", t.name).unwrap();
             header_words += 1;
         }
+        // Multi-output: one write-gate flag per output (in output order). For
+        // voronoi_2d this reproduces the hand uniform's write_out/write_cell_id
+        // tail exactly.
+        if multi_output {
+            for o in &tex_outputs {
+                writeln!(out, "    write_{}: u32,", o.name).unwrap();
+                header_words += 1;
+            }
+        }
         let pad_words = (4 - (header_words % 4)) % 4;
         for i in 0..pad_words {
             writeln!(out, "    _pad{i}: u32,").unwrap();
@@ -227,13 +247,36 @@ pub fn generate_standalone(
         writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         next_binding += 1;
     }
-    let output_binding = next_binding;
-    writeln!(
-        out,
-        "@group(0) @binding({output_binding}) var dst: texture_storage_2d<rgba16float, write>;"
-    )
-    .unwrap();
+    // Output storage texture(s). Single output keeps the name `dst` (so existing
+    // atoms' WGSL is unchanged); multi-output names each `dst_<port>`.
+    if multi_output {
+        for o in &tex_outputs {
+            writeln!(
+                out,
+                "@group(0) @binding({next_binding}) var dst_{}: texture_storage_2d<rgba16float, write>;",
+                o.name
+            )
+            .unwrap();
+            next_binding += 1;
+        }
+    } else {
+        writeln!(
+            out,
+            "@group(0) @binding({next_binding}) var dst: texture_storage_2d<rgba16float, write>;"
+        )
+        .unwrap();
+    }
     out.push('\n');
+
+    // Multi-output body returns a struct with one vec4 field per output port. The
+    // codegen declares it so the body can `return BodyOutputs(out_value, …)`.
+    if multi_output {
+        out.push_str("struct BodyOutputs {\n");
+        for o in &tex_outputs {
+            writeln!(out, "    {}: vec4<f32>,", o.name).unwrap();
+        }
+        out.push_str("}\n\n");
+    }
 
     // --- the atom's body fragment, verbatim ---
     out.push_str(body.trim_end());
@@ -243,7 +286,13 @@ pub fn generate_standalone(
     // body in (texture-inputs-then-params) order, store. ---
     out.push_str("@compute @workgroup_size(16, 16)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
-    out.push_str("    let dims = textureDimensions(dst);\n");
+    if multi_output {
+        // Any output binding gives the canvas size (run() binds the live slot to
+        // every binding, so they share dimensions); use the first.
+        writeln!(out, "    let dims = textureDimensions(dst_{});", tex_outputs[0].name).unwrap();
+    } else {
+        out.push_str("    let dims = textureDimensions(dst);\n");
+    }
     out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
     out.push_str("    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n");
     if any_texel {
@@ -312,7 +361,21 @@ pub fn generate_standalone(
         args.push(format!("params.{}", t.name));
     }
     writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
-    out.push_str("    textureStore(dst, vec2<i32>(id.xy), result);\n");
+    if multi_output {
+        // Each store gated on its write flag — an unconsumed output's slot is
+        // aliased onto a live one, so writing it ungated would clobber the live
+        // texture.
+        for o in &tex_outputs {
+            writeln!(
+                out,
+                "    if params.write_{} != 0u {{ textureStore(dst_{}, vec2<i32>(id.xy), result.{}); }}",
+                o.name, o.name, o.name
+            )
+            .unwrap();
+        }
+    } else {
+        out.push_str("    textureStore(dst, vec2<i32>(id.xy), result);\n");
+    }
     out.push_str("}\n");
 
     Ok(out)
@@ -674,8 +737,8 @@ mod gpu_tests {
     fn generated_wgsl_is_deterministic() {
         let g = Gain::new();
         let body = g.wgsl_body().unwrap();
-        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access()).unwrap();
-        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access()).unwrap();
+        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.outputs()).unwrap();
+        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.outputs()).unwrap();
         assert_eq!(a, b, "codegen must be deterministic");
         assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
         assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
@@ -698,6 +761,7 @@ mod gpu_tests {
             g.inputs(),
             g.parameters(),
             g.input_access(),
+            g.outputs(),
         )
         .expect("gain generates");
         let original = include_str!("../primitives/shaders/gain.wgsl");
@@ -781,6 +845,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
@@ -973,6 +1038,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("mix generates");
         let original = include_str!("../primitives/shaders/mix.wgsl");
@@ -1017,6 +1083,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("vignette generates");
         let original = include_str!("../primitives/shaders/vignette.wgsl");
@@ -1112,6 +1179,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("dither generates");
 
@@ -1216,6 +1284,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
@@ -1296,6 +1365,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
@@ -1360,6 +1430,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("abs_texture generates");
 
@@ -1415,6 +1486,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("remap generates");
 
@@ -1522,6 +1594,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
@@ -1599,6 +1672,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             // Structural: the gather input is NOT pre-sampled into a register.
@@ -1651,6 +1725,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("gaussian_blur generates");
         assert!(
@@ -1732,6 +1807,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("basic_shape generates");
         let original = include_str!("../primitives/shaders/basic_shape.wgsl");
@@ -1812,6 +1888,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.outputs(),
         )
         .expect("gradient_ramp generates");
         // Structural: the Table param expands to a count word + a vec4 array.
@@ -1865,6 +1942,99 @@ mod gpu_tests {
             "generated gradient_ramp must reproduce gradient_ramp.wgsl \
              (max_abs={}, max_rel={})",
             r.max_abs, r.max_rel
+        );
+    }
+
+    /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
+    /// outputs get their own texture (no aliasing) so each can be diffed.
+    fn dispatch_two_output_source(
+        device: &GpuDevice,
+        wgsl: &str,
+        param_bytes: &[u8],
+        w: u32,
+        h: u32,
+    ) -> (RenderTarget, RenderTarget) {
+        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-multi-out");
+        let a = RenderTarget::new(device, w, h, FMT, "codegen-out-a");
+        let b = RenderTarget::new(device, w, h, FMT, "codegen-out-b");
+        let mut enc = device.create_encoder("codegen-multi-out");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: param_bytes },
+                GpuBinding::Texture { binding: 1, texture: &a.texture },
+                GpuBinding::Texture { binding: 2, texture: &b.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "codegen-multi-out",
+        );
+        enc.commit_and_wait_completed();
+        (a, b)
+    }
+
+    /// MULTI-OUTPUT SOURCE parity: node.voronoi_2d writes two storage textures
+    /// (`out` = F1/F2/edge/cell_hash, `cell_id` = the F1-winning cell coordinate).
+    /// The generated kernel declares both as dst_<port>, the body returns a
+    /// BodyOutputs struct, and each store is gated on an injected write_<port>
+    /// flag. Those flags land at the same offsets as the hand uniform's
+    /// write_out/write_cell_id, so the generated Params layout equals
+    /// VoronoiUniforms exactly — one payload drives both kernels. Diff each output
+    /// independently (both write flags on, distinct textures, no aliasing).
+    #[test]
+    fn generated_voronoi_2d_matches_original() {
+        let device = crate::test_device();
+        let (w, h) = (128u32, 128u32);
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let differ = TextureDiff::new(&device);
+
+        let node = registry.construct("node.voronoi_2d").unwrap();
+        let generated = generate_standalone(
+            node.fusion_kind(),
+            node.wgsl_body().unwrap(),
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.outputs(),
+        )
+        .expect("voronoi_2d generates");
+        // Structural: two storage outputs, a struct return, and per-output gates.
+        assert!(
+            generated.contains("var dst_out: texture_storage_2d<rgba16float, write>"),
+            "dst_out binding missing:\n{generated}"
+        );
+        assert!(
+            generated.contains("var dst_cell_id: texture_storage_2d<rgba16float, write>"),
+            "dst_cell_id binding missing:\n{generated}"
+        );
+        assert!(generated.contains("struct BodyOutputs"), "struct missing:\n{generated}");
+        assert!(generated.contains("write_out: u32"), "write_out flag missing:\n{generated}");
+        assert!(
+            generated.contains("write_cell_id: u32"),
+            "write_cell_id flag missing:\n{generated}"
+        );
+        let original = include_str!("../primitives/shaders/voronoi_2d.wgsl");
+
+        // {scale, offset_x, offset_y, jitter, out_scale, write_out, write_cell_id, _pad}.
+        let mut bytes = vec![0u8; 32];
+        bytes[0..4].copy_from_slice(&8.0f32.to_le_bytes()); // scale
+        bytes[12..16].copy_from_slice(&1.0f32.to_le_bytes()); // jitter (full random)
+        bytes[16..20].copy_from_slice(&1.0f32.to_le_bytes()); // out_scale
+        bytes[20..24].copy_from_slice(&1u32.to_le_bytes()); // write_out
+        bytes[24..28].copy_from_slice(&1u32.to_le_bytes()); // write_cell_id
+
+        let (h_out, h_cell) = dispatch_two_output_source(&device, original, &bytes, w, h);
+        let (g_out, g_cell) = dispatch_two_output_source(&device, &generated, &bytes, w, h);
+        let r_out = differ.compare(&device, &h_out.texture, &g_out.texture, 1e-5, 1e-5);
+        assert_eq!(
+            r_out.over_count, 0,
+            "voronoi `out`: generated must reproduce voronoi_2d.wgsl (max_abs={}, max_rel={})",
+            r_out.max_abs, r_out.max_rel
+        );
+        let r_cell = differ.compare(&device, &h_cell.texture, &g_cell.texture, 1e-5, 1e-5);
+        assert_eq!(
+            r_cell.over_count, 0,
+            "voronoi `cell_id`: generated must reproduce voronoi_2d.wgsl (max_abs={}, max_rel={})",
+            r_cell.max_abs, r_cell.max_rel
         );
     }
 
@@ -1982,6 +2152,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
             let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))

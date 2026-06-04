@@ -100,6 +100,8 @@ crate::primitive! {
     summary: "Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields.",
     category: Noise,
     role: Source,
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/voronoi_2d_body.wgsl"),
 }
 
 impl Primitive for Voronoi2D {
@@ -134,9 +136,15 @@ impl Primitive for Voronoi2D {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Multi-output Source: the generated kernel binds uniform(0)/dst_out(1)/
+            // dst_cell_id(2), the body returns both in a BodyOutputs struct, and the
+            // wrapper gates each store on the injected write_out/write_cell_id flags
+            // (which sit at the same offsets as the hand uniform's, so VoronoiUniforms
+            // packs the generated layout unchanged). voronoi_2d.wgsl is the oracle.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/voronoi_2d.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.voronoi_2d standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.voronoi_2d",
             )
         });
