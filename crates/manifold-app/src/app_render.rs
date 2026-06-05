@@ -2363,14 +2363,15 @@ impl Application {
         let preview_title_h = 18.0_f32;
         let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
         let preview_h = preview_w * 9.0 / 16.0;
-        // The sidebar top hosts up to two stacked 16:9 monitors, each a titled
-        // pane (title row + image): the selected node's output on top, and the
-        // master compositor output below it. The node monitor is reserved only
-        // when the selected node has an image — control / math / envelope nodes
-        // hand that space to the value inspector instead. The master monitor is
-        // always present so the editor always shows what the live show is
-        // putting out. The param rows / inspector begin below whatever panes
-        // are reserved (`sidebar_content_top`).
+        // The sidebar top hosts two pinned, stacked 16:9 monitors, each a
+        // titled pane (title row + body): the selected node's output on top,
+        // and the master compositor output below it. Both panes are ALWAYS
+        // reserved so neither moves as the selection changes. The node pane's
+        // body shows the node's image, or — for a control / math / envelope
+        // node with no image — its value inspector text in place of the image,
+        // or a placeholder when nothing is selected. The master pane always
+        // shows what the live show is putting out. The param rows begin below
+        // both panes (`sidebar_content_top`), a fixed offset.
         let node_preview_info = self.content_state.node_preview_info.clone();
         let preview_has_image = node_preview_info
             .as_ref()
@@ -2378,17 +2379,11 @@ impl Application {
             .unwrap_or(false);
         let show_image = self.last_preview_node.is_some() && preview_has_image;
         let mut pane_y = preview_pad;
-        // Node-output monitor: `(title_y, image_y)`, reserved only when an
-        // image node is selected.
-        let node_pane_y = if show_image {
-            let title_y = pane_y;
-            let img_y = title_y + preview_title_h;
-            pane_y = img_y + preview_h + preview_pad;
-            Some((title_y, img_y))
-        } else {
-            None
-        };
-        // Master-out monitor: always present, stacked below the node monitor.
+        // Node-output monitor: title row + 16:9 body, always reserved (pinned).
+        let node_title_y = pane_y;
+        let node_img_y = node_title_y + preview_title_h;
+        pane_y = node_img_y + preview_h + preview_pad;
+        // Master-out monitor: always present, pinned just below the node pane.
         let master_title_y = pane_y;
         let master_img_y = master_title_y + preview_title_h;
         pane_y = master_img_y + preview_h + preview_pad;
@@ -2551,9 +2546,11 @@ impl Application {
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
 
-        // Titles for the sidebar-top preview monitors. Added to the editor tree
-        // so they composite into the offscreen; the monitor images blit onto
-        // the drawable just below each title in the present pass.
+        // Pinned sidebar-top preview monitors: a backing panel, the two pane
+        // titles, and — for a non-image node — the value inspector text in the
+        // node pane. Added to the editor tree so they composite into the
+        // offscreen; the monitor images blit onto the drawable below each title
+        // in the present pass.
         {
             use manifold_ui::node::{TextAlign, UIStyle};
             let title_style = UIStyle {
@@ -2563,16 +2560,59 @@ impl Application {
                 ..UIStyle::default()
             };
             let title_x = sidebar_x + preview_pad;
-            if let Some((title_y, _)) = node_pane_y {
+            // Backing panel for the pinned monitor region so the titles and the
+            // inspector text sit on the same surface as the param list below.
+            ws.ui_root.tree.add_panel(
+                -1,
+                sidebar_x,
+                0.0,
+                sidebar_width,
+                sidebar_content_top,
+                UIStyle {
+                    bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32,
+                    ..UIStyle::default()
+                },
+            );
+            // Node-output pane. A non-image node fills the pane with its value
+            // inspector (its own title heads the pane, in place of the image);
+            // otherwise the generic "Node Output" title sits above the image,
+            // and a hint fills the body when nothing is selected.
+            let node_region = manifold_ui::Rect::new(
+                title_x,
+                node_title_y,
+                preview_w,
+                preview_title_h + preview_h,
+            );
+            let inspector_drawn = self
+                .graph_editor_panel
+                .render_node_inspector(&mut ws.ui_root.tree, node_region);
+            if !inspector_drawn {
                 ws.ui_root.tree.add_label(
                     -1,
                     title_x,
-                    title_y,
+                    node_title_y,
                     preview_w,
                     preview_title_h,
                     "Node Output",
                     title_style,
                 );
+                if !show_image {
+                    // Nothing selected — the image body stays empty; hint it.
+                    ws.ui_root.tree.add_label(
+                        -1,
+                        title_x,
+                        node_img_y + preview_h * 0.5 - 8.0,
+                        preview_w,
+                        16.0,
+                        "Select a node",
+                        UIStyle {
+                            text_color: manifold_ui::color::TEXT_DIMMED_C32,
+                            font_size: 12,
+                            text_align: TextAlign::Center,
+                            ..UIStyle::default()
+                        },
+                    );
+                }
             }
             ws.ui_root.tree.add_label(
                 -1,
@@ -2681,8 +2721,10 @@ impl Application {
             let h = preview_h * scale;
             let x = (sidebar_x + preview_pad) * scale;
             // Node-output monitor — the selected image node's captured output.
-            if let (Some((_, img_y)), Some(bridge)) =
-                (node_pane_y, self.node_preview_texture_bridge.as_ref())
+            // Only when that node has an image; a non-image node's pane is
+            // filled with the value inspector text instead (drawn above).
+            if show_image
+                && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
             {
                 let front = bridge.front_index() as usize;
                 if let Some(tex) = self
@@ -2703,7 +2745,7 @@ impl Application {
                                 sampler: blit_s,
                             },
                         ],
-                        (x, img_y * scale, w, h),
+                        (x, node_img_y * scale, w, h),
                         manifold_gpu::GpuLoadAction::Load,
                         "Node Preview → Sidebar",
                     );

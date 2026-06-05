@@ -400,17 +400,17 @@ impl GraphEditorPanel {
 
         let mut y = viewport.y + PADDING;
 
-        // Top of the sidebar: either the value inspector (a previewed node with
-        // no image — show what it is + its live signal, in the reclaimed
-        // preview area) or the "Smart preview" toggle (an image preview).
-        if let Some(insp) = self.node_inspector.clone() {
-            y = Self::render_inspector_block(tree, bg_id, viewport, y, &insp);
-        } else {
+        // The value inspector for a non-image node renders in the pinned
+        // node-output pane at the sidebar top (see `render_node_inspector`),
+        // not here — this region is the param list. Only the image-preview
+        // auto-gain toggle precedes the list, and only when a node-output
+        // *image* (not the value inspector) is on screen.
+        if self.node_inspector.is_none() {
             // ── Node-preview "Smart preview" toggle ───────────────
-            // Sits directly under the preview image. Flips the semantic
-            // encoding on the preview pane so dark/signed intermediates are
-            // legible. Node preview only — never touches the live render.
-            // Added before the early-returns below so it's always clickable.
+            // Flips the semantic encoding on the node-output pane so
+            // dark/signed intermediates are legible. Node preview only —
+            // never touches the live render. Added before the early-returns
+            // below so it's always clickable.
             let cb_x = viewport.x + PADDING;
             let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
             let cb_id = tree.add_button(
@@ -679,21 +679,35 @@ impl GraphEditorPanel {
         }
     }
 
-    /// Render the value inspector for a non-image previewed node into the
-    /// reclaimed preview area: title, one-line "what it does", then the live
-    /// OUTPUT signal and INPUT values. Returns the y below the block. No row
-    /// state (nothing here is clickable).
+    /// Render the value inspector for the previewed node into the pinned
+    /// node-output pane (`region`) when the node carries no image — its title,
+    /// one-line "what it does", then the live OUTPUT signal and INPUT values.
+    /// Returns `true` when it drew (a non-image node is selected), so the host
+    /// knows the pane is occupied by text rather than an image and skips the
+    /// generic "Node Output" title. No row state — nothing here is clickable.
+    pub fn render_node_inspector(&self, tree: &mut UITree, region: Rect) -> bool {
+        let Some(insp) = self.node_inspector.as_ref() else {
+            return false;
+        };
+        Self::render_inspector_block(tree, -1, region, insp);
+        true
+    }
+
+    /// Draw the inspector block — title, description, OUTPUT/INPUT rows — into
+    /// `region`, parented at `parent_id`. Coordinates are absolute; `region.x`
+    /// is the left edge of the text (already padded by the caller).
     fn render_inspector_block(
         tree: &mut UITree,
-        bg_id: i32,
-        viewport: Rect,
-        mut y: f32,
+        parent_id: i32,
+        region: Rect,
         insp: &NodeInspector,
-    ) -> f32 {
+    ) {
         const DESC_LINE_H: f32 = 16.0;
         const IO_ROW_H: f32 = 20.0;
-        let x = viewport.x + PADDING;
-        let w = (viewport.width - 2.0 * PADDING).max(10.0);
+        let x = region.x;
+        let w = region.width.max(10.0);
+        let bg_id = parent_id;
+        let mut y = region.y;
 
         // Title.
         tree.add_label(
@@ -790,7 +804,6 @@ impl GraphEditorPanel {
             }
             y += PADDING * 0.5;
         }
-        y + PADDING * 0.5
     }
 
     /// Translate a single UITree event into zero or more `PanelAction`s.
