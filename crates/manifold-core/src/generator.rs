@@ -426,8 +426,8 @@ impl GeneratorParamState {
             Some(b) => b,
             None => return,
         };
-        let id_to_index =
-            crate::preset_definition_registry::generator::try_get(&self.generator_type).map(|d| &d.id_to_index);
+        let def = crate::preset_definition_registry::generator::try_get(&self.generator_type);
+        let id_to_index = def.as_ref().map(|d| &d.id_to_index);
 
         if let Some(drivers) = &self.drivers {
             for driver in drivers {
@@ -553,8 +553,10 @@ impl GeneratorParamState {
 /// Unified parameter interface — mirrors `impl ParamSource for EffectInstance`.
 impl ParamSource for GeneratorParamState {
     fn display_name(&self) -> &str {
+        // Interned to `&'static str` — the registry is hot-reloadable and
+        // returns an owned `Arc<PresetDef>`. See effect impl above.
         crate::preset_definition_registry::generator::try_get(&self.generator_type)
-            .map(|d| d.display_name.as_str())
+            .map(|d| crate::preset_definition_registry::intern_display_name(&d.display_name))
             .unwrap_or("Generator")
     }
 

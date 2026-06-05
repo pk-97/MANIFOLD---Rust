@@ -253,7 +253,7 @@ pub fn tune_all(device: &GpuDevice) {
         let Some(json) = bundled_generator_preset_json(&type_id) else {
             continue;
         };
-        let Ok(canonical) = serde_json::from_str::<EffectGraphDef>(json) else {
+        let Ok(canonical) = serde_json::from_str::<EffectGraphDef>(&json) else {
             continue;
         };
         let atoms = worker_atom_count(&canonical);

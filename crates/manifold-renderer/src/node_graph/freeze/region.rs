@@ -1480,7 +1480,7 @@ mod audit {
         };
         for type_id in bundled_generator_preset_type_ids() {
             if let Some(json) = bundled_generator_preset_json(&type_id) {
-                audit_one(type_id.as_str(), json, &registry);
+                audit_one(type_id.as_str(), &json, &registry);
             }
         }
     }

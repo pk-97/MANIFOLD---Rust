@@ -805,7 +805,7 @@ impl Application {
                             .and_then(|gt| {
                                 manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(&gt)
                             })
-                            .and_then(|json| serde_json::from_str(json).ok());
+                            .and_then(|json| serde_json::from_str(&json).ok());
                     }
                     self.pending_open_graph_editor = true;
                     continue;

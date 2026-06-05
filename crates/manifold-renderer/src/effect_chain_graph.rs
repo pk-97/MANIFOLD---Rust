@@ -158,6 +158,14 @@ pub struct ChainGraph {
     /// Hash of the topology this graph was built for. Compared
     /// each frame to decide whether to rebuild.
     topology_hash: u64,
+    /// Preset catalog generation this graph was built against (step 10
+    /// hot-reload). The dispatcher compares it to the live
+    /// [`crate::preset_loader::catalog_generation`] once per frame: when a
+    /// preset `.json` is edited on disk the watcher bumps the generation,
+    /// and any chain built against the old generation is rebuilt from the
+    /// new defs. At rest the generation never moves, so the comparison is a
+    /// single atomic load that always matches — no perform-path cost.
+    built_generation: u64,
     /// State store for stateful primitives that key per-owner state
     /// off `(node_id, owner_key)` rather than carrying it on the
     /// node instance directly. Today that's only `temporal::Feedback`,
@@ -970,6 +978,7 @@ impl ChainGraph {
             width,
             height,
             topology_hash,
+            built_generation: crate::preset_loader::catalog_generation(),
             state_store: StateStore::new(),
             errors,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
@@ -982,6 +991,13 @@ impl ChainGraph {
     /// chain built and ran cleanly.
     pub fn errors(&self) -> &[ChainError] {
         &self.errors
+    }
+
+    /// Preset catalog generation this chain was built against (step 10).
+    /// The dispatcher compares it to the live catalog generation to decide
+    /// whether a hot-reloaded preset edit requires a rebuild.
+    pub fn built_generation(&self) -> u64 {
+        self.built_generation
     }
 
     /// Compare a cached graph's topology hash to the current chain's.

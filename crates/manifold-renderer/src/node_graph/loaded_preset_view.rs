@@ -29,9 +29,11 @@
 //! constructor map.
 
 use std::borrow::Cow;
-use std::sync::OnceLock;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ahash::AHashMap;
+use arc_swap::ArcSwap;
 use manifold_core::EffectTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
@@ -76,14 +78,44 @@ pub struct LoadedPresetView {
     pub fused_retarget: AHashMap<(String, String), (NodeId, String)>,
 }
 
+/// Generation-stamped cache of leaked `&'static LoadedPresetView`s. Keeps
+/// the `&'static` return (the render path stores `view.canonical_def:
+/// &'static EffectGraphDef` and `view.bindings: &'static [_]`) while
+/// allowing a hot-reload (step 10) to rebuild the map from the new catalog.
+///
+/// At rest the generation never moves, so [`loaded_preset_view_by_id`] is
+/// one relaxed atomic compare + an `ArcSwap` pointer load + an
+/// `AHashMap::get` — the same cost class as the old `OnceLock`. This sits
+/// on the per-frame path (`compute_topology_hash` reads `view.skip_mode`),
+/// so the at-rest cost is the single atomic load the prime directive
+/// permits.
+struct ViewCache {
+    generation: AtomicU64,
+    map: ArcSwap<AHashMap<EffectTypeId, &'static LoadedPresetView>>,
+}
+
+static VIEW_CACHE: std::sync::LazyLock<ViewCache> = std::sync::LazyLock::new(|| ViewCache {
+    generation: AtomicU64::new(u64::MAX),
+    map: ArcSwap::from_pointee(AHashMap::default()),
+});
+
 /// Lookup a [`LoadedPresetView`] by effect type id, building it on
-/// first call and caching for the process lifetime. Returns `None`
-/// for effects whose JSON file doesn't carry `presetMetadata` (i.e.,
-/// v1 entries — not yet migrated by §11 block 4).
+/// first call (and after each hot-reload generation bump) and caching for
+/// the process lifetime. Returns `None` for effects whose JSON file doesn't
+/// carry `presetMetadata` (i.e., v1 entries — not yet migrated by §11
+/// block 4).
 pub fn loaded_preset_view_by_id(id: &EffectTypeId) -> Option<&'static LoadedPresetView> {
-    static MAP: OnceLock<AHashMap<EffectTypeId, &'static LoadedPresetView>> = OnceLock::new();
-    let map = MAP.get_or_init(build_view_map);
-    map.get(id).copied()
+    let generation = crate::preset_loader::catalog_generation();
+    if VIEW_CACHE.generation.load(Ordering::Acquire) != generation {
+        rebuild_view_cache(generation);
+    }
+    VIEW_CACHE.map.load().get(id).copied()
+}
+
+#[cold]
+fn rebuild_view_cache(generation: u64) {
+    VIEW_CACHE.map.store(Arc::new(build_view_map()));
+    VIEW_CACHE.generation.store(generation, Ordering::Release);
 }
 
 fn build_view_map() -> AHashMap<EffectTypeId, &'static LoadedPresetView> {

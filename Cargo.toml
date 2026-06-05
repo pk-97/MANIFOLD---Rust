@@ -41,6 +41,7 @@ kira = "0.9"
 symphonia = { version = "0.5", features = ["all"] }
 ahash = "0.8"
 parking_lot = "0.12"
+arc-swap = "1"
 
 # Optimise audio decoding even in debug builds — pure-Rust symphonia is 10-50x
 # slower without optimisation, and kira uses it internally for decoding.

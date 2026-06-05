@@ -1588,7 +1588,7 @@ fn gen_params_to_config(
         Graph(&'a Vec<manifold_core::effect_graph_def::ParamSpecDef>),
         Registry(&'a manifold_core::preset_def::PresetDef),
     }
-    let source = match (graph_meta, reg_def) {
+    let source = match (graph_meta, reg_def.as_deref()) {
         (Some(m), _) if !m.params.is_empty() => Source::Graph(&m.params),
         (_, Some(d)) => Source::Registry(d),
         _ => {
@@ -1924,13 +1924,19 @@ fn describe_macro_mapping(
         } => {
             let def = manifold_core::preset_definition_registry::effect::try_get(effect_type);
             let effect_name = def
-                .map(|d| d.display_name.as_str())
-                .unwrap_or(effect_type.as_str());
+                .as_ref()
+                .map(|d| d.display_name.clone())
+                .unwrap_or_else(|| effect_type.as_str().to_string());
             let param_name = def
-                .and_then(|d| d.id_to_index.get(param_id.as_ref()).copied())
-                .and_then(|i| def.and_then(|d| d.param_defs.get(i)))
-                .map(|p| p.name.as_str())
-                .unwrap_or("?");
+                .as_ref()
+                .and_then(|d| {
+                    d.id_to_index
+                        .get(param_id.as_ref())
+                        .copied()
+                        .and_then(|i| d.param_defs.get(i))
+                        .map(|p| p.name.clone())
+                })
+                .unwrap_or_else(|| "?".to_string());
             format!("{} → {}", effect_name, param_name)
         }
         MacroMappingTarget::LayerOpacity { layer_id } => {
@@ -1957,13 +1963,19 @@ fn describe_macro_mapping(
                 .unwrap_or("?");
             let def = manifold_core::preset_definition_registry::effect::try_get(effect_type);
             let effect_name = def
-                .map(|d| d.display_name.as_str())
-                .unwrap_or(effect_type.as_str());
+                .as_ref()
+                .map(|d| d.display_name.clone())
+                .unwrap_or_else(|| effect_type.as_str().to_string());
             let param_name = def
-                .and_then(|d| d.id_to_index.get(param_id.as_ref()).copied())
-                .and_then(|i| def.and_then(|d| d.param_defs.get(i)))
-                .map(|p| p.name.as_str())
-                .unwrap_or("?");
+                .as_ref()
+                .and_then(|d| {
+                    d.id_to_index
+                        .get(param_id.as_ref())
+                        .copied()
+                        .and_then(|i| d.param_defs.get(i))
+                        .map(|p| p.name.clone())
+                })
+                .unwrap_or_else(|| "?".to_string());
             format!("{} {} → {}", layer_name, effect_name, param_name)
         }
         MacroMappingTarget::GenParam { layer_id, param_id } => {

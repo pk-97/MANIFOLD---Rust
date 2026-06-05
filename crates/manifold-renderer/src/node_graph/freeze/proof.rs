@@ -785,7 +785,7 @@ fn every_fused_generator_kernel_compiles() {
         let Some(json) = bundled_generator_preset_json(&type_id) else {
             continue;
         };
-        let Ok(def) = serde_json::from_str::<EffectGraphDef>(json) else {
+        let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else {
             continue;
         };
         let Some(fused) = super::install::fuse_canonical_def(&def, &registry) else {
@@ -1207,7 +1207,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
 
     let json = bundled_generator_preset_json(&manifold_core::GeneratorTypeId::new("DigitalPlants"))
         .expect("DigitalPlants preset bundled");
-    let canonical: EffectGraphDef = serde_json::from_str(json).unwrap();
+    let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
     // The whole point: DigitalPlants' GPU per-instance chain must fuse into a
     // buffer kernel that BUILDS (the aliased-output model). If this is None the
     // buffer-fusion activation regressed.

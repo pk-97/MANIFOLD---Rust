@@ -204,8 +204,7 @@ impl GraphHost for EffectInstance {
 
     fn param_range(&self, index: usize) -> (f32, f32) {
         crate::preset_definition_registry::effect::try_get(self.effect_type())
-            .and_then(|d| d.param_defs.get(index))
-            .map(|p| (p.min, p.max))
+            .and_then(|d| d.param_defs.get(index).map(|p| (p.min, p.max)))
             .unwrap_or((0.0, 1.0))
     }
 
@@ -335,8 +334,7 @@ impl GraphHost for GeneratorHost<'_> {
             .as_deref()
             .and_then(|p| {
                 crate::preset_definition_registry::generator::try_get(p.generator_type())
-                    .and_then(|d| d.param_defs.get(index))
-                    .map(|pd| (pd.min, pd.max))
+                    .and_then(|d| d.param_defs.get(index).map(|pd| (pd.min, pd.max)))
             })
             .unwrap_or((0.0, 1.0))
     }

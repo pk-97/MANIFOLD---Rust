@@ -23,52 +23,96 @@
 //! The type id is the JSON filename stem, exactly as before — type ids
 //! are forever (save files reference them).
 
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use ahash::AHashMap;
+use arc_swap::ArcSwap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use crate::preset_loader::EFFECT_CATALOG;
+use crate::preset_loader::{EFFECT_CATALOG, catalog_generation};
 
 /// Raw JSON for the bundled preset of `effect_type`, or `None` if no
 /// preset has that type id.
 ///
-/// The string is the on-disk file verbatim — same bytes the drift test
-/// compares against. Useful when a caller wants to re-export the preset
-/// (e.g., copy-on-write into a per-instance override). The catalog is
-/// process-`'static` (a `LazyLock`), so the borrow is `'static`.
-pub fn bundled_preset_json(effect_type: &EffectTypeId) -> Option<&'static str> {
-    EFFECT_CATALOG.json(effect_type.as_str())
+/// The string is the current on-disk file verbatim. Hot-reload (step 10):
+/// the catalog lives behind an [`ArcSwap`], so this returns an owned
+/// `Arc<str>` cloned from the current snapshot rather than a `&'static`
+/// borrow — a concurrent reload can swap the snapshot without invalidating
+/// a value the caller already holds.
+pub fn bundled_preset_json(effect_type: &EffectTypeId) -> Option<Arc<str>> {
+    EFFECT_CATALOG.load().json(effect_type.as_str())
+}
+
+/// Generation-stamped parsed-def cache. Keyed `&'static str` → leaked
+/// `&'static EffectGraphDef` so [`bundled_preset_def`] can keep handing out
+/// `&'static` references (the render path stores them on
+/// `LoadedPresetView.canonical_def`). The cache is rebuilt (and re-leaked)
+/// whenever the catalog generation advances; at rest the generation never
+/// moves and the cache is reused, so the only at-rest cost over the old
+/// `OnceLock` is one relaxed atomic load.
+struct DefCache {
+    /// Generation this map was built against. `u64::MAX` = not yet built.
+    generation: std::sync::atomic::AtomicU64,
+    map: ArcSwap<AHashMap<&'static str, &'static EffectGraphDef>>,
+}
+
+static DEF_CACHE: std::sync::LazyLock<DefCache> = std::sync::LazyLock::new(|| DefCache {
+    generation: std::sync::atomic::AtomicU64::new(u64::MAX),
+    map: ArcSwap::from_pointee(AHashMap::default()),
+});
+
+fn parsed_def_map() -> Arc<AHashMap<&'static str, &'static EffectGraphDef>> {
+    let generation = catalog_generation();
+    if DEF_CACHE.generation.load(std::sync::atomic::Ordering::Acquire) != generation {
+        rebuild_def_cache(generation);
+    }
+    DEF_CACHE.map.load_full()
+}
+
+#[cold]
+fn rebuild_def_cache(generation: u64) {
+    // Build from the current catalog snapshot and leak each def so the
+    // returned references are `'static`. The leak is bounded by the
+    // (finite) shipping preset count × the number of reloads in a session —
+    // authoring-time, never on the perform path.
+    let mut m: AHashMap<&'static str, &'static EffectGraphDef> = AHashMap::default();
+    for (id, json) in EFFECT_CATALOG.load().entries() {
+        let def: EffectGraphDef = serde_json::from_str(&json)
+            .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
+        let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
+        let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
+        m.insert(id_static, def_static);
+    }
+    DEF_CACHE.map.store(Arc::new(m));
+    DEF_CACHE
+        .generation
+        .store(generation, std::sync::atomic::Ordering::Release);
 }
 
 /// Parsed [`EffectGraphDef`] for the bundled preset of `effect_type`,
 /// or `None` if no preset is registered.
 ///
-/// First call lazily parses every bundled JSON into a cached
-/// [`AHashMap`]; subsequent calls return a borrowed reference into
-/// that cache. Parsing happens once per process.
+/// First call (and every call after a hot-reload generation bump) parses
+/// the current catalog snapshot into a leaked map; subsequent calls return
+/// a borrowed reference into that map. At rest, parsing happens once.
 ///
 /// Parse failures panic with the effect type id and underlying error
 /// — these come from files we author, so any failure is a developer
 /// mistake to fix, not a runtime condition to handle.
 pub fn bundled_preset_def(effect_type: &EffectTypeId) -> Option<&'static EffectGraphDef> {
-    static CACHE: OnceLock<AHashMap<&'static str, EffectGraphDef>> = OnceLock::new();
-    let map = CACHE.get_or_init(|| {
-        let mut m: AHashMap<&'static str, EffectGraphDef> = AHashMap::default();
-        for (id, json) in EFFECT_CATALOG.entries() {
-            let def: EffectGraphDef = serde_json::from_str(json)
-                .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
-            m.insert(id, def);
-        }
-        m
-    });
-    map.get(effect_type.as_str())
+    parsed_def_map().get(effect_type.as_str()).copied()
 }
 
-/// Every [`EffectTypeId`] that has a bundled preset registered.
+/// Every [`EffectTypeId`] that has a bundled preset registered (current
+/// snapshot).
 pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
-    EFFECT_CATALOG.type_ids().map(EffectTypeId::new)
+    EFFECT_CATALOG
+        .load()
+        .type_ids()
+        .map(|id| EffectTypeId::from_string(id.to_string()))
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 /// Loader function for the core's [`LoadedPresetSource`] inventory.
@@ -83,9 +127,10 @@ pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
 /// per process.
 pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
     EFFECT_CATALOG
+        .load()
         .entries()
         .filter_map(|(id, json)| {
-            let def: EffectGraphDef = serde_json::from_str(json)
+            let def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
             def.preset_metadata
         })
@@ -161,7 +206,7 @@ mod tests {
     fn bundled_preset_json_returns_embedded_bytes() {
         let raw = bundled_preset_json(&EffectTypeId::MIRROR).expect("Mirror preset registered");
         // Sanity: the embedded JSON must parse as a valid def and name itself "Mirror".
-        let def: EffectGraphDef = serde_json::from_str(raw).expect("Mirror preset parses");
+        let def: EffectGraphDef = serde_json::from_str(&raw).expect("Mirror preset parses");
         assert_eq!(def.name.as_deref(), Some("Mirror"));
     }
 

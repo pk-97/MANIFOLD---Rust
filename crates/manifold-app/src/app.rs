@@ -1008,7 +1008,7 @@ impl Application {
                             let cmd =
                                 manifold_editing::commands::effects::ChangeGraphParamCommand::new(
                                     manifold_core::GraphTarget::Effect(effect_id),
-                                    param_id,
+                                    param_id.to_string(),
                                     old_val,
                                     new_val,
                                 );
@@ -1048,7 +1048,7 @@ impl Application {
                         // param id the unified by-id command addresses.
                         let param_id =
                             manifold_core::preset_definition_registry::generator::try_get(gen_type)
-                                .and_then(|d| d.param_ids.get(param_idx).map(|s| s.as_str()));
+                                .and_then(|d| d.param_ids.get(param_idx).map(|s| s.to_string()));
                         if (old_val - new_val).abs() > f32::EPSILON
                             && let Some(param_id) = param_id
                         {
@@ -1744,6 +1744,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.state_rx = Some(state_rx);
             self.content_thread_handle = Some(handle);
             log::info!("[ContentThread] spawned (dual device + triple-buffered IOSurface bridge)");
+
+            // Step 10: start the preset hot-reload watcher alongside the
+            // content thread. Detached background thread, off the render
+            // and content tick paths — editing a preset `.json` on disk
+            // refreshes the catalog + registry and rebuilds live chains
+            // without a restart. Idempotent; a no-op if already started.
+            manifold_renderer::preset_loader::start_preset_watcher();
         }
 
         self.gpu = Some(gpu);

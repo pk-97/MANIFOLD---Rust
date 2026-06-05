@@ -56,7 +56,7 @@ impl GeneratorRegistry {
         for type_id in bundled_generator_preset_type_ids() {
             if let Some(json) = bundled_generator_preset_json(&type_id)
                 && let Err(e) = JsonGraphGenerator::from_json_str_with_device(
-                    json,
+                    &json,
                     &registry,
                     device,
                     256,
@@ -140,7 +140,7 @@ impl GeneratorRegistry {
             (Some(grafted), true)
         } else {
             let parsed = bundled_generator_preset_json(gen_type).and_then(|json| {
-                serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json).ok()
+                serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(&json).ok()
             });
             (parsed, false)
         };
@@ -191,7 +191,7 @@ impl GeneratorRegistry {
             // overrides.
             if is_override && let Some(json) = bundled_generator_preset_json(gen_type) {
                 match JsonGraphGenerator::from_json_str_with_device(
-                    json,
+                    &json,
                     &registry,
                     device,
                     width,
@@ -264,7 +264,7 @@ pub fn graft_preset_metadata_from_bundle(
     let Some(json) = bundled_generator_preset_json(gen_type) else {
         return;
     };
-    let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json)
+    let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(&json)
     else {
         return;
     };

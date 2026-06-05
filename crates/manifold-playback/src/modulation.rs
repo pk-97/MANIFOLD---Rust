@@ -312,7 +312,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         .filter(|d| d.enabled && !d.is_paused_by_user)
         .filter_map(|driver| {
             let resolved = manifold_core::effects::resolve_param_in(
-                effect_def,
+                &effect_def,
                 fx,
                 driver.param_id.as_ref(),
             )?;
@@ -460,7 +460,7 @@ pub fn evaluate_all_envelopes(
                     None => continue,
                 };
                 let Some(resolved) = manifold_core::effects::resolve_param_in(
-                    effect_def,
+                    &effect_def,
                     fx,
                     param_id.as_ref(),
                 ) else {
@@ -553,7 +553,7 @@ pub fn evaluate_all_envelopes(
                 None => continue,
             };
             let Some(resolved) = manifold_core::effects::resolve_param_in(
-                effect_def,
+                &effect_def,
                 fx,
                 param_id.as_ref(),
             ) else {

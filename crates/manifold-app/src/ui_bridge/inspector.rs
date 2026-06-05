@@ -2681,8 +2681,7 @@ pub(super) fn dispatch_inspector(
                     )
                     .and_then(|slot| {
                         manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())
-                            .and_then(|def| def.param_defs.get(slot))
-                            .map(|pd| (pd.min, pd.max))
+                            .and_then(|def| def.param_defs.get(slot).map(|pd| (pd.min, pd.max)))
                     })
                     .unwrap_or((0.0, 1.0))
                 };

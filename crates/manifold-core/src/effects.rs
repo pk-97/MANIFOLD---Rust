@@ -954,7 +954,7 @@ where
     use serde::ser::{SerializeMap, SerializeSeq};
 
     let def = crate::preset_definition_registry::generator::try_get(gen_type);
-    let can_emit_map = def.is_some_and(|d| {
+    let can_emit_map = def.as_ref().is_some_and(|d| {
         values.len() <= d.param_ids.len()
             && d.param_ids
                 .iter()
@@ -996,7 +996,7 @@ where
     use serde::ser::{SerializeMap, SerializeSeq};
 
     let def = crate::preset_definition_registry::generator::try_get(gen_type);
-    let can_emit_map = def.is_some_and(|d| {
+    let can_emit_map = def.as_ref().is_some_and(|d| {
         values.len() <= d.param_ids.len()
             && d.param_ids
                 .iter()
@@ -1040,9 +1040,9 @@ where
     use serde::ser::{SerializeMap, SerializeSeq};
 
     let def = crate::preset_definition_registry::effect::try_get(effect_type);
-    let static_count = def.map(|d| d.param_count).unwrap_or(0);
+    let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
-    let can_emit_map = def.is_some_and(|d| {
+    let can_emit_map = def.as_ref().is_some_and(|d| {
         d.param_ids
             .iter()
             .take(static_touch)
@@ -1086,9 +1086,9 @@ where
     use serde::ser::{SerializeMap, SerializeSeq};
 
     let def = crate::preset_definition_registry::effect::try_get(effect_type);
-    let static_count = def.map(|d| d.param_count).unwrap_or(0);
+    let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
-    let can_emit_map = def.is_some_and(|d| {
+    let can_emit_map = def.as_ref().is_some_and(|d| {
         d.param_ids
             .iter()
             .take(static_touch)
@@ -1711,7 +1711,7 @@ impl EffectInstance {
     /// the bookkeeping.
     pub fn resolve_param(&self, id: &str) -> Option<ResolvedParam> {
         let def = crate::preset_definition_registry::effect::try_get(&self.effect_type)?;
-        resolve_param_in(def, self, id)
+        resolve_param_in(&def, self, id)
     }
 
     /// Append a user-exposed binding and reserve its `param_values`
@@ -2160,8 +2160,13 @@ impl EffectInstance {
 /// Port of Unity EffectInstance : IParamSource.
 impl ParamSource for EffectInstance {
     fn display_name(&self) -> &str {
+        // The registry hands back an owned `Arc<PresetDef>` (hot-reloadable
+        // since step 10), so the name is interned to `&'static str` to
+        // satisfy the trait's borrowed return without rippling `String`
+        // through every `ParamSource` caller. See
+        // `preset_definition_registry::intern_display_name`.
         match crate::preset_definition_registry::effect::try_get(&self.effect_type) {
-            Some(def) => def.display_name.as_str(),
+            Some(def) => crate::preset_definition_registry::intern_display_name(&def.display_name),
             None => "?",
         }
     }

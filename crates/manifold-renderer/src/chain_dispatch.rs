@@ -153,9 +153,19 @@ pub fn dispatch_chain<'a>(
     let enabled_count = effects.iter().filter(|fx| fx.enabled).count() as u64;
     CHAIN_EFFECT_COUNT.fetch_add(enabled_count, Ordering::Relaxed);
 
+    // Step 10 hot-reload: one relaxed atomic load. At rest the catalog
+    // generation never moves, so a cached chain built against the current
+    // generation passes through unchanged (byte-identical perform path).
+    // When a preset `.json` is edited on disk the watcher bumps the
+    // generation, and any chain built against the old generation is forced
+    // to rebuild from the freshly-loaded defs on the next frame.
+    let catalog_generation = crate::preset_loader::catalog_generation();
     let needs_rebuild = match cache.as_ref() {
         None => true,
-        Some(cg) => !cg.is_compatible(effects, groups, ctx.width, ctx.height, preview_effect),
+        Some(cg) => {
+            cg.built_generation() != catalog_generation
+                || !cg.is_compatible(effects, groups, ctx.width, ctx.height, preview_effect)
+        }
     };
     if needs_rebuild {
         if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {

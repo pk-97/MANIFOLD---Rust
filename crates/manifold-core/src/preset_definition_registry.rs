@@ -27,7 +27,9 @@
 
 use ahash::AHashMap;
 use std::collections::HashMap;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
+
+use arc_swap::ArcSwap;
 
 use crate::effect_graph_def::{
     AliasEntry, BindingDef, ParamSpecDef, PresetMetadata, SkipModeDef, ValueAliasEntry,
@@ -58,12 +60,48 @@ pub struct StringParamDef {
 
 // ─── Static registries ───
 
-static EFFECT_DEFINITIONS: LazyLock<HashMap<EffectTypeId, PresetDef>> = LazyLock::new(|| {
-    let mut m: HashMap<EffectTypeId, PresetDef> = HashMap::new();
+// ─── Static registries (hot-reloadable, step 10) ───
+//
+// The two stores used to be `LazyLock<HashMap<_, PresetDef>>` borrowed for
+// the process lifetime. They are now `ArcSwap` of `Arc<HashMap<_,
+// Arc<PresetDef>>>` so the hot-reload watcher can swap in a freshly-built
+// map (from the reloaded preset JSON) without a restart via
+// [`rebuild_effect_definitions`] / [`rebuild_generator_definitions`].
+//
+// `get`/`try_get` return a cheap `Arc<PresetDef>` refcount clone. They are
+// NOT a per-frame hot path (modulation/Ableton/OSC route through
+// `param_id_to_index`, an `AHashMap::get` on the snapshot — see below), so
+// the extra atomic pointer load + refcount bump per call is negligible and
+// only happens at chain (re)build / editor / addressing setup time.
+//
+// At rest the stores are never swapped, so a `load_full` returns the same
+// `Arc` every time — byte-identical behaviour to the old `LazyLock`.
+
+type EffectMap = HashMap<EffectTypeId, Arc<PresetDef>>;
+type GeneratorMap = HashMap<GeneratorTypeId, Arc<PresetDef>>;
+
+static EFFECT_DEFINITIONS: LazyLock<ArcSwap<EffectMap>> =
+    LazyLock::new(|| ArcSwap::from_pointee(build_effect_definitions(effect::loaded_preset_metadata())));
+
+static GENERATOR_DEFINITIONS: LazyLock<ArcSwap<GeneratorMap>> = LazyLock::new(|| {
+    ArcSwap::from_pointee(build_generator_definitions(generator::loaded_preset_metadata()))
+});
+
+/// `param_id_to_index`'s hot read happens against a snapshot of the effect
+/// map. To keep that read a single atomic pointer load (no per-call
+/// `load_full` refcount churn on the per-frame addressing path), callers
+/// take a snapshot via `EFFECT_DEFINITIONS.load()` and index it.
+///
+/// Build the effect definition map from the inventory submissions plus the
+/// supplied JSON-loaded preset metadata. Shared by the `LazyLock`
+/// initializer (passing the cached `loaded_preset_metadata`) and
+/// [`rebuild_effect_definitions`] (passing freshly-reloaded metadata).
+fn build_effect_definitions(json_presets: &[PresetMetadata]) -> EffectMap {
+    let mut m: EffectMap = HashMap::new();
     // All effects are registered via inventory::submit! in their
     // implementation files (manifold-renderer/src/effects/*.rs).
     for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
-        m.insert(meta.id.clone(), meta.to_effect_def());
+        m.insert(meta.id.clone(), Arc::new(meta.to_effect_def()));
     }
     // Sidecar alias submissions: attach to the matching def. Built
     // separately from `EffectMetadata` so effects without aliases
@@ -71,7 +109,7 @@ static EFFECT_DEFINITIONS: LazyLock<HashMap<EffectTypeId, PresetDef>> = LazyLock
     // their primary submission. See `effect_registration::EffectAliasMetadata`.
     for alias_meta in inventory::iter::<crate::effect_registration::EffectAliasMetadata> {
         if let Some(def) = m.get_mut(&alias_meta.id) {
-            def.legacy_param_aliases = alias_meta.aliases;
+            Arc::make_mut(def).legacy_param_aliases = alias_meta.aliases;
         }
     }
     // Same pattern for **value** aliases — slot-value migration tables
@@ -79,31 +117,32 @@ static EFFECT_DEFINITIONS: LazyLock<HashMap<EffectTypeId, PresetDef>> = LazyLock
     // `effect_registration::EffectValueAliasMetadata`.
     for alias_meta in inventory::iter::<crate::effect_registration::EffectValueAliasMetadata> {
         if let Some(def) = m.get_mut(&alias_meta.id) {
-            def.legacy_value_aliases = alias_meta.aliases;
+            Arc::make_mut(def).legacy_value_aliases = alias_meta.aliases;
         }
     }
-    // JSON-loaded presets (§11 unified-registry migration). Each entry in
-    // `effect::loaded_preset_metadata()` is converted to a `PresetDef` and
-    // inserted — a JSON-loaded preset wins over an inventory submission
-    // for the same id. Post-§11 every shipping effect lives in JSON; the
-    // inventory loop above only fires for tests that submit synthetic
-    // `EffectMetadata` entries.
-    for preset in effect::loaded_preset_metadata() {
+    // JSON-loaded presets (§11 unified-registry migration). Each entry is
+    // converted to a `PresetDef` and inserted — a JSON-loaded preset wins
+    // over an inventory submission for the same id. Post-§11 every shipping
+    // effect lives in JSON; the inventory loop above only fires for tests
+    // that submit synthetic `EffectMetadata` entries.
+    for preset in json_presets {
         m.insert(
             preset.id.clone(),
-            preset_metadata_to_def(preset, PresetKind::Effect),
+            Arc::new(preset_metadata_to_def(preset, PresetKind::Effect)),
         );
     }
     m
-});
+}
 
-static GENERATOR_DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, PresetDef>> = LazyLock::new(|| {
-    let mut m: HashMap<GeneratorTypeId, PresetDef> = HashMap::new();
+/// Build the generator definition map. Mirror of
+/// [`build_effect_definitions`] over the generator side.
+fn build_generator_definitions(json_presets: &[PresetMetadata]) -> GeneratorMap {
+    let mut m: GeneratorMap = HashMap::new();
 
     // ── None ──
     m.insert(
         GeneratorTypeId::NONE,
-        PresetDef {
+        Arc::new(PresetDef {
             kind: PresetKind::Generator,
             display_name: "None".to_string(),
             is_line_based: false,
@@ -115,18 +154,18 @@ static GENERATOR_DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, PresetDef>> = La
             param_ids: Vec::new(),
             legacy_param_aliases: &[],
             legacy_value_aliases: &[],
-        },
+        }),
     );
 
     // All other generators are registered via inventory::submit! in their
     // implementation files (manifold-renderer/src/generators/*.rs).
     for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
-        m.insert(meta.id.clone(), meta.to_generator_def());
+        m.insert(meta.id.clone(), Arc::new(meta.to_generator_def()));
     }
     // Sidecar alias submissions for generators. See parallel effect path.
     for alias_meta in inventory::iter::<crate::generator_registration::GeneratorAliasMetadata> {
         if let Some(def) = m.get_mut(&alias_meta.id) {
-            def.legacy_param_aliases = alias_meta.aliases;
+            Arc::make_mut(def).legacy_param_aliases = alias_meta.aliases;
         }
     }
     // JSON-loaded presets (§11). A JSON-loaded preset wins over an
@@ -135,20 +174,102 @@ static GENERATOR_DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, PresetDef>> = La
     // preset *and* a legacy inventory entry uses the JSON as the
     // canonical schema. Eliminates the inventory-vs-preset positional
     // layout drift class structurally.
-    for preset in generator::loaded_preset_metadata() {
+    for preset in json_presets {
         let gen_id = GeneratorTypeId::from_string(preset.id.as_str().to_string());
-        m.insert(gen_id, preset_metadata_to_def(preset, PresetKind::Generator));
+        m.insert(
+            gen_id,
+            Arc::new(preset_metadata_to_def(preset, PresetKind::Generator)),
+        );
     }
     m
-});
+}
 
-static MAX_GEN_PARAM_COUNT: LazyLock<usize> = LazyLock::new(|| {
-    GENERATOR_DEFINITIONS
+/// Hot-reload (step 10): rebuild the effect definition map from
+/// freshly-reloaded JSON preset metadata and swap it in. Called by the
+/// watcher thread **after** the renderer's preset catalog snapshot has been
+/// reloaded; the caller passes the new metadata (sourced from the reloaded
+/// catalog) so the core stays decoupled from the renderer's disk loader.
+///
+/// Crash-safe by construction: the new map is built fully before the swap;
+/// a swap is atomic, so a concurrent reader never sees a half-built map.
+pub fn rebuild_effect_definitions(json_presets: &[PresetMetadata]) {
+    EFFECT_DEFINITIONS.store(Arc::new(build_effect_definitions(json_presets)));
+}
+
+/// Hot-reload (step 10): rebuild the generator definition map. Mirror of
+/// [`rebuild_effect_definitions`]. Also recomputes the
+/// `MAX_GEN_PARAM_COUNT` cache so `max_param_count()` reflects the reload.
+pub fn rebuild_generator_definitions(json_presets: &[PresetMetadata]) {
+    let map = build_generator_definitions(json_presets);
+    let max = map.values().map(|d| d.param_count).max().unwrap_or(0);
+    MAX_GEN_PARAM_COUNT.store(max as u64, std::sync::atomic::Ordering::Relaxed);
+    GENERATOR_DEFINITIONS.store(Arc::new(map));
+}
+
+/// Max generator param count, maintained as an atomic so a generator
+/// reload can update it without rebuilding a `LazyLock`. Seeded lazily on
+/// first access from the current generator map.
+static MAX_GEN_PARAM_COUNT: LazyLock<std::sync::atomic::AtomicU64> = LazyLock::new(|| {
+    let max = GENERATOR_DEFINITIONS
+        .load()
         .values()
         .map(|d| d.param_count)
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    std::sync::atomic::AtomicU64::new(max as u64)
 });
+
+// ─── Display-name interner ───
+//
+// `ParamSource::display_name(&self) -> &str` (effect + generator impls)
+// must hand back a `&str` that outlives the call, but a hot-reloadable
+// registry hands out an owned `Arc<PresetDef>` whose `display_name` is
+// dropped at the end of the call. To keep the trait signature (used by a
+// lot of debug/UI callers) without rippling `String` everywhere, the name
+// is interned once per `(type_id, name)` pair into a process-`'static`
+// string. Bounded by the (finite) number of distinct preset names ever
+// seen across reloads — authoring-time growth at worst, never a per-call
+// leak: a repeat lookup of an already-seen name returns the cached
+// `&'static str`. This is a borrow gateway, not a value cache.
+static DISPLAY_NAME_INTERNER: LazyLock<parking_intern::Interner> =
+    LazyLock::new(parking_intern::Interner::default);
+
+/// Tiny string interner backed by an `ArcSwap`'d map. Keeps the crate's
+/// `#![forbid(unsafe_code)]` contract (no `OnceCell`/`AtomicPtr` tricks)
+/// while still returning `&'static str`.
+mod parking_intern {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    pub struct Interner {
+        map: ArcSwap<HashMap<String, &'static str>>,
+    }
+
+    impl Interner {
+        /// Return a `&'static str` equal to `s`, interning it on first sight.
+        /// The leak is bounded by the number of distinct strings interned.
+        pub fn intern(&self, s: &str) -> &'static str {
+            if let Some(found) = self.map.load().get(s) {
+                return found;
+            }
+            // Slow path: leak the string and publish a new map snapshot.
+            // A racing interner of the same string leaks one extra copy —
+            // harmless and vanishingly rare (authoring-time).
+            let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+            let mut next = HashMap::clone(&self.map.load());
+            next.entry(s.to_string()).or_insert(leaked);
+            let resolved = *next.get(s).expect("just inserted");
+            self.map.store(Arc::new(next));
+            resolved
+        }
+    }
+}
+
+/// Intern a display name to `&'static str`. See [`DISPLAY_NAME_INTERNER`].
+pub(crate) fn intern_display_name(name: &str) -> &'static str {
+    DISPLAY_NAME_INTERNER.intern(name)
+}
 
 // ─── Effect accessors ───
 //
@@ -164,8 +285,13 @@ pub mod effect {
     pub use crate::effect_registration::resolve_param_alias;
 
     /// Get the definition for an effect type. Panics if not found.
-    pub fn get(effect_type: &EffectTypeId) -> &'static PresetDef {
-        EFFECT_DEFINITIONS.get(effect_type).unwrap_or_else(|| {
+    ///
+    /// Returns an owned `Arc<PresetDef>` (cheap refcount clone of the
+    /// current registry snapshot). Hot-reload (step 10): a reload swaps the
+    /// snapshot, so holding the `Arc` keeps the def the caller looked up
+    /// alive even across a concurrent rebuild. Not a per-frame hot path.
+    pub fn get(effect_type: &EffectTypeId) -> Arc<PresetDef> {
+        try_get(effect_type).unwrap_or_else(|| {
             panic!(
                 "EffectDefinitionRegistry: unknown EffectTypeId '{}'",
                 effect_type
@@ -174,8 +300,8 @@ pub mod effect {
     }
 
     /// Try to get the definition for an effect type.
-    pub fn try_get(effect_type: &EffectTypeId) -> Option<&'static PresetDef> {
-        EFFECT_DEFINITIONS.get(effect_type)
+    pub fn try_get(effect_type: &EffectTypeId) -> Option<Arc<PresetDef>> {
+        EFFECT_DEFINITIONS.load().get(effect_type).cloned()
     }
 
     /// Translate a stable `ParamSpec::id` into the param's storage index
@@ -188,20 +314,28 @@ pub mod effect {
     /// the registry initializes.
     pub fn param_id_to_index(effect_type: &EffectTypeId, id: &str) -> Option<usize> {
         EFFECT_DEFINITIONS
+            .load()
             .get(effect_type)?
             .id_to_index
             .get(id)
             .copied()
     }
 
-    /// Reverse of [`param_id_to_index`]: storage index → param id. Each id
-    /// is the original `&'static str` from the `ParamSpec` registration.
-    /// Returns `None` if the effect or index is out of range, or the slot
-    /// has an empty id (V1 fixture / pre-step-6 entry).
-    pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<&'static str> {
-        let def = EFFECT_DEFINITIONS.get(effect_type)?;
-        let id = def.param_ids.get(index)?.as_str();
-        if id.is_empty() { None } else { Some(id) }
+    /// Reverse of [`param_id_to_index`]: storage index → param id. Returns
+    /// an owned `Arc<str>` cloned from the registry snapshot (the old
+    /// `&'static str` return is no longer possible now the registry is
+    /// hot-reloadable — a swap would dangle a borrowed reference). Returns
+    /// `None` if the effect or index is out of range, or the slot has an
+    /// empty id (V1 fixture / pre-step-6 entry).
+    pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<Arc<str>> {
+        let snapshot = EFFECT_DEFINITIONS.load();
+        let def = snapshot.get(effect_type)?;
+        let id = def.param_ids.get(index)?;
+        if id.is_empty() {
+            None
+        } else {
+            Some(Arc::from(id.as_str()))
+        }
     }
 
     /// Create a new EffectInstance with default parameter values from the
@@ -282,12 +416,12 @@ pub mod effect {
 
     /// Get all registered effect types (unordered).
     pub fn get_all_effect_types() -> Vec<EffectTypeId> {
-        EFFECT_DEFINITIONS.keys().cloned().collect()
+        EFFECT_DEFINITIONS.load().keys().cloned().collect()
     }
 
     /// Get all registered effect types sorted by display name.
     pub fn get_all_effect_types_sorted() -> Vec<EffectTypeId> {
-        let mut list: Vec<EffectTypeId> = EFFECT_DEFINITIONS.keys().cloned().collect();
+        let mut list: Vec<EffectTypeId> = EFFECT_DEFINITIONS.load().keys().cloned().collect();
         list.sort_by_key(|t| t.as_str().to_string());
         list
     }
@@ -358,8 +492,8 @@ pub mod effect {
 pub mod generator {
     use super::*;
 
-    pub fn get(gen_type: &GeneratorTypeId) -> &'static PresetDef {
-        GENERATOR_DEFINITIONS.get(gen_type).unwrap_or_else(|| {
+    pub fn get(gen_type: &GeneratorTypeId) -> Arc<PresetDef> {
+        try_get(gen_type).unwrap_or_else(|| {
             panic!(
                 "GeneratorDefinitionRegistry: unknown GeneratorTypeId '{}'",
                 gen_type
@@ -367,8 +501,8 @@ pub mod generator {
         })
     }
 
-    pub fn try_get(gen_type: &GeneratorTypeId) -> Option<&'static PresetDef> {
-        GENERATOR_DEFINITIONS.get(gen_type)
+    pub fn try_get(gen_type: &GeneratorTypeId) -> Option<Arc<PresetDef>> {
+        GENERATOR_DEFINITIONS.load().get(gen_type).cloned()
     }
 
     /// Translate a stable `ParamSpec::id` into the param's storage index
@@ -376,29 +510,38 @@ pub mod generator {
     /// is unknown. Mirrors [`super::effect::param_id_to_index`].
     pub fn param_id_to_index(gen_type: &GeneratorTypeId, id: &str) -> Option<usize> {
         GENERATOR_DEFINITIONS
+            .load()
             .get(gen_type)?
             .id_to_index
             .get(id)
             .copied()
     }
 
-    /// Reverse of [`param_id_to_index`]. Returns the original `&'static
-    /// str` from the `ParamSpec` registration. `None` if out of range or
-    /// the slot has an empty id (V1 fixture / pre-step-6 entry).
-    pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<&'static str> {
-        let def = GENERATOR_DEFINITIONS.get(gen_type)?;
-        let id = def.param_ids.get(index)?.as_str();
-        if id.is_empty() { None } else { Some(id) }
+    /// Reverse of [`param_id_to_index`]. Returns an owned `Arc<str>` cloned
+    /// from the registry snapshot (the registry is hot-reloadable, so a
+    /// borrowed `&'static str` could dangle across a reload). `None` if out
+    /// of range or the slot has an empty id (V1 fixture / pre-step-6 entry).
+    pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<Arc<str>> {
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let def = snapshot.get(gen_type)?;
+        let id = def.param_ids.get(index)?;
+        if id.is_empty() {
+            None
+        } else {
+            Some(Arc::from(id.as_str()))
+        }
     }
 
     pub fn is_line_based(gen_type: &GeneratorTypeId) -> bool {
         GENERATOR_DEFINITIONS
+            .load()
             .get(gen_type)
             .is_some_and(|d| d.is_line_based)
     }
 
     pub fn get_param_def(gen_type: &GeneratorTypeId, index: usize) -> ParamDef {
-        let Some(def) = GENERATOR_DEFINITIONS.get(gen_type) else {
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let Some(def) = snapshot.get(gen_type) else {
             return ParamDef::default();
         };
         if index >= def.param_count {
@@ -408,7 +551,8 @@ pub mod generator {
     }
 
     pub fn get_defaults(gen_type: &GeneratorTypeId) -> Vec<f32> {
-        let Some(def) = GENERATOR_DEFINITIONS.get(gen_type) else {
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let Some(def) = snapshot.get(gen_type) else {
             return Vec::new();
         };
         def.param_defs.iter().map(|p| p.default_value).collect()
@@ -438,7 +582,8 @@ pub mod generator {
     }
 
     pub fn get_osc_address(gen_type: &GeneratorTypeId, index: usize) -> Option<String> {
-        let def = GENERATOR_DEFINITIONS.get(gen_type)?;
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let def = snapshot.get(gen_type)?;
         let prefix = def.osc_prefix.as_deref()?;
         let param_id = def.param_ids.get(index)?;
         if param_id.is_empty() {
@@ -460,7 +605,8 @@ pub mod generator {
         if layer_id.is_empty() {
             return None;
         }
-        let def = GENERATOR_DEFINITIONS.get(gen_type)?;
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let def = snapshot.get(gen_type)?;
         let prefix = def.osc_prefix.as_deref()?;
         let param_id = def.param_ids.get(index)?;
         if param_id.is_empty() {
@@ -470,7 +616,8 @@ pub mod generator {
     }
 
     pub fn try_get_gen_param_range(gen_type: &GeneratorTypeId, index: usize) -> Option<(f32, f32)> {
-        let def = GENERATOR_DEFINITIONS.get(gen_type)?;
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let def = snapshot.get(gen_type)?;
         if index >= def.param_count {
             return None;
         }
@@ -479,7 +626,8 @@ pub mod generator {
     }
 
     pub fn clamp_param(gen_type: &GeneratorTypeId, index: usize, value: f32) -> f32 {
-        let Some(def) = GENERATOR_DEFINITIONS.get(gen_type) else {
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        let Some(def) = snapshot.get(gen_type) else {
             return value;
         };
         if index >= def.param_count {
@@ -490,7 +638,7 @@ pub mod generator {
     }
 
     pub fn max_param_count() -> usize {
-        *MAX_GEN_PARAM_COUNT
+        MAX_GEN_PARAM_COUNT.load(std::sync::atomic::Ordering::Relaxed) as usize
     }
 
     /// JSON-loaded **generator** preset metadata for the
@@ -753,7 +901,7 @@ mod tests {
     #[test]
     fn test_param_counts_match() {
         // Check all registered effects have consistent param counts
-        for (_, def) in EFFECT_DEFINITIONS.iter() {
+        for (_, def) in EFFECT_DEFINITIONS.load().iter() {
             assert_eq!(
                 def.param_count,
                 def.param_defs.len(),
@@ -892,7 +1040,7 @@ mod tests {
                     i
                 );
                 assert_eq!(
-                    param_index_to_id(&effect, i),
+                    param_index_to_id(&effect, i).as_deref(),
                     Some(pd.id.as_str()),
                     "{} index {} must reverse to {}",
                     effect.as_str(),
@@ -1208,7 +1356,8 @@ mod tests {
     fn gen_param_id_to_index_round_trips_for_all_known_generators() {
         // Every registered generator's id_to_index map must round-trip
         // each entry through param_index_to_id.
-        for (gen_id, def) in GENERATOR_DEFINITIONS.iter() {
+        let snapshot = GENERATOR_DEFINITIONS.load();
+        for (gen_id, def) in snapshot.iter() {
             for (i, pd) in def.param_defs.iter().enumerate() {
                 if pd.id.is_empty() {
                     continue;
@@ -1222,7 +1371,7 @@ mod tests {
                     i
                 );
                 assert_eq!(
-                    generator::param_index_to_id(gen_id, i),
+                    generator::param_index_to_id(gen_id, i).as_deref(),
                     Some(pd.id.as_str()),
                     "{} index {} must reverse to {}",
                     gen_id.as_str(),

@@ -1302,7 +1302,7 @@ impl ContentThread {
                 let json = manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(
                     gen_type,
                 )?;
-                serde_json::from_str(json).ok()?
+                serde_json::from_str(&json).ok()?
             };
         let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&def)?;
         // Populate outer_routings from the preset's bindings so the

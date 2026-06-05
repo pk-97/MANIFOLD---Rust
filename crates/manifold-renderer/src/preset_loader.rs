@@ -38,42 +38,100 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// One scanned preset: type id (filename stem) + owned JSON content.
+use arc_swap::ArcSwap;
+
+/// Monotonic catalog generation counter. Starts at 0 and is bumped by the
+/// hot-reload watcher (after both the catalog snapshots and the core
+/// registry have been refreshed) so live consumers can detect that the
+/// preset data changed.
+///
+/// The render path reads this **once per chain dispatch** with a single
+/// relaxed atomic load and compares it to the generation it last built
+/// against. At rest the value never changes, the comparison is equal, and
+/// the rebuild slow-path is skipped — preserving the byte-identical
+/// at-rest invariant. Authoring-time edits bump it, which forces the
+/// affected chains to rebuild from the new defs on the next frame.
+static CATALOG_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Current catalog generation. One relaxed atomic load; safe to call on the
+/// per-frame path.
+#[inline]
+pub fn catalog_generation() -> u64 {
+    CATALOG_GENERATION.load(Ordering::Relaxed)
+}
+
+/// Bump the catalog generation. Called by the watcher thread **after** the
+/// catalog snapshots and the core registry have been swapped, so a reader
+/// that observes the new generation is guaranteed to see the new data when
+/// it rebuilds. `Release` here pairs with the `Acquire`/`Relaxed` reads on
+/// the consumer side (the data it gates was published by prior `store`s).
+pub fn bump_catalog_generation() -> u64 {
+    CATALOG_GENERATION.fetch_add(1, Ordering::Release) + 1
+}
+
+/// One scanned preset: type id (filename stem) + owned JSON content,
+/// stored as `Arc<str>` so the catalog snapshot can share unchanged
+/// strings across reload swaps and hand out cheap refcount clones.
 struct PresetFile {
-    type_id: String,
-    json: String,
+    type_id: Arc<str>,
+    json: Arc<str>,
 }
 
 /// A fully-loaded, read-only preset catalog for one kind (effects or
-/// generators). Built once at first access via [`LazyLock`]; the owned
-/// strings live for the lifetime of the process, so borrows handed out
-/// to callers are `'static`.
+/// generators).
+///
+/// ## Hot-reload (step 10)
+///
+/// The catalog is no longer a `LazyLock<PresetCatalog>` borrowed for the
+/// process lifetime. It now lives behind an [`ArcSwap`] snapshot
+/// ([`EFFECT_CATALOG`] / [`GENERATOR_CATALOG`] are
+/// `LazyLock<ArcSwap<Arc<PresetCatalog>>>`). A read takes a cheap
+/// `load_full` of the current `Arc<PresetCatalog>` snapshot and clones the
+/// owned `String`/`Arc<str>` it needs; the watcher thread re-scans the
+/// dirs and `store`s a fresh snapshot when a file changes.
+///
+/// This is RCU, not a lock: readers never block and never see a torn
+/// catalog. **At rest** (no file changing) the only cost over the old
+/// `LazyLock` borrow is one atomic pointer load per read plus the owned
+/// clone, and no read happens on the per-frame render path — the catalog
+/// is consulted only at chain (re)build, which the prime directive already
+/// permits to do work.
+///
+/// JSON is stored as `Arc<str>` so a snapshot swap shares the unchanged
+/// strings with the previous snapshot (only the changed file's `Arc<str>`
+/// is freshly allocated) and so cloning out a value is a refcount bump,
+/// not a byte copy.
 pub struct PresetCatalog {
     /// `(type_id, json)` pairs, sorted by type id for stable iteration.
-    entries: Vec<(String, String)>,
+    entries: Vec<(Arc<str>, Arc<str>)>,
 }
 
 impl PresetCatalog {
-    /// Raw JSON for `type_id`, or `None` if no preset has that id.
-    pub fn json(&self, type_id: &str) -> Option<&str> {
+    /// Raw JSON for `type_id`, or `None` if no preset has that id. The
+    /// returned `Arc<str>` is a cheap refcount clone of the snapshot's
+    /// stored string, owned by the caller — so a concurrent reload that
+    /// swaps the snapshot can't invalidate it.
+    pub fn json(&self, type_id: &str) -> Option<Arc<str>> {
         self.entries
             .iter()
-            .find(|(id, _)| id == type_id)
-            .map(|(_, json)| json.as_str())
+            .find(|(id, _)| id.as_ref() == type_id)
+            .map(|(_, json)| json.clone())
     }
 
-    /// Every type id in the catalog, in sorted order.
-    pub fn type_ids(&self) -> impl Iterator<Item = &str> {
-        self.entries.iter().map(|(id, _)| id.as_str())
+    /// Every type id in the catalog, in sorted order (owned clones).
+    pub fn type_ids(&self) -> impl Iterator<Item = Arc<str>> + '_ {
+        self.entries.iter().map(|(id, _)| id.clone())
     }
 
-    /// Every `(type_id, json)` pair, in sorted order.
-    pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
+    /// Every `(type_id, json)` pair, in sorted order (owned clones).
+    pub fn entries(&self) -> impl Iterator<Item = (Arc<str>, Arc<str>)> + '_ {
         self.entries
             .iter()
-            .map(|(id, json)| (id.as_str(), json.as_str()))
+            .map(|(id, json)| (id.clone(), json.clone()))
     }
 
     /// Number of presets loaded.
@@ -110,15 +168,51 @@ const GENERATOR_DIRS: KindDirs = KindDirs {
     dev_subdir: "assets/generator-presets",
 };
 
-/// The effect preset catalog. Built once; fail-loud if the stock root is
-/// missing or empty.
-pub static EFFECT_CATALOG: LazyLock<PresetCatalog> =
-    LazyLock::new(|| load_catalog(&EFFECT_DIRS));
+/// The effect preset catalog. Built once on first access; fail-loud if
+/// the stock root is missing or empty. Lives behind an [`ArcSwap`] so the
+/// watcher thread can swap in a freshly-scanned snapshot at authoring time
+/// without a restart (step 10). At rest the snapshot is never re-scanned.
+pub static EFFECT_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
+    LazyLock::new(|| ArcSwap::from(load_catalog(&EFFECT_DIRS)));
 
-/// The generator preset catalog. Built once; fail-loud if the stock root
-/// is missing or empty.
-pub static GENERATOR_CATALOG: LazyLock<PresetCatalog> =
-    LazyLock::new(|| load_catalog(&GENERATOR_DIRS));
+/// The generator preset catalog. Same shape as [`EFFECT_CATALOG`].
+pub static GENERATOR_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
+    LazyLock::new(|| ArcSwap::from(load_catalog(&GENERATOR_DIRS)));
+
+/// Re-scan the effect preset dirs and swap in a fresh snapshot.
+///
+/// Crash-safe: if the re-scan resolves no stock root, or scans to zero
+/// presets (a transient empty / all-malformed edit), the previous good
+/// snapshot is **kept** and the failure is logged loudly — never swapped
+/// to empty. Returns `true` if a new snapshot was installed.
+pub fn reload_effect_catalog() -> bool {
+    reload_into(&EFFECT_CATALOG, &EFFECT_DIRS)
+}
+
+/// Re-scan the generator preset dirs and swap in a fresh snapshot. Same
+/// crash-safe last-good-snapshot contract as [`reload_effect_catalog`].
+pub fn reload_generator_catalog() -> bool {
+    reload_into(&GENERATOR_CATALOG, &GENERATOR_DIRS)
+}
+
+/// Shared reload body. Re-runs the same resolve+scan as startup but, on a
+/// transient empty/broken scan, keeps the last-good snapshot instead of
+/// panicking (startup panics; a live reload must not take the show down).
+fn reload_into(slot: &ArcSwap<PresetCatalog>, dirs: &KindDirs) -> bool {
+    match try_load_catalog(dirs) {
+        Ok(catalog) => {
+            slot.store(catalog);
+            true
+        }
+        Err(reason) => {
+            log::error!(
+                "[presets] reload of {} presets failed ({reason}); keeping the last-good catalog",
+                dirs.label,
+            );
+            false
+        }
+    }
+}
 
 /// Resolve the STOCK root for a kind. First existing directory wins:
 /// packaged bundle `Resources/presets/<subdir>`, then the dev workspace
@@ -197,7 +291,7 @@ fn scan_dir(dir: &Path) -> Vec<PresetFile> {
             log::error!("[presets] preset file has no valid UTF-8 stem, skipping: {}", path.display());
             continue;
         };
-        let type_id = type_id.to_string();
+        let type_id: Arc<str> = Arc::from(type_id);
 
         let json = match fs::read_to_string(&path) {
             Ok(s) => s,
@@ -218,16 +312,41 @@ fn scan_dir(dir: &Path) -> Vec<PresetFile> {
             continue;
         }
 
-        out.push(PresetFile { type_id, json });
+        out.push(PresetFile {
+            type_id,
+            json: Arc::from(json),
+        });
     }
 
     out
 }
 
-/// Build a catalog for one kind: resolve + scan the stock root (fail-loud
-/// if missing or empty), then overlay the optional user root (overrides
-/// log).
-fn load_catalog(dirs: &KindDirs) -> PresetCatalog {
+/// Build a catalog for one kind at STARTUP: resolve + scan the stock root
+/// (fail-loud if missing or empty), then overlay the optional user root
+/// (overrides log). Panics on failure — the app must never come up with an
+/// empty catalog. The crash-safe reload path uses [`try_load_catalog`]
+/// instead, which returns `Err` rather than panicking.
+fn load_catalog(dirs: &KindDirs) -> Arc<PresetCatalog> {
+    match try_load_catalog(dirs) {
+        Ok(catalog) => catalog,
+        Err(reason) => panic!(
+            "[presets] FATAL: {reason}\n\
+             The app cannot start with an empty preset catalog. For a packaged \
+             build, ensure presets were copied into \
+             `<App>.app/Contents/Resources/presets/{}/`. For a dev build, ensure \
+             `{}/{}` exists.",
+            dirs.bundle_subdir,
+            env!("CARGO_MANIFEST_DIR"),
+            dirs.dev_subdir,
+        ),
+    }
+}
+
+/// Fallible catalog build shared by startup and reload. Resolves the stock
+/// root and scans it; returns `Err(reason)` if the stock root can't be
+/// resolved or scans to zero presets. Startup turns that `Err` into a
+/// panic; reload logs it and keeps the last-good snapshot.
+fn try_load_catalog(dirs: &KindDirs) -> Result<Arc<PresetCatalog>, String> {
     let (stock_root, tried) = resolve_stock_root(dirs);
     let Some(stock_root) = stock_root else {
         let candidates = tried
@@ -235,31 +354,30 @@ fn load_catalog(dirs: &KindDirs) -> PresetCatalog {
             .map(|p| format!("    - {}", p.display()))
             .collect::<Vec<_>>()
             .join("\n");
-        panic!(
-            "[presets] FATAL: could not resolve the stock {} preset directory. \
-             Tried (first existing wins):\n{candidates}\n\
-             The app cannot start with an empty preset catalog. For a packaged \
-             build, ensure presets were copied into \
-             `<App>.app/Contents/Resources/presets/{}/`. For a dev build, ensure \
-             `{}/{}` exists.",
+        return Err(format!(
+            "could not resolve the stock {} preset directory. Tried (first existing wins):\n{candidates}",
             dirs.label,
-            dirs.bundle_subdir,
-            env!("CARGO_MANIFEST_DIR"),
-            dirs.dev_subdir,
-        );
+        ));
     };
 
     let user_root = resolve_user_root(dirs);
     build_catalog(dirs.label, &stock_root, user_root.as_deref())
 }
 
-/// The catalog assembly + fail-loud-on-empty logic, factored out of the
-/// path-resolution so the empty-scan panic can be unit-tested against a
+/// The catalog assembly + empty-scan check, factored out of the
+/// path-resolution so the empty-scan behaviour can be unit-tested against a
 /// real (empty) directory without touching `CARGO_MANIFEST_DIR`.
 ///
 /// `stock_root` is the resolved stock directory (already known to exist).
 /// `user_root`, if `Some`, is overlaid on top (override on stem match).
-fn build_catalog(label: &str, stock_root: &Path, user_root: Option<&Path>) -> PresetCatalog {
+/// Returns `Err` (rather than panicking) when the stock root scans to zero
+/// presets, so the reload path can keep its last-good snapshot; the startup
+/// path converts that `Err` into the fail-loud panic.
+fn build_catalog(
+    label: &str,
+    stock_root: &Path,
+    user_root: Option<&Path>,
+) -> Result<Arc<PresetCatalog>, String> {
     log::info!(
         "[presets] scanning stock {label} presets from {}",
         stock_root.display()
@@ -267,17 +385,16 @@ fn build_catalog(label: &str, stock_root: &Path, user_root: Option<&Path>) -> Pr
     let stock = scan_dir(stock_root);
 
     if stock.is_empty() {
-        panic!(
-            "[presets] FATAL: stock {label} preset directory {} scanned to ZERO presets. \
-             The app cannot start with an empty preset catalog. Check that the \
+        return Err(format!(
+            "stock {label} preset directory {} scanned to ZERO presets. Check that the \
              directory contains valid `*.json` preset files (malformed files are \
              skipped with a logged error — look above for per-file errors).",
             stock_root.display(),
-        );
+        ));
     }
 
     // Merge: start with stock, then overlay user (override on stem match).
-    let mut merged: Vec<(String, String)> =
+    let mut merged: Vec<(Arc<str>, Arc<str>)> =
         stock.into_iter().map(|f| (f.type_id, f.json)).collect();
 
     if let Some(user_root) = user_root {
@@ -308,7 +425,152 @@ fn build_catalog(label: &str, stock_root: &Path, user_root: Option<&Path>) -> Pr
 
     log::info!("[presets] loaded {} {label} presets", merged.len());
 
-    PresetCatalog { entries: merged }
+    Ok(Arc::new(PresetCatalog { entries: merged }))
+}
+
+// ─── Hot-reload watcher (step 10) ───
+//
+// A single background thread that polls the preset directories' mtimes
+// every ~1s. It does **no work on the render or content tick path** — it's
+// a normal detached thread. When it detects any added / removed / changed
+// `*.json` under the watched roots, it reloads both catalog snapshots,
+// rebuilds the core definition registry from the freshly-loaded metadata,
+// then bumps `CATALOG_GENERATION`. Live chains observe the new generation
+// on their next dispatch (a single atomic load) and rebuild from the new
+// defs; the catalog default also updates so newly-created instances use
+// the new JSON.
+//
+// mtime-poll, not the `notify` crate: simpler, no extra dependency, and
+// lower-risk for a live rig (no FS-event backend quirks). 1s latency is
+// fine for authoring.
+
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, SystemTime};
+
+/// Guards against starting the watcher twice (idempotent startup).
+static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Every directory the watcher polls: the resolved stock + optional user
+/// roots for both effects and generators. Returns only directories that
+/// currently exist.
+fn watched_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for kind in [&EFFECT_DIRS, &GENERATOR_DIRS] {
+        if let (Some(stock), _) = resolve_stock_root(kind) {
+            dirs.push(stock);
+        }
+        if let Some(user) = resolve_user_root(kind) {
+            dirs.push(user);
+        }
+    }
+    dirs
+}
+
+/// A cheap fingerprint of a directory's `*.json` files: the count plus the
+/// max mtime. Catches add / remove (count changes) and edit (mtime moves).
+/// Returns `(count, latest_mtime_nanos)`.
+fn dir_fingerprint(dir: &Path) -> (usize, u128) {
+    let mut count = 0usize;
+    let mut latest = 0u128;
+    let Ok(rd) = fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        count += 1;
+        if let Ok(meta) = entry.metadata()
+            && let Ok(modified) = meta.modified()
+            && let Ok(dur) = modified.duration_since(SystemTime::UNIX_EPOCH)
+        {
+            latest = latest.max(dur.as_nanos());
+        }
+    }
+    (count, latest)
+}
+
+/// Combined fingerprint across all watched dirs.
+fn snapshot_fingerprint(dirs: &[PathBuf]) -> Vec<(usize, u128)> {
+    dirs.iter().map(|d| dir_fingerprint(d)).collect()
+}
+
+/// Reload both catalogs, rebuild the core registry from the freshly-loaded
+/// metadata, then bump the generation. Returns the new generation.
+///
+/// Order matters: catalogs first (they feed the metadata loaders the
+/// registry rebuild reads), then the registry, then the generation bump —
+/// so any reader that observes the new generation is guaranteed to see the
+/// new catalog + registry data.
+fn apply_reload() -> u64 {
+    let effect_changed = reload_effect_catalog();
+    let generator_changed = reload_generator_catalog();
+    if !effect_changed && !generator_changed {
+        // Every reload attempt failed (transient empty/broken edit); the
+        // last-good snapshots were kept. Don't bump — nothing changed for
+        // consumers, and bumping would force a needless rebuild against
+        // identical data.
+        log::warn!("[presets] hot-reload: all reload attempts failed; keeping last-good, not bumping generation");
+        return catalog_generation();
+    }
+
+    // Rebuild the core definition registry from the reloaded catalog's
+    // metadata. The metadata loaders read the current (just-swapped)
+    // catalog snapshot.
+    let effect_meta = crate::node_graph::loaded_presets_from_bundled();
+    let generator_meta =
+        crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled();
+    manifold_core::preset_definition_registry::rebuild_effect_definitions(&effect_meta);
+    manifold_core::preset_definition_registry::rebuild_generator_definitions(&generator_meta);
+
+    let generation = bump_catalog_generation();
+    log::info!("[presets] hot-reload applied; catalog generation = {generation}");
+    generation
+}
+
+/// Start the preset hot-reload watcher. Idempotent — only the first call
+/// spawns the thread. Call once at app startup (after the catalogs have
+/// been force-loaded so the watcher's first fingerprint is taken against
+/// the real, validated catalog). The thread is detached and runs for the
+/// process lifetime; it never touches the render or content tick path.
+pub fn start_preset_watcher() {
+    if WATCHER_STARTED.swap(true, Ordering::SeqCst) {
+        return; // already running
+    }
+
+    // Force the catalogs to load now (fail-loud happens here if a stock
+    // root is missing) so the watcher baseline reflects a valid catalog.
+    LazyLock::force(&EFFECT_CATALOG);
+    LazyLock::force(&GENERATOR_CATALOG);
+
+    let dirs = watched_dirs();
+    if dirs.is_empty() {
+        log::warn!("[presets] hot-reload watcher: no preset directories resolved; not starting");
+        return;
+    }
+    log::info!(
+        "[presets] hot-reload watcher polling {} preset dir(s) every 1s",
+        dirs.len()
+    );
+
+    std::thread::Builder::new()
+        .name("preset-watcher".into())
+        .spawn(move || {
+            let mut last = snapshot_fingerprint(&dirs);
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let current = snapshot_fingerprint(&dirs);
+                if current != last {
+                    log::info!("[presets] hot-reload: preset directory change detected");
+                    apply_reload();
+                    // Re-fingerprint AFTER reload so a reload that itself
+                    // touches mtimes doesn't retrigger.
+                    last = snapshot_fingerprint(&dirs);
+                }
+            }
+        })
+        .expect("failed to spawn preset-watcher thread");
 }
 
 #[cfg(test)]
@@ -320,7 +582,7 @@ mod tests {
     #[test]
     fn dev_effect_catalog_is_non_empty() {
         assert!(
-            !EFFECT_CATALOG.is_empty(),
+            !EFFECT_CATALOG.load().is_empty(),
             "effect catalog must load from the dev assets dir",
         );
     }
@@ -328,7 +590,7 @@ mod tests {
     #[test]
     fn dev_generator_catalog_is_non_empty() {
         assert!(
-            !GENERATOR_CATALOG.is_empty(),
+            !GENERATOR_CATALOG.load().is_empty(),
             "generator catalog must load from the dev assets dir",
         );
     }
@@ -336,7 +598,7 @@ mod tests {
     /// Type ids are filename stems and the catalog is sorted.
     #[test]
     fn catalog_is_sorted_by_type_id() {
-        let ids: Vec<&str> = EFFECT_CATALOG.type_ids().collect();
+        let ids: Vec<Arc<str>> = EFFECT_CATALOG.load().type_ids().collect();
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted, "effect catalog must be sorted by type id");
@@ -364,15 +626,22 @@ mod tests {
         fs::write(dir.join(format!("{stem}.json")), json).expect("write preset");
     }
 
-    /// FAIL-LOUD: a stock root that exists but scans to zero presets must
-    /// panic with the documented message. Exercises the real
-    /// `build_catalog` empty-scan branch against a real empty directory.
+    /// FAIL-LOUD: at startup a stock root that exists but scans to zero
+    /// presets must panic. Reproduced through the startup wrapper
+    /// `load_catalog` semantics: `build_catalog` returns the `Err` that
+    /// `load_catalog` turns into a panic. Here we assert the `Err`.
     #[test]
-    #[should_panic(expected = "scanned to ZERO presets")]
-    fn empty_stock_dir_panics() {
+    fn empty_stock_dir_errors() {
         let dir = scratch("empty");
-        // Real empty dir → build_catalog must panic.
-        build_catalog("effect", &dir, None);
+        let err = match build_catalog("effect", &dir, None) {
+            Ok(_) => panic!("empty stock dir must produce an Err (startup turns it into a panic)"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("scanned to ZERO presets"),
+            "error must name the empty-scan condition, got: {err}",
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A malformed JSON file is skipped (logged), not fatal — the rest
@@ -382,9 +651,13 @@ mod tests {
         let dir = scratch("malformed");
         write_preset(&dir, "Good", "Good");
         fs::write(dir.join("Bad.json"), "{ this is not json").expect("write bad");
-        let cat = build_catalog("effect", &dir, None);
-        let ids: Vec<&str> = cat.type_ids().collect();
-        assert_eq!(ids, vec!["Good"], "malformed Bad.json must be skipped");
+        let cat = build_catalog("effect", &dir, None).expect("good file must load");
+        let ids: Vec<Arc<str>> = cat.type_ids().collect();
+        assert_eq!(
+            ids.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
+            vec!["Good"],
+            "malformed Bad.json must be skipped",
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -399,7 +672,7 @@ mod tests {
         write_preset(&user, "Shared", "UserVersion");
         write_preset(&user, "UserOnly", "UserOnly");
 
-        let cat = build_catalog("effect", &stock, Some(&user));
+        let cat = build_catalog("effect", &stock, Some(&user)).expect("merge loads");
 
         // Shared resolves to the user JSON.
         let shared = cat.json("Shared").expect("Shared present");
@@ -408,10 +681,74 @@ mod tests {
             "user preset must override stock by stem, got: {shared}",
         );
         // Both unique ids survive; catalog sorted.
-        let ids: Vec<&str> = cat.type_ids().collect();
-        assert_eq!(ids, vec!["Shared", "StockOnly", "UserOnly"]);
+        let ids: Vec<Arc<str>> = cat.type_ids().collect();
+        assert_eq!(
+            ids.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
+            vec!["Shared", "StockOnly", "UserOnly"],
+        );
 
         let _ = fs::remove_dir_all(&stock);
         let _ = fs::remove_dir_all(&user);
+    }
+
+    /// HOT-RELOAD: editing a preset file and reloading swaps the catalog
+    /// snapshot — the new value is visible, the old `Arc` snapshot held
+    /// across the swap still reads the old value (RCU, no torn reads).
+    #[test]
+    fn reload_swaps_catalog_snapshot() {
+        let stock = scratch("reload-stock");
+        write_preset(&stock, "Alpha", "AlphaV1");
+
+        let slot = ArcSwap::from(build_catalog("effect", &stock, None).expect("initial load"));
+
+        // Hold the pre-edit snapshot — proves RCU: the swap must not
+        // mutate it underneath us.
+        let pre = slot.load_full();
+        assert!(pre.json("Alpha").unwrap().contains("AlphaV1"));
+
+        // Edit the file on disk and reload (same body the watcher calls).
+        write_preset(&stock, "Alpha", "AlphaV2");
+        let reloaded = build_catalog("effect", &stock, None).expect("reload load");
+        slot.store(reloaded);
+
+        // New snapshot sees the edit; the retained old snapshot does not.
+        assert!(
+            slot.load().json("Alpha").unwrap().contains("AlphaV2"),
+            "reload must surface the edited JSON",
+        );
+        assert!(
+            pre.json("Alpha").unwrap().contains("AlphaV1"),
+            "the pre-swap snapshot must still read the old bytes (RCU)",
+        );
+
+        let _ = fs::remove_dir_all(&stock);
+    }
+
+    /// HOT-RELOAD crash-safety: a reload whose scan comes back empty (every
+    /// file deleted, or all malformed) must NOT swap an empty catalog in —
+    /// the last-good snapshot is kept. Mirrors `reload_into`'s contract.
+    #[test]
+    fn reload_keeps_last_good_on_empty_or_malformed() {
+        let stock = scratch("reload-keep-stock");
+        write_preset(&stock, "Beta", "BetaGood");
+
+        let slot = ArcSwap::from(build_catalog("effect", &stock, None).expect("initial load"));
+
+        // Simulate a transient bad edit: delete the only good file and
+        // leave only a malformed one (scan_dir skips it → zero presets).
+        fs::remove_file(stock.join("Beta.json")).expect("remove good");
+        fs::write(stock.join("Beta.json"), "{ broken").expect("write broken");
+
+        // The reload body (build_catalog) must Err on the empty scan; the
+        // `reload_into` contract keeps the prior snapshot.
+        let attempt = build_catalog("effect", &stock, None);
+        assert!(attempt.is_err(), "all-malformed scan must Err, not swap empty");
+        // Caller keeps last-good — emulate `reload_into` not storing on Err.
+        assert!(
+            slot.load().json("Beta").unwrap().contains("BetaGood"),
+            "last-good snapshot must survive a broken reload",
+        );
+
+        let _ = fs::remove_dir_all(&stock);
     }
 }

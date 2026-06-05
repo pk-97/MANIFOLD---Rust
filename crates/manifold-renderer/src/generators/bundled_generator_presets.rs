@@ -39,9 +39,10 @@ use crate::preset_loader::GENERATOR_CATALOG;
 pub fn loaded_generator_presets_from_bundled()
 -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
     GENERATOR_CATALOG
+        .load()
         .entries()
         .filter_map(|(id, json)| {
-            let def: EffectGraphDef = serde_json::from_str(json)
+            let def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled generator preset {id}: parse failed: {e}"));
             def.preset_metadata
         })
@@ -58,8 +59,8 @@ inventory::submit! {
 /// `generator_type`, or `None` if no preset is registered for that id.
 pub fn bundled_generator_preset_json(
     generator_type: &GeneratorTypeId,
-) -> Option<&'static str> {
-    GENERATOR_CATALOG.json(generator_type.as_str())
+) -> Option<std::sync::Arc<str>> {
+    GENERATOR_CATALOG.load().json(generator_type.as_str())
 }
 
 /// Every `GeneratorTypeId` that has a bundled JSON preset registered.
@@ -68,8 +69,11 @@ pub fn bundled_generator_preset_json(
 /// generators.
 pub fn bundled_generator_preset_type_ids() -> impl Iterator<Item = GeneratorTypeId> {
     GENERATOR_CATALOG
+        .load()
         .type_ids()
         .map(|id| GeneratorTypeId::from_string(id.to_string()))
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 #[cfg(test)]
@@ -104,8 +108,8 @@ mod tests {
     #[test]
     fn every_bundled_generator_preset_parses() {
         use manifold_core::effect_graph_def::EffectGraphDef;
-        for (id, json) in GENERATOR_CATALOG.entries() {
-            let _: EffectGraphDef = serde_json::from_str(json).unwrap_or_else(|e| {
+        for (id, json) in GENERATOR_CATALOG.load().entries() {
+            let _: EffectGraphDef = serde_json::from_str(&json).unwrap_or_else(|e| {
                 panic!("bundled generator preset {id}: parse failed: {e}")
             });
         }
@@ -128,8 +132,8 @@ mod tests {
     fn every_bundled_preset_binding_resolves_to_an_outer_param() {
         use manifold_core::effect_graph_def::EffectGraphDef;
         let mut violations: Vec<String> = Vec::new();
-        for (preset_id, json) in GENERATOR_CATALOG.entries() {
-            let doc: EffectGraphDef = serde_json::from_str(json).unwrap_or_else(|e| {
+        for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
+            let doc: EffectGraphDef = serde_json::from_str(&json).unwrap_or_else(|e| {
                 panic!("bundled preset {preset_id}: parse failed: {e}")
             });
             let Some(meta) = doc.preset_metadata.as_ref() else {
@@ -174,9 +178,9 @@ mod tests {
         let device = crate::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures: Vec<String> = Vec::new();
-        for (preset_id, json) in GENERATOR_CATALOG.entries() {
+        for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
             if let Err(e) = JsonGraphGenerator::from_json_str_with_device(
-                json,
+                &json,
                 &registry,
                 &device,
                 1920,
@@ -234,9 +238,9 @@ mod tests {
 
         let mut failures: Vec<String> = Vec::new();
 
-        for (preset_id, json) in GENERATOR_CATALOG.entries() {
+        for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
             let mut g = match JsonGraphGenerator::from_json_str_with_device(
-                json, &registry, &device, w, h, format,
+                &json, &registry, &device, w, h, format,
             ) {
                 Ok(g) => g,
                 Err(e) => {

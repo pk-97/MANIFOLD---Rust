@@ -2131,12 +2131,15 @@ impl AbletonBridge {
                     let effect_def =
                         manifold_core::preset_definition_registry::effect::try_get(fx.effect_type());
                     let resolved_idx = effect_def
+                        .as_ref()
                         .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
                     let Some(resolved_idx) = resolved_idx else {
                         continue;
                     };
-                    let param_def = effect_def.and_then(|d| d.param_defs.get(resolved_idx));
-                    let (pmin, pmax) = param_def.map(|pd| (pd.min, pd.max)).unwrap_or((0.0, 1.0));
+                    let (pmin, pmax) = effect_def
+                        .as_ref()
+                        .and_then(|d| d.param_defs.get(resolved_idx).map(|pd| (pd.min, pd.max)))
+                        .unwrap_or((0.0, 1.0));
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
@@ -2182,15 +2185,18 @@ impl AbletonBridge {
                             let effect_def = manifold_core::preset_definition_registry::effect::try_get(
                                 fx.effect_type(),
                             );
-                            let resolved_idx = effect_def.and_then(|d| {
+                            let resolved_idx = effect_def.as_ref().and_then(|d| {
                                 d.id_to_index.get(mapping.param_id.as_ref()).copied()
                             });
                             let Some(resolved_idx) = resolved_idx else {
                                 continue;
                             };
-                            let param_def = effect_def.and_then(|d| d.param_defs.get(resolved_idx));
-                            let (pmin, pmax) =
-                                param_def.map(|pd| (pd.min, pd.max)).unwrap_or((0.0, 1.0));
+                            let (pmin, pmax) = effect_def
+                                .as_ref()
+                                .and_then(|d| {
+                                    d.param_defs.get(resolved_idx).map(|pd| (pd.min, pd.max))
+                                })
+                                .unwrap_or((0.0, 1.0));
                             let (abl_min, abl_max) = self.ableton_param_range(
                                 mapping.address.track_id,
                                 mapping.address.device_id,
@@ -2233,13 +2239,16 @@ impl AbletonBridge {
 
                     let gen_def =
                         manifold_core::preset_definition_registry::generator::try_get(gp.generator_type());
-                    let resolved_idx =
-                        gen_def.and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
+                    let resolved_idx = gen_def
+                        .as_ref()
+                        .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
                     let Some(resolved_idx) = resolved_idx else {
                         continue;
                     };
-                    let param_def = gen_def.and_then(|d| d.param_defs.get(resolved_idx));
-                    let (pmin, pmax) = param_def.map(|pd| (pd.min, pd.max)).unwrap_or((0.0, 1.0));
+                    let (pmin, pmax) = gen_def
+                        .as_ref()
+                        .and_then(|d| d.param_defs.get(resolved_idx).map(|pd| (pd.min, pd.max)))
+                        .unwrap_or((0.0, 1.0));
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
