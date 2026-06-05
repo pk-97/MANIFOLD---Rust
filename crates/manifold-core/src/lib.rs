@@ -29,6 +29,7 @@ pub mod percussion;
 pub mod percussion_analysis;
 pub mod percussion_binding;
 pub mod percussion_settings;
+pub mod preset_def;
 pub mod project;
 pub mod recording;
 pub mod selection;
