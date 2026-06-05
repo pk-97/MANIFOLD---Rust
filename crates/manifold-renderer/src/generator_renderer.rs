@@ -193,6 +193,18 @@ impl GeneratorRenderer {
             .unwrap_or_default()
     }
 
+    /// Live scalar I/O of the watched generator's previewed node — for the
+    /// editor's value inspector when the node has no image.
+    pub fn preview_scalar_io(
+        &self,
+        layer_id: &LayerId,
+    ) -> crate::node_graph::PreviewScalarIo {
+        self.layer_generators
+            .get(layer_id)
+            .map(|s| s.generator.preview_scalar_io())
+            .unwrap_or_default()
+    }
+
     pub fn set_device(&mut self, device: &GpuDevice) {
         self.device_ptr = device as *const GpuDevice;
     }

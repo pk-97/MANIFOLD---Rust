@@ -163,6 +163,11 @@ pub struct ContentPipeline {
     /// brightness). Used for force fields, flow, gradients, displacement.
     #[cfg(target_os = "macos")]
     node_preview_vector_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Live node-output preview info from the most recent render — the
+    /// previewed node's id, whether it produced an image, and its scalar I/O.
+    /// Pulled into [`ContentState`](crate::content_state::ContentState) each
+    /// frame so the editor can show a value inspector for non-image nodes.
+    last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
     /// Whether the node-output preview applies its smart (semantic) encoding.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
@@ -211,6 +216,7 @@ impl ContentPipeline {
             preview_generation: 0,
             node_preview_request: None,
             node_preview_generator: None,
+            last_node_preview_info: None,
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
@@ -699,6 +705,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // the frame; the readback runs after the compositor CB commits.
         let pending_dump = self.pending_graph_dump.take();
         let native_device = self.native_device.as_ref().unwrap();
+        // Reset the node-preview inspector info; the active preview path below
+        // repopulates it for this frame.
+        self.last_node_preview_info = None;
         let texture_pool = self.texture_pool.as_ref();
 
         // Split borrow: get renderers + project from engine simultaneously.
@@ -759,7 +768,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // node-preview surface (raw encoder, after the wrapper is dropped),
             // or clear to black when nothing was captured (non-texture node).
             #[cfg(target_os = "macos")]
-            if let Some((layer_id, _)) = &self.node_preview_generator {
+            if let Some((layer_id, node_id_opt)) = &self.node_preview_generator {
                 let gen_ref = renderers
                     .iter()
                     .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
@@ -767,6 +776,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let encoding = gen_ref
                     .map(|gr| gr.preview_encoding(layer_id))
                     .unwrap_or_default();
+                // Value-inspector info for a non-image node: its live scalar I/O.
+                if let Some(node_id) = node_id_opt {
+                    let (inputs, outputs) = gen_ref
+                        .map(|gr| gr.preview_scalar_io(layer_id))
+                        .unwrap_or_default();
+                    self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
+                        node_id: node_id.clone(),
+                        has_image: node_tex.is_some(),
+                        inputs,
+                        outputs,
+                    });
+                }
                 if let Some(node_tex) = node_tex {
                     Self::update_node_preview(
                         &mut gen_enc,
@@ -990,6 +1011,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // preview is requested but nothing was captured (the selected node
             // has no Texture2D output), clear the surface to black so the pane
             // reads as "no image output" rather than showing a stale frame.
+            // Value-inspector info for a previewed effect node: its live scalar
+            // I/O + whether it produced an image. Built whenever a node is
+            // watched, image or not.
+            if let Some((_, Some(node_id))) = &self.node_preview_request {
+                let (inputs, outputs) = self.compositor.preview_scalar_io();
+                self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
+                    node_id: node_id.clone(),
+                    has_image: self.compositor.preview_texture().is_some(),
+                    inputs,
+                    outputs,
+                });
+            }
             if let Some(node_tex) = self.compositor.preview_texture() {
                 let encoding = self.compositor.preview_encoding();
                 Self::update_node_preview(
@@ -1399,6 +1432,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// default; the editor's preview pane flips it. Node preview only.
     pub fn set_node_preview_normalize(&mut self, on: bool) {
         self.node_preview_normalize = on;
+    }
+
+    /// Live node-output preview info from the most recent render, for the
+    /// editor's value inspector. `None` when no node is being previewed.
+    pub fn node_preview_info(&self) -> Option<crate::content_state::NodePreviewInfo> {
+        self.last_node_preview_info.clone()
     }
 
     /// Clean up per-owner effect state for stopped clips.

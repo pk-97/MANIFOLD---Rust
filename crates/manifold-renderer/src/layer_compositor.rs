@@ -1926,6 +1926,34 @@ impl Compositor for LayerCompositor {
         crate::node_graph::PreviewEncoding::Color
     }
 
+    /// Live scalar I/O of this frame's previewed node, for the value inspector.
+    /// Walks the watched chain regardless of whether it captured a texture —
+    /// the inspector is exactly the no-texture case.
+    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+        if self.preview_request.is_none() {
+            return (Vec::new(), Vec::new());
+        }
+        if let Some(cg) = self.master_effect_chain.as_ref() {
+            let io = cg.preview_scalar_io();
+            if !io.0.is_empty() || !io.1.is_empty() {
+                return io;
+            }
+        }
+        for chain in self
+            .effect_chains
+            .values()
+            .chain(self.group_effect_chains.values())
+        {
+            if let Some(cg) = chain.as_ref() {
+                let io = cg.preview_scalar_io();
+                if !io.0.is_empty() || !io.1.is_empty() {
+                    return io;
+                }
+            }
+        }
+        (Vec::new(), Vec::new())
+    }
+
     fn set_dump_request(&mut self, effect_id: Option<EffectId>) {
         self.dump_request = effect_id;
     }

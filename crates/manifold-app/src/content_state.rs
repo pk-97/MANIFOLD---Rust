@@ -10,6 +10,23 @@ use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::stem_audio::STEM_COUNT;
 use std::sync::Arc;
 
+/// Live state of the editor's node-output preview, pushed each frame so the
+/// UI can show a value inspector for non-image nodes (control / math /
+/// envelope) instead of a black pane. Present only while a node is previewed.
+#[derive(Clone, Debug)]
+pub struct NodePreviewInfo {
+    /// The previewed node's stable id — lets the UI confirm it matches the
+    /// current selection before showing the inspector.
+    pub node_id: manifold_core::NodeId,
+    /// True if the node produced a Texture2D output (the image pane is shown);
+    /// false → the UI shows the value inspector built from `inputs`/`outputs`.
+    pub has_image: bool,
+    /// Live scalar input port values this frame (`port_name`, value).
+    pub inputs: Vec<(String, f32)>,
+    /// Live scalar output port values — the signal the node is producing.
+    pub outputs: Vec<(String, f32)>,
+}
+
 /// Sent once when an export finishes.
 // FIXME(dead-code-audit): event is constructed and stored in ContentState but
 // never read by UI — export-finished feedback isn't wired.
@@ -133,6 +150,10 @@ pub struct ContentState {
     /// has run yet, or when the editor window isn't open. Wrapped in
     /// `Arc` so cloning the `ContentState` per snapshot is cheap.
     pub active_graph_snapshot: Option<Arc<manifold_renderer::node_graph::GraphSnapshot>>,
+
+    /// Live node-output preview state for the editor's value inspector. `None`
+    /// when no node is being previewed. See [`NodePreviewInfo`].
+    pub node_preview_info: Option<NodePreviewInfo>,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -368,6 +389,7 @@ impl Default for ContentState {
             project_snapshot: None,
             modulation_snapshot: None,
             active_graph_snapshot: None,
+            node_preview_info: None,
         }
     }
 }

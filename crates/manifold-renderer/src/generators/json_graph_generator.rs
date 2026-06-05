@@ -925,6 +925,13 @@ impl Generator for JsonGraphGenerator {
         self.preview_encoding
     }
 
+    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+        (
+            self.executor.preview_scalar_inputs().to_vec(),
+            self.executor.preview_scalar_outputs().to_vec(),
+        )
+    }
+
     /// The preview target's captured output texture from the most recent
     /// `render`. `None` if no target, the node was pruned, or it has no
     /// texture output.

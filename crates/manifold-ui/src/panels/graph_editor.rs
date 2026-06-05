@@ -116,6 +116,23 @@ pub struct GraphEditorNodeView {
     pub parameters: Vec<GraphEditorParam>,
 }
 
+/// Value inspector for a previewed node that has no image output (control /
+/// math / envelope). Replaces the black preview pane with what the node is and
+/// the live signal flowing through it. Built by the host from the node's
+/// descriptor + the live scalar I/O captured this frame.
+#[derive(Debug, Clone, Default)]
+pub struct NodeInspector {
+    /// Node display title.
+    pub title: String,
+    /// One-line "what it does" (the descriptor summary, else purpose). May be
+    /// empty if the node carries no descriptor text.
+    pub description: String,
+    /// Live scalar input port values `(port_name, value)` this frame.
+    pub inputs: Vec<(String, f32)>,
+    /// Live scalar output port values — the signal the node is producing.
+    pub outputs: Vec<(String, f32)>,
+}
+
 /// Right-sidebar width inside the graph-editor window. Bigger than a
 /// typical inspector cell because it has to fit a checkbox + a
 /// param label without truncation.
@@ -300,6 +317,11 @@ pub struct GraphEditorPanel {
     /// drives the preview toggle's checkmark. Default off only until the first
     /// `configure` lands the real value (app default is on).
     normalize_preview: bool,
+    /// Value inspector for a previewed non-image node, or `None` when the
+    /// preview is an image (or nothing is previewed). When `Some`, the top of
+    /// the sidebar shows the node's description + live I/O instead of the
+    /// preview toggle. Set each frame by the host.
+    node_inspector: Option<NodeInspector>,
     /// Per-row state, populated during `build`.
     rows: Vec<RowState>,
     /// Root container for everything this panel owns inside the tree.
@@ -347,6 +369,13 @@ impl GraphEditorPanel {
         self.normalize_preview = on;
     }
 
+    /// Set (or clear) the value inspector shown when a non-image node is
+    /// previewed. Called each frame before [`Self::build`]; `None` restores the
+    /// normal toggle + params layout.
+    pub fn set_node_inspector(&mut self, inspector: Option<NodeInspector>) {
+        self.node_inspector = inspector;
+    }
+
     /// Build the UITree subtree at the given viewport. Idempotent
     /// w.r.t. tree state — clears the previous root and re-adds.
     pub fn build(&mut self, tree: &mut UITree, viewport: Rect) {
@@ -371,12 +400,17 @@ impl GraphEditorPanel {
 
         let mut y = viewport.y + PADDING;
 
-        // ── Node-preview auto-gain toggle ─────────────────────────
-        // Sits directly under the preview image. Flips normalization on the
-        // preview pane so dark intermediates (force fields, normals, depth,
-        // flow) are legible. Node preview only — never touches the live render.
-        // Added before the early-returns below so it's always clickable.
-        {
+        // Top of the sidebar: either the value inspector (a previewed node with
+        // no image — show what it is + its live signal, in the reclaimed
+        // preview area) or the "Smart preview" toggle (an image preview).
+        if let Some(insp) = self.node_inspector.clone() {
+            y = Self::render_inspector_block(tree, bg_id, viewport, y, &insp);
+        } else {
+            // ── Node-preview "Smart preview" toggle ───────────────
+            // Sits directly under the preview image. Flips the semantic
+            // encoding on the preview pane so dark/signed intermediates are
+            // legible. Node preview only — never touches the live render.
+            // Added before the early-returns below so it's always clickable.
             let cb_x = viewport.x + PADDING;
             let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
             let cb_id = tree.add_button(
@@ -643,6 +677,120 @@ impl GraphEditorPanel {
 
             y += ROW_H;
         }
+    }
+
+    /// Render the value inspector for a non-image previewed node into the
+    /// reclaimed preview area: title, one-line "what it does", then the live
+    /// OUTPUT signal and INPUT values. Returns the y below the block. No row
+    /// state (nothing here is clickable).
+    fn render_inspector_block(
+        tree: &mut UITree,
+        bg_id: i32,
+        viewport: Rect,
+        mut y: f32,
+        insp: &NodeInspector,
+    ) -> f32 {
+        const DESC_LINE_H: f32 = 16.0;
+        const IO_ROW_H: f32 = 20.0;
+        let x = viewport.x + PADDING;
+        let w = (viewport.width - 2.0 * PADDING).max(10.0);
+
+        // Title.
+        tree.add_label(
+            bg_id,
+            x,
+            y,
+            w,
+            HEADER_H - PADDING,
+            &insp.title,
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: HEADER_FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        y += HEADER_H;
+
+        // "What it does", wrapped, capped at 4 lines.
+        if !insp.description.is_empty() {
+            let max_chars = ((w / 6.5).floor() as usize).max(8);
+            for line in wrap_words(&insp.description, max_chars).into_iter().take(4) {
+                tree.add_label(
+                    bg_id,
+                    x,
+                    y,
+                    w,
+                    DESC_LINE_H,
+                    &line,
+                    UIStyle {
+                        text_color: color::TEXT_DIMMED_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
+                y += DESC_LINE_H;
+            }
+        }
+        y += PADDING * 0.5;
+
+        // OUTPUT then INPUT value sections. Output first — it's the live signal.
+        for (heading, rows) in [("OUTPUT", &insp.outputs), ("INPUT", &insp.inputs)] {
+            if rows.is_empty() {
+                continue;
+            }
+            tree.add_label(
+                bg_id,
+                x,
+                y,
+                w,
+                IO_ROW_H,
+                heading,
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            y += IO_ROW_H;
+            for (name, value) in rows {
+                let value_w = (w * 0.4).max(50.0);
+                let name_w = (w - value_w).max(10.0);
+                tree.add_label(
+                    bg_id,
+                    x,
+                    y,
+                    name_w,
+                    IO_ROW_H,
+                    name,
+                    UIStyle {
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
+                tree.add_label(
+                    bg_id,
+                    x + name_w,
+                    y,
+                    value_w,
+                    IO_ROW_H,
+                    &fmt_value(*value),
+                    UIStyle {
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+                y += IO_ROW_H;
+            }
+            y += PADDING * 0.5;
+        }
+        y + PADDING * 0.5
     }
 
     /// Translate a single UITree event into zero or more `PanelAction`s.
@@ -954,6 +1102,39 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
         }
         GraphEditorParamKind::Trigger => "▶ Fire".to_string(),
         GraphEditorParamKind::Other => "—".to_string(),
+    }
+}
+
+/// Greedy word-wrap to a character budget per line. Approximate (assumes a
+/// roughly fixed glyph width) — fine for the inspector's short description.
+fn wrap_words(text: &str, max_chars: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        if cur.is_empty() {
+            cur.push_str(word);
+        } else if cur.chars().count() + 1 + word.chars().count() <= max_chars {
+            cur.push(' ');
+            cur.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur.push_str(word);
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+/// Format a live scalar value compactly: integers without decimals, otherwise
+/// up to 3 places with trailing zeros trimmed.
+fn fmt_value(v: f32) -> String {
+    if v.is_finite() && (v - v.round()).abs() < 1e-4 && v.abs() < 1e6 {
+        format!("{:.0}", v)
+    } else {
+        let s = format!("{v:.3}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
 }
 

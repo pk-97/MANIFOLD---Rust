@@ -107,6 +107,14 @@ pub struct Executor {
     /// downscales it into the preview surface. `None` if the target didn't run
     /// (pruned) or has no texture output (a scalar/array-only node).
     preview_resource: Option<ResourceId>,
+    /// Live scalar values on the previewed node's input ports this frame
+    /// (`port_name`, value). Captured when the target node has no texture
+    /// output — drives the editor's value-inspector panel for control / math /
+    /// envelope nodes that currently show a black pane. Cleared each frame.
+    preview_scalar_inputs: Vec<(String, f32)>,
+    /// Same for the previewed node's scalar OUTPUT ports — the live signal the
+    /// node is producing (an LFO's current value, a math result).
+    preview_scalar_outputs: Vec<(String, f32)>,
     /// Authoring-time "dump every output" mode. When set, the executor
     /// preserves ALL resources past the frame (skips every `free_after`) and
     /// records each node's Texture2D outputs in [`dump_resources`], so the
@@ -147,6 +155,8 @@ impl Executor {
             wired_scratch: Vec::new(),
             preview_target: None,
             preview_resource: None,
+            preview_scalar_inputs: Vec::new(),
+            preview_scalar_outputs: Vec::new(),
             dump_all: false,
             dump_resources: Vec::new(),
             dump_array_resources: Vec::new(),
@@ -190,6 +200,36 @@ impl Executor {
     /// [`Backend::slot_for`] + [`Backend::texture_2d`] on [`backend`](Self::backend).
     pub fn preview_resource(&self) -> Option<ResourceId> {
         self.preview_resource
+    }
+
+    /// Live scalar input values on the previewed node this frame
+    /// (`port_name`, value). Non-empty only when the target ran and had no
+    /// texture output (a control / math / scalar node). See
+    /// [`preview_scalar_outputs`](Self::preview_scalar_outputs).
+    pub fn preview_scalar_inputs(&self) -> &[(String, f32)] {
+        &self.preview_scalar_inputs
+    }
+
+    /// Live scalar OUTPUT values on the previewed node — the signal it's
+    /// producing this frame.
+    pub fn preview_scalar_outputs(&self) -> &[(String, f32)] {
+        &self.preview_scalar_outputs
+    }
+
+    /// Read a scalar resource's current value off the backend as `f32`, or
+    /// `None` if it isn't a `Scalar` port or has no bound slot. `Bool`/`Enum`
+    /// collapse to a number for display.
+    fn read_scalar_resource(&self, plan: &ExecutionPlan, res: ResourceId) -> Option<f32> {
+        if !matches!(plan.resource_type(res), Some(crate::node_graph::ports::PortType::Scalar(_))) {
+            return None;
+        }
+        let slot = self.backend.slot_for(res)?;
+        match self.backend.scalar(slot)? {
+            ParamValue::Float(f) => Some(f),
+            ParamValue::Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+            ParamValue::Enum(e) => Some(e as f32),
+            _ => None,
+        }
     }
 
     /// Convenience constructor with a fresh [`MockBackend`]. Used by tests
@@ -431,6 +471,8 @@ impl Executor {
         // Reset preview capture for this frame. Re-resolved below if the
         // target node is live and produces a texture.
         self.preview_resource = None;
+        self.preview_scalar_inputs.clear();
+        self.preview_scalar_outputs.clear();
         self.dump_resources.clear();
         self.dump_array_resources.clear();
 
@@ -682,6 +724,22 @@ impl Executor {
                     }
                 }
                 self.preview_resource = first_texture;
+                // When the node has no image, capture its live scalar I/O so the
+                // editor can show a value inspector instead of a black pane.
+                // Skip the scalar read on image nodes — that pane shows the
+                // texture, not numbers.
+                if first_texture.is_none() {
+                    for &(port, res) in &step.inputs {
+                        if let Some(v) = self.read_scalar_resource(plan, res) {
+                            self.preview_scalar_inputs.push((port.to_string(), v));
+                        }
+                    }
+                    for &(port, res) in &step.outputs {
+                        if let Some(v) = self.read_scalar_resource(plan, res) {
+                            self.preview_scalar_outputs.push((port.to_string(), v));
+                        }
+                    }
+                }
             }
 
             // Dump capture: record every Texture2D output of this step so the

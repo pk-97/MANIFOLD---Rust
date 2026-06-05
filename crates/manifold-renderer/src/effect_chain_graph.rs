@@ -1234,6 +1234,15 @@ impl ChainGraph {
         self.preview_encoding
     }
 
+    /// Live scalar I/O of the previewed node — for the editor's value inspector
+    /// when the watched node has no image output.
+    pub fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+        (
+            self.executor.preview_scalar_inputs().to_vec(),
+            self.executor.preview_scalar_outputs().to_vec(),
+        )
+    }
+
     /// Clear any preview capture on this chain. Called each frame for chains
     /// that don't hold the watched effect so a stale target doesn't keep a
     /// texture pinned.

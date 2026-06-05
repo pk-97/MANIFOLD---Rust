@@ -85,4 +85,11 @@ pub trait Generator: Send {
     fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
         crate::node_graph::PreviewEncoding::Color
     }
+
+    /// Live scalar input / output values on the previewed node this frame
+    /// (`port_name`, value), when it has no texture output — the data behind
+    /// the editor's value inspector. Default empty.
+    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+        (Vec::new(), Vec::new())
+    }
 }

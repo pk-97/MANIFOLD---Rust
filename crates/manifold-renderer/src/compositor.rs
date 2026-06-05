@@ -126,6 +126,13 @@ pub trait Compositor: Send {
         crate::node_graph::PreviewEncoding::Color
     }
 
+    /// Live scalar input / output values of the previewed node this frame, when
+    /// it has no texture output — the data behind the editor's value inspector.
+    /// Default empty.
+    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+        (Vec::new(), Vec::new())
+    }
+
     /// Request a one-shot "dump every output" of effect `effect_id` on the next
     /// `render`, or clear it. Default no-op. See [`Self::dump_textures`].
     fn set_dump_request(&mut self, _effect_id: Option<EffectId>) {}

@@ -18,6 +18,11 @@
 
 use crate::node_graph::descriptor::{Category, Role, descriptor_for};
 
+/// Live scalar I/O of a previewed node: `(inputs, outputs)`, each entry
+/// `(port_name, value)`. Captured for the editor's value inspector when a
+/// previewed node has no image output.
+pub type PreviewScalarIo = (Vec<(String, f32)>, Vec<(String, f32)>);
+
 /// How the node-output preview should render a captured texture. Phase 1: three
 /// encodings; normal-map decode and depth colormaps are a later pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

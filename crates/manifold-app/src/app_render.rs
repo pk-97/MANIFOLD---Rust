@@ -2353,8 +2353,16 @@ impl Application {
         let preview_pad = 8.0_f32;
         let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
         let preview_h = preview_w * 9.0 / 16.0;
-        let preview_active = self.last_preview_node.is_some();
-        let sidebar_content_top = if preview_active {
+        // The preview pane reserves the sidebar top ONLY for an image. A
+        // previewed node with no image (control / math / envelope) hands that
+        // space to the panel, which draws a value inspector there instead.
+        let node_preview_info = self.content_state.node_preview_info.clone();
+        let preview_has_image = node_preview_info
+            .as_ref()
+            .map(|i| i.has_image)
+            .unwrap_or(false);
+        let show_image = self.last_preview_node.is_some() && preview_has_image;
+        let sidebar_content_top = if show_image {
             preview_pad + preview_h + preview_pad
         } else {
             0.0
@@ -2419,6 +2427,40 @@ impl Application {
         );
         self.graph_editor_panel
             .set_node_preview_normalize(self.node_preview_normalize);
+        // Value inspector for a previewed node with no image: its description
+        // (from the descriptor) + the live scalar I/O captured this frame.
+        let node_inspector = node_preview_info
+            .as_ref()
+            .filter(|i| !i.has_image)
+            .map(|info| {
+                let snap_node = snap_arc
+                    .as_deref()
+                    .and_then(|s| find_snapshot_node(&s.nodes, &info.node_id));
+                let title = snap_node
+                    .map(|n| n.title.clone())
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| info.node_id.to_string());
+                let description = snap_node
+                    .and_then(|n| {
+                        manifold_renderer::node_graph::descriptor_for(&n.type_id)
+                    })
+                    .map(|d| {
+                        if !d.summary.is_empty() {
+                            d.summary.to_string()
+                        } else {
+                            // First sentence of the technical purpose keeps it short.
+                            d.purpose.split(". ").next().unwrap_or(d.purpose).to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+                manifold_ui::panels::graph_editor::NodeInspector {
+                    title,
+                    description,
+                    inputs: info.inputs.clone(),
+                    outputs: info.outputs.clone(),
+                }
+            });
+        self.graph_editor_panel.set_node_inspector(node_inspector);
 
         // The left lane renders the REAL effect/generator card for the edited
         // target — the same `ParamCardPanel` the inspector shows, configured
@@ -2572,7 +2614,7 @@ impl Application {
         // pipeline targets the drawable's Bgra8Unorm format, so this draws
         // into the drawable (Load) rather than the Rgba16Float offscreen.
         #[cfg(target_os = "macos")]
-        if self.last_preview_node.is_some()
+        if show_image
             && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
         {
             let front = bridge.front_index() as usize;
@@ -3113,6 +3155,25 @@ fn render_text_input_overlay(
 /// per-node param view needs (handle, title, params + ranges). Gating
 /// on an effect-only target would silently empty the right column for
 /// every generator graph the user opens.
+/// Recursively find a snapshot node by stable [`NodeId`], descending into
+/// groups. Resolves a previewed node's title + type_id for the value inspector.
+fn find_snapshot_node<'a>(
+    nodes: &'a [manifold_renderer::node_graph::NodeSnapshot],
+    id: &manifold_core::NodeId,
+) -> Option<&'a manifold_renderer::node_graph::NodeSnapshot> {
+    for n in nodes {
+        if &n.node_id == id {
+            return Some(n);
+        }
+        if let Some(g) = n.group.as_ref()
+            && let Some(found) = find_snapshot_node(&g.nodes, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn build_graph_editor_view(
     selected_node: Option<u32>,
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
