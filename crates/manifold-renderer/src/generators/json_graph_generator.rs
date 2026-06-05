@@ -245,6 +245,15 @@ pub struct JsonGraphGenerator {
     /// frame always applies (loaded notes take effect immediately, since
     /// the version isn't serialized and resets to 0).
     last_note_version: u32,
+    /// Group container `NodeId` → concrete inner producer `NodeId`, for the
+    /// node-output preview. A group is a UI container that flattens away, so
+    /// its own id is never a runtime step; selecting a collapsed group in the
+    /// editor would otherwise preview nothing (black). Computed once from the
+    /// pre-flatten document via
+    /// [`manifold_core::flatten::group_output_producer_map`]; consulted by
+    /// [`Generator::set_preview_node`] to substitute the group's primary
+    /// texture-output producer. Empty for groupless presets.
+    group_preview_map: Vec<(manifold_core::NodeId, manifold_core::NodeId)>,
 }
 
 /// One resolved String outer-card → inner-node binding. The String
@@ -355,6 +364,11 @@ impl JsonGraphGenerator {
             .as_ref()
             .map(|m| m.string_bindings.clone())
             .unwrap_or_default();
+
+        // Group → producer map for the node-output preview, captured before
+        // `into_graph` flattens the groups away (the flattened graph has no
+        // group nodes to resolve a selected collapsed group against).
+        let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
 
         let mut graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
@@ -510,6 +524,7 @@ impl JsonGraphGenerator {
             state_store: StateStore::new(),
             binding_specs,
             last_note_version: u32::MAX,
+            group_preview_map,
         };
         g.apply_string_defaults();
         Ok(g)
@@ -852,8 +867,20 @@ impl Generator for JsonGraphGenerator {
     /// [`NodeId`](manifold_core::NodeId), resolved to this generator's runtime
     /// node, or clear it. The targeted node's output is preserved past the
     /// frame so the editor can sample it.
+    ///
+    /// A selected *group* container has no runtime node (the flattener inlined
+    /// its body), so a direct lookup misses; fall back to the group → producer
+    /// map and preview the group's primary texture-output producer instead.
+    /// Plain nodes and groups thus share one capture mechanism.
     fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
-        let target = node_id.and_then(|nid| self.graph.instance_by_node_id(nid));
+        let target = node_id.and_then(|nid| {
+            self.graph.instance_by_node_id(nid).or_else(|| {
+                self.group_preview_map
+                    .iter()
+                    .find(|(group, _)| group == nid)
+                    .and_then(|(_, producer)| self.graph.instance_by_node_id(producer))
+            })
+        });
         self.executor.set_preview_target(target);
     }
 
@@ -1806,6 +1833,47 @@ mod tests {
         assert!(
             matches!(err, JsonGeneratorLoadError::MissingFinalOutput),
             "got {err:?}"
+        );
+    }
+
+    /// Node-output preview, grouped generator: selecting the collapsed
+    /// `Flow Field` group must resolve to the concrete producer of its
+    /// `forceField` output (the `field_blur_v` node), since the group
+    /// container itself is no runtime node after flattening. Proves the
+    /// content-side fix end-to-end on the shipping FluidSimulation preset:
+    /// the group id has no direct runtime instance, but the group → producer
+    /// map bridges to one that does.
+    #[test]
+    fn grouped_generator_preview_resolves_group_to_producer() {
+        let json = include_str!("../../assets/generator-presets/FluidSimulation.json");
+        let g = JsonGraphGenerator::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("FluidSimulation preset must load");
+
+        // The group container has no runtime node — a direct lookup misses
+        // (this is exactly why the preview showed black before the fix).
+        assert!(
+            g.graph
+                .instance_by_node_id(&manifold_core::NodeId::new("Flow Field"))
+                .is_none(),
+            "group container should have no runtime instance after flattening"
+        );
+
+        // The group → producer map bridges it to `field_blur_v`, which IS a
+        // real flattened node the executor's step map keys on.
+        let producer = g
+            .group_preview_map
+            .iter()
+            .find(|(group, _)| *group == manifold_core::NodeId::new("Flow Field"))
+            .map(|(_, producer)| producer.clone())
+            .expect("Flow Field group must be in the preview map");
+        assert_eq!(
+            producer,
+            manifold_core::NodeId::new("field_blur_v"),
+            "Flow Field's forceField output is produced by field_blur_v"
+        );
+        assert!(
+            g.graph.instance_by_node_id(&producer).is_some(),
+            "the resolved producer must be a real runtime node"
         );
     }
 }

@@ -544,6 +544,86 @@ fn check_unique_interface(group: &GroupDef, group_handle: &str) -> Result<(), Fl
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Group → producer resolution (node-output preview)
+// ---------------------------------------------------------------------------
+//
+// A group is a UI container: the flattener inlines its body and the group's own
+// `node_id` never becomes a runtime step. So the node-output preview, which
+// matches a selected `node_id` against the flattened execution plan, finds
+// nothing when a *group* is selected and shows black. These helpers map a group
+// container's stable `NodeId` to the concrete inner node whose output should
+// stand in for it — the producer feeding the group's primary texture output —
+// resolving recursively through nested groups. Because the flattener preserves
+// each inner node's `node_id` (the nodeId safety invariant), the resolved id is
+// the same one the executor's step map keys on.
+
+/// Every group container in `def` (at any nesting depth) paired with the
+/// concrete inner producer of its primary texture output. One entry per group
+/// whose primary output resolves to a concrete (non-group) node; groups whose
+/// primary output is an unsupported input→output passthrough are omitted.
+///
+/// Built once at graph-build time (both the effect splice path and the
+/// generator load path) and consulted by the node-output preview: a selected
+/// collapsed group's `NodeId` maps to the producer `NodeId` here, which then
+/// resolves through the normal node→instance map to a real flattened step.
+pub fn group_output_producer_map(def: &EffectGraphDef) -> Vec<(crate::NodeId, crate::NodeId)> {
+    let mut out = Vec::new();
+    collect_group_producers(&def.nodes, &mut out);
+    out
+}
+
+fn collect_group_producers(nodes: &[EffectGraphNode], out: &mut Vec<(crate::NodeId, crate::NodeId)>) {
+    for node in nodes {
+        let Some(group) = node.group.as_deref() else {
+            continue;
+        };
+        if let Some(port) = primary_output_port(group)
+            && let Some(producer) = producer_for_output(group, port)
+        {
+            out.push((node.node_id.clone(), producer));
+        }
+        // Recurse so a nested group can be previewed on its own when collapsed.
+        collect_group_producers(&group.nodes, out);
+    }
+}
+
+/// The group's primary output port: the first `Texture2D` output, or the first
+/// output of any type if none is a texture. `None` for an output-less group.
+fn primary_output_port(group: &GroupDef) -> Option<&str> {
+    let outputs = &group.interface.outputs;
+    outputs
+        .iter()
+        .find(|p| p.port_type.starts_with("Texture2D"))
+        .or_else(|| outputs.first())
+        .map(|p| p.name.as_str())
+}
+
+/// The stable `NodeId` of the concrete inner node producing `output_port` of
+/// `group`, resolving through nested groups. `None` if the port has no inner
+/// producer, or the producer is the group's own input (an unsupported
+/// input→output passthrough, which the flattener also rejects).
+fn producer_for_output(group: &GroupDef, output_port: &str) -> Option<crate::NodeId> {
+    let out_boundary = group
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
+    let wire = group
+        .wires
+        .iter()
+        .find(|w| w.to_node == out_boundary.id && w.to_port == output_port)?;
+    let producer = group.nodes.iter().find(|n| n.id == wire.from_node)?;
+    if let Some(inner) = producer.group.as_deref() {
+        // The producer is itself a sub-group: recurse through the matching
+        // output port (`wire.from_port`) to the concrete node behind it.
+        producer_for_output(inner, &wire.from_port)
+    } else if producer.type_id == GROUP_INPUT_TYPE_ID {
+        None
+    } else {
+        Some(producer.node_id.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -929,5 +1009,154 @@ mod tests {
             flatten_groups(&d),
             Err(FlattenError::PassthroughNotSupported { .. })
         ));
+    }
+
+    // ── group_output_producer_map (node-output preview resolution) ──
+
+    /// Set a node's stable id by handle inside a (possibly nested) body.
+    fn set_node_id(d: &mut EffectGraphDef, handle: &str, id: &str) {
+        fn walk(nodes: &mut [EffectGraphNode], handle: &str, id: &str) -> bool {
+            for n in nodes.iter_mut() {
+                if n.handle.as_deref() == Some(handle) {
+                    n.node_id = crate::NodeId::new(id);
+                    return true;
+                }
+                if let Some(body) = n.group.as_deref_mut()
+                    && walk(&mut body.nodes, handle, id)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        assert!(walk(&mut d.nodes, handle, id), "no node with handle {handle}");
+    }
+
+    /// A flat (groupless) document produces an empty map.
+    #[test]
+    fn producer_map_empty_for_flat_document() {
+        let d = def(
+            vec![
+                node(0, "system.source", Some("source")),
+                node(1, "node.blur", Some("blur")),
+                node(2, "system.final_output", Some("final")),
+            ],
+            vec![wire(0, "out", 1, "src"), wire(1, "out", 2, "in")],
+        );
+        assert!(group_output_producer_map(&d).is_empty());
+    }
+
+    /// A single group resolves its container id to the concrete node feeding
+    /// its output port (`mix`), not the group container or a boundary node.
+    #[test]
+    fn producer_map_resolves_group_to_output_producer() {
+        let mut d = def(
+            vec![
+                node(0, "system.source", Some("source")),
+                soft_focus_group(1, "soft_focus"),
+                node(2, "system.final_output", Some("final")),
+            ],
+            vec![wire(0, "out", 1, "src"), wire(1, "out", 2, "in")],
+        );
+        set_node_id(&mut d, "soft_focus", "group_sf");
+        set_node_id(&mut d, "mix", "mix_node");
+
+        let map = group_output_producer_map(&d);
+        assert_eq!(
+            map,
+            vec![(crate::NodeId::new("group_sf"), crate::NodeId::new("mix_node"))],
+            "selecting the group should preview its output producer (mix)"
+        );
+    }
+
+    /// A group whose output producer is itself a nested group resolves through
+    /// to the concrete inner node, and both group containers get an entry.
+    #[test]
+    fn producer_map_resolves_through_nested_group() {
+        // Outer group `wrap`: GroupInput.src -> inner.src ;
+        // inner.out -> GroupOutput.out. `inner` is itself a soft_focus group
+        // whose `out` is produced by its `mix` node.
+        let mut outer = node(1, GROUP_TYPE_ID, Some("wrap"));
+        let inner = soft_focus_group(10, "inner");
+        outer.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: vec![port("src")],
+                outputs: vec![port("out")],
+                params: vec![],
+            },
+            nodes: vec![
+                node(0, GROUP_INPUT_TYPE_ID, None),
+                inner,
+                node(2, GROUP_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![wire(0, "src", 10, "src"), wire(10, "out", 2, "out")],
+        }));
+
+        let mut d = def(
+            vec![
+                node(0, "system.source", Some("source")),
+                outer,
+                node(2, "system.final_output", Some("final")),
+            ],
+            vec![wire(0, "out", 1, "src"), wire(1, "out", 2, "in")],
+        );
+        set_node_id(&mut d, "wrap", "group_wrap");
+        set_node_id(&mut d, "inner", "group_inner");
+        set_node_id(&mut d, "mix", "mix_node");
+
+        let map = group_output_producer_map(&d);
+        // Both groups resolve to the concrete `mix` node behind the nesting.
+        assert!(
+            map.contains(&(crate::NodeId::new("group_wrap"), crate::NodeId::new("mix_node"))),
+            "outer group should resolve through the nested group to `mix`; got {map:?}"
+        );
+        assert!(
+            map.contains(&(crate::NodeId::new("group_inner"), crate::NodeId::new("mix_node"))),
+            "inner group should resolve to `mix` directly; got {map:?}"
+        );
+    }
+
+    /// The first Texture2D output is chosen as the primary port even when a
+    /// non-texture output is declared first.
+    #[test]
+    fn producer_map_prefers_first_texture_output() {
+        let mut g = node(1, GROUP_TYPE_ID, Some("g"));
+        g.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: vec![port("src")],
+                outputs: vec![
+                    InterfacePortDef {
+                        name: "amount".to_string(),
+                        port_type: "Scalar(F32)".to_string(),
+                    },
+                    InterfacePortDef {
+                        name: "tex".to_string(),
+                        port_type: "Texture2D".to_string(),
+                    },
+                ],
+                params: vec![],
+            },
+            nodes: vec![
+                node(0, GROUP_INPUT_TYPE_ID, None),
+                node(1, "node.measure", Some("measure")),
+                node(2, "node.blur", Some("blur")),
+                node(3, GROUP_OUTPUT_TYPE_ID, None),
+            ],
+            wires: vec![
+                wire(0, "src", 2, "src"),
+                wire(1, "out", 3, "amount"),
+                wire(2, "out", 3, "tex"),
+            ],
+        }));
+        let mut d = def(vec![g], vec![]);
+        set_node_id(&mut d, "g", "group_g");
+        set_node_id(&mut d, "blur", "blur_node");
+
+        let map = group_output_producer_map(&d);
+        assert_eq!(
+            map,
+            vec![(crate::NodeId::new("group_g"), crate::NodeId::new("blur_node"))],
+            "the Texture2D output `tex` (producer blur), not the scalar `amount`, should win"
+        );
     }
 }

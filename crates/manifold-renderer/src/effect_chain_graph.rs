@@ -317,6 +317,15 @@ struct EffectSlot {
     /// [`ResolvedBinding::from_static`] / [`ResolvedBinding::from_user`]),
     /// so a binding survives the node's handle changing under grouping.
     node_map: Vec<(NodeId, NodeInstanceId)>,
+    /// Group container `NodeId` → concrete inner producer `NodeId`, for the
+    /// node-output preview. A group is a UI container that flattens away before
+    /// the splice, so its own id is never in [`Self::node_map`]; selecting a
+    /// collapsed group in the editor would otherwise preview nothing (black).
+    /// Computed once at chain build from the pre-flatten preset def via
+    /// [`manifold_core::flatten::group_output_producer_map`]; consulted by
+    /// [`ChainGraph::set_preview_target`] to substitute the group's primary
+    /// texture-output producer. Empty for groupless effects.
+    group_preview_map: Vec<(NodeId, NodeId)>,
     /// Unified resolved binding list — `bindings[0..n_static]` are
     /// spec bindings hydrated via [`ResolvedBinding::from_static`];
     /// `bindings[n_static..]` are user-exposed bindings hydrated via
@@ -654,6 +663,17 @@ impl ChainGraph {
                 .iter()
                 .filter_map(|(_, id)| graph.get_node(*id).map(|inst| (inst.node_id.clone(), *id)))
                 .collect();
+            // Group → producer map for the node-output preview, derived from
+            // the same pre-flatten def that was just spliced (`splice_def`) so
+            // its group containers and producers carry the same stable NodeIds
+            // as `node_map`. The spliced graph itself has no group nodes left to
+            // resolve a selected collapsed group against. Empty for groupless
+            // defs, which is nearly all of them. The watched (preview) effect is
+            // always unfused, so `splice_def` is the user's edited graph when
+            // present, else the canonical preset — either way the def whose
+            // groups the editor is showing.
+            let group_preview_map =
+                manifold_core::flatten::group_output_producer_map(splice_def);
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
@@ -749,6 +769,7 @@ impl ChainGraph {
                 legacy_index: *legacy_index,
                 handles,
                 node_map,
+                group_preview_map,
                 bindings,
                 n_static,
                 n_static_slots,
@@ -1149,10 +1170,26 @@ impl ChainGraph {
                 .iter()
                 .find(|slot| &slot.effect_id == effect_id)
                 .and_then(|slot| {
-                    slot.node_map
+                    let direct = slot
+                        .node_map
                         .iter()
                         .find(|(mapped, _)| mapped == nid)
-                        .map(|(_, instance)| *instance)
+                        .map(|(_, instance)| *instance);
+                    // A selected group container isn't in `node_map` (it
+                    // flattened away); resolve it to its primary texture-output
+                    // producer and look that up instead, so plain nodes and
+                    // groups share one capture mechanism.
+                    direct.or_else(|| {
+                        slot.group_preview_map
+                            .iter()
+                            .find(|(group, _)| group == nid)
+                            .and_then(|(_, producer)| {
+                                slot.node_map
+                                    .iter()
+                                    .find(|(mapped, _)| mapped == producer)
+                                    .map(|(_, instance)| *instance)
+                            })
+                    })
                 })
         });
         self.executor.set_preview_target(target);
@@ -1783,8 +1820,9 @@ mod topology_hash_tests {
         let fx = make_default(EffectTypeId::COLOR_GRADE);
         let other = make_default(EffectTypeId::VORONOI_PRISM);
 
-        let unwatched = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        let watched = compute_topology_hash(&[fx.clone()], &[], 256, 256, Some(&fx.id));
+        let unwatched = compute_topology_hash(std::slice::from_ref(&fx), &[], 256, 256, None);
+        let watched =
+            compute_topology_hash(std::slice::from_ref(&fx), &[], 256, 256, Some(&fx.id));
         assert_ne!(
             unwatched, watched,
             "topology hash must change when an effect becomes the watched target \
@@ -1793,7 +1831,7 @@ mod topology_hash_tests {
 
         // A watch on an effect NOT in this chain must not perturb the hash.
         let watch_elsewhere =
-            compute_topology_hash(&[fx.clone()], &[], 256, 256, Some(&other.id));
+            compute_topology_hash(std::slice::from_ref(&fx), &[], 256, 256, Some(&other.id));
         assert_eq!(
             unwatched, watch_elsewhere,
             "watching an effect absent from this chain must leave its hash \

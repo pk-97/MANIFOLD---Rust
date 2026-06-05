@@ -121,6 +121,13 @@ pub struct Executor {
     /// buffers. Read via [`dump_array_resources`] and decoded against the
     /// resource's `ArrayType` channel layout.
     dump_array_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
+    /// Dedup key for the node-output-preview diagnostic log:
+    /// `(target, matched_a_live_step, texture_2d_output_count,
+    /// captured_resource)`. Logged (grep `[preview]`) only when it changes
+    /// while a preview is active, so the terminal shows one line per retarget
+    /// instead of per-frame spam. Diagnostic only — the live render path never
+    /// sets a preview target, so this stays `None` there.
+    preview_debug_last: Option<(Option<NodeInstanceId>, bool, usize, Option<ResourceId>)>,
 }
 
 impl Executor {
@@ -143,6 +150,7 @@ impl Executor {
             dump_all: false,
             dump_resources: Vec::new(),
             dump_array_resources: Vec::new(),
+            preview_debug_last: None,
         }
     }
 
@@ -473,6 +481,14 @@ impl Executor {
             }
         }
 
+        // Node-output-preview diagnostic accumulators. `matched` flips true if
+        // the preview target named a live step this frame; `tex_count` records
+        // how many Texture2D outputs that step had. Distinguishes the two
+        // preview-black failure modes (no step matched = identity problem;
+        // matched but black = resource recycled) in the post-loop log below.
+        let mut preview_matched = false;
+        let mut preview_tex_count = 0usize;
+
         for (idx, step) in plan.steps().iter().enumerate() {
             if !self.live_steps[idx] {
                 // Mux short-circuit: producer subgraph of an
@@ -654,13 +670,18 @@ impl Executor {
             // slot bound past the frame. The integration layer reads it after
             // `execute_frame_*` and downscales it into the preview surface.
             if self.preview_target == Some(step.node) {
-                self.preview_resource = step
-                    .outputs
-                    .iter()
-                    .find(|&&(_, res)| {
-                        plan.resource_type(res).is_some_and(|t| t.is_texture_2d())
-                    })
-                    .map(|&(_, res)| res);
+                preview_matched = true;
+                preview_tex_count = 0;
+                let mut first_texture: Option<ResourceId> = None;
+                for &(_, res) in &step.outputs {
+                    if plan.resource_type(res).is_some_and(|t| t.is_texture_2d()) {
+                        if first_texture.is_none() {
+                            first_texture = Some(res);
+                        }
+                        preview_tex_count += 1;
+                    }
+                }
+                self.preview_resource = first_texture;
             }
 
             // Dump capture: record every Texture2D output of this step so the
@@ -698,6 +719,33 @@ impl Executor {
                 let dims = resolve_dims(plan, res_id, canvas_dims);
                 self.backend.release(res_id, ty, fmt, dims);
             }
+        }
+
+        // Node-output-preview diagnostic. Fires once per retarget (deduped) when
+        // a preview is active, so the terminal reveals which failure mode a
+        // black preview is: `matched=false` means the target id named no live
+        // step (an identity problem — the node is a group container or a
+        // pruned/multi-pass node whose previewable id differs); `matched=true`
+        // with `resource=None` means the step ran but had no Texture2D output;
+        // `matched=true` with a resource that still reads black points at
+        // resource recycling. Grep `[preview]`.
+        if self.preview_target.is_some() {
+            let key = (
+                self.preview_target,
+                preview_matched,
+                preview_tex_count,
+                self.preview_resource,
+            );
+            if self.preview_debug_last != Some(key) {
+                self.preview_debug_last = Some(key);
+                eprintln!(
+                    "[preview] target={:?} matched_live_step={} texture2d_outputs={} \
+                     captured_resource={:?}",
+                    self.preview_target, preview_matched, preview_tex_count, self.preview_resource,
+                );
+            }
+        } else if self.preview_debug_last.is_some() {
+            self.preview_debug_last = None;
         }
 
         // ===== Late-capture pass =====
