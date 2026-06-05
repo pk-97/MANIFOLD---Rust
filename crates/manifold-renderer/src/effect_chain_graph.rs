@@ -59,10 +59,10 @@ use crate::effect::EffectContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, LoadedPresetView,
+    BoundGraph, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LoadedPresetView,
     MetalBackend, NodeInstanceId, ParamBinding, ParamValue, PrimitiveRegistry, ResolvedBinding,
-    ResourceId, Slot, Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings,
-    compile, splice_def_into_chain,
+    ResourceId, Slot, Source, SpliceResult, StateStore, apply_binding_defaults, compile,
+    splice_def_into_chain,
 };
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -347,19 +347,20 @@ struct EffectSlot {
     /// [`apply_inner_param_overrides`], so the edit lands without wiping
     /// primitive state. Seeded to `fx.graph_version` at build.
     applied_graph_version: u32,
-    /// Unified resolved binding list — `bindings[0..n_static]` are
-    /// spec bindings hydrated via [`ResolvedBinding::from_static`];
-    /// `bindings[n_static..]` are user-exposed bindings hydrated via
-    /// [`ResolvedBinding::from_user`]. Same order as
-    /// `EffectInstance.param_values`, so [`apply_bindings`] walks
-    /// both in lockstep against one cache.
+    /// The card-driven binding lifecycle — the resolved binding list + the
+    /// skip-on-unchanged cache — shared with the generator runtime via
+    /// [`BoundGraph`]. `bound.bindings[0..n_static]` are spec bindings hydrated
+    /// via [`ResolvedBinding::from_static`]; `bound.bindings[n_static..]` are
+    /// user-exposed bindings hydrated via [`ResolvedBinding::from_user`]. Same
+    /// order as `EffectInstance.param_values`, so [`apply_bindings`] walks both in
+    /// lockstep against one cache.
     ///
     /// The user tail is re-hydrated lazily when
     /// `effect.user_param_bindings_version` advances past
-    /// [`Self::user_bindings_version`] — exposing or unexposing a
-    /// param bumps the core-side version without changing chain
-    /// topology, so we don't force a chain rebuild for each toggle.
-    bindings: Vec<ResolvedBinding>,
+    /// [`Self::user_bindings_version`]; the static prefix rebuilds on a
+    /// `param_mappings_version` bump; the cache clears (via
+    /// [`BoundGraph::apply_inner_overrides`]) on a `graph_version` bump.
+    bound: BoundGraph,
     /// Boundary index inside [`Self::bindings`] separating the static
     /// prefix from the user tail. Equals the count of resolved static
     /// bindings — orphaned static bindings (handle missing from the
@@ -379,7 +380,6 @@ struct EffectSlot {
     /// re-hydrates the user tail of [`Self::bindings`] from the live
     /// binding list before applying.
     user_bindings_version: u32,
-    binding_cache: LastAppliedCache,
     /// Effect-side `system.generator_input` node id, if the preset
     /// included one. Effects with a generator_input get per-frame
     /// scalars (time / beat / aspect / output dims) pushed to this
@@ -799,16 +799,13 @@ impl ChainGraph {
                     ),
                 }
             }
-            let mut binding_cache = LastAppliedCache::new();
-            binding_cache.seed_from_bindings(&bindings);
-            // Make the cache's "Applied(default_value)" claim true:
-            // plant each binding's declared default into its inner
-            // target now, so the per-frame `apply_bindings`
-            // skip-on-unchanged check holds against an inner that
-            // already matches. Walks the unified list — closes both
-            // the static "touch to update" bug (518436a7) and the
-            // symmetric user-binding default-seed gap.
-            apply_binding_defaults(&bindings, &mut graph, None);
+            // Hand the resolved binding list to the shared `BoundGraph`, which
+            // seeds the skip cache and plants each binding's declared default into
+            // its inner target (so the per-frame skip-on-unchanged check holds
+            // against an inner that already matches — closes both the static
+            // "touch to update" bug (518436a7) and the symmetric user-binding
+            // default-seed gap).
+            let bound = BoundGraph::new(bindings, &mut graph);
             let user_bindings_version = fx.user_param_bindings_version;
             let param_mappings_version = fx.param_mappings_version;
             effect_nodes.push(EffectSlot {
@@ -820,11 +817,10 @@ impl ChainGraph {
                 group_preview_map,
                 preview_kinds,
                 applied_graph_version: fx.graph_version,
-                bindings,
+                bound,
                 n_static,
                 n_static_slots,
                 user_bindings_version,
-                binding_cache,
                 generator_input_node: generator_input_id,
                 static_specs,
                 param_mappings_version,
@@ -1046,9 +1042,9 @@ impl ChainGraph {
             // so bound params keep their live value and only the unbound
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
-                apply_inner_param_overrides(fx.graph.as_ref(), &slot.node_map, &mut self.graph);
+                slot.bound
+                    .apply_inner_overrides(&mut self.graph, &slot.node_map, fx.graph.as_ref());
                 slot.applied_graph_version = fx.graph_version;
-                slot.binding_cache.clear();
             }
             // Re-hydrate the user tail if the effect's binding list
             // moved since this slot was built. Exposing or unexposing
@@ -1059,7 +1055,7 @@ impl ChainGraph {
             // slider has no effect, while the same value set in the
             // graph editor works).
             if fx.user_param_bindings_version != slot.user_bindings_version {
-                slot.bindings.truncate(slot.n_static);
+                slot.bound.bindings.truncate(slot.n_static);
                 for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
                     let source_index = slot.n_static_slots + user_slot;
                     match ResolvedBinding::from_user(
@@ -1068,7 +1064,7 @@ impl ChainGraph {
                         &slot.node_map,
                         source_index,
                     ) {
-                        Some(rb) => slot.bindings.push(rb),
+                        Some(rb) => slot.bound.bindings.push(rb),
                         None => record_chain_error(
                             &mut self.errors,
                             ChainError::UserBindingResolveFailed {
@@ -1086,13 +1082,13 @@ impl ChainGraph {
                 // targets so the cache's "Applied(default)" claim holds
                 // against an inner that already matches — symmetric
                 // with the static-prefix seed at chain-build time.
-                apply_binding_defaults(&slot.bindings[slot.n_static..], &mut self.graph, None);
+                apply_binding_defaults(&slot.bound.bindings[slot.n_static..], &mut self.graph, None);
                 slot.user_bindings_version = fx.user_param_bindings_version;
                 // Reset the user-tail cache so the first apply after
                 // re-hydrate unconditionally writes — the previous
                 // cache entries refer to a different binding list and
                 // would skip-write on stale-prev compare.
-                slot.binding_cache.clear_tail(slot.n_static);
+                slot.bound.cache.clear_tail(slot.n_static);
             }
             // Re-build the static prefix if a per-instance reshape note
             // changed. A mapping-drawer edit bumps `param_mappings_version`
@@ -1121,18 +1117,12 @@ impl ChainGraph {
                 // against the impossible mismatch rather than corrupt the
                 // user-tail offsets.
                 if new_static.len() == slot.n_static {
-                    slot.bindings.splice(0..slot.n_static, new_static);
-                    slot.binding_cache.clear();
+                    slot.bound.bindings.splice(0..slot.n_static, new_static);
+                    slot.bound.cache.clear();
                 }
                 slot.param_mappings_version = fx.param_mappings_version;
             }
-            apply_bindings(
-                &slot.bindings,
-                &mut self.graph,
-                None,
-                &fx.param_values,
-                &mut slot.binding_cache,
-            );
+            slot.bound.apply(&mut self.graph, &fx.param_values);
             // If the preset includes a `system.generator_input` node,
             // push every frame-context scalar (time / beat / aspect /
             // output dims) into its params. The standard port-shadows-
@@ -1522,34 +1512,6 @@ fn compute_topology_hash(
     width.hash(&mut h);
     height.hash(&mut h);
     h.finish()
-}
-
-/// Push a card's inner-node param values into the live runtime graph without
-/// rebuilding it — the in-place path for a value-only edit (an inner param
-/// tweak in the graph editor), which bumps `graph_version` but not
-/// `graph_structure_version`. Flattening first means a group-interface override
-/// is already routed onto its concrete inner node, so every param resolves by
-/// the stable `node_id` the runtime `node_map` keys on (the nodeId-safety
-/// invariant survives flatten). Cheap and edit-time only — never per frame.
-fn apply_inner_param_overrides(
-    def: Option<&EffectGraphDef>,
-    node_map: &[(NodeId, NodeInstanceId)],
-    graph: &mut Graph,
-) {
-    let Some(def) = def else { return };
-    let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
-        return;
-    };
-    for node in &flat.nodes {
-        let Some((_, inst)) = node_map.iter().find(|(nid, _)| *nid == node.node_id) else {
-            continue;
-        };
-        for (name, value) in &node.params {
-            // `set_param` (not unchecked) so a dynamic-port param re-runs the
-            // node's `reconfigure` hook, matching a live slider write.
-            let _ = graph.set_param(*inst, name, value.clone().into());
-        }
-    }
 }
 
 /// State tracked for an open partial-wet-dry group during
@@ -2178,7 +2140,7 @@ mod user_binding_tests {
         // `param_values` through the slot's bindings into the graph.
         fn apply(cg: &mut ChainGraph, values: &[ParamSlot]) {
             let slot = &mut cg.effect_nodes[0];
-            apply_bindings(&slot.bindings, &mut cg.graph, None, values, &mut slot.binding_cache);
+            slot.bound.apply(&mut cg.graph, values);
         }
 
         // Control: same effect, zoom = 0.3, NO note → inner sees 0.3.
@@ -2273,11 +2235,11 @@ mod user_binding_tests {
             .first()
             .expect("StylizedFeedback contributes one effect slot");
         assert_eq!(
-            slot.bindings.len(),
+            slot.bound.bindings.len(),
             slot.n_static + 1,
             "user-tail binding for affine.translate_x must hydrate at build time",
         );
-        let user_rb = &slot.bindings[slot.n_static];
+        let user_rb = &slot.bound.bindings[slot.n_static];
         assert_eq!(user_rb.source, crate::node_graph::BindingSource::User);
         match &user_rb.target {
             crate::node_graph::ResolvedTarget::Node { param, .. } => {
@@ -2311,13 +2273,7 @@ mod user_binding_tests {
         // Mirror the per-frame apply that `run()` would execute:
         // walk the slot's unified bindings against fx.param_values.
         let slot = &mut cg.effect_nodes[0];
-        apply_bindings(
-            &slot.bindings,
-            &mut cg.graph,
-            None,
-            &fx.param_values,
-            &mut slot.binding_cache,
-        );
+        slot.bound.apply(&mut cg.graph, &fx.param_values);
 
         // Inspect the inner affine node's `translate_x` param — it
         // must reflect the user-tail slot's value, not its primitive

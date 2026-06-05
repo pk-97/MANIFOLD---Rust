@@ -27,10 +27,10 @@ use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::{
-    BindingSource, EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID, FrameTime,
-    GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LastAppliedCache, LoadError, MetalBackend,
-    NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding, ResolvedTarget, ResourceId,
-    Slot, StateStore, apply_binding_defaults, apply_bindings, compile,
+    BindingSource, BoundGraph, EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID,
+    FrameTime, GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, MetalBackend, NodeInstanceId,
+    ParamValue, PrimitiveRegistry, ResolvedBinding, ResolvedTarget, ResourceId, Slot, StateStore,
+    compile,
 };
 use crate::render_target::RenderTarget;
 use manifold_core::effects::ParamSlot;
@@ -193,21 +193,21 @@ pub struct JsonGraphGenerator {
     /// resize. `None` for the mock-backend test path (which doesn't
     /// touch the GPU on resize).
     target_format: Option<GpuTextureFormat>,
-    /// Outer-card → inner-node bindings resolved at construction time,
-    /// using the SAME [`ResolvedBinding`] type, [`apply_bindings`] loop,
-    /// and [`LastAppliedCache`] the effect chain uses. Each render frame
-    /// walks these via `apply_bindings`, which pushes the corresponding
-    /// `GeneratorContext::params[i]` into the target node's param,
-    /// skipping writes whose outer value hasn't changed (so per-card
-    /// inner edits survive at-rest sliders — the same property effects
-    /// have) and logging structured errors on routing failures instead
-    /// of silently dropping. Empty when the preset declares no bindings.
-    bindings: Vec<ResolvedBinding>,
-    /// Skip-on-unchanged cache parallel to `bindings`. Seeded with each
-    /// binding's declared default at construction so a freshly-built
-    /// generator only writes outer→inner for slots that already diverge
-    /// from their default.
-    binding_cache: LastAppliedCache,
+    /// Outer-card → inner-node binding lifecycle — the resolved binding list +
+    /// the skip-on-unchanged cache — shared with the effect chain via
+    /// [`BoundGraph`]. Each render frame walks these via [`BoundGraph::apply`],
+    /// which pushes the corresponding `GeneratorContext::params[i]` into the
+    /// target node's param, skipping writes whose outer value hasn't changed (so
+    /// per-card inner edits survive at-rest sliders — the same property effects
+    /// have) and logging structured errors on routing failures instead of
+    /// silently dropping. Resolved at construction from the preset's bindings
+    /// (`bound.bindings` empty when the preset declares none).
+    bound: BoundGraph,
+    /// Stable `NodeId` → runtime `NodeInstanceId` over this generator's whole
+    /// graph, built once at construction. Feeds [`BoundGraph::apply_inner_overrides`]
+    /// the same way the effect chain's per-effect splice map does, so a
+    /// value/position editor edit resolves each def node to its live instance.
+    node_map: Vec<(manifold_core::NodeId, NodeInstanceId)>,
     /// Reusable scratch for wrapping the host's `&[f32]` value bus into the
     /// `&[ParamSlot]` the shared `apply_bindings` loop takes. Cleared and
     /// refilled each frame so the per-frame apply stays allocation-free (the
@@ -493,14 +493,20 @@ impl JsonGraphGenerator {
             })
             .collect();
 
-        // Seed the skip-on-unchanged cache + plant each binding's declared
-        // default into its inner-node target now — mirrors the effect
-        // chain's chain-build seed (closes the "inner node starts at the
-        // primitive default instead of the binding default" gap that the
-        // bespoke generator path previously had).
-        let mut binding_cache = LastAppliedCache::new();
-        binding_cache.seed_from_bindings(&bindings);
-        apply_binding_defaults(&bindings, &mut graph, None);
+        // Hand the resolved bindings to the shared `BoundGraph` — it seeds the
+        // skip-on-unchanged cache and plants each binding's declared default into
+        // its inner-node target (closes the "inner node starts at the primitive
+        // default instead of the binding default" gap). Same construction the
+        // effect chain uses, so the per-frame apply + override-and-clear behave
+        // identically on both sides.
+        let bound = BoundGraph::new(bindings, &mut graph);
+        // Stable NodeId → live instance over the whole graph, for the in-place
+        // inner-param-override path (a value/position editor edit).
+        let node_map: Vec<(manifold_core::NodeId, NodeInstanceId)> = graph
+            .nodes()
+            .filter(|n| !n.node_id.as_str().is_empty())
+            .map(|n| (n.node_id.clone(), n.id))
+            .collect();
 
         let string_bindings: Vec<StringBindingResolution> = string_binding_specs
             .iter()
@@ -535,8 +541,8 @@ impl JsonGraphGenerator {
             final_output_input_resource,
             final_output_slot: None,
             target_format: None,
-            bindings,
-            binding_cache,
+            bound,
+            node_map,
             param_slot_scratch: Vec::new(),
             string_bindings,
             state_store: StateStore::new(),
@@ -827,13 +833,7 @@ impl JsonGraphGenerator {
         self.param_slot_scratch.clear();
         self.param_slot_scratch
             .extend(values.iter().map(|v| ParamSlot::exposed(*v)));
-        apply_bindings(
-            &self.bindings,
-            &mut self.graph,
-            None,
-            &self.param_slot_scratch,
-            &mut self.binding_cache,
-        );
+        self.bound.apply(&mut self.graph, &self.param_slot_scratch);
     }
 
     /// Push the host's per-clip string overrides through the preset's
@@ -956,32 +956,16 @@ impl Generator for JsonGraphGenerator {
         &mut self,
         def: &manifold_core::effect_graph_def::EffectGraphDef,
     ) {
-        // Flatten so a group-interface override is already routed onto its
-        // concrete inner node; every param then resolves by the stable node_id
-        // the runtime graph keys on. Edit-time only — never per frame.
-        let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
-            return;
-        };
-        for node in &flat.nodes {
-            let Some(inst) = self.graph.instance_by_node_id(&node.node_id) else {
-                continue;
-            };
-            for (name, value) in &node.params {
-                let _ = self.graph.set_param(inst, name, value.clone().into());
-            }
-        }
-        // Re-assert the live card bindings over what we just wrote. This pushes
-        // the def value into EVERY inner node — including the ones an outer-card
-        // slider drives — so without clearing the apply cache, the next
-        // `apply_param_values` would skip the (unchanged) outer value and the
-        // bound inner param would stay stuck at the def default. A position-only
-        // editor edit (auto-format / node move) bumps `generator_graph_version`
-        // and lands here, so the Speed slider snapped back to its baked value on
-        // every such bump. Mirrors the effect chain's `binding_cache.clear()`
-        // after `apply_inner_param_overrides`, and this generator's own
-        // `apply_param_notes`. The clear only forces a re-apply; bound params
-        // re-take their card value, unbound params keep the def value.
-        self.binding_cache.clear();
+        // Delegate to the shared `BoundGraph`: it pushes the def's inner-node
+        // values into the graph (resolved through `node_map`) AND clears the
+        // binding cache so the live card sliders re-assert over them. The clear
+        // is the load-bearing part — a position-only editor edit (auto-format /
+        // node move) bumps `generator_graph_version` and lands here, and without
+        // re-asserting the bindings a bound param (OilyFluid Speed) sticks at the
+        // baked def value. It lives inside `apply_inner_overrides` so this side
+        // can't drift from the effect chain again.
+        self.bound
+            .apply_inner_overrides(&mut self.graph, &self.node_map, Some(def));
     }
 
     /// The preview target's captured output texture from the most recent
@@ -1075,7 +1059,7 @@ impl Generator for JsonGraphGenerator {
             .iter()
             .map(|s| (s.id.as_str(), (s.scale, s.offset)))
             .collect();
-        for binding in self.bindings.iter_mut() {
+        for binding in self.bound.bindings.iter_mut() {
             let id = binding.id.as_ref();
             let note = notes.iter().find(|n| n.param_id == id);
             let (recipe_scale, recipe_offset) = recipe.get(id).copied().unwrap_or((1.0, 0.0));
@@ -1084,7 +1068,7 @@ impl Generator for JsonGraphGenerator {
         // Force the rebuilt reshapes to re-apply on the next `apply_param_values`
         // even though the raw param values didn't move (the cache keys on the
         // raw value). Mirrors the effect chain's note-edit cache clear.
-        self.binding_cache.clear();
+        self.bound.cache.clear();
         self.last_note_version = version;
     }
 

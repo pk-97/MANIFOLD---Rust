@@ -15,6 +15,7 @@ pub mod light;
 pub mod material;
 mod binding_migration;
 mod boundary_nodes;
+mod bound_graph;
 mod bundled_presets;
 pub mod catalog_gen;
 mod chain_spec;
@@ -59,6 +60,7 @@ pub use boundary_nodes::{
     Source,
 };
 pub use binding_migration::migrate_user_param_bindings_to_node_id;
+pub use bound_graph::{BoundGraph, apply_inner_param_overrides};
 pub use bundled_presets::{
     bundled_preset_def, bundled_preset_json, bundled_preset_type_ids,
 };
