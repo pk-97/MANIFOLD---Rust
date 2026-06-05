@@ -2381,12 +2381,13 @@ impl Application {
         // `watched_graph_target` is a degenerate state — show the panel's
         // empty placeholder.
         let snap_arc = self.content_state.active_graph_snapshot.as_ref().cloned();
-        let view_for_panel = build_graph_editor_view(
-            self.graph_canvas
-                .as_ref()
-                .and_then(|c| c.selected_node_id()),
-            snap_arc.as_deref(),
-        );
+        let (selected_node_u32, panel_scope) = self
+            .graph_canvas
+            .as_ref()
+            .map(|c| (c.selected_node_id(), c.scope_path().to_vec()))
+            .unwrap_or((None, Vec::new()));
+        let view_for_panel =
+            build_graph_editor_view(selected_node_u32, snap_arc.as_deref(), &panel_scope);
         // V2 unification: the right-sidebar's top "Effect Parameters"
         // list is a read-only summary of every inner-node param
         // currently exposed on the effect card (static-block + user-
@@ -3177,6 +3178,7 @@ fn find_snapshot_node<'a>(
 fn build_graph_editor_view(
     selected_node: Option<u32>,
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+    scope: &[u32],
 ) -> Option<manifold_ui::panels::graph_editor::GraphEditorNodeView> {
     use manifold_renderer::node_graph::ParamSnapshotKind;
     use manifold_ui::panels::graph_editor::{
@@ -3185,7 +3187,14 @@ fn build_graph_editor_view(
 
     let id = selected_node?;
     let snap = snapshot?;
-    let node = snap.nodes.iter().find(|n| n.id == id)?;
+    // The selected id is level-local: when the canvas has descended into a
+    // group, the node lives in that group's body, not the document root. Resolve
+    // the level the canvas is showing before searching, or its params come back
+    // empty for every node inside a group.
+    let level_nodes = crate::graph_canvas::resolve_level(snap, scope)
+        .map(|(nodes, _)| nodes)
+        .unwrap_or(snap.nodes.as_slice());
+    let node = level_nodes.iter().find(|n| n.id == id)?;
     let parameters = node
         .parameters
         .iter()

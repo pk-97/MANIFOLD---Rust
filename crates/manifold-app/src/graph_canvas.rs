@@ -2765,7 +2765,7 @@ fn cubic_bezier(
 /// `(nodes, wires)` of the addressed level. Empty scope → the document root.
 /// `None` if any id in the path isn't a group at its level — e.g. the group
 /// was deleted or ungrouped out from under the canvas. Pure; unit-tested.
-fn resolve_level<'a>(
+pub(crate) fn resolve_level<'a>(
     snap: &'a GraphSnapshot,
     scope: &[u32],
 ) -> Option<(&'a [NodeSnapshot], &'a [WireSnapshot])> {
