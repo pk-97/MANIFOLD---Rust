@@ -4,6 +4,7 @@ use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::{EffectId, NodeId};
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
@@ -67,6 +68,23 @@ impl<'a> CompositorFrame<'a> {
     }
 }
 
+/// One dumped texture borrowed from a compositor: `(node_id, port, type_id,
+/// texture)`. The strings are owned; the texture borrows the compositor.
+pub type DumpTextureRef<'a> = (String, String, String, &'a manifold_gpu::GpuTexture);
+
+/// One dumped `Array` (storage-buffer) output for inspection: identity, the
+/// live buffer, the per-item byte stride, and the channel layout as
+/// `(name, kind, byte_offset)` where `kind` ∈ {`f32`,`i32`,`u32`,`vec2f`,
+/// `vec3f`,`vec4f`}. The reader decodes the buffer against these fields.
+pub struct ArrayDump<'a> {
+    pub name: String,
+    pub port: String,
+    pub type_id: String,
+    pub buffer: &'a manifold_gpu::GpuBuffer,
+    pub item_size: u32,
+    pub fields: Vec<(String, &'static str, u32)>,
+}
+
 /// Trait for compositing layers into a final output.
 pub trait Compositor: Send {
     /// Render into the compositor's internal render targets.
@@ -88,6 +106,35 @@ pub trait Compositor: Send {
 
     /// The final compositor output texture (post-tonemap, post-effects).
     fn output_texture(&self) -> &manifold_gpu::GpuTexture;
+
+    /// Set (or clear) the authoring-time node-output preview request:
+    /// `(watched effect, optional selected node)`. The chain holding the
+    /// watched effect preserves the selected node's output texture for the
+    /// editor to sample. Default no-op for compositors without effect chains.
+    fn set_preview_request(&mut self, _request: Option<(EffectId, Option<NodeId>)>) {}
+
+    /// The captured preview texture from the most recent `render`, if a
+    /// preview is active and the watched node produced one. Default `None`.
+    fn preview_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
+    /// Request a one-shot "dump every output" of effect `effect_id` on the next
+    /// `render`, or clear it. Default no-op. See [`Self::dump_textures`].
+    fn set_dump_request(&mut self, _effect_id: Option<EffectId>) {}
+
+    /// After a `render` with a dump requested, every captured Texture2D output
+    /// of the watched effect as `(node_id, port, type_id, texture)`. Default
+    /// empty.
+    fn dump_textures(&self) -> Vec<DumpTextureRef<'_>> {
+        Vec::new()
+    }
+
+    /// Captured `Array` (storage-buffer) outputs of the watched effect after a
+    /// dump `render`. Default empty.
+    fn dump_arrays(&self) -> Vec<ArrayDump<'_>> {
+        Vec::new()
+    }
 
     /// Clean up per-owner effect state for a stopped clip.
     fn cleanup_clip_owner(&mut self, clip_id: &str);

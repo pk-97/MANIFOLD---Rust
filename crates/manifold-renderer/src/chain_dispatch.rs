@@ -28,6 +28,7 @@ use crate::effect::EffectContext;
 use crate::effect_chain_graph::ChainGraph;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::PrimitiveRegistry;
+use manifold_core::EffectId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_gpu::GpuTexture;
 
@@ -141,6 +142,7 @@ pub fn dispatch_chain<'a>(
     effects: &[EffectInstance],
     groups: &[EffectGroup],
     ctx: &EffectContext,
+    preview_effect: Option<&EffectId>,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
         return None;
@@ -169,6 +171,7 @@ pub fn dispatch_chain<'a>(
             gpu.pool,
             ctx.width,
             ctx.height,
+            preview_effect,
         );
         CHAIN_REBUILD_COUNT.fetch_add(1, Ordering::Relaxed);
         CHAIN_REBUILD_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);

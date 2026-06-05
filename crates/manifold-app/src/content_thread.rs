@@ -121,6 +121,10 @@ pub struct ContentThread {
     /// Mutually exclusive in practice — setting one clears the other,
     /// because only one editor canvas is visible at a time.
     pub watched_graph_generator_layer: Option<manifold_core::LayerId>,
+    /// Node the editor is previewing within the watched effect/generator, if
+    /// any. Combined with `watched_graph_effect` / `watched_graph_generator_layer`
+    /// each frame to drive the per-node output capture. `None` = no preview.
+    pub preview_graph_node: Option<manifold_core::NodeId>,
     /// Cached editor-canvas snapshot for the watched generator layer.
     ///
     /// Built lazily by [`Self::active_generator_graph_snapshot`] and
@@ -624,6 +628,22 @@ impl ContentThread {
         // 7. Render content
         #[cfg(feature = "profiling")]
         let _t0 = std::time::Instant::now();
+
+        // Forward the authoring-time node-output preview request to the
+        // pipeline. Effect and generator are mutually exclusive (only one
+        // editor canvas is watched at a time); the inactive one is cleared.
+        let effect_preview = self
+            .watched_graph_effect
+            .as_ref()
+            .map(|eid| (eid.clone(), self.preview_graph_node.clone()));
+        let generator_preview = self
+            .watched_graph_generator_layer
+            .as_ref()
+            .map(|lid| (lid.clone(), self.preview_graph_node.clone()));
+        self.content_pipeline
+            .set_node_preview_request(effect_preview);
+        self.content_pipeline
+            .set_node_preview_generator(generator_preview);
 
         let render_work_start = std::time::Instant::now();
         self.content_pipeline.render_content(

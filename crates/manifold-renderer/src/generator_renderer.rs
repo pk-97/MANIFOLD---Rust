@@ -133,6 +133,37 @@ impl GeneratorRenderer {
     /// Set the device pointer after the GpuDevice has been moved to its
     /// final location (inside ContentPipeline). Must be called before any
     /// generator is created.
+    /// Aim the authoring-time node-output preview at `node_id` within the
+    /// generator on `layer_id`, clearing every other layer's generator so a
+    /// stale target doesn't pin a texture. Call each frame before
+    /// [`Self::render_all`] while the editor watches this generator.
+    pub fn set_preview_node(
+        &mut self,
+        layer_id: &LayerId,
+        node_id: Option<&manifold_core::NodeId>,
+    ) {
+        for (lid, state) in self.layer_generators.iter_mut() {
+            let target = if lid == layer_id { node_id } else { None };
+            state.generator.set_preview_node(target);
+        }
+    }
+
+    /// Clear preview capture on every layer's generator (no preview active).
+    pub fn clear_preview(&mut self) {
+        for state in self.layer_generators.values_mut() {
+            state.generator.set_preview_node(None);
+        }
+    }
+
+    /// The captured preview texture for the generator on `layer_id`, from the
+    /// most recent [`Self::render_all`]. `None` if absent or nothing captured.
+    pub fn preview_texture(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {
+        self.layer_generators
+            .get(layer_id)?
+            .generator
+            .preview_texture()
+    }
+
     pub fn set_device(&mut self, device: &GpuDevice) {
         self.device_ptr = device as *const GpuDevice;
     }

@@ -8,7 +8,7 @@ use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectGroup, EffectInstance};
-use manifold_core::{BlendMode, EffectTypeId, LayerId};
+use manifold_core::{BlendMode, EffectId, EffectTypeId, LayerId, NodeId};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -460,6 +460,19 @@ pub struct LayerCompositor {
     /// "blocked" semantic. Lazy-initialised on first frame any LED layer is
     /// active; cleared once on creation, then reused indefinitely.
     led_black_tex: Option<GpuTexture>,
+
+    /// Authoring-time node-output preview request: `(watched effect, optional
+    /// selected node)`. Applied to every chain before `render` so the chain
+    /// holding the watched effect preserves the selected node's output for the
+    /// editor to sample; all other chains clear. `None` = no preview active.
+    /// Set via [`Self::set_preview_request`]; read back via
+    /// [`Self::preview_texture`].
+    preview_request: Option<(EffectId, Option<NodeId>)>,
+
+    /// One-shot "dump every output" request for an effect, applied to its chain
+    /// before the next `render`. The content layer reads [`Self::dump_textures`]
+    /// after that frame and clears it. `None` = no dump pending.
+    dump_request: Option<EffectId>,
 }
 
 /// Distinct owner_key for the LED master effect chain — must not collide with
@@ -561,6 +574,37 @@ impl LayerCompositor {
             led_group_effect_chains: AHashMap::default(),
             led_group_chain_last_used_frame: AHashMap::default(),
             led_black_tex: None,
+            preview_request: None,
+            dump_request: None,
+        }
+    }
+
+    /// Apply the current preview request to every screen-effect chain: the one
+    /// holding the watched effect aims its capture at the selected node, all
+    /// others clear. Called once per frame before compositing so a freshly
+    /// rebuilt chain re-acquires its target. LED chains are excluded — preview
+    /// is a screen-authoring aid.
+    fn apply_preview_targets(&mut self) {
+        let request = self.preview_request.clone();
+        let dump = self.dump_request.clone();
+        let apply = |chain: &mut Option<ChainGraph>| {
+            if let Some(cg) = chain.as_mut() {
+                match &request {
+                    Some((effect_id, node_id)) => {
+                        cg.set_preview_target(effect_id, node_id.as_ref())
+                    }
+                    None => cg.clear_preview_target(),
+                }
+                // Enable dump only on the chain holding the requested effect.
+                cg.set_dump(dump.as_ref());
+            }
+        };
+        apply(&mut self.master_effect_chain);
+        for chain in self.effect_chains.values_mut() {
+            apply(chain);
+        }
+        for chain in self.group_effect_chains.values_mut() {
+            apply(chain);
         }
     }
 
@@ -808,8 +852,17 @@ impl LayerCompositor {
         effects: &[EffectInstance],
         groups: &[EffectGroup],
         ctx: &EffectContext,
+        preview_effect: Option<&EffectId>,
     ) -> Option<&'a GpuTexture> {
-        dispatch_chain(effect_chain, gpu, input_texture, effects, groups, ctx)
+        dispatch_chain(
+            effect_chain,
+            gpu,
+            input_texture,
+            effects,
+            groups,
+            ctx,
+            preview_effect,
+        )
     }
 
     /// Clean up per-owner effect state for a stopped clip.
@@ -838,6 +891,10 @@ impl LayerCompositor {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
+        // Watched effect (if any) — forces its chain unfused so preview can
+        // sample inner node outputs. Owned clone so it survives the raw-pointer
+        // borrows of `self.effect_chains` below. Cheap; `None` when no preview.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
 
         // Pre-scan: count multi-clip layers and collect the set of
         // active `LayerId`s that need a chain this frame. Effect
@@ -1032,6 +1089,7 @@ impl LayerCompositor {
                         ld.effects,
                         ld.effect_groups,
                         &ctx,
+                        preview_fx.as_ref(),
                     )
                 } else {
                     None
@@ -1298,6 +1356,8 @@ impl LayerCompositor {
                                 group.effects,
                                 group.effect_groups,
                                 &ctx,
+                                // LED path is not a preview surface — never unfuse for it.
+                                None,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -1399,6 +1459,10 @@ impl LayerCompositor {
     ///
     /// No-op when no groups exist (single boolean check).
     fn fold_groups(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        // Watched effect id for the group-FX build gate (forces it unfused so
+        // preview can sample inner outputs). Owned clone to avoid re-borrowing
+        // `self` inside the group loop. `None` when no preview is active.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
         // Early exit: no groups → nothing to fold
         if !frame.layers.iter().any(|l| l.is_group) {
             return;
@@ -1495,6 +1559,7 @@ impl LayerCompositor {
                     group_desc.effects,
                     group_desc.effect_groups,
                     &ctx,
+                    preview_fx.as_ref(),
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -1570,6 +1635,11 @@ impl LayerCompositor {
 
         let device = compositor_gpu.device;
         let pool = compositor_gpu.pool;
+
+        // Watched effect (if any) — owned clone usable inside the per-layer
+        // loop below without re-borrowing `self`. Forces its chain unfused so
+        // the authoring-time preview can sample inner node outputs.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
 
         self.uniform_arena.reset();
 
@@ -1743,6 +1813,7 @@ impl LayerCompositor {
                             ld.effects,
                             ld.effect_groups,
                             &ctx,
+                            preview_fx.as_ref(),
                         )
                     } else {
                         None
@@ -1801,7 +1872,85 @@ impl LayerCompositor {
 }
 
 impl Compositor for LayerCompositor {
+    /// Set (or clear) the authoring-time node-output preview request. Cheap;
+    /// applied to every screen chain by `apply_preview_targets` each frame.
+    fn set_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
+        self.preview_request = request;
+    }
+
+    /// The captured preview texture for this frame, if a preview is active and
+    /// its node produced one. Scans the screen-effect chains and returns the
+    /// first match (only the chain holding the watched effect captures).
+    fn preview_texture(&self) -> Option<&GpuTexture> {
+        // No preview active → nothing to read.
+        self.preview_request.as_ref()?;
+        self.master_effect_chain
+            .as_ref()
+            .and_then(|cg| cg.preview_texture())
+            .or_else(|| {
+                self.effect_chains
+                    .values()
+                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
+                    .next()
+            })
+            .or_else(|| {
+                self.group_effect_chains
+                    .values()
+                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
+                    .next()
+            })
+    }
+
+    fn set_dump_request(&mut self, effect_id: Option<EffectId>) {
+        self.dump_request = effect_id;
+    }
+
+    fn dump_textures(&self) -> Vec<crate::compositor::DumpTextureRef<'_>> {
+        let Some(effect_id) = self.dump_request.as_ref() else {
+            return Vec::new();
+        };
+        // The watched effect lives in exactly one screen chain; find it and
+        // pull that effect's captured node outputs.
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains {
+            if let Some(cg) = chain.as_ref() {
+                let dumped = cg.dump_textures(effect_id);
+                if !dumped.is_empty() {
+                    return dumped;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn dump_arrays(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
+        let Some(effect_id) = self.dump_request.as_ref() else {
+            return Vec::new();
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains {
+            if let Some(cg) = chain.as_ref() {
+                let dumped = cg.dump_arrays(effect_id);
+                if !dumped.is_empty() {
+                    return dumped;
+                }
+            }
+        }
+        Vec::new()
+    }
+
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
+        // Aim the authoring-time output preview at the watched node (or clear)
+        // before any chain runs, so a freshly rebuilt chain re-acquires it.
+        self.apply_preview_targets();
+        // Owned clone of the watched effect id for the master-FX build gate
+        // below (forces it unfused). Computed before the `&mut self` chain
+        // borrows so it doesn't conflict.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
         if frame.clips.is_empty() {
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
@@ -1909,6 +2058,7 @@ impl Compositor for LayerCompositor {
                 frame.master_effects,
                 frame.master_effect_groups,
                 &ctx,
+                preview_fx.as_ref(),
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -1969,6 +2119,8 @@ impl Compositor for LayerCompositor {
                 frame.master_effects,
                 frame.master_effect_groups,
                 &ctx,
+                // LED path is not a preview surface — never unfuse for it.
+                None,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,

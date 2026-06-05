@@ -221,6 +221,19 @@ pub enum ContentCommand {
     /// follow-up; today the snapshot is the bundled JSON unchanged.
     WatchGeneratorGraph(Option<manifold_core::LayerId>),
 
+    /// Set the node whose output the graph editor is previewing, within the
+    /// currently-watched effect/generator. `None` clears the preview. The
+    /// content thread combines this with `WatchEffectGraph` /
+    /// `WatchGeneratorGraph` to drive the per-node output capture. Sent when
+    /// the editor's node selection changes.
+    SetGraphPreviewNode(Option<manifold_core::NodeId>),
+
+    /// Dump every node output of the currently-watched effect to a temp folder
+    /// as 16-bit linear PNGs + a manifest, for visual inspection. One-shot;
+    /// the content thread picks the output directory and logs it. No-op unless
+    /// an effect graph is being watched.
+    DumpGraphOutputs,
+
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
 }

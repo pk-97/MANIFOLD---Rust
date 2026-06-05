@@ -17,7 +17,7 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
+use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
 use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
@@ -96,6 +96,31 @@ pub struct Executor {
     /// Per-frame scratch for `selected_input_branch`'s `wired_inputs`
     /// argument. Reused across nodes; cleared before each call.
     wired_scratch: Vec<&'static str>,
+    /// Authoring-time output preview: when set, the executor preserves this
+    /// node's first Texture2D output past the frame (skips its `free_after`
+    /// release) so the graph editor can sample it. `None` disables capture —
+    /// zero cost on the live path. Set per frame via [`set_preview_target`].
+    preview_target: Option<NodeInstanceId>,
+    /// The Texture2D output resource of `preview_target`, recorded during the
+    /// step loop. After `execute_frame_*`, the integration layer reads its
+    /// texture via [`Backend::slot_for`] + [`Backend::texture_2d`] and
+    /// downscales it into the preview surface. `None` if the target didn't run
+    /// (pruned) or has no texture output (a scalar/array-only node).
+    preview_resource: Option<ResourceId>,
+    /// Authoring-time "dump every output" mode. When set, the executor
+    /// preserves ALL resources past the frame (skips every `free_after`) and
+    /// records each node's Texture2D outputs in [`dump_resources`], so the
+    /// host can read them all from one frame and write them to disk. One-shot,
+    /// off by default — costs nothing on the live path.
+    dump_all: bool,
+    /// `(node, output_port, resource)` for every Texture2D output produced
+    /// this frame while [`dump_all`] is set. Cleared and repopulated each
+    /// frame. Read after `execute_frame_*` via [`dump_resources`].
+    dump_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
+    /// Same, for `Array` (storage-buffer) outputs — particle/instance/edge
+    /// buffers. Read via [`dump_array_resources`] and decoded against the
+    /// resource's `ArrayType` channel layout.
+    dump_array_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
 }
 
 impl Executor {
@@ -113,7 +138,50 @@ impl Executor {
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
             wired_scratch: Vec::new(),
+            preview_target: None,
+            preview_resource: None,
+            dump_all: false,
+            dump_resources: Vec::new(),
+            dump_array_resources: Vec::new(),
         }
+    }
+
+    /// Enable/disable "dump every output" mode for the NEXT frame. When on,
+    /// the executor preserves every resource past the frame and records all
+    /// Texture2D outputs in [`dump_resources`](Self::dump_resources). One-shot:
+    /// the host turns it on, runs a frame, reads the textures, turns it off.
+    pub fn set_dump_all(&mut self, on: bool) {
+        self.dump_all = on;
+    }
+
+    /// `(node, output_port, resource)` for every Texture2D output captured on
+    /// the last frame while dump mode was on. Resolve each to a texture via
+    /// [`Backend::slot_for`] + [`Backend::texture_2d`] on [`backend`](Self::backend).
+    pub fn dump_resources(&self) -> &[(NodeInstanceId, &'static str, ResourceId)] {
+        &self.dump_resources
+    }
+
+    /// `(node, output_port, resource)` for every `Array` output captured on
+    /// the last frame while dump mode was on. Resolve to a buffer via
+    /// [`Backend::array_buffer`] and decode against the resource's `ArrayType`.
+    pub fn dump_array_resources(&self) -> &[(NodeInstanceId, &'static str, ResourceId)] {
+        &self.dump_array_resources
+    }
+
+    /// Set the node whose output texture should be preserved for an
+    /// authoring-time preview, or `None` to disable. Cheap; call per frame
+    /// before `execute_frame_*`. When set, the named node's first Texture2D
+    /// output survives the frame so [`preview_resource`](Self::preview_resource)
+    /// can hand it to the integration layer for downscaling.
+    pub fn set_preview_target(&mut self, node: Option<NodeInstanceId>) {
+        self.preview_target = node;
+    }
+
+    /// The preview target's Texture2D output resource from the last frame, if
+    /// the target ran and produced one. Resolve to a texture via
+    /// [`Backend::slot_for`] + [`Backend::texture_2d`] on [`backend`](Self::backend).
+    pub fn preview_resource(&self) -> Option<ResourceId> {
+        self.preview_resource
     }
 
     /// Convenience constructor with a fresh [`MockBackend`]. Used by tests
@@ -352,6 +420,12 @@ impl Executor {
     ) {
         self.compute_live_steps(graph, plan);
 
+        // Reset preview capture for this frame. Re-resolved below if the
+        // target node is live and produces a texture.
+        self.preview_resource = None;
+        self.dump_resources.clear();
+        self.dump_array_resources.clear();
+
         // Wipe any skip-passthrough aliases installed during the previous
         // frame. Without this, a slot that was aliased-on-skip last frame
         // would shadow its real write this frame and downstream reads
@@ -575,10 +649,48 @@ impl Executor {
                 }
             }
 
+            // Preview capture: if this is the node being previewed, remember
+            // its first Texture2D output so the release loop below keeps that
+            // slot bound past the frame. The integration layer reads it after
+            // `execute_frame_*` and downscales it into the preview surface.
+            if self.preview_target == Some(step.node) {
+                self.preview_resource = step
+                    .outputs
+                    .iter()
+                    .find(|&&(_, res)| {
+                        plan.resource_type(res).is_some_and(|t| t.is_texture_2d())
+                    })
+                    .map(|&(_, res)| res);
+            }
+
+            // Dump capture: record every Texture2D output of this step so the
+            // host can read them all after the frame (the release loop skips
+            // every release while dumping, so they all survive).
+            if self.dump_all {
+                for &(port, res) in &step.outputs {
+                    match plan.resource_type(res) {
+                        Some(t) if t.is_texture_2d() => {
+                            self.dump_resources.push((step.node, port, res));
+                        }
+                        Some(crate::node_graph::ports::PortType::Array(_)) => {
+                            self.dump_array_resources.push((step.node, port, res));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             // 4. Release dead resources. `dims` must match the
             // acquire-time value so the slot returns to the correct
-            // (PortType, format, dims) bucket.
+            // (PortType, format, dims) bucket. The preview-captured resource
+            // is held back so its texture survives for a post-frame read; it
+            // returns to the pool next frame (re-resolved at the top).
             for &res_id in &step.free_after {
+                // Dump mode preserves everything for a one-frame read; preview
+                // preserves just the watched node's output.
+                if self.dump_all || self.preview_resource == Some(res_id) {
+                    continue;
+                }
                 let ty = plan
                     .resource_type(res_id)
                     .expect("resource type known from compile()");
@@ -988,6 +1100,114 @@ mod tests {
         let a_out_slot = a_eval.outputs[0].1;
         let b_in_slot = b_eval.inputs[0].1;
         assert_eq!(a_out_slot, b_in_slot);
+    }
+
+    #[test]
+    fn preview_target_records_upstream_texture_output() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(RecordingNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let b = g.add_node(Box::new(RecordingNode::new(
+            "b",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        // No target → nothing captured.
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(exec.preview_resource(), None);
+
+        // Target the upstream node: its Texture2D output is recorded (and
+        // held back from recycling) even though `b` is its last reader.
+        exec.set_preview_target(Some(a));
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert!(
+            exec.preview_resource().is_some(),
+            "upstream texture output should be captured for preview"
+        );
+
+        // Clearing the target stops capture next frame.
+        exec.set_preview_target(None);
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(exec.preview_resource(), None);
+    }
+
+    #[test]
+    fn dump_all_records_every_texture_output() {
+        // a → b → c. `a` and `b` have downstream consumers (so their outputs
+        // get resources); `c` is the dangling sink (no resource, like a graph
+        // with no final_output). Dump should record `a` and `b`.
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(RecordingNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let b = g.add_node(Box::new(RecordingNode::new(
+            "b",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let c = g.add_node(Box::new(RecordingNode::new(
+            "c",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        g.connect((b, "out"), (c, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        // Off by default.
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert!(exec.dump_resources().is_empty());
+
+        // On: every consumed Texture2D output is recorded.
+        exec.set_dump_all(true);
+        exec.execute_frame(&mut g, &plan, frame_time());
+        let nodes: Vec<_> = exec.dump_resources().iter().map(|&(n, _, _)| n).collect();
+        assert!(nodes.contains(&a), "a's output recorded");
+        assert!(nodes.contains(&b), "b's output recorded");
+
+        // Off again clears it next frame.
+        exec.set_dump_all(false);
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert!(exec.dump_resources().is_empty());
+    }
+
+    #[test]
+    fn preview_target_with_no_texture_output_captures_nothing() {
+        use crate::node_graph::ports::ScalarType;
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let s = g.add_node(Box::new(RecordingNode::new(
+            "scalar_src",
+            vec![],
+            vec![output("v", PortType::Scalar(ScalarType::F32))],
+            log.clone(),
+        )));
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.set_preview_target(Some(s));
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(
+            exec.preview_resource(),
+            None,
+            "a node with only a scalar output is not previewable"
+        );
     }
 
     #[test]

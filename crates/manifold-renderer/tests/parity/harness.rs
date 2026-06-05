@@ -171,7 +171,8 @@ impl ParityHarness {
         let mut render_enc = self.device.create_encoder("parity-legacy-render");
         {
             let mut gpu = RendererGpuEncoder::new(&mut render_enc, &self.device);
-            let result = dispatch_chain(&mut chain, &mut gpu, input, slice::from_ref(fx), &[], ctx);
+            let result =
+                dispatch_chain(&mut chain, &mut gpu, input, slice::from_ref(fx), &[], ctx, None);
             // `result == None` means the chain skipped (disabled / no
             // registered processor / amount==0). Parity-test contract:
             // the "effect output" in that case equals the input. Same

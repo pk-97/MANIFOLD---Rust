@@ -226,6 +226,16 @@ pub struct Application {
     /// Last requested workspace preview surface size.
     #[cfg(target_os = "macos")]
     pub(crate) workspace_preview_size: (u32, u32),
+    /// IOSurface bridge for the graph editor's node-output preview pane.
+    /// Fixed small size; the content thread downscales the captured node
+    /// texture into it and the editor sidebar samples the front buffer.
+    #[cfg(target_os = "macos")]
+    pub(crate) node_preview_texture_bridge:
+        Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// UI-side textures imported from the node-output preview IOSurfaces.
+    #[cfg(target_os = "macos")]
+    pub(crate) ui_node_preview_textures:
+        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
@@ -300,6 +310,10 @@ pub struct Application {
     /// Built-once list of atoms shown in the spawn popup (node browser).
     /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
+    /// Last node-preview selection sent to the content thread, to suppress
+    /// duplicate `SetGraphPreviewNode` commands each frame. `None` = nothing
+    /// previewed (editor closed or multi/zero selection).
+    pub(crate) last_preview_node: Option<manifold_core::NodeId>,
     /// What graph the editor canvas is open on. Set by `OpenGraphEditor`
     /// (Effect target) or `OpenGeneratorGraphEditor` (Generator target);
     /// cleared when the editor closes. Every graph mutation command
@@ -437,6 +451,7 @@ impl Application {
             active_inspector_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,
+            last_preview_node: None,
             #[cfg(target_os = "macos")]
             #[cfg(target_os = "macos")]
             preview_texture_bridge: None,
@@ -450,6 +465,10 @@ impl Application {
             last_output_front_index: usize::MAX,
             #[cfg(target_os = "macos")]
             workspace_preview_size: (1920, 1080),
+            #[cfg(target_os = "macos")]
+            node_preview_texture_bridge: None,
+            #[cfg(target_os = "macos")]
+            ui_node_preview_textures: [None, None, None],
             blit_pipeline: None,
             blit_sampler: None,
             atlas_pipeline: None,
@@ -1546,6 +1565,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 });
                 self.ui_preview_textures = preview_textures.map(Some);
                 self.preview_texture_bridge = Some(Arc::clone(&preview_bridge));
+
+                // Node-output preview bridge — fixed small size (the editor
+                // pane is small and the content thread downscales into it).
+                let node_bridge =
+                    Arc::new(crate::shared_texture::SharedTextureBridge::new(480, 270));
+                let node_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
+                    node_bridge.import_texture_native(&gpu.device, i)
+                });
+                self.ui_node_preview_textures = node_textures.map(Some);
+                self.node_preview_texture_bridge = Some(Arc::clone(&node_bridge));
             }
 
             // Create native Metal device BEFORE renderers so they can build native pipelines.
@@ -1608,6 +1638,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_preview_textures(preview_textures, Arc::clone(bridge));
+            }
+            // Content-side import of the node-output preview IOSurfaces.
+            #[cfg(target_os = "macos")]
+            if let Some(ref bridge) = self.node_preview_texture_bridge {
+                let native_dev = content_pipeline.native_device().unwrap();
+                let node_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
+                content_pipeline.set_node_preview_textures(node_textures, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
@@ -1674,6 +1713,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_project_snapshot: None,
                 watched_graph_effect: None,
                 watched_graph_generator_layer: None,
+                preview_graph_node: None,
                 cached_generator_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
                 cached_midi_clock_position: Arc::from(""),
@@ -2762,6 +2802,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
+                // Editor window: Cmd+D dumps every node output of the watched
+                // effect to a temp folder (16-bit PNGs + manifest) for visual
+                // inspection. The content thread picks the dir and logs it.
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("d")
+                {
+                    if let Some(tx) = self.content_tx.as_ref() {
+                        crate::content_command::ContentCommand::send(
+                            tx,
+                            crate::content_command::ContentCommand::DumpGraphOutputs,
+                        );
                     }
                     return;
                 }

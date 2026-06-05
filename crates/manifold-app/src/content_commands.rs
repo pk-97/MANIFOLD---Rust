@@ -65,10 +65,34 @@ impl ContentThread {
                 self.watched_graph_effect = effect_id;
                 // Only one canvas active at a time.
                 self.watched_graph_generator_layer = None;
+                // Switching what's watched invalidates any node preview.
+                self.preview_graph_node = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
                 self.watched_graph_generator_layer = layer_id;
                 self.watched_graph_effect = None;
+                self.preview_graph_node = None;
+            }
+            ContentCommand::SetGraphPreviewNode(node_id) => {
+                self.preview_graph_node = node_id;
+            }
+            ContentCommand::DumpGraphOutputs => {
+                if let Some(effect_id) = self.watched_graph_effect.clone() {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let dir =
+                        std::path::PathBuf::from(format!("/tmp/manifold-graph-dump-{ts}"));
+                    log::info!(
+                        "[graph-dump] dumping outputs of effect {} to {}",
+                        effect_id.as_str(),
+                        dir.display()
+                    );
+                    self.content_pipeline.request_graph_dump(effect_id, dir);
+                } else {
+                    log::warn!("[graph-dump] no effect graph is being watched — nothing to dump");
+                }
             }
 
             // ── GPU events ─────────────────────────────────────────

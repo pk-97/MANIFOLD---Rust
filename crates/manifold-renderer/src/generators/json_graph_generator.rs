@@ -603,6 +603,102 @@ impl JsonGraphGenerator {
         self.executor = executor;
     }
 
+    /// Enable/disable one-shot "dump every output" mode on the executor
+    /// (preserve every Texture2D output for one frame). For the headless
+    /// graph-output inspection dump.
+    pub fn set_dump_all(&mut self, on: bool) {
+        self.executor.set_dump_all(on);
+    }
+
+    /// After a `render` with dump mode on, every captured Texture2D output as
+    /// `(node_id, port, type_id, texture)` — the generator's whole pipeline.
+    pub fn dump_textures(&self) -> Vec<(String, String, String, &GpuTexture)> {
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_resources() {
+            let Some(tex) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().texture_2d(s))
+            else {
+                continue;
+            };
+            let (name, type_id) = self
+                .graph
+                .get_node(node)
+                .map(|inst| {
+                    (
+                        inst.node_id.to_string(),
+                        inst.node.type_id().as_str().to_string(),
+                    )
+                })
+                .unwrap_or_default();
+            out.push((name, port.to_string(), type_id, tex));
+        }
+        out
+    }
+
+    /// After a `render` with dump mode on, every captured `Array` output with
+    /// its channel layout, for structured inspection (e.g. particle buffers).
+    pub fn dump_arrays(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
+        use crate::node_graph::ports::{ChannelElementType, PortType, std430_layout};
+        let kind = |t: ChannelElementType| match t {
+            ChannelElementType::F32 => "f32",
+            ChannelElementType::I32 => "i32",
+            ChannelElementType::U32 => "u32",
+            ChannelElementType::Vec2F => "vec2f",
+            ChannelElementType::Vec3F => "vec3f",
+            ChannelElementType::Vec4F => "vec4f",
+        };
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_array_resources() {
+            let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
+                continue;
+            };
+            let Some(buffer) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().array_buffer(s))
+            else {
+                continue;
+            };
+            let (offsets, _, _) = std430_layout(at.specs);
+            let fields = at
+                .specs
+                .iter()
+                .zip(offsets)
+                .map(|(spec, off)| {
+                    let name = spec
+                        .name
+                        .debug_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("ch@{off}"));
+                    (name, kind(spec.ty), off)
+                })
+                .collect();
+            let (name, type_id) = self
+                .graph
+                .get_node(node)
+                .map(|inst| {
+                    (
+                        inst.node_id.to_string(),
+                        inst.node.type_id().as_str().to_string(),
+                    )
+                })
+                .unwrap_or_default();
+            out.push(crate::compositor::ArrayDump {
+                name,
+                port: port.to_string(),
+                type_id,
+                buffer,
+                item_size: at.item_size,
+                fields,
+            });
+        }
+        out
+    }
+
     /// Install the host-provided target texture as the source for
     /// `final_output.in` via `replace_texture_2d` — a single atomic
     /// retain on the host's `MTLTexture`, no allocation. The slot was
@@ -750,6 +846,24 @@ impl JsonGraphGenerator {
 impl Generator for JsonGraphGenerator {
     fn generator_type(&self) -> &GeneratorTypeId {
         &self.type_id
+    }
+
+    /// Aim the authoring-time output preview at the editor's stable
+    /// [`NodeId`](manifold_core::NodeId), resolved to this generator's runtime
+    /// node, or clear it. The targeted node's output is preserved past the
+    /// frame so the editor can sample it.
+    fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
+        let target = node_id.and_then(|nid| self.graph.instance_by_node_id(nid));
+        self.executor.set_preview_target(target);
+    }
+
+    /// The preview target's captured output texture from the most recent
+    /// `render`. `None` if no target, the node was pruned, or it has no
+    /// texture output.
+    fn preview_texture(&self) -> Option<&GpuTexture> {
+        let res = self.executor.preview_resource()?;
+        let slot = self.executor.backend().slot_for(res)?;
+        self.executor.backend().texture_2d(slot)
     }
 
     fn render(

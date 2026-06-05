@@ -2256,6 +2256,26 @@ impl Application {
     /// Gated on the editor's own CVDisplayLink: when it hasn't fired,
     /// we skip the present to avoid wasting a drawable slot.
     fn present_graph_editor_window(&mut self) {
+        // Forward the editor's single-node selection to the content thread so
+        // it can capture that node's output for the preview pane. Deduplicated
+        // against the last send. A closed editor (`graph_canvas == None`)
+        // yields `None`, clearing the preview.
+        let preview_node = self
+            .graph_canvas
+            .as_ref()
+            .and_then(|c| c.selected_single_node_id());
+        if preview_node != self.last_preview_node {
+            if let Some(tx) = self.content_tx.as_ref() {
+                crate::content_command::ContentCommand::send(
+                    tx,
+                    crate::content_command::ContentCommand::SetGraphPreviewNode(
+                        preview_node.clone(),
+                    ),
+                );
+            }
+            self.last_preview_node = preview_node;
+        }
+
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
             return;
@@ -2319,8 +2339,24 @@ impl Application {
         let canvas_x = palette_width;
         let canvas_width = (logical_w as f32 - palette_width - sidebar_width).max(0.0);
         let sidebar_x = canvas_x + canvas_width;
-        let sidebar_viewport =
-            manifold_ui::Rect::new(sidebar_x, 0.0, sidebar_width, logical_h as f32);
+        // When a node is being previewed, the preview pane occupies the top of
+        // the sidebar; the expose/param rows start below it so they don't
+        // overlap. Logical units; the present pass draws the pane to match.
+        let preview_pad = 8.0_f32;
+        let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
+        let preview_h = preview_w * 9.0 / 16.0;
+        let preview_active = self.last_preview_node.is_some();
+        let sidebar_content_top = if preview_active {
+            preview_pad + preview_h + preview_pad
+        } else {
+            0.0
+        };
+        let sidebar_viewport = manifold_ui::Rect::new(
+            sidebar_x,
+            sidebar_content_top,
+            sidebar_width,
+            (logical_h as f32 - sidebar_content_top).max(0.0),
+        );
         let palette_viewport =
             manifold_ui::Rect::new(0.0, 0.0, palette_width, logical_h as f32);
 
@@ -2518,6 +2554,49 @@ impl Application {
             true,
             "Editor Offscreen → Drawable",
         );
+
+        // ── Node-output preview pane ──
+        // Composite the captured node texture into the top of the editor
+        // sidebar, over the panel background. Only when a node is being
+        // previewed and its IOSurface front buffer is available. The blit
+        // pipeline targets the drawable's Bgra8Unorm format, so this draws
+        // into the drawable (Load) rather than the Rgba16Float offscreen.
+        #[cfg(target_os = "macos")]
+        if self.last_preview_node.is_some()
+            && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
+        {
+            let front = bridge.front_index() as usize;
+            if let Some(tex) = self
+                .ui_node_preview_textures
+                .get(front)
+                .and_then(|t| t.as_ref())
+            {
+                let scale = scale as f32;
+                // Same pad / dimensions used to offset the param rows above.
+                let w = preview_w * scale;
+                let h = preview_h * scale;
+                let x = (sidebar_x + preview_pad) * scale;
+                let y = preview_pad * scale;
+                present_enc.draw_fullscreen_viewport(
+                    blit_p,
+                    &drawable_tex,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: tex,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler: blit_s,
+                        },
+                    ],
+                    (x, y, w, h),
+                    manifold_gpu::GpuLoadAction::Load,
+                    "Node Preview → Sidebar",
+                );
+            }
+        }
+
         present_enc.present_drawable(&drawable);
         present_enc.commit();
     }
