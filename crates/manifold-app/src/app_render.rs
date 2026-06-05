@@ -70,11 +70,15 @@ impl Application {
         match self.watched_graph_target.as_ref()? {
             manifold_core::GraphTarget::Effect(eid) => {
                 let fx = self.local_project.find_effect_by_id(eid)?;
-                if let Some(b) = fx.user_param_bindings.iter().find(|b| b.id == param_id) {
-                    return Some((b.min, b.max, b.scale, b.offset));
-                }
+                // Reshape note wins (it carries the live edit); else the
+                // user binding's synthesized range (folds the note already,
+                // so this is the declared-range fallback for an un-noted
+                // user binding).
                 if let Some(n) = fx.param_mapping(param_id) {
                     return Some((n.min, n.max, n.scale, n.offset));
+                }
+                if let Some(b) = fx.user_param_bindings().iter().find(|b| b.id == param_id) {
+                    return Some((b.min, b.max, b.scale, b.offset));
                 }
                 let def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
                 let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
@@ -2128,7 +2132,11 @@ impl Application {
                 let Some(fx) = self.local_project.find_effect_by_id(&eid) else {
                     return;
                 };
-                if let Some(b) = fx.user_param_bindings.iter().find(|b| b.id == param_id) {
+                if let Some(b) = fx
+                    .user_param_bindings()
+                    .into_iter()
+                    .find(|b| b.id == param_id)
+                {
                     let (node_id, inner_param) = (b.node_id.clone(), b.inner_param.clone());
                     let range = self
                         .content_state
@@ -3529,8 +3537,8 @@ pub(crate) fn resolve_canvas_binding(
     };
     let fx = project.find_effect_by_id(eid)?;
     let b = fx
-        .user_param_bindings
-        .iter()
+        .user_param_bindings()
+        .into_iter()
         .find(|b| b.node_id == node.node_id && b.inner_param == inner_param)?;
     Some((
         b.id.clone(),

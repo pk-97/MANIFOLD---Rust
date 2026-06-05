@@ -1280,7 +1280,10 @@ fn effects_to_configs(
         .filter_map(|(i, fx)| {
             let reg_def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
             let static_count = reg_def.param_count;
-            let user_count = fx.user_param_bindings.len();
+            // User bindings are synthesized from the graph's user-added
+            // metadata + reshape notes (the single binding-storage list).
+            let user_bindings = fx.user_param_bindings();
+            let user_count = user_bindings.len();
             let n = static_count + user_count;
 
             // Static prefix: one ParamInfo per def-declared slot.
@@ -1376,7 +1379,7 @@ fn effects_to_configs(
 
             // User-tail: append one ParamInfo per user binding.
             // Slot index in param_values is `static_count + j`.
-            for (j, ub) in fx.user_param_bindings.iter().enumerate() {
+            for (j, ub) in user_bindings.iter().enumerate() {
                 let slot_idx = static_count + j;
                 let abl_mapping = fx
                     .ableton_mappings

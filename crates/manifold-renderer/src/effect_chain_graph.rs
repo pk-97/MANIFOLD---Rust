@@ -375,10 +375,12 @@ struct EffectSlot {
     /// doesn't shift every subsequent user-tail slider down one slot.
     /// In the common case (no orphans) this equals `n_static`.
     n_static_slots: usize,
-    /// Last seen `EffectInstance.user_param_bindings_version`. When
-    /// the live effect's version differs, the per-frame apply path
-    /// re-hydrates the user tail of [`Self::bindings`] from the live
-    /// binding list before applying.
+    /// Last seen `EffectInstance.graph_version` for the user tail. User
+    /// bindings live in the per-instance graph now, so a binding add /
+    /// remove / reshape bumps the graph version. When the live effect's
+    /// version differs, the per-frame apply path re-hydrates the user tail
+    /// of [`Self::bindings`] from the synthesized binding list before
+    /// applying.
     user_bindings_version: u32,
     /// Effect-side `system.generator_input` node id, if the preset
     /// included one. Effects with a generator_input get per-frame
@@ -732,8 +734,13 @@ impl ChainGraph {
                 .as_ref()
                 .map(|m| m.params.len())
                 .unwrap_or(view.bindings.len());
+            // User-added bindings now live in the per-instance graph's
+            // `preset_metadata` (the single binding-storage list);
+            // `user_param_bindings()` synthesizes the runtime view (routing
+            // from the binding + range from its reshape note).
+            let user_bindings = fx.user_param_bindings();
             let mut bindings: Vec<ResolvedBinding> =
-                Vec::with_capacity(view.bindings.len() + fx.user_param_bindings.len());
+                Vec::with_capacity(view.bindings.len() + user_bindings.len());
             // Retain the static specs + source_index so the static prefix
             // can be rebuilt in place when a per-instance reshape note
             // changes (see the `param_mappings_version` watch in `run`).
@@ -762,7 +769,7 @@ impl ChainGraph {
                 }
             }
             let n_static = bindings.len();
-            for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
+            for (user_slot, core) in user_bindings.iter().enumerate() {
                 let source_index = n_static_slots + user_slot;
                 // When this effect renders FUSED, the inner node this user
                 // binding targets was collapsed into a fused kernel, so its
@@ -806,7 +813,9 @@ impl ChainGraph {
             // "touch to update" bug (518436a7) and the symmetric user-binding
             // default-seed gap).
             let bound = BoundGraph::new(bindings, &mut graph);
-            let user_bindings_version = fx.user_param_bindings_version;
+            // The user tail lives in the graph now, so its rebuild signal
+            // is the graph version (a binding add/remove/reshape bumps it).
+            let user_bindings_version = fx.graph_version;
             let param_mappings_version = fx.param_mappings_version;
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
@@ -1054,9 +1063,9 @@ impl ChainGraph {
             // never reaches the inner node (the symptom: exposed
             // slider has no effect, while the same value set in the
             // graph editor works).
-            if fx.user_param_bindings_version != slot.user_bindings_version {
+            if fx.graph_version != slot.user_bindings_version {
                 slot.bound.bindings.truncate(slot.n_static);
-                for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
+                for (user_slot, core) in fx.user_param_bindings().iter().enumerate() {
                     let source_index = slot.n_static_slots + user_slot;
                     match ResolvedBinding::from_user(
                         core,
@@ -1083,7 +1092,7 @@ impl ChainGraph {
                 // against an inner that already matches — symmetric
                 // with the static-prefix seed at chain-build time.
                 apply_binding_defaults(&slot.bound.bindings[slot.n_static..], &mut self.graph, None);
-                slot.user_bindings_version = fx.user_param_bindings_version;
+                slot.user_bindings_version = fx.graph_version;
                 // Reset the user-tail cache so the first apply after
                 // re-hydrate unconditionally writes — the previous
                 // cache entries refer to a different binding list and

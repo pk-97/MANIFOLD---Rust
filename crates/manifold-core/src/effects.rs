@@ -150,12 +150,19 @@ pub enum ParamConvert {
 }
 
 /// Free-function form of [`EffectInstance::resolve_param`]. Takes the
-/// `EffectDef` and `user_param_bindings` slice directly so callers in
+/// `EffectDef` and the effect instance directly so callers in
 /// borrow-tight closures (the modulation evaluators iterating
-/// `fx.drivers`) can resolve without a second `&fx` borrow.
+/// `fx.drivers`) can resolve without going through the borrowing
+/// `&self` method.
+///
+/// The user tail is read from the instance's `graph.preset_metadata`
+/// (`user_added` bindings) — the single binding-storage list after the
+/// preset-unification step-3 fold-in. Allocation-free: it scans the
+/// graph's binding iterator rather than materializing a Vec, so it stays
+/// safe on the per-frame modulation path.
 pub fn resolve_param_in(
     def: &crate::effect_definition_registry::EffectDef,
-    user_bindings: &[UserParamBinding],
+    fx: &EffectInstance,
     id: &str,
 ) -> Option<ResolvedParam> {
     if let Some(&idx) = def.id_to_index.get(id) {
@@ -167,14 +174,26 @@ pub fn resolve_param_in(
             whole_numbers: pd.whole_numbers || pd.value_labels.is_some(),
         });
     }
-    let j = user_bindings.iter().position(|b| b.id == id)?;
-    let ub = &user_bindings[j];
+    let (j, b) = fx.user_added_bindings().enumerate().find(|(_, b)| b.id == id)?;
+    // Range comes from the per-instance reshape note when present, else
+    // the binding's declared `ParamSpecDef` range, else 0..1.
+    let (min, max) = fx
+        .param_mapping(id)
+        .map(|n| (n.min, n.max))
+        .or_else(|| {
+            fx.graph
+                .as_ref()
+                .and_then(|g| g.preset_metadata.as_ref())
+                .and_then(|m| m.params.iter().find(|p| p.id == id))
+                .map(|s| (s.min, s.max))
+        })
+        .unwrap_or((0.0, 1.0));
     Some(ResolvedParam {
         idx: def.param_count + j,
-        min: ub.min,
-        max: ub.max,
+        min,
+        max,
         whole_numbers: matches!(
-            ub.convert,
+            b.convert,
             ParamConvert::IntRound
                 | ParamConvert::EnumRound
                 | ParamConvert::BoolThreshold
@@ -600,22 +619,6 @@ pub struct EffectInstance {
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     pub group_id: Option<EffectGroupId>,
 
-    /// V2 user-exposed parameters bound to inner-graph nodes.
-    /// Empty for legacy and non-graph-backed effects. Serialized as
-    /// `userParamBindings` and skipped when empty so existing fixtures
-    /// round-trip byte-identically.
-    pub user_param_bindings: Vec<UserParamBinding>,
-
-    /// Monotonically bumped each time `user_param_bindings` is mutated
-    /// in place by `append_user_binding` / `remove_user_binding_by_id` /
-    /// `set_user_binding_label`. Renderer-side caches the last seen
-    /// version on the FX struct singleton, rebuilds its
-    /// `Vec<ParamBinding>` scratch only when the version changes —
-    /// keeps the per-frame path allocation-free even when user
-    /// bindings are present. Not serialized; resets to 0 on load and
-    /// `u32::MAX` on the renderer side forces a first-frame rebuild.
-    pub user_param_bindings_version: u32,
-
     /// Per-instance reshape notes — the DAW-style override for stock card
     /// params. Each [`ParamMapping`] reshapes ONE param (keyed by its
     /// `param_id`) without touching the param's value slot; see the
@@ -714,7 +717,8 @@ impl ParamValuesWire {
     fn into_positional(
         self,
         effect_type: &EffectTypeId,
-        user_bindings: &[UserParamBinding],
+        user_binding_ids: &[&str],
+        user_defaults: &[f32],
     ) -> Vec<ParamSlot> {
         match self {
             ParamValuesWire::Positional(v) => v,
@@ -733,14 +737,14 @@ impl ParamValuesWire {
                     return Vec::new();
                 };
                 let n_static = def.param_count;
-                let n_user = user_bindings.len();
+                let n_user = user_binding_ids.len();
                 let total = n_static + n_user;
                 let mut out = vec![ParamSlot::default(); total];
                 for (i, pd) in def.param_defs.iter().enumerate().take(n_static) {
                     out[i] = ParamSlot::exposed(pd.default_value);
                 }
-                for (j, ub) in user_bindings.iter().enumerate() {
-                    out[n_static + j] = ParamSlot::exposed(ub.default_value);
+                for (j, &dv) in user_defaults.iter().enumerate() {
+                    out[n_static + j] = ParamSlot::exposed(dv);
                 }
                 for (id, pv) in map {
                     // Direct hit via the current id_to_index table (static).
@@ -761,8 +765,8 @@ impl ParamValuesWire {
                         out[idx] = pv;
                         continue;
                     }
-                    // Per-instance user binding lookup.
-                    if let Some(j) = user_bindings.iter().position(|b| b.id == id) {
+                    // Per-instance user-added binding lookup (graph tail).
+                    if let Some(j) = user_binding_ids.iter().position(|bid| *bid == id) {
                         out[n_static + j] = pv;
                     }
                 }
@@ -841,7 +845,8 @@ impl FloatValuesWire {
     fn into_positional_base(
         self,
         effect_type: &EffectTypeId,
-        user_bindings: &[UserParamBinding],
+        user_binding_ids: &[&str],
+        user_defaults: &[f32],
     ) -> Vec<f32> {
         match self {
             FloatValuesWire::Positional(v) => v,
@@ -857,14 +862,14 @@ impl FloatValuesWire {
                     return Vec::new();
                 };
                 let n_static = def.param_count;
-                let n_user = user_bindings.len();
+                let n_user = user_binding_ids.len();
                 let total = n_static + n_user;
                 let mut out = vec![0.0_f32; total];
                 for (i, pd) in def.param_defs.iter().enumerate().take(n_static) {
                     out[i] = pd.default_value;
                 }
-                for (j, ub) in user_bindings.iter().enumerate() {
-                    out[n_static + j] = ub.default_value;
+                for (j, &dv) in user_defaults.iter().enumerate() {
+                    out[n_static + j] = dv;
                 }
                 for (id, value) in map {
                     if let Some(&idx) = def.id_to_index.get(&id)
@@ -882,7 +887,7 @@ impl FloatValuesWire {
                         out[idx] = value;
                         continue;
                     }
-                    if let Some(j) = user_bindings.iter().position(|b| b.id == id) {
+                    if let Some(j) = user_binding_ids.iter().position(|bid| *bid == id) {
                         out[n_static + j] = value;
                     }
                 }
@@ -1026,7 +1031,7 @@ where
 fn serialize_param_values<S>(
     values: &[ParamSlot],
     effect_type: &EffectTypeId,
-    user_bindings: &[UserParamBinding],
+    user_binding_ids: &[&str],
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -1050,10 +1055,10 @@ where
         for (i, pv) in values.iter().take(static_touch).enumerate() {
             map.serialize_entry(def.param_ids[i], pv)?;
         }
-        for (j, ub) in user_bindings.iter().enumerate() {
+        for (j, id) in user_binding_ids.iter().enumerate() {
             let idx = static_count + j;
             if let Some(pv) = values.get(idx) {
-                map.serialize_entry(&ub.id, pv)?;
+                map.serialize_entry(id, pv)?;
             }
         }
         map.end()
@@ -1072,7 +1077,7 @@ where
 fn serialize_base_param_values<S>(
     values: &[f32],
     effect_type: &EffectTypeId,
-    user_bindings: &[UserParamBinding],
+    user_binding_ids: &[&str],
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -1096,10 +1101,10 @@ where
         for (i, &v) in values.iter().take(static_touch).enumerate() {
             map.serialize_entry(def.param_ids[i], &v)?;
         }
-        for (j, ub) in user_bindings.iter().enumerate() {
+        for (j, id) in user_binding_ids.iter().enumerate() {
             let idx = static_count + j;
             if let Some(&v) = values.get(idx) {
-                map.serialize_entry(&ub.id, &v)?;
+                map.serialize_entry(id, &v)?;
             }
         }
         map.end()
@@ -1137,9 +1142,6 @@ impl Serialize for EffectInstance {
         if self.group_id.is_some() {
             field_count += 1;
         }
-        if !self.user_param_bindings.is_empty() {
-            field_count += 1;
-        }
         if !self.param_mappings.is_empty() {
             field_count += 1;
         }
@@ -1159,6 +1161,14 @@ impl Serialize for EffectInstance {
             field_count += 1;
         }
 
+        // The user-tail of `param_values` is keyed (on the wire) by each
+        // user-added binding's stable id. After the storage unification
+        // those ids live in `graph.preset_metadata.bindings` (user_added),
+        // so collect them here for the value serializers. The bindings
+        // themselves ride out inside the `graph` field — there is no
+        // longer a separate `userParamBindings` array.
+        let user_binding_ids: Vec<&str> = self.user_added_bindings().map(|b| b.id.as_str()).collect();
+
         let mut s = serializer.serialize_struct("EffectInstance", field_count)?;
         s.serialize_field("id", &self.id)?;
         s.serialize_field("effectType", &self.effect_type)?;
@@ -1169,7 +1179,7 @@ impl Serialize for EffectInstance {
             &ParamValuesSer {
                 values: &self.param_values,
                 effect_type: &self.effect_type,
-                user_bindings: &self.user_param_bindings,
+                user_binding_ids: &user_binding_ids,
             },
         )?;
         if let Some(base) = &self.base_param_values {
@@ -1178,7 +1188,7 @@ impl Serialize for EffectInstance {
                 &BaseParamValuesSer {
                     values: base,
                     effect_type: &self.effect_type,
-                    user_bindings: &self.user_param_bindings,
+                    user_binding_ids: &user_binding_ids,
                 },
             )?;
         }
@@ -1190,12 +1200,6 @@ impl Serialize for EffectInstance {
         }
         if let Some(g) = &self.group_id {
             s.serialize_field("groupId", g)?;
-        }
-        // `userParamBindings` is skipped when empty so existing
-        // fixtures (Burn V5/V4, WAYPOINTS, Liveschool) round-trip
-        // byte-identically — no new field appears in their JSON.
-        if !self.user_param_bindings.is_empty() {
-            s.serialize_field("userParamBindings", &self.user_param_bindings)?;
         }
         // `paramMappings` is skipped when empty — same round-trip-
         // invariance policy. A project that never reshaped a stock knob
@@ -1232,7 +1236,7 @@ impl Serialize for EffectInstance {
 struct ParamValuesSer<'a> {
     values: &'a [ParamSlot],
     effect_type: &'a EffectTypeId,
-    user_bindings: &'a [UserParamBinding],
+    user_binding_ids: &'a [&'a str],
 }
 
 impl Serialize for ParamValuesSer<'_> {
@@ -1243,7 +1247,7 @@ impl Serialize for ParamValuesSer<'_> {
         serialize_param_values(
             self.values,
             self.effect_type,
-            self.user_bindings,
+            self.user_binding_ids,
             serializer,
         )
     }
@@ -1253,7 +1257,7 @@ impl Serialize for ParamValuesSer<'_> {
 struct BaseParamValuesSer<'a> {
     values: &'a [f32],
     effect_type: &'a EffectTypeId,
-    user_bindings: &'a [UserParamBinding],
+    user_binding_ids: &'a [&'a str],
 }
 
 impl Serialize for BaseParamValuesSer<'_> {
@@ -1264,7 +1268,7 @@ impl Serialize for BaseParamValuesSer<'_> {
         serialize_base_param_values(
             self.values,
             self.effect_type,
-            self.user_bindings,
+            self.user_binding_ids,
             serializer,
         )
     }
@@ -1296,8 +1300,6 @@ impl<'de> Deserialize<'de> for EffectInstance {
             #[serde(default)]
             group_id: Option<EffectGroupId>,
             #[serde(default)]
-            user_param_bindings: Option<Vec<UserParamBinding>>,
-            #[serde(default)]
             param_mappings: Option<Vec<ParamMapping>>,
             #[serde(default)]
             graph: Option<EffectGraphDef>,
@@ -1312,20 +1314,46 @@ impl<'de> Deserialize<'de> for EffectInstance {
         }
 
         let raw = Raw::deserialize(deserializer)?;
-        let user_param_bindings = raw.user_param_bindings.unwrap_or_default();
-        // `into_positional` resolves Map keys against both the static
-        // registry AND the per-instance user bindings, so user-binding
-        // tail values arrive in the right slot regardless of JSON key
-        // ordering. The Map → positional fold runs before
-        // `align_to_definition`, so registry-known but user-tail-empty
-        // cases land at zero and align fills user-binding defaults.
+        // User-added bindings are the single storage list — they live in
+        // `graph.preset_metadata.bindings` (`user_added`). The legacy
+        // `userParamBindings` array is folded into the graph by the
+        // v1.3→v1.4 load migration before this runs, so by here the only
+        // home for the user tail is the graph. Extract its ids + defaults
+        // (declaration order) to drive the keyed-map → positional fold.
+        let user_binding_ids: Vec<&str> = raw
+            .graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .map(|m| {
+                m.bindings
+                    .iter()
+                    .filter(|b| b.user_added)
+                    .map(|b| b.id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let user_defaults: Vec<f32> = raw
+            .graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .map(|m| {
+                m.bindings
+                    .iter()
+                    .filter(|b| b.user_added)
+                    .map(|b| b.default_value)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The Map → positional fold runs before `align_to_definition`, so
+        // registry-known but user-tail-empty cases land at zero and align
+        // fills user-binding defaults.
         let param_values = raw
             .param_values
-            .map(|w| w.into_positional(&raw.effect_type, &user_param_bindings))
+            .map(|w| w.into_positional(&raw.effect_type, &user_binding_ids, &user_defaults))
             .unwrap_or_default();
         let base_param_values = raw
             .base_param_values
-            .map(|w| w.into_positional_base(&raw.effect_type, &user_param_bindings));
+            .map(|w| w.into_positional_base(&raw.effect_type, &user_binding_ids, &user_defaults));
 
         Ok(EffectInstance {
             id: raw.id,
@@ -1337,8 +1365,6 @@ impl<'de> Deserialize<'de> for EffectInstance {
             drivers: raw.drivers,
             ableton_mappings: raw.ableton_mappings,
             group_id: raw.group_id,
-            user_param_bindings,
-            user_param_bindings_version: 0,
             param_mappings: raw.param_mappings.unwrap_or_default(),
             param_mappings_version: 0,
             graph: raw.graph,
@@ -1366,8 +1392,6 @@ impl EffectInstance {
             drivers: None,
             ableton_mappings: None,
             group_id: None,
-            user_param_bindings: Vec::new(),
-            user_param_bindings_version: 0,
             param_mappings: Vec::new(),
             param_mappings_version: 0,
             graph: None,
@@ -1519,25 +1543,105 @@ impl EffectInstance {
         }
     }
 
-    /// Number of user-exposed parameter bindings on this instance.
-    pub fn user_param_count(&self) -> usize {
-        self.user_param_bindings.len()
+    /// The per-instance graph's user-added [`BindingDef`]s, in declaration
+    /// order — the **single source of truth** for this effect's
+    /// user-exposed parameters after the binding-storage unification
+    /// (`PRESET_UNIFICATION_PLAN.md` step 3). User bindings no longer live
+    /// in a parallel `EffectInstance.user_param_bindings` Vec; they are the
+    /// `user_added` entries of `graph.preset_metadata.bindings`, exactly
+    /// like the generator side. Empty when the effect has no per-instance
+    /// graph or no user-added bindings. Order matches the `param_values`
+    /// user-tail order (registry `param_count + j`).
+    pub fn user_added_bindings(&self) -> impl Iterator<Item = &crate::effect_graph_def::BindingDef> {
+        self.graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .into_iter()
+            .flat_map(|m| m.bindings.iter())
+            .filter(|b| b.user_added)
     }
 
-    /// Position of a user binding by stable id, or `None` if not found.
-    /// Returned index is relative to `user_param_bindings`, NOT
-    /// `param_values`. Use [`Self::param_id_to_value_index`] for the
+    /// Number of user-exposed parameter bindings on this instance.
+    pub fn user_param_count(&self) -> usize {
+        self.user_added_bindings().count()
+    }
+
+    /// Synthesize the in-memory [`UserParamBinding`] view for each
+    /// user-added binding, folding in the per-instance reshape note
+    /// (range / invert / curve) where one exists. Routing fields come
+    /// from the `user_added` [`BindingDef`]; reshape fields come from the
+    /// matching [`ParamMapping`] note (the binding carries routing only —
+    /// see the plan). `is_angle` has no home in the unified shape (the
+    /// generator side accepts the same gap), so it defaults to `false`.
+    ///
+    /// Allocates a `Vec`; callers (renderer rebuild, state-sync, panels)
+    /// hit this only on the boundary path (binding edit / card build), not
+    /// the per-frame hot path, so the allocation is acceptable.
+    pub fn user_param_bindings(&self) -> Vec<UserParamBinding> {
+        self.user_added_bindings()
+            .map(|b| self.synth_user_binding(b))
+            .collect()
+    }
+
+    /// Build one [`UserParamBinding`] from a `user_added` [`BindingDef`]
+    /// plus its reshape note. Shared by [`Self::user_param_bindings`] and
+    /// the single-binding lookups.
+    fn synth_user_binding(&self, b: &crate::effect_graph_def::BindingDef) -> UserParamBinding {
+        use crate::effect_graph_def::BindingTarget;
+        let (node_id, inner_param) = match &b.target {
+            BindingTarget::Node { node_id, param } => (node_id.clone(), param.clone()),
+            BindingTarget::Composite { outer_name } => {
+                (NodeId::default(), outer_name.clone())
+            }
+        };
+        let note = self.param_mapping(&b.id);
+        // Declared range is captured at expose time in the matching
+        // `ParamSpecDef`; a reshape note overrides it. Fall back to 0..1
+        // only when neither exists.
+        let spec = self
+            .graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .and_then(|m| m.params.iter().find(|p| p.id == b.id));
+        let base_min = spec.map(|s| s.min).unwrap_or(0.0);
+        let base_max = spec.map(|s| s.max).unwrap_or(1.0);
+        UserParamBinding {
+            id: b.id.clone(),
+            label: note
+                .and_then(|n| n.label.clone())
+                .unwrap_or_else(|| b.label.clone()),
+            node_id,
+            legacy_node_handle: None,
+            inner_param,
+            min: note.map(|n| n.min).unwrap_or(base_min),
+            max: note.map(|n| n.max).unwrap_or(base_max),
+            default_value: b.default_value,
+            convert: b.convert,
+            is_angle: false,
+            invert: note.map(|n| n.invert).unwrap_or(false),
+            curve: note.map(|n| n.curve).unwrap_or_default(),
+            // Reshape scale/offset come from the note when one exists; the
+            // binding's own scale/offset is the recipe fold-in fallback.
+            scale: note.map(|n| n.scale).unwrap_or(b.scale),
+            offset: note.map(|n| n.offset).unwrap_or(b.offset),
+        }
+    }
+
+    /// Position of a user binding by stable id within the user-added
+    /// tail, or `None` if not found. Index is relative to the user tail,
+    /// NOT `param_values`. Use [`Self::param_id_to_value_index`] for the
     /// `param_values` slot.
     pub fn user_binding_index(&self, id: &str) -> Option<usize> {
-        self.user_param_bindings.iter().position(|b| b.id == id)
+        self.user_added_bindings().position(|b| b.id == id)
     }
 
     /// Translate a stable `param_id` to its slot in `param_values`.
     ///
     /// Lookup order:
     /// 1. Static registry (`def.id_to_index`).
-    /// 2. Per-instance user bindings (linear scan; tail position
-    ///    `def.param_count + j` where `j` is the binding's vec index).
+    /// 2. Per-instance user-added bindings (linear scan; tail position
+    ///    `def.param_count + j` where `j` is the binding's declaration
+    ///    index among the `user_added` entries).
     ///
     /// Returns `None` for unknown ids — callers (driver evaluation,
     /// Ableton update, OSC dispatch) treat this as orphaned addressing.
@@ -1609,7 +1713,7 @@ impl EffectInstance {
     pub fn resolve_param(&self, id: &str) -> Option<ResolvedParam> {
         use crate::effect_definition_registry;
         let def = effect_definition_registry::try_get(&self.effect_type)?;
-        resolve_param_in(def, &self.user_param_bindings, id)
+        resolve_param_in(def, self, id)
     }
 
     /// Append a user-exposed binding and reserve its `param_values`
@@ -1633,28 +1737,112 @@ impl EffectInstance {
     /// `manifold-editing`) provides the canonical collision-free
     /// shape.
     pub fn append_user_binding(&mut self, binding: UserParamBinding) {
-        // Align FIRST (against the current user_param_bindings list,
+        use crate::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+        // Align FIRST (against the current user-added binding count,
         // which doesn't include the new binding yet) so the static
         // prefix is `n_static` long. Then push — the new tail slot
         // lands at exactly `n_static + old_user_count`, matching what
         // `param_id_to_value_index` will compute on lookup.
         self.align_to_definition();
         let default_v = binding.default_value;
-        self.user_param_bindings.push(binding);
+
+        // The per-instance graph is the single binding-storage list.
+        // The live expose command lifts the canonical graph before this
+        // runs; for graph-less callers (storage unit tests) we synthesize
+        // a metadata-only graph so the binding still has a home.
+        let graph = self.graph.get_or_insert_with(|| EffectGraphDef {
+            version: 0,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+        let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            id: EffectTypeId::new(""),
+            display_name: String::new(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        let whole_numbers = matches!(
+            binding.convert,
+            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
+        );
+        meta.params.push(ParamSpecDef {
+            id: binding.id.clone(),
+            name: binding.label.clone(),
+            min: binding.min,
+            max: binding.max,
+            default_value: binding.default_value,
+            whole_numbers,
+            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
+            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+        });
+        meta.bindings.push(BindingDef {
+            id: binding.id.clone(),
+            label: binding.label.clone(),
+            default_value: binding.default_value,
+            target: BindingTarget::Node {
+                node_id: binding.node_id.clone(),
+                param: binding.inner_param.clone(),
+            },
+            convert: binding.convert,
+            user_added: true,
+            scale: binding.scale,
+            offset: binding.offset,
+        });
+
+        // Reshape (range / invert / curve) lives in the per-instance
+        // ParamMapping note, never on the binding (routing-only). Seed a
+        // note only when the binding carries a non-default reshape so a
+        // plain expose stays byte-identical to the recipe.
+        if binding.min != 0.0
+            || binding.max != 1.0
+            || binding.invert
+            || binding.curve != crate::macro_bank::MacroCurve::default()
+        {
+            self.upsert_param_mapping(ParamMapping {
+                param_id: binding.id.clone(),
+                label: None,
+                min: binding.min,
+                max: binding.max,
+                invert: binding.invert,
+                curve: binding.curve,
+                scale: binding.scale,
+                offset: binding.offset,
+            });
+        }
+
         self.param_values.push(ParamSlot::exposed(default_v));
         if let Some(base) = self.base_param_values.as_mut() {
             base.push(default_v);
         }
-        self.user_param_bindings_version = self.user_param_bindings_version.wrapping_add(1);
     }
 
     /// Remove a user-exposed binding by id and drop its `param_values`
-    /// (and `base_param_values`) slot. Returns the removed binding.
+    /// (and `base_param_values`) slot. Returns the removed binding view.
     ///
-    /// Bumps `user_param_bindings_version`. Restores undo-state via
-    /// the returned `UserParamBinding` plus the value caller saved
-    /// before the call (use [`Self::get_param`] / [`Self::get_base_param`]
-    /// at the slot returned by [`Self::param_id_to_value_index`]).
+    /// Pulls the `user_added` `BindingDef` + its `ParamSpecDef` from the
+    /// per-instance graph's `preset_metadata` (the single storage list)
+    /// and its reshape note. Restores undo-state via the returned
+    /// `UserParamBinding` plus the value caller saved before the call
+    /// (use [`Self::get_param`] / [`Self::get_base_param`] at the slot
+    /// returned by [`Self::param_id_to_value_index`]).
     pub fn remove_user_binding_by_id(&mut self, id: &str) -> Option<UserParamBinding> {
         use crate::effect_definition_registry;
         let j = self.user_binding_index(id)?;
@@ -1662,7 +1850,29 @@ impl EffectInstance {
             .map(|d| d.param_count)
             .unwrap_or(0);
         let value_idx = n_static + j;
-        let removed = self.user_param_bindings.remove(j);
+
+        // Synthesize the removed view BEFORE mutating the graph (it reads
+        // the binding + its reshape note).
+        let removed = {
+            let b = self.user_added_bindings().nth(j)?;
+            self.synth_user_binding(b)
+        };
+
+        // Pull the binding + spec from the graph metadata, and the note.
+        if let Some(meta) = self
+            .graph
+            .as_mut()
+            .and_then(|g| g.preset_metadata.as_mut())
+        {
+            if let Some(bi) = meta.bindings.iter().position(|b| b.user_added && b.id == id) {
+                meta.bindings.remove(bi);
+            }
+            if let Some(si) = meta.params.iter().position(|p| p.id == id) {
+                meta.params.remove(si);
+            }
+        }
+        self.remove_param_mapping(id);
+
         if value_idx < self.param_values.len() {
             self.param_values.remove(value_idx);
         }
@@ -1671,8 +1881,131 @@ impl EffectInstance {
         {
             base.remove(value_idx);
         }
-        self.user_param_bindings_version = self.user_param_bindings_version.wrapping_add(1);
         Some(removed)
+    }
+
+    /// Re-insert a previously-removed user binding at its original
+    /// user-tail `position`, restoring the graph metadata (binding +
+    /// spec), the reshape note (if the binding carried one), and the
+    /// `param_values` (+ `base_param_values`) slot. Undo counterpart to
+    /// [`Self::remove_user_binding_by_id`]; keeps the user-tail order so
+    /// sibling user bindings keep their slot indices.
+    pub fn restore_user_binding_at(
+        &mut self,
+        binding: UserParamBinding,
+        position: usize,
+        slot_value: ParamSlot,
+    ) {
+        use crate::effect_definition_registry;
+        use crate::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+
+        let graph = self.graph.get_or_insert_with(|| EffectGraphDef {
+            version: 0,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+        let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            id: EffectTypeId::new(""),
+            display_name: String::new(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+
+        // Absolute binding index of the `position`-th user-added entry
+        // (or end). Static (bundled) bindings sit before / among them in
+        // declaration order; we count only the user-added ones.
+        let abs_binding_idx = meta
+            .bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.user_added)
+            .nth(position)
+            .map(|(i, _)| i)
+            .unwrap_or(meta.bindings.len());
+        let whole_numbers = matches!(
+            binding.convert,
+            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
+        );
+        meta.bindings.insert(
+            abs_binding_idx,
+            BindingDef {
+                id: binding.id.clone(),
+                label: binding.label.clone(),
+                default_value: binding.default_value,
+                target: BindingTarget::Node {
+                    node_id: binding.node_id.clone(),
+                    param: binding.inner_param.clone(),
+                },
+                convert: binding.convert,
+                user_added: true,
+                scale: binding.scale,
+                offset: binding.offset,
+            },
+        );
+        // Spec list: append (its absolute position isn't load-bearing for
+        // effects — the registry drives the static prefix; the user tail
+        // is keyed by id).
+        meta.params.push(ParamSpecDef {
+            id: binding.id.clone(),
+            name: binding.label.clone(),
+            min: binding.min,
+            max: binding.max,
+            default_value: binding.default_value,
+            whole_numbers,
+            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
+            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+        });
+
+        // Reshape note, if the restored binding carried a non-identity one.
+        if binding.min != 0.0
+            || binding.max != 1.0
+            || binding.invert
+            || binding.curve != crate::macro_bank::MacroCurve::default()
+        {
+            self.upsert_param_mapping(ParamMapping {
+                param_id: binding.id.clone(),
+                label: None,
+                min: binding.min,
+                max: binding.max,
+                invert: binding.invert,
+                curve: binding.curve,
+                scale: binding.scale,
+                offset: binding.offset,
+            });
+        }
+
+        // Value slot at the original tail index `n_static + position`.
+        let n_static = effect_definition_registry::try_get(&self.effect_type)
+            .map(|d| d.param_count)
+            .unwrap_or(0);
+        let value_idx = n_static + position;
+        if value_idx <= self.param_values.len() {
+            self.param_values.insert(value_idx, slot_value);
+        } else {
+            self.param_values.push(slot_value);
+        }
+        if let Some(base) = self.base_param_values.as_mut() {
+            let bidx = value_idx.min(base.len());
+            base.insert(bidx, slot_value.value);
+        }
     }
 
     /// Resize paramValues and baseParamValues to match the current effect definition.
@@ -1725,9 +2058,17 @@ impl EffectInstance {
             }
         }
 
+        // Snapshot the user-added binding defaults up front (declaration
+        // order) so the resize loops can pad without a borrow conflict
+        // against `self.graph`.
+        let user_defaults: Vec<f32> = self
+            .user_added_bindings()
+            .map(|b| b.default_value)
+            .collect();
+
         if let Some(def) = effect_definition_registry::try_get(&self.effect_type) {
             let static_target = def.param_count;
-            let n_user = self.user_param_bindings.len();
+            let n_user = user_defaults.len();
             let target = static_target + n_user;
             if self.param_values.len() == target {
                 return;
@@ -1770,9 +2111,10 @@ impl EffectInstance {
             }
             // User-binding tail — copy what we have, pad from binding defaults.
             for j in 0..n_user {
-                aligned[static_target + j] = user_tail_now.get(j).copied().unwrap_or_else(|| {
-                    ParamSlot::exposed(self.user_param_bindings[j].default_value)
-                });
+                aligned[static_target + j] = user_tail_now
+                    .get(j)
+                    .copied()
+                    .unwrap_or_else(|| ParamSlot::exposed(user_defaults[j]));
             }
             self.param_values = aligned;
 
@@ -1803,7 +2145,7 @@ impl EffectInstance {
                     aligned_base[static_target + j] = base_user_tail_now
                         .get(j)
                         .copied()
-                        .unwrap_or(self.user_param_bindings[j].default_value);
+                        .unwrap_or(user_defaults[j]);
                 }
                 self.base_param_values = Some(aligned_base);
             }
@@ -1840,9 +2182,11 @@ impl ParamSource for EffectInstance {
             if index < def.param_count {
                 return def.param_defs[index].clone();
             }
-            // User-binding tail: synthesize a ParamDef from the binding.
+            // User-binding tail: synthesize a ParamDef from the
+            // user-added binding (routing) + its reshape note (range).
             let user_idx = index - def.param_count;
-            if let Some(ub) = self.user_param_bindings.get(user_idx) {
+            if let Some(b) = self.user_added_bindings().nth(user_idx) {
+                let ub = self.synth_user_binding(b);
                 let whole_numbers = matches!(
                     ub.convert,
                     ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
@@ -2854,8 +3198,6 @@ mod tests {
             drivers: None,
             ableton_mappings: None,
             group_id: None,
-            user_param_bindings: Vec::new(),
-            user_param_bindings_version: 0,
             param_mappings: Vec::new(),
             param_mappings_version: 0,
             graph: None,
@@ -2916,8 +3258,6 @@ mod tests {
             drivers: None,
             ableton_mappings: None,
             group_id: None,
-            user_param_bindings: Vec::new(),
-            user_param_bindings_version: 0,
             param_mappings: Vec::new(),
             param_mappings_version: 0,
             graph: None,
@@ -3042,9 +3382,10 @@ mod tests {
         assert!(!json.contains("\"abletonMappings\""));
         assert!(!json.contains("\"groupId\""));
         assert!(!json.contains("\"param0\""));
-        // Empty user_param_bindings must NOT emit `userParamBindings` —
-        // existing fixtures (Burn V5/V4, WAYPOINTS, Liveschool) need to
-        // round-trip byte-identically.
+        // After the binding-storage unification there is no separate
+        // `userParamBindings` field at all — user bindings live in the
+        // graph. A fresh effect has no graph, so nothing extra emits and
+        // existing fixtures round-trip byte-identically.
         assert!(!json.contains("\"userParamBindings\""));
     }
 
@@ -3097,6 +3438,66 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
         }
+    }
+
+    /// Install a user-added binding into the effect's graph metadata
+    /// WITHOUT growing `param_values` — mimics what deserialize produces
+    /// (the binding lives in the graph; the value tail comes from
+    /// `paramValues`). Used to exercise `align_to_definition` directly.
+    fn push_user_binding_meta_only(fx: &mut EffectInstance, ub: &UserParamBinding) {
+        use crate::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+        let graph = fx.graph.get_or_insert_with(|| EffectGraphDef {
+            version: 0,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+        let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            id: EffectTypeId::new(""),
+            display_name: String::new(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        meta.params.push(ParamSpecDef {
+            id: ub.id.clone(),
+            name: ub.label.clone(),
+            min: ub.min,
+            max: ub.max,
+            default_value: ub.default_value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+        });
+        meta.bindings.push(BindingDef {
+            id: ub.id.clone(),
+            label: ub.label.clone(),
+            default_value: ub.default_value,
+            target: BindingTarget::Node {
+                node_id: ub.node_id.clone(),
+                param: ub.inner_param.clone(),
+            },
+            convert: ub.convert,
+            user_added: true,
+            scale: ub.scale,
+            offset: ub.offset,
+        });
     }
 
     #[test]
@@ -3164,19 +3565,21 @@ mod tests {
         fx.param_values[2].value = 0.91;
 
         let json = serde_json::to_string(&fx).unwrap();
-        assert!(json.contains("\"userParamBindings\""));
-        // V1.3 wire emits {value, exposed} objects per entry.
+        // User bindings now ride out inside the per-instance `graph`
+        // (preset_metadata.bindings, userAdded), not a separate array.
+        assert!(json.contains("\"graph\""));
+        assert!(json.contains("\"userAdded\":true"));
+        // V1.3 wire emits {value, exposed} objects per entry; the
+        // param_values tail is keyed by the user-binding id.
         assert!(json.contains("\"amount\":{\"value\":0.7,\"exposed\":true}"));
         assert!(json.contains("\"user.uv_transform.translate.1\":{\"value\":0.42"));
         assert!(json.contains("\"user.mix.amount.1\":{\"value\":0.91"));
 
         let back: EffectInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.user_param_bindings.len(), 2);
-        assert_eq!(
-            back.user_param_bindings[0].id,
-            "user.uv_transform.translate.1"
-        );
-        assert_eq!(back.user_param_bindings[1].id, "user.mix.amount.1");
+        let back_bindings = back.user_param_bindings();
+        assert_eq!(back_bindings.len(), 2);
+        assert_eq!(back_bindings[0].id, "user.uv_transform.translate.1");
+        assert_eq!(back_bindings[1].id, "user.mix.amount.1");
         assert_eq!(
             back.param_values,
             vec![
@@ -3185,8 +3588,6 @@ mod tests {
                 ParamSlot::exposed(0.91)
             ]
         );
-        // user_param_bindings_version is not serialized — load resets to 0.
-        assert_eq!(back.user_param_bindings_version, 0);
     }
 
     #[test]
@@ -3194,7 +3595,6 @@ mod tests {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.ensure_base_values();
-        let v0 = fx.user_param_bindings_version;
 
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         assert_eq!(
@@ -3202,7 +3602,8 @@ mod tests {
             vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.25)]
         );
         assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.7, 0.25]);
-        assert_ne!(fx.user_param_bindings_version, v0, "version must bump");
+        // The binding now lives in the graph (the single storage list).
+        assert_eq!(fx.user_param_count(), 1);
     }
 
     #[test]
@@ -3216,7 +3617,7 @@ mod tests {
 
         let removed = fx.remove_user_binding_by_id("user.a.b.1");
         assert!(removed.is_some());
-        assert_eq!(fx.user_param_bindings.len(), 1);
+        assert_eq!(fx.user_param_count(), 1);
         // Static prefix preserved + user tail compacted around the gap.
         assert_eq!(
             fx.param_values,
@@ -3228,14 +3629,9 @@ mod tests {
     fn remove_user_binding_unknown_id_returns_none() {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)];
-        let v0 = fx.user_param_bindings_version;
         let removed = fx.remove_user_binding_by_id("user.nope.1");
         assert!(removed.is_none());
         assert_eq!(fx.param_values, vec![ParamSlot::exposed(0.7)]);
-        assert_eq!(
-            fx.user_param_bindings_version, v0,
-            "no-op remove must not bump version"
-        );
     }
 
     #[test]
@@ -3260,10 +3656,8 @@ mod tests {
         // per-instance — same EffectInstance), and align runs. The
         // user-binding tail values must survive.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings
-            .push(sample_user_binding("user.a.b.1", "a", "b"));
-        fx.user_param_bindings
-            .push(sample_user_binding("user.c.d.1", "c", "d"));
+        push_user_binding_meta_only(&mut fx, &sample_user_binding("user.a.b.1", "a", "b"));
+        push_user_binding_meta_only(&mut fx, &sample_user_binding("user.c.d.1", "c", "d"));
         // Hand-build param_values to mimic what comes out of deserialize.
         fx.param_values = vec![
             ParamSlot::exposed(0.7),
@@ -3288,8 +3682,7 @@ mod tests {
         // (e.g., the binding was added in memory but param_values
         // hasn't grown yet). align should pad with binding defaults.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings
-            .push(sample_user_binding("user.a.b.1", "a", "b"));
+        push_user_binding_meta_only(&mut fx, &sample_user_binding("user.a.b.1", "a", "b"));
         fx.param_values = vec![ParamSlot::exposed(0.7)]; // missing tail
         fx.align_to_definition();
         assert_eq!(
@@ -3303,8 +3696,7 @@ mod tests {
         // param_values has more user-tail slots than user bindings —
         // junk data from somewhere. align trims to the actual binding count.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings
-            .push(sample_user_binding("user.a.b.1", "a", "b"));
+        push_user_binding_meta_only(&mut fx, &sample_user_binding("user.a.b.1", "a", "b"));
         fx.param_values = vec![
             ParamSlot::exposed(0.7),
             ParamSlot::exposed(0.42),
@@ -3313,7 +3705,7 @@ mod tests {
         ]; // extra junk at tail
         fx.align_to_definition();
         // After: static=1 (kept) + user=1 (last value taken — split logic
-        // pulls the tail count from user_param_bindings).
+        // pulls the tail count from the graph's user-added bindings).
         assert_eq!(fx.param_values.len(), 2);
         assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
     }
@@ -3362,10 +3754,9 @@ mod tests {
     #[test]
     fn deserialize_keyed_param_values_routes_user_ids_to_tail() {
         // The key insight: paramValues comes in as a Map. The custom
-        // Deserialize must consult `userParamBindings` (which appears
-        // in the same JSON object, possibly *after* paramValues) to
-        // route user ids to the right tail slots. Tests JSON ordering
-        // independence by putting userParamBindings AFTER paramValues.
+        // Deserialize must consult the graph's `user_added` bindings (the
+        // single storage list after the unification) to route user ids to
+        // the right tail slots — regardless of JSON key order in the Map.
         let json = r#"{
             "id": "abc12345",
             "effectType": "Bloom",
@@ -3376,21 +3767,28 @@ mod tests {
                 "user.foo.bar.1": 0.3,
                 "user.baz.qux.1": 0.9
             },
-            "userParamBindings": [
-                {
-                    "id": "user.foo.bar.1", "label": "Foo",
-                    "nodeHandle": "foo", "innerParam": "bar",
-                    "min": 0.0, "max": 1.0, "defaultValue": 0.5
-                },
-                {
-                    "id": "user.baz.qux.1", "label": "Baz",
-                    "nodeHandle": "baz", "innerParam": "qux",
-                    "min": 0.0, "max": 1.0, "defaultValue": 0.5
+            "graph": {
+                "version": 0,
+                "nodes": [],
+                "wires": [],
+                "presetMetadata": {
+                    "id": "",
+                    "displayName": "",
+                    "category": "",
+                    "oscPrefix": "",
+                    "params": [
+                        { "id": "user.foo.bar.1", "name": "Foo", "min": 0.0, "max": 1.0, "defaultValue": 0.5 },
+                        { "id": "user.baz.qux.1", "name": "Baz", "min": 0.0, "max": 1.0, "defaultValue": 0.5 }
+                    ],
+                    "bindings": [
+                        { "id": "user.foo.bar.1", "label": "Foo", "defaultValue": 0.5, "userAdded": true, "target": { "kind": "node", "nodeId": "foo", "param": "bar" } },
+                        { "id": "user.baz.qux.1", "label": "Baz", "defaultValue": 0.5, "userAdded": true, "target": { "kind": "node", "nodeId": "baz", "param": "qux" } }
+                    ]
                 }
-            ]
+            }
         }"#;
         let fx: EffectInstance = serde_json::from_str(json).unwrap();
-        assert_eq!(fx.user_param_bindings.len(), 2);
+        assert_eq!(fx.user_param_count(), 2);
         assert_eq!(fx.param_values.len(), 3);
         assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
         assert!((fx.param_values[1].value - 0.3).abs() < f32::EPSILON);

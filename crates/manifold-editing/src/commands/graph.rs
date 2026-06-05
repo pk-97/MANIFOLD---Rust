@@ -1199,11 +1199,19 @@ fn static_slot_for(
 ) -> Option<usize> {
     use manifold_core::effect_graph_def::BindingTarget;
     let meta = def.preset_metadata.as_ref()?;
-    let binding_idx = meta.bindings.iter().position(|b| match &b.target {
-        BindingTarget::Node { node_id: nid, param } => {
-            nid == node_id && param == inner_param
+    let binding_idx = meta.bindings.iter().position(|b| {
+        // A user-added binding is NOT a static slot — it lives in the
+        // user tail and is removed (not exposure-flipped) on unexpose.
+        // Only bundled (shipped) bindings own a static `param_values` slot.
+        if b.user_added {
+            return false;
         }
-        BindingTarget::Composite { .. } => false,
+        match &b.target {
+            BindingTarget::Node { node_id: nid, param } => {
+                nid == node_id && param == inner_param
+            }
+            BindingTarget::Composite { .. } => false,
+        }
     })?;
     // Static-block slots are positional against `metadata.params` —
     // each `params[i]` corresponds to bindings sharing the same `id`.
@@ -1487,9 +1495,10 @@ fn mirror_effect_side(
         return EffectMirrorReverse::StaticSlot { slot, prev_exposed };
     }
 
-    // Non-static path: append / remove a UserParamBinding.
-    let existing_position = effect
-        .user_param_bindings
+    // Non-static path: append / remove a user-added binding (stored in
+    // the per-instance graph's `preset_metadata.bindings`).
+    let user_bindings = effect.user_param_bindings();
+    let existing_position = user_bindings
         .iter()
         .position(|b| &b.node_id == node_id && b.inner_param == inner_param);
 
@@ -1497,10 +1506,12 @@ fn mirror_effect_side(
         if existing_position.is_some() {
             return EffectMirrorReverse::NoOp;
         }
+        let existing_ids: Vec<String> =
+            user_bindings.iter().map(|b| b.id.clone()).collect();
         let id = crate::commands::effects::generate_user_param_id(
             node_handle,
             inner_param,
-            &effect.user_param_bindings,
+            &existing_ids,
         );
         let binding = UserParamBinding {
             id: id.clone(),
@@ -1526,7 +1537,7 @@ fn mirror_effect_side(
         let Some(position) = existing_position else {
             return EffectMirrorReverse::NoOp;
         };
-        let binding = effect.user_param_bindings[position].clone();
+        let binding = user_bindings[position].clone();
         let binding_id = binding.id.clone();
         // Capture the slot value BEFORE removal (the slot lives at
         // static_count + position).
@@ -1616,18 +1627,10 @@ fn unmirror_effect_side(
             // effect borrow.
             removed_envelope_state: _,
         } => {
-            let pos = position.min(effect.user_param_bindings.len());
-            let binding_id = binding.id.clone();
-            effect.user_param_bindings.insert(pos, binding);
-            effect.user_param_bindings_version =
-                effect.user_param_bindings_version.wrapping_add(1);
-            if let Some(value_idx) = effect.param_id_to_value_index(&binding_id) {
-                if value_idx <= effect.param_values.len() {
-                    effect.param_values.insert(value_idx, slot_value);
-                } else {
-                    effect.param_values.push(slot_value);
-                }
-            }
+            // Restore the binding (graph metadata + reshape note) and its
+            // value slot at the original tail position so other user
+            // bindings keep their slot indices.
+            effect.restore_user_binding_at(binding, position, slot_value);
             // Restore the automation rows that referenced this binding.
             // The same id now resolves through `param_id_to_value_index`
             // since we re-inserted the binding above.
@@ -3650,8 +3653,9 @@ mod tests {
         // user_param_id.
         let user_param_id = {
             let fx = project.find_effect_by_id(&effect_id).unwrap();
-            assert_eq!(fx.user_param_bindings.len(), 1);
-            fx.user_param_bindings[0].id.clone()
+            let ub = fx.user_param_bindings();
+            assert_eq!(ub.len(), 1);
+            ub[0].id.clone()
         };
         {
             let fx = project.find_effect_by_id_mut(&effect_id).unwrap();
@@ -3721,7 +3725,7 @@ mod tests {
         // Undo restores both.
         unexpose.undo(&mut project);
         let fx = project.find_effect_by_id(&effect_id).unwrap();
-        assert_eq!(fx.user_param_bindings.len(), 1, "binding restored");
+        assert_eq!(fx.user_param_bindings().len(), 1, "binding restored");
         assert_eq!(
             fx.drivers.as_ref().map(|d| d.len()).unwrap_or(0),
             1,
@@ -3780,7 +3784,7 @@ mod tests {
 
         let user_param_id = {
             let fx = project.find_effect_by_id(&effect_id).unwrap();
-            fx.user_param_bindings[0].id.clone()
+            fx.user_param_bindings()[0].id.clone()
         };
         {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
@@ -4005,11 +4009,13 @@ mod tests {
             .find(|n| n.handle.as_deref() == Some("uv_transform"))
             .unwrap();
         assert!(node.exposed_params.contains("rotation"));
-        // Effect-side mirror: user_param_bindings appended because the
-        // catalog default has no preset bindings for this param.
-        assert_eq!(fx.user_param_bindings.len(), 1);
-        assert_eq!(fx.user_param_bindings[0].node_id, "uv_transform");
-        assert_eq!(fx.user_param_bindings[0].inner_param, "rotation");
+        // Effect-side mirror: a user-added binding was appended to the
+        // graph metadata because the catalog default has no preset
+        // bindings for this param.
+        let ub = fx.user_param_bindings();
+        assert_eq!(ub.len(), 1);
+        assert_eq!(ub[0].node_id, "uv_transform");
+        assert_eq!(ub[0].inner_param, "rotation");
 
         // Undo reverses both sides.
         cmd.undo(&mut project);
@@ -4021,7 +4027,7 @@ mod tests {
             .find(|n| n.handle.as_deref() == Some("uv_transform"))
             .unwrap();
         assert!(!node.exposed_params.contains("rotation"));
-        assert_eq!(fx.user_param_bindings.len(), 0);
+        assert_eq!(fx.user_param_bindings().len(), 0);
     }
 
     #[test]

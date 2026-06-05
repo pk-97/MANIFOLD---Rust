@@ -1,270 +1,245 @@
-//! One-time load migration: backfill `UserParamBinding.node_id`.
+//! One-time load completion for migrated effect user bindings.
 //!
-//! Pre-node-id projects addressed inner-graph user bindings by handle.
-//! That handle is captured on load into
-//! [`UserParamBinding::legacy_node_handle`](manifold_core::effects::UserParamBinding::legacy_node_handle);
-//! this pass resolves it to the inner node's stable [`NodeId`] against
-//! the graph the effect actually renders with — the per-instance
-//! override ([`EffectInstance::graph`]) if it diverged, otherwise the
-//! canonical bundled preset for the effect's type.
+//! User-added effect bindings used to live in a parallel
+//! `EffectInstance.user_param_bindings` Vec. The binding-storage
+//! unification (`PRESET_UNIFICATION_PLAN.md` step 3) folds them into the
+//! per-instance graph's `preset_metadata.bindings` (`user_added`), the
+//! same single list generators already use. The on-disk JSON fold-in
+//! lives in `manifold-io`'s v1.3→v1.4 migration — but that layer can't
+//! build a preset's node graph (the topology is renderer-side, compiled
+//! in). So when the JSON migration meets an effect with user bindings and
+//! no per-instance graph, it can only emit a **metadata-only stub** graph
+//! (the bindings + their specs, but no nodes).
 //!
-//! Node identity itself is normalized earlier: override-def nodes get
-//! `node_id == handle` from [`manifold_core::project::Project`]'s
-//! load-time normalization, and the canonical bundled presets ship
-//! pre-stamped. So both graphs already map handle → id by the time this
-//! runs — it only has to copy the right id onto each binding.
+//! This pass completes those stubs at load: it lifts the effect's
+//! canonical bundled topology into any graph that carries
+//! `preset_metadata` but no nodes, preserving the migrated user-added
+//! bindings/params on top. After this runs the effect renders exactly as
+//! it did pre-migration (canonical topology) with the user bindings
+//! addressing the canonical nodes by their stable, handle-stamped ids.
 //!
-//! This is a versioned load upgrade, not a runtime fallback: it runs
-//! once when a project is loaded, the runtime resolver only ever reads
-//! `node_id`, and a resolved binding clears its legacy handle so the
-//! upgrade never re-triggers after a save. A handle that can't be
-//! resolved (effect type unknown to this build, or the node was deleted)
-//! is left untouched — the binding stays inert, not silently dropped, so
-//! a future load with the right graph present can still recover it.
+//! Legacy-handle resolution itself is no longer this pass's job: a
+//! pre-node-id binding deserializes through `BindingTarget`'s tolerant
+//! reader, which upgrades the old `handleNode` form to `Node { node_id ==
+//! handle }`, and the canonical preset nodes are stamped `node_id ==
+//! handle`, so the migrated binding resolves against the lifted topology
+//! with no extra step.
+//!
+//! Idempotent: a completed graph has nodes, so a second load (or a
+//! re-save) finds nothing to lift.
 
-use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode};
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::EffectInstance;
 use manifold_core::project::Project;
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
 
-/// Backfill `node_id` on every user binding in the project that still
-/// carries a pre-node-id handle. Walks master, layer, and clip effects —
-/// the same surface [`Project::find_effect_by_id_mut`] covers. See module
-/// docs.
+/// Complete every metadata-only stub graph produced by the v1.3→v1.4
+/// user-binding fold-in. Walks master, layer, and clip effects — the same
+/// surface [`Project::find_effect_by_id_mut`] covers. See module docs.
 pub fn migrate_user_param_bindings_to_node_id(project: &mut Project) {
     for fx in &mut project.settings.master_effects {
-        migrate_effect(fx);
+        complete_stub_graph(fx);
     }
     for layer in &mut project.timeline.layers {
         if let Some(effects) = layer.effects.as_mut() {
             for fx in effects.iter_mut() {
-                migrate_effect(fx);
+                complete_stub_graph(fx);
             }
         }
         for clip in &mut layer.clips {
             for fx in &mut clip.effects {
-                migrate_effect(fx);
+                complete_stub_graph(fx);
             }
         }
     }
 }
 
-fn migrate_effect(fx: &mut EffectInstance) {
-    // Nothing to do unless some binding carries an unresolved legacy
-    // handle. Keeps the common (already-migrated / no-user-bindings)
-    // case free of any graph lookup.
-    let needs_migration = fx
-        .user_param_bindings
-        .iter()
-        .any(|b| b.node_id.is_empty() && b.legacy_node_handle.is_some());
-    if !needs_migration {
-        // Clear any stale legacy handles on already-resolved bindings so a
-        // re-save drops the dead `nodeHandle` key.
-        for b in &mut fx.user_param_bindings {
-            if !b.node_id.is_empty() {
-                b.legacy_node_handle = None;
-            }
-        }
+/// If `fx.graph` is a metadata-only stub (has `preset_metadata` but no
+/// nodes), lift the effect's canonical topology underneath the migrated
+/// metadata. No-op for graphs that already carry nodes (real per-instance
+/// overrides, or already-completed stubs) and for `graph: None` effects.
+fn complete_stub_graph(fx: &mut EffectInstance) {
+    let needs_lift = fx
+        .graph
+        .as_ref()
+        .is_some_and(|g| g.preset_metadata.is_some() && g.nodes.is_empty());
+    if !needs_lift {
         return;
     }
-
-    // Resolve handles against the graph this instance renders with: the
-    // per-instance override if it diverged, else the canonical bundled
-    // preset. Both already carry `node_id == handle` on every node —
-    // overrides via `Project::normalize_override_node_ids` at core load,
-    // bundled presets via the on-disk stamp — so this is a pure read.
     let effect_type = fx.effect_type().clone();
-    let handle_to_id = match fx.graph.as_ref() {
-        Some(def) => handle_id_map(def),
-        None => match bundled_preset_def(&effect_type) {
-            Some(def) => handle_id_map(def),
-            // Effect type unknown to this build: leave the bindings
-            // untouched for a future load that has the preset.
-            None => return,
-        },
+    let Some(canonical) = bundled_preset_def(&effect_type) else {
+        // Effect type unknown to this build: leave the stub as-is so a
+        // future load with the preset present can complete it. The
+        // bindings stay inert, never silently dropped.
+        return;
     };
 
-    for b in &mut fx.user_param_bindings {
-        if !b.node_id.is_empty() {
-            b.legacy_node_handle = None;
-            continue;
-        }
-        let Some(handle) = b.legacy_node_handle.as_deref() else {
-            continue;
-        };
-        if let Some(id) = handle_to_id.get(handle) {
-            b.node_id = id.clone();
-            b.legacy_node_handle = None;
-        }
-        // Unresolved handle: leave both fields as-is (inert binding,
-        // recoverable on a future load). No silent data loss.
-    }
-}
+    // Take the migrated metadata off the stub, then rebuild the graph from
+    // the canonical topology with that metadata layered on top. The
+    // canonical's own preset_metadata is the base (static params +
+    // bindings); the migrated user-added entries append to it.
+    let stub_meta = fx
+        .graph
+        .as_mut()
+        .and_then(|g| g.preset_metadata.take())
+        .expect("needs_lift checked preset_metadata is Some");
 
-/// Build a `handle → NodeId` map over every node in the def, recursing
-/// into group bodies. Keyed by the node's own (unprefixed) handle, which
-/// is what a pre-node-id binding stored. Pre-node-id data is flat (groups
-/// postdate it), so collisions across group boundaries don't arise in
-/// practice; if one ever did, the first node wins — best-effort, never a
-/// panic.
-fn handle_id_map(def: &EffectGraphDef) -> ahash::AHashMap<String, NodeId> {
-    let mut map = ahash::AHashMap::default();
-    collect_handle_ids(&def.nodes, &mut map);
-    map
-}
-
-fn collect_handle_ids(nodes: &[EffectGraphNode], map: &mut ahash::AHashMap<String, NodeId>) {
-    for node in nodes {
-        if let Some(handle) = node.handle.as_deref()
-            && !node.node_id.is_empty()
-        {
-            map.entry(handle.to_string())
-                .or_insert_with(|| node.node_id.clone());
+    let mut lifted: EffectGraphDef = canonical.clone();
+    match lifted.preset_metadata.as_mut() {
+        Some(canon_meta) => {
+            // Append only the user-added entries from the stub — the
+            // canonical metadata already carries the static prefix.
+            for b in stub_meta.bindings.into_iter().filter(|b| b.user_added) {
+                if !canon_meta.bindings.iter().any(|x| x.id == b.id) {
+                    // Pull the matching spec across too.
+                    if let Some(spec) =
+                        stub_meta.params.iter().find(|p| p.id == b.id).cloned()
+                        && !canon_meta.params.iter().any(|p| p.id == spec.id)
+                    {
+                        canon_meta.params.push(spec);
+                    }
+                    canon_meta.bindings.push(b);
+                }
+            }
         }
-        if let Some(group) = node.group.as_ref() {
-            collect_handle_ids(&group.nodes, map);
+        None => {
+            // Canonical has no metadata (unusual) — adopt the stub's whole
+            // metadata so the user bindings survive.
+            lifted.preset_metadata = Some(stub_meta);
         }
     }
+    fx.graph = Some(lifted);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use manifold_core::EffectTypeId;
-    use manifold_core::effects::{EffectInstance, ParamConvert, UserParamBinding};
+    use manifold_core::effect_graph_def::{
+        BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+    };
+    use manifold_core::effects::{EffectInstance, ParamConvert};
 
-    /// A pre-node-id user binding: empty `node_id`, target carried in
-    /// `legacy_node_handle` (the shape an old project deserializes into).
-    fn legacy_binding(handle: &str, inner: &str) -> UserParamBinding {
-        UserParamBinding {
-            id: format!("user.{handle}.{inner}.1"),
-            label: inner.to_string(),
-            node_id: NodeId::default(),
-            legacy_node_handle: Some(handle.to_string()),
-            inner_param: inner.to_string(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.0,
-            convert: ParamConvert::Float,
-            is_angle: false,
-            invert: false,
-            curve: Default::default(),
-            scale: 1.0,
-            offset: 0.0,
+    /// Build a metadata-only stub graph carrying one user-added binding —
+    /// the exact shape the v1.3→v1.4 JSON fold-in emits when an effect had
+    /// `userParamBindings` but no per-instance graph.
+    fn stub_with_user_binding(node_handle: &str, inner: &str, id: &str) -> EffectGraphDef {
+        let meta = PresetMetadata {
+            id: EffectTypeId::new(""),
+            display_name: String::new(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: vec![ParamSpecDef {
+                id: id.to_string(),
+                name: inner.to_string(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.0,
+                whole_numbers: false,
+                is_toggle: false,
+                is_trigger: false,
+                value_labels: Vec::new(),
+                format_string: None,
+                osc_suffix: String::new(),
+            }],
+            bindings: vec![BindingDef {
+                id: id.to_string(),
+                label: inner.to_string(),
+                default_value: 0.0,
+                // `node_id == handle` — the convention the canonical
+                // preset stamp uses, so this resolves after the lift.
+                target: BindingTarget::Node {
+                    node_id: manifold_core::NodeId::new(node_handle),
+                    param: inner.to_string(),
+                },
+                convert: ParamConvert::Float,
+                user_added: true,
+                scale: 1.0,
+                offset: 0.0,
+            }],
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        };
+        EffectGraphDef {
+            version: 0,
+            name: None,
+            description: None,
+            preset_metadata: Some(meta),
+            nodes: Vec::new(),
+            wires: Vec::new(),
         }
     }
 
     #[test]
-    fn graph_none_binding_resolves_against_canonical_preset() {
-        // Bloom is a `graph: None` effect: its graph IS the bundled
-        // preset, whose nodes are stamped with `nodeId == handle`. A
-        // legacy binding to handle "blur" must come out targeting the
-        // canonical node's id (== "blur" by the stamp convention).
+    fn stub_graph_is_completed_with_canonical_topology() {
+        // Bloom is a `graph: None` effect. A migrated user binding for it
+        // arrives as a metadata-only stub; the lift must restore Bloom's
+        // canonical nodes while keeping the user binding.
         let mut project = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings.push(legacy_binding("blur", "radius"));
+        fx.graph = Some(stub_with_user_binding("blur", "radius", "user.blur.radius.1"));
         project.settings.master_effects.push(fx);
 
         migrate_user_param_bindings_to_node_id(&mut project);
 
-        let b = &project.settings.master_effects[0].user_param_bindings[0];
-        let canonical = bundled_preset_def(&EffectTypeId::BLOOM).expect("Bloom preset present");
-        let blur = canonical
-            .nodes
-            .iter()
-            .find(|n| n.handle.as_deref() == Some("blur"))
-            .expect("Bloom has a `blur` node");
-        assert!(!blur.node_id.is_empty(), "preset node must be stamped");
-        assert_eq!(b.node_id, blur.node_id, "binding now targets the node id");
-        assert_eq!(b.legacy_node_handle, None, "legacy handle cleared");
-    }
-
-    #[test]
-    fn graph_override_binding_resolves_against_overrides_own_nodes() {
-        // A `graph: Some(def)` override: the binding must resolve against
-        // the OVERRIDE's nodes, not the bundled preset. Core load
-        // normalization has already stamped `node_id == handle` on the
-        // override node (simulated here), so the migration just copies it
-        // onto the binding.
-        use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphNode};
-        use std::collections::{BTreeMap, BTreeSet};
-
-        let node = EffectGraphNode {
-            id: 0,
-            node_id: NodeId::new("softblur"), // normalized at core load
-            type_id: "node.blur".to_string(),
-            handle: Some("softblur".to_string()),
-            params: BTreeMap::new(),
-            exposed_params: BTreeSet::new(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: BTreeMap::new(),
-            output_canvas_scales: BTreeMap::new(),
-            group: None,
-        };
-        let def = EffectGraphDef {
-            version: EFFECT_GRAPH_VERSION,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            nodes: vec![node],
-            wires: vec![],
-        };
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.graph = Some(def);
-        // "softblur" exists only on the override, never on Bloom's preset.
-        fx.user_param_bindings
-            .push(legacy_binding("softblur", "radius"));
-        let mut project = Project::default();
-        project.settings.master_effects.push(fx);
-
-        migrate_user_param_bindings_to_node_id(&mut project);
-
-        let b = &project.settings.master_effects[0].user_param_bindings[0];
-        assert_eq!(b.node_id, "softblur", "binding targets the override node id");
-        assert_eq!(b.legacy_node_handle, None);
-    }
-
-    #[test]
-    fn already_migrated_binding_is_left_alone_and_handle_cleared() {
-        // A binding that already carries a node id (post-cutover save)
-        // must not be touched, except to drop any stale legacy handle.
-        let mut project = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        let mut b = legacy_binding("blur", "radius");
-        b.node_id = NodeId::new("explicit_id");
-        fx.user_param_bindings.push(b);
-        project.settings.master_effects.push(fx);
-
-        migrate_user_param_bindings_to_node_id(&mut project);
-
-        let b = &project.settings.master_effects[0].user_param_bindings[0];
-        assert_eq!(b.node_id, "explicit_id", "explicit id preserved");
-        assert_eq!(b.legacy_node_handle, None, "stale legacy handle cleared");
-    }
-
-    #[test]
-    fn unresolved_handle_is_left_inert_not_dropped() {
-        // A handle that matches no node in the graph: the binding stays
-        // unmigrated (empty id, handle retained) so a future load can
-        // recover it. Never silently dropped.
-        let mut project = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings
-            .push(legacy_binding("ghost_node", "radius"));
-        project.settings.master_effects.push(fx);
-
-        migrate_user_param_bindings_to_node_id(&mut project);
-
-        let b = &project.settings.master_effects[0].user_param_bindings[0];
-        assert!(b.node_id.is_empty(), "unresolved binding stays inert");
-        assert_eq!(
-            b.legacy_node_handle.as_deref(),
-            Some("ghost_node"),
-            "handle retained for future recovery"
+        let g = project.settings.master_effects[0]
+            .graph
+            .as_ref()
+            .expect("graph present");
+        assert!(!g.nodes.is_empty(), "canonical topology lifted in");
+        let meta = g.preset_metadata.as_ref().expect("metadata present");
+        assert!(
+            meta.bindings.iter().any(|b| b.id == "user.blur.radius.1" && b.user_added),
+            "user binding preserved on the lifted graph"
         );
+        // The user binding's value slot still resolves by id.
+        assert!(
+            project.settings.master_effects[0]
+                .user_param_bindings()
+                .iter()
+                .any(|b| b.id == "user.blur.radius.1"),
+            "user binding enumerates from the lifted graph"
+        );
+    }
+
+    #[test]
+    fn already_completed_graph_is_left_alone() {
+        // A graph that already has nodes (real override, or a re-loaded
+        // completed stub) must not be re-lifted — idempotency.
+        let mut project = Project::default();
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let canonical = bundled_preset_def(&EffectTypeId::BLOOM)
+            .expect("Bloom preset present")
+            .clone();
+        let node_count = canonical.nodes.len();
+        fx.graph = Some(canonical);
+        project.settings.master_effects.push(fx);
+
+        migrate_user_param_bindings_to_node_id(&mut project);
+
+        assert_eq!(
+            project.settings.master_effects[0].graph.as_ref().unwrap().nodes.len(),
+            node_count,
+            "completed graph untouched"
+        );
+    }
+
+    #[test]
+    fn graph_none_effect_is_left_alone() {
+        // No graph, no migration — a plain effect stays `graph: None`.
+        let mut project = Project::default();
+        let fx = EffectInstance::new(EffectTypeId::BLOOM);
+        project.settings.master_effects.push(fx);
+
+        migrate_user_param_bindings_to_node_id(&mut project);
+
+        assert!(project.settings.master_effects[0].graph.is_none());
     }
 }

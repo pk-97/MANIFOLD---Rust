@@ -304,7 +304,6 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         Some(d) => d,
         None => return false,
     };
-    let user_bindings = &fx.user_param_bindings;
     let mut any_driven = false;
 
     // Collect results to avoid borrow conflict between drivers and param_values
@@ -314,7 +313,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         .filter_map(|driver| {
             let resolved = manifold_core::effects::resolve_param_in(
                 effect_def,
-                user_bindings,
+                fx,
                 driver.param_id.as_ref(),
             )?;
             let (idx, min, max) = (resolved.idx, resolved.min, resolved.max);
@@ -462,7 +461,7 @@ pub fn evaluate_all_envelopes(
                 };
                 let Some(resolved) = manifold_core::effects::resolve_param_in(
                     effect_def,
-                    &fx.user_param_bindings,
+                    fx,
                     param_id.as_ref(),
                 ) else {
                     if let Some(envs) = &mut layer.envelopes
@@ -555,7 +554,7 @@ pub fn evaluate_all_envelopes(
             };
             let Some(resolved) = manifold_core::effects::resolve_param_in(
                 effect_def,
-                &fx.user_param_bindings,
+                fx,
                 param_id.as_ref(),
             ) else {
                 continue;

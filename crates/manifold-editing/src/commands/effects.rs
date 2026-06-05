@@ -329,7 +329,7 @@ pub struct InnerParamMeta {
 pub fn generate_user_param_id(
     inner_node_handle: &str,
     inner_param: &str,
-    existing: &[UserParamBinding],
+    existing_ids: &[String],
 ) -> String {
     // Strip any "primitive."/"composite." prefix if it ever leaks in
     // — handles are short by design, but be defensive in case future
@@ -342,7 +342,7 @@ pub fn generate_user_param_id(
     let mut n: u32 = 1;
     loop {
         let candidate = format!("{prefix}.{n}");
-        if !existing.iter().any(|b| b.id == candidate) {
+        if !existing_ids.contains(&candidate) {
             return candidate;
         }
         n += 1;
@@ -466,8 +466,10 @@ impl Command for ToggleEffectParamExposeCommand {
         // id doesn't resolve — leaves `reverse` as `None`, a clean no-op.
         let reverse_out = project.find_effect_by_id_mut(&self.effect_id).map(|effect| {
             // Locate any existing binding for this (node_id, inner_param).
-            let existing_position = effect
-                .user_param_bindings
+            // User bindings are synthesized from the graph's user-added
+            // metadata — the single binding-storage list.
+            let user_bindings = effect.user_param_bindings();
+            let existing_position = user_bindings
                 .iter()
                 .position(|b| b.node_id == node_id && b.inner_param == inner_param);
 
@@ -476,8 +478,10 @@ impl Command for ToggleEffectParamExposeCommand {
                 if existing_position.is_some() {
                     return ReverseState::None;
                 }
+                let existing_ids: Vec<String> =
+                    user_bindings.iter().map(|b| b.id.clone()).collect();
                 let id =
-                    generate_user_param_id(&node_handle, &inner_param, &effect.user_param_bindings);
+                    generate_user_param_id(&node_handle, &inner_param, &existing_ids);
                 let binding = UserParamBinding {
                     id: id.clone(),
                     label: meta.label.clone(),
@@ -501,7 +505,7 @@ impl Command for ToggleEffectParamExposeCommand {
                 let Some(position) = existing_position else {
                     return ReverseState::None;
                 };
-                let user_param_id = effect.user_param_bindings[position].id.clone();
+                let user_param_id = user_bindings[position].id.clone();
                 // Read the current slot values BEFORE removal so undo
                 // can reinstate them.
                 let value_idx = effect.param_id_to_value_index(&user_param_id);
@@ -641,27 +645,19 @@ impl Command for ToggleEffectParamExposeCommand {
                     // Re-insert at original position so the user-tail
                     // slot positions stay stable for any other addressing
                     // (drivers, Ableton mappings) that referenced the
-                    // user_param_id by string. position is bounded by
-                    // the current vec len, clamp defensively.
-                    let pos = position.min(effect.user_param_bindings.len());
+                    // user_param_id by string.
                     let binding_id = binding.id.clone();
-                    effect.user_param_bindings.insert(pos, binding);
-                    effect.user_param_bindings_version =
-                        effect.user_param_bindings_version.wrapping_add(1);
-                    // Restore the param_values slot at the corresponding
-                    // value-index. With user_param_bindings updated, the
-                    // value index is now resolvable via the helper.
+                    let restore_slot = slot_value;
+                    effect.restore_user_binding_at(binding, position, restore_slot);
                     if let Some(value_idx) = effect.param_id_to_value_index(&binding_id) {
-                        if value_idx <= effect.param_values.len() {
-                            effect.param_values.insert(value_idx, slot_value);
-                        } else {
-                            effect.param_values.push(slot_value);
-                        }
+                        // `restore_user_binding_at` seeded base from the
+                        // value slot; override with the captured base if
+                        // present so the pre-modulation snapshot is exact.
                         if let (Some(base), Some(base_v)) =
                             (effect.base_param_values.as_mut(), slot_base_value)
-                            && value_idx <= base.len()
+                            && value_idx < base.len()
                         {
-                            base.insert(value_idx, base_v);
+                            base[value_idx] = base_v;
                         }
                     }
                     // Restore the drivers / Ableton mappings that
@@ -794,49 +790,7 @@ pub struct BindingMappingEdit {
 }
 
 impl BindingMappingEdit {
-    /// Apply each `Some` field onto `binding`. `None` fields are
-    /// skipped, so an edit only mutates what the user touched.
-    fn apply_to(&self, binding: &mut UserParamBinding) {
-        if let Some(label) = &self.label {
-            binding.label = label.clone();
-        }
-        if let Some(min) = self.min {
-            binding.min = min;
-        }
-        if let Some(max) = self.max {
-            binding.max = max;
-        }
-        if let Some(invert) = self.invert {
-            binding.invert = invert;
-        }
-        if let Some(curve) = self.curve {
-            binding.curve = curve;
-        }
-        if let Some(scale) = self.scale {
-            binding.scale = scale;
-        }
-        if let Some(offset) = self.offset {
-            binding.offset = offset;
-        }
-    }
-
-    /// Snapshot the binding's *current* values for exactly the fields
-    /// `self` touches, so an undo can restore them. Returns a
-    /// `BindingMappingEdit` with `Some` set for the same fields and
-    /// `None` everywhere else.
-    fn snapshot_inverse(&self, binding: &UserParamBinding) -> BindingMappingEdit {
-        BindingMappingEdit {
-            label: self.label.as_ref().map(|_| binding.label.clone()),
-            min: self.min.map(|_| binding.min),
-            max: self.max.map(|_| binding.max),
-            invert: self.invert.map(|_| binding.invert),
-            curve: self.curve.map(|_| binding.curve),
-            scale: self.scale.map(|_| binding.scale),
-            offset: self.offset.map(|_| binding.offset),
-        }
-    }
-
-    /// Apply each touched field onto a stock-param reshape note
+    /// Apply each touched field onto a reshape note
     /// ([`ParamMapping`]). Same partial-edit semantics as
     /// [`Self::apply_to`] but for the note shape (whose `label` is an
     /// `Option<String>` override over the recipe label).
@@ -872,9 +826,18 @@ impl BindingMappingEdit {
 /// unit-test contexts and only matters for invert/curve (scale/offset
 /// reshapes ignore the range).
 fn seed_note(host: &dyn manifold_core::GraphHost, param_id: &str) -> ParamMapping {
+    // Stock params take their range from the registry; user-exposed
+    // bindings (which have no static index) take it from the binding's
+    // declared range, captured at expose time in the graph metadata.
     let (min, max) = host
         .param_id_to_static_index(param_id)
         .map(|i| host.param_range(i))
+        .or_else(|| {
+            host.user_param_bindings()
+                .into_iter()
+                .find(|b| b.id == param_id)
+                .map(|b| (b.min, b.max))
+        })
         .unwrap_or((0.0, 1.0));
     ParamMapping {
         param_id: param_id.to_string(),
@@ -888,14 +851,14 @@ fn seed_note(host: &dyn manifold_core::GraphHost, param_id: &str) -> ParamMappin
     }
 }
 
-/// Undo state for [`EditParamMappingCommand`]. The reshape can live
-/// in either of the two per-instance stores, so undo has to know which
-/// one and how to revert it.
+/// Undo state for [`EditParamMappingCommand`]. Every reshape now lives in
+/// the per-instance reshape note (`ParamMapping`), so undo only has to
+/// know whether the command created the note or edited an existing one.
+/// The shared `Note` prefix is intentional — these are all note
+/// operations now that the user-binding inline path was removed.
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 enum MappingReverse {
-    /// User-exposed binding (inline reshape): restore exactly the touched
-    /// fields.
-    UserFields(BindingMappingEdit),
     /// Stock-param note that already existed: restore the whole prior
     /// note (cheaper + simpler than field-wise, and a note is 7 fields).
     NoteRestore(ParamMapping),
@@ -990,22 +953,11 @@ impl Command for EditParamMappingCommand {
         let explicit = self.explicit_reverse.clone();
         self.reverse = project
             .with_graph_host_mut(&self.target, |host| {
-                // User-exposed binding (inline reshape) — effects only;
-                // generators present an empty binding list and fall through.
-                if let Some(binding) = host.user_param_binding_mut(&binding_id) {
-                    // Explicit pre-drag reverse wins (drag commit); else
-                    // snapshot the OLD values of the touched fields first.
-                    let reverse = explicit
-                        .clone()
-                        .unwrap_or_else(|| new.snapshot_inverse(binding));
-                    new.apply_to(binding);
-                    host.bump_user_bindings_version();
-                    return Some(MappingReverse::UserFields(reverse));
-                }
-                // Otherwise a stock effect param or a generator card param
-                // → a reshape NOTE. Edit the existing note, or seed one
-                // copy-on-write (identity, so the un-edited note is
-                // byte-identical) and apply onto that.
+                // Every reshape — stock effect param, generator card param,
+                // OR a user-exposed binding — lives in the per-instance
+                // reshape NOTE now (the binding carries routing only). Edit
+                // the existing note, or seed one copy-on-write (identity, so
+                // the un-edited note is byte-identical) and apply onto that.
                 match host.param_mapping(&binding_id).cloned() {
                     Some(prior) => {
                         let mut note = prior.clone();
@@ -1040,12 +992,6 @@ impl Command for EditParamMappingCommand {
         };
         let binding_id = self.binding_id.clone();
         project.with_graph_host_mut(&self.target, |host| match reverse {
-            MappingReverse::UserFields(fields) => {
-                if let Some(binding) = host.user_param_binding_mut(&binding_id) {
-                    fields.apply_to(binding);
-                    host.bump_user_bindings_version();
-                }
-            }
             MappingReverse::NoteRestore(prior) => {
                 host.upsert_param_mapping(prior); // bumps version
             }
@@ -1093,20 +1039,25 @@ mod tests {
 
     /// Build a project with one master effect carrying one user
     /// binding. Returns the project, the effect id, and the binding id.
+    /// The binding lives in the effect's graph metadata (the single
+    /// binding-storage list) via `append_user_binding`.
     fn project_with_one_user_binding() -> (Project, EffectId, String) {
         let mut project = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
         let effect_id = fx.id.clone();
         let binding_id = "user.uv_transform.rotation.1".to_string();
-        fx.user_param_bindings.push(sample_user_binding(&binding_id));
+        fx.append_user_binding(sample_user_binding(&binding_id));
         project.settings.master_effects.push(fx);
         (project, effect_id, binding_id)
     }
 
-    fn master_binding<'a>(project: &'a Project, id: &str) -> &'a UserParamBinding {
+    /// The synthesized binding view for `id` — routing from the graph
+    /// binding, reshape folded from the per-instance note. Owned because
+    /// it's reconstructed.
+    fn master_binding(project: &Project, id: &str) -> UserParamBinding {
         project.settings.master_effects[0]
-            .user_param_bindings
-            .iter()
+            .user_param_bindings()
+            .into_iter()
             .find(|b| b.id == id)
             .expect("binding present")
     }
@@ -1114,7 +1065,9 @@ mod tests {
     #[test]
     fn edit_mapping_roundtrip_execute_undo_redo() {
         let (mut project, effect_id, binding_id) = project_with_one_user_binding();
-        let v0 = project.settings.master_effects[0].user_param_bindings_version;
+        // Reshape now writes a per-instance ParamMapping note, which bumps
+        // `param_mappings_version` (the renderer rebuilds the binding list).
+        let v0 = project.settings.master_effects[0].param_mappings_version;
 
         let edit = BindingMappingEdit {
             label: Some("Spin".to_string()),
@@ -1142,9 +1095,9 @@ mod tests {
         assert_eq!(b.node_id, "uv_transform");
         assert_eq!(b.inner_param, "rotation");
         assert_eq!(b.default_value, 0.25);
-        // Version bumped so the renderer rebuilds the user-binding tail.
-        let v1 = project.settings.master_effects[0].user_param_bindings_version;
-        assert_ne!(v1, v0, "execute must bump user_param_bindings_version");
+        // Version bumped so the renderer rebuilds the reshaped binding.
+        let v1 = project.settings.master_effects[0].param_mappings_version;
+        assert_ne!(v1, v0, "execute must bump param_mappings_version");
 
         // ── undo: every touched field restored to its pre-edit value ──
         cmd.undo(&mut project);
@@ -1156,8 +1109,8 @@ mod tests {
         assert_eq!(b.curve, MacroCurve::Linear);
         assert_eq!(b.scale, 1.0, "scale restored to identity on undo");
         assert_eq!(b.offset, 0.0, "offset restored to identity on undo");
-        let v2 = project.settings.master_effects[0].user_param_bindings_version;
-        assert_ne!(v2, v1, "undo must bump user_param_bindings_version");
+        let v2 = project.settings.master_effects[0].param_mappings_version;
+        assert_ne!(v2, v1, "undo must bump param_mappings_version");
 
         // ── redo: reapplies cleanly ──
         cmd.execute(&mut project);
@@ -1204,7 +1157,7 @@ mod tests {
         // must leave the effect untouched; undo with no captured reverse
         // is a clean no-op.
         let (mut project, effect_id, _binding_id) = project_with_one_user_binding();
-        let v0 = project.settings.master_effects[0].user_param_bindings_version;
+        let v0 = project.settings.master_effects[0].param_mappings_version;
         let mut cmd = EditParamMappingCommand::new(
             GraphTarget::Effect(effect_id),
             "user.does.not.exist.1".to_string(),
@@ -1215,12 +1168,12 @@ mod tests {
         );
         cmd.execute(&mut project);
         assert!(cmd.reverse.is_none(), "no reverse captured for a no-op");
-        let v1 = project.settings.master_effects[0].user_param_bindings_version;
+        let v1 = project.settings.master_effects[0].param_mappings_version;
         assert_eq!(v1, v0, "no-op must not bump the version");
         // Undo is a clean no-op.
         cmd.undo(&mut project);
         assert_eq!(
-            project.settings.master_effects[0].user_param_bindings_version,
+            project.settings.master_effects[0].param_mappings_version,
             v0
         );
     }
@@ -1368,7 +1321,19 @@ mod tests {
     fn drag_commit_explicit_reverse_restores_pre_drag_not_preview_final() {
         let (mut project, effect_id, binding_id) = project_with_one_user_binding();
         // Simulate the live-drag preview having already moved scale 1.0 -> 3.0.
-        project.settings.master_effects[0].user_param_bindings[0].scale = 3.0;
+        // The reshape lives in a per-instance note now, so seed/mutate the note.
+        project.settings.master_effects[0].upsert_param_mapping(
+            manifold_core::effects::ParamMapping {
+                param_id: binding_id.clone(),
+                label: None,
+                min: 0.0,
+                max: 1.0,
+                invert: false,
+                curve: MacroCurve::Linear,
+                scale: 3.0,
+                offset: 0.0,
+            },
+        );
 
         let mut cmd = EditParamMappingCommand::new_with_reverse(
             GraphTarget::Effect(effect_id),

@@ -132,21 +132,24 @@ pub trait GraphHost {
 
     // ── User param bindings (effect-only tier) ────────────────────────
 
-    /// The effect's user-exposed bindings; an empty slice for generators
-    /// (whose user bindings live in `preset_metadata.bindings`). Lets a
-    /// host-generic command enumerate "is there a user binding for this
-    /// id?" uniformly while the storage stays kind-specific.
-    fn user_param_bindings(&self) -> &[UserParamBinding];
+    /// The host's user-exposed bindings, synthesized from
+    /// `graph.preset_metadata.bindings` (`user_added`) — the single
+    /// binding-storage list shared by effects and generators after the
+    /// preset-unification step-3 fold-in. Returns an owned `Vec` because
+    /// the bindings are reconstructed from the graph + reshape notes; the
+    /// boundary call sites (enumeration / card build) tolerate the
+    /// allocation. Empty when the host has no user-added bindings.
+    fn user_param_bindings(&self) -> Vec<UserParamBinding>;
 
-    /// Mutable access to a user binding by stable id, for the inline
-    /// reshape edit (label / range / invert / curve / scale / offset).
-    /// `None` for generators — they have no user-binding tier, so a
-    /// host-generic mapping edit falls through to the reshape-note path.
-    fn user_param_binding_mut(&mut self, id: &str) -> Option<&mut UserParamBinding>;
+    /// Mutable access to the per-instance reshape note for a binding's
+    /// stable id, for the inline reshape edit (range / invert / curve /
+    /// scale / offset). The binding itself carries routing only, so a
+    /// reshape edit writes the `ParamMapping` note. `None` when no note
+    /// has been authored yet.
+    fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping>;
 
-    /// Bump the user-binding version so the renderer rebuilds the user
-    /// tail (and drops its `LastAppliedCache` tail) next frame. No-op for
-    /// generators.
+    /// Bump the host's graph version so the renderer rebuilds the user
+    /// tail (and drops its `LastAppliedCache` tail) next frame.
     fn bump_user_bindings_version(&mut self);
 }
 
@@ -223,16 +226,22 @@ impl GraphHost for EffectInstance {
         EffectInstance::remove_param_mapping(self, id)
     }
 
-    fn user_param_bindings(&self) -> &[UserParamBinding] {
-        &self.user_param_bindings
+    fn user_param_bindings(&self) -> Vec<UserParamBinding> {
+        EffectInstance::user_param_bindings(self)
     }
 
-    fn user_param_binding_mut(&mut self, id: &str) -> Option<&mut UserParamBinding> {
-        self.user_param_bindings.iter_mut().find(|b| b.id == id)
+    fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping> {
+        // User bindings carry routing only now; the reshape lives in the
+        // per-instance ParamMapping note. Seed-on-touch is the caller's
+        // job — here we only hand back an existing note.
+        self.param_mappings.iter_mut().find(|m| m.param_id == id)
     }
 
     fn bump_user_bindings_version(&mut self) {
-        self.user_param_bindings_version = self.user_param_bindings_version.wrapping_add(1);
+        // User bindings live in the graph; a binding add/remove already
+        // bumps the graph version (and structure version) through the
+        // editing command. Nothing separate to bump here.
+        self.graph_version = self.graph_version.wrapping_add(1);
     }
 }
 
@@ -355,15 +364,21 @@ impl GraphHost for GeneratorHost<'_> {
         }
     }
 
-    fn user_param_bindings(&self) -> &[UserParamBinding] {
-        // Generators store user bindings in `preset_metadata.bindings`,
-        // not as a sibling Vec. Empty here on purpose — see module docs.
-        &[]
+    fn user_param_bindings(&self) -> Vec<UserParamBinding> {
+        // Generators already store user bindings in
+        // `preset_metadata.bindings`; the host-generic enumeration call
+        // sites that need them go through the layer/state path directly,
+        // so this returns empty for the trait surface. See module docs.
+        Vec::new()
     }
 
-    fn user_param_binding_mut(&mut self, _id: &str) -> Option<&mut UserParamBinding> {
-        None
+    fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping> {
+        self.params
+            .as_deref_mut()
+            .and_then(|p| p.param_mappings.iter_mut().find(|m| m.param_id == id))
     }
 
-    fn bump_user_bindings_version(&mut self) {}
+    fn bump_user_bindings_version(&mut self) {
+        *self.graph_version = self.graph_version.wrapping_add(1);
+    }
 }

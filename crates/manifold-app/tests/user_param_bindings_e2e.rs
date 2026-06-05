@@ -80,8 +80,9 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
 
     {
         let fx = &project.settings.master_effects[0];
-        assert_eq!(fx.user_param_bindings.len(), 1);
-        let ub = &fx.user_param_bindings[0];
+        let ub_list = fx.user_param_bindings();
+        assert_eq!(ub_list.len(), 1);
+        let ub = &ub_list[0];
         assert_eq!(ub.id, user_id);
         assert_eq!(ub.node_id, "uv_transform");
         assert_eq!(ub.inner_param, "translate");
@@ -138,11 +139,17 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
 
     // 5. Serialize to JSON, then reload.
     let json = serde_json::to_string_pretty(&project).expect("serialize project");
-    // Sanity: the user-id key appears in the serialized paramValues map
-    // and in the userParamBindings array.
+    // Sanity: after the binding-storage unification the user binding rides
+    // out inside the per-instance graph (presetMetadata.bindings,
+    // userAdded), not a separate userParamBindings array. The user-tail
+    // slot value still lands in the paramValues map keyed by the id.
     assert!(
-        json.contains("\"userParamBindings\""),
-        "userParamBindings field must be emitted when non-empty"
+        !json.contains("\"userParamBindings\""),
+        "userParamBindings must no longer be emitted (folded into the graph)"
+    );
+    assert!(
+        json.contains("\"userAdded\": true"),
+        "user binding must be in graph.presetMetadata.bindings as userAdded"
     );
     assert!(
         json.contains("\"user.uv_transform.translate.1\": 0.42"),
@@ -153,8 +160,9 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
 
     // 6. Verify the user binding round-trips intact.
     let fx = &reloaded.settings.master_effects[0];
-    assert_eq!(fx.user_param_bindings.len(), 1, "binding survives reload");
-    let ub = &fx.user_param_bindings[0];
+    let ub_list = fx.user_param_bindings();
+    assert_eq!(ub_list.len(), 1, "binding survives reload");
+    let ub = &ub_list[0];
     assert_eq!(ub.id, user_id);
     assert_eq!(ub.node_id, "uv_transform");
     assert_eq!(ub.inner_param, "translate");
@@ -211,7 +219,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
         meta_for_uv_translate(),
     );
     expose.execute(&mut project);
-    let id_first = project.settings.master_effects[0].user_param_bindings[0]
+    let id_first = project.settings.master_effects[0].user_param_bindings()[0]
         .id
         .clone();
 
@@ -226,7 +234,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
     unexpose.execute(&mut project);
     assert!(
         project.settings.master_effects[0]
-            .user_param_bindings
+            .user_param_bindings()
             .is_empty()
     );
 
@@ -239,7 +247,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
         meta_for_uv_translate(),
     );
     expose_again.execute(&mut project);
-    let id_second = project.settings.master_effects[0].user_param_bindings[0]
+    let id_second = project.settings.master_effects[0].user_param_bindings()[0]
         .id
         .clone();
 
@@ -283,7 +291,7 @@ fn second_expose_under_same_handle_increments_n() {
     b.execute(&mut project);
 
     let ids: Vec<String> = project.settings.master_effects[0]
-        .user_param_bindings
+        .user_param_bindings()
         .iter()
         .map(|ub| ub.id.clone())
         .collect();
