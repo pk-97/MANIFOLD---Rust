@@ -125,21 +125,49 @@ impl GeneratorRegistry {
     ) -> Option<Box<dyn Generator>> {
         let registry = PrimitiveRegistry::with_builtin();
 
-        // Override path: the layer's per-instance graph wins over the
-        // bundled JSON when present. If the override lost its
-        // `preset_metadata` during a prior graph edit, graft it back
-        // from the bundled JSON before constructing — otherwise the
-        // bindings list would deserialize empty and the live frame
-        // would render with every inner-node param pinned at its JSON
-        // default, *while the editor canvas still shows correct
-        // routings*. That mismatch is silent and load-bearing on every
-        // graph-edit command's `preset_metadata` preservation; doing
-        // the graft once here is the durable defense.
-        if let Some(def) = override_def {
+        // The "effective def" this layer renders: the per-layer graph override
+        // when present, else the bundled canonical preset parsed to a def. The
+        // override wins over the bundled JSON; if it lost its `preset_metadata`
+        // during a prior graph edit, graft it back from the bundle before
+        // constructing — otherwise the bindings list would deserialize empty and
+        // the live frame would render with every inner-node param pinned at its
+        // JSON default *while the editor canvas still shows correct routings*. That
+        // mismatch is silent and load-bearing on every graph-edit command's
+        // `preset_metadata` preservation; the graft here is the durable defense.
+        let (effective_def, is_override) = if let Some(def) = override_def {
             let mut grafted = def.clone();
             graft_preset_metadata_from_bundle(&mut grafted, gen_type);
+            (Some(grafted), true)
+        } else {
+            let parsed = bundled_generator_preset_json(gen_type).and_then(|json| {
+                serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(json).ok()
+            });
+            (parsed, false)
+        };
+
+        if let Some(def) = effective_def {
+            // On-demand fusion (design step 2): fuse THIS exact shape — shipped,
+            // edited, or created — unless the editor is watching it (then unfused
+            // so per-node preview can sample inner-node textures and edits render
+            // live). `fused_generator_def_for` compiles-on-miss + caches by the
+            // def's content, so an edited generator fuses on editor-close exactly
+            // like a shipped one. The fused def loads through the SAME `from_def`
+            // path — only the def changed (fused kernels + bindings retargeted onto
+            // them) — so modulation keeps flowing. Same decision as the effect
+            // rule, via the one shared `should_render_fused`.
+            let render_def = if crate::node_graph::freeze::install::should_render_fused(
+                crate::node_graph::freeze::install::FuseTarget::Generator(gen_type),
+                is_watched,
+            ) {
+                match crate::node_graph::freeze::install::fused_generator_def_for(&def) {
+                    Some(fused) => fused.clone(),
+                    None => def,
+                }
+            } else {
+                def
+            };
             match JsonGraphGenerator::from_def_with_device(
-                grafted,
+                render_def,
                 &registry,
                 device,
                 width,
@@ -149,67 +177,34 @@ impl GeneratorRegistry {
                 Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
                 Err(e) => {
                     log::warn!(
-                        "Per-layer override for generator {} failed to load: {e} — \
-                         falling back to bundled preset",
+                        "Generator {} failed to load from def: {e}",
                         gen_type.as_str(),
                     );
                 }
             }
-        }
 
-        // Fused bundled path: when the freeze compiler produced a fused def for
-        // this generator AND the shared gate says fuse, render through the fused
-        // def. It loads through the SAME `from_def` path as the unfused preset —
-        // only the def changed (fused kernels + bindings retargeted onto them),
-        // so modulation keeps flowing. The gate refuses to fuse when this layer
-        // carries a per-layer override (the early-return above already handled
-        // that, so `has_override = false` here) or is the watched (open in the
-        // editor) target — kept unfused so per-node preview can sample inner-node
-        // textures and edits render live. Same decision as the effect rule, via
-        // the one shared `should_render_fused`.
-        if crate::node_graph::freeze::install::should_render_fused(
-            crate::node_graph::freeze::install::FuseTarget::Generator(gen_type),
-            override_def.is_some(),
-            is_watched,
-        ) && let Some(fused_def) =
-            crate::node_graph::freeze::install::fused_generator_def_by_id(gen_type)
-        {
-            match JsonGraphGenerator::from_def_with_device(
-                fused_def.clone(),
-                &registry,
-                device,
-                width,
-                height,
-                self.target_format,
-            ) {
-                Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
-                Err(e) => {
-                    log::warn!(
-                        "Fused generator {} failed to load: {e} — falling back to unfused preset",
-                        gen_type.as_str(),
-                    );
-                }
-            }
-        }
-
-        // Bundled JSON preset path.
-        if let Some(json) = bundled_generator_preset_json(gen_type) {
-            match JsonGraphGenerator::from_json_str_with_device(
-                json,
-                &registry,
-                device,
-                width,
-                height,
-                self.target_format,
-            ) {
-                Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
-                Err(e) => {
-                    log::warn!(
-                        "Failed to construct JSON generator {}: {e}",
-                        gen_type.as_str(),
-                    );
-                    // Fall through to Rust factories — maybe a Rust
-                    // factory by the same id is also registered.
+            // Runtime robustness: a broken per-layer override falls back to the
+            // bundled canonical so the layer keeps rendering rather than going
+            // black mid-show. (Not a migration stop-gap — a broken user graph is a
+            // real, transient editing state.) The canonical itself is the
+            // effective def in the non-override case, so this only runs for
+            // overrides.
+            if is_override && let Some(json) = bundled_generator_preset_json(gen_type) {
+                match JsonGraphGenerator::from_json_str_with_device(
+                    json,
+                    &registry,
+                    device,
+                    width,
+                    height,
+                    self.target_format,
+                ) {
+                    Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
+                    Err(e) => {
+                        log::warn!(
+                            "Bundled fallback for generator {} also failed: {e}",
+                            gen_type.as_str(),
+                        );
+                    }
                 }
             }
         }

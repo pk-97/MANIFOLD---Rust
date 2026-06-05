@@ -59,12 +59,13 @@ use crate::effect::EffectContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
-    NodeInstanceId, ParamBinding, ParamValue, PrimitiveRegistry, ResolvedBinding, ResourceId, Slot,
-    Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings, compile,
-    splice_def_into_chain,
+    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, LoadedPresetView,
+    MetalBackend, NodeInstanceId, ParamBinding, ParamValue, PrimitiveRegistry, ResolvedBinding,
+    ResourceId, Slot, Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings,
+    compile, splice_def_into_chain,
 };
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
+use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::render_target::RenderTarget;
 
 const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -543,69 +544,73 @@ impl ChainGraph {
                 );
                 return None;
             };
-            // Freeze compiler (design §12): render the FUSED view as the main
-            // path. Gated on (a) the process-level freeze toggle and (b) this
-            // instance using the canonical graph — an effect with a per-instance
-            // graph override (`fx.graph = Some`) is the user's live editing
-            // surface and renders unfused so drilling in / editing stays exact.
-            // `fused_view_by_id` returns `None` for any effect that isn't a
-            // single whole-card fusable region, so non-ColorGrade effects fall
-            // straight through to the canonical view unchanged. The fused view
-            // keeps the same outer-card params + skip mode, so every line below
-            // (splice, outer_param_index, binding resolution) is shape-identical.
-            // The fuse-or-not decision (freeze toggle + per-card override +
-            // watched-target override + the device's perf verdict) lives in one
-            // shared place so the watched override can't drift between the
-            // effect and generator copies. `has_override = fx.graph.is_some()`
-            // (a per-instance graph edit renders unfused so drilling in stays
-            // exact); `is_watched` keeps the effect open in the editor unfused
-            // so node-output preview can sample inner-node textures and edits
-            // render live. See `install::should_render_fused`.
-            let view = if crate::node_graph::freeze::install::should_render_fused(
-                crate::node_graph::freeze::install::FuseTarget::Effect(fx.effect_type()),
-                fx.graph.is_some(),
-                preview_effect == Some(&fx.id),
-            ) {
-                // `fused_view_by_id` returns `None` for any effect that isn't a
-                // single whole-card fusable region — those fall straight through
-                // to the canonical view unchanged.
-                match crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type()) {
-                    Some(fused) => {
-                        // Step-7 attribution (minimal): one line per chain
-                        // rebuild so the operator can confirm a card is actually
-                        // rendering through the fused kernel. Rebuilds are
-                        // editing-time events (topology change / resize), not
-                        // per-frame, so this is not hot-path spam. Grep `[freeze]`.
-                        eprintln!(
-                            "[freeze] {} → FUSED kernel (canonical region collapsed to 1 dispatch)",
-                            fx.effect_type().as_str()
-                        );
-                        fused
-                    }
-                    None => base_view,
-                }
-            } else {
-                base_view
-            };
+            // Freeze compiler (design §12, step 2): fusion is on-demand and keyed
+            // by the def's CONTENT, so ANY shape — shipped, edited in the node
+            // editor, or created — fuses through one cache. The "effective def" is
+            // the user's edited graph when present, else the canonical preset;
+            // `fused_view_for` compiles-on-miss + caches by that def's content, so
+            // an edited shape fuses on editor-close exactly like a shipped one
+            // (and a freshly-warmed canonical hits the cache `tune_all` filled).
+            // The gate (`should_render_fused`) only suppresses fusion while this
+            // effect is the editor's *watched* target — kept unfused so node-output
+            // preview can sample inner-node textures and edits render live. There
+            // is no `has_override` veto: an override is just the effective def to
+            // fuse. The fused view keeps the same outer-card params + skip mode, so
+            // every line below (splice, outer_param_index, bindings) is shape-
+            // identical. `fused_view_for` returns `None` for any shape with no
+            // fusable region (or a binding that would strand) → renders unfused.
+            let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(base_view.canonical_def);
+            let fused_view: Option<&LoadedPresetView> =
+                if crate::node_graph::freeze::install::should_render_fused(
+                    crate::node_graph::freeze::install::FuseTarget::Effect(fx.effect_type()),
+                    preview_effect == Some(&fx.id),
+                ) {
+                    crate::node_graph::freeze::install::fused_view_for(effective_def, base_view)
+                } else {
+                    None
+                };
+            if fused_view.is_some() {
+                // Step-7 attribution (minimal): one line per chain rebuild so the
+                // operator can confirm a card is rendering through the fused
+                // kernel. Rebuilds are editing-time events (topology change /
+                // resize / editor close), not per-frame, so not hot-path spam.
+                // Grep `[freeze]`.
+                eprintln!(
+                    "[freeze] {} → FUSED kernel (region collapsed to 1 dispatch)",
+                    fx.effect_type().as_str()
+                );
+            }
+            let view = fused_view.unwrap_or(base_view);
             if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
                 // to the next effect.
                 continue;
             }
-            // Divergent path: user-edited def replaces the canonical
-            // graph. The user's wiring is materialized directly into
-            // the chain graph the same way the canonical def's
-            // splice would place the canonical layout.
-            let canonical_def = view.canonical_def;
-            let splice_result = if let Some(def) = &fx.graph {
-                match splice_def_into_chain(
-                    &mut graph,
-                    (prev_node, prev_out_port),
-                    def,
-                    primitives,
-                ) {
-                    Some(r) => r,
-                    None => {
+            // The def actually spliced into the chain:
+            //   - fused  → the fused def (it already folds the effective shape's
+            //              content, canonical or edited, into one kernel);
+            //   - else, an edited override → the user's wiring, materialized
+            //              directly (the watched / non-fusable case);
+            //   - else   → the canonical preset.
+            // On primary-splice failure, fall back to the canonical (unfused) def —
+            // it always builds — recording a divergent error when we were trying
+            // the user's edited graph or a fused kernel.
+            let splice_def: &EffectGraphDef = if fused_view.is_some() {
+                view.canonical_def
+            } else if let Some(def) = &fx.graph {
+                def
+            } else {
+                view.canonical_def
+            };
+            let splice_result = match splice_def_into_chain(
+                &mut graph,
+                (prev_node, prev_out_port),
+                splice_def,
+                primitives,
+            ) {
+                Some(r) => r,
+                None => {
+                    if fx.graph.is_some() || fused_view.is_some() {
                         record_chain_error(
                             &mut errors,
                             ChainError::DivergentGraphFellBack {
@@ -613,42 +618,23 @@ impl ChainGraph {
                                 effect_type: fx.effect_type().clone(),
                             },
                         );
-                        match splice_def_into_chain(
-                            &mut graph,
-                            (prev_node, prev_out_port),
-                            canonical_def,
-                            primitives,
-                        ) {
-                            Some(r) => r,
-                            None => {
-                                eprintln!(
-                                    "[chain-build-fail] canonical splice failed \
-                                     for effect_type={:?} (effect_id={:?}) after \
-                                     divergent-graph fallback",
-                                    fx.effect_type(),
-                                    fx.id,
-                                );
-                                return None;
-                            }
-                        }
                     }
-                }
-            } else {
-                match splice_def_into_chain(
-                    &mut graph,
-                    (prev_node, prev_out_port),
-                    canonical_def,
-                    primitives,
-                ) {
-                    Some(r) => r,
-                    None => {
-                        eprintln!(
-                            "[chain-build-fail] canonical splice failed for \
-                             effect_type={:?} (effect_id={:?})",
-                            fx.effect_type(),
-                            fx.id,
-                        );
-                        return None;
+                    match splice_def_into_chain(
+                        &mut graph,
+                        (prev_node, prev_out_port),
+                        base_view.canonical_def,
+                        primitives,
+                    ) {
+                        Some(r) => r,
+                        None => {
+                            eprintln!(
+                                "[chain-build-fail] canonical splice failed for \
+                                 effect_type={:?} (effect_id={:?}) after fallback",
+                                fx.effect_type(),
+                                fx.id,
+                            );
+                            return None;
+                        }
                     }
                 }
             };

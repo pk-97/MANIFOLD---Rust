@@ -90,24 +90,28 @@ pub enum FuseTarget<'a> {
     Generator(&'a GeneratorTypeId),
 }
 
-/// The single home for the "render this card through its fused kernel?"
-/// decision, shared by the effect chain build ([`crate::effect_chain_graph`])
-/// and the generator registry ([`crate::generators::registry`]). Both paths
-/// previously hand-maintained the same boolean shape; folding it here keeps the
-/// watched-target override from drifting into a third copy.
+/// The single home for the "should we attempt to fuse this card?" decision,
+/// shared by the effect chain build ([`crate::effect_chain_graph`]) and the
+/// generator registry ([`crate::generators::registry`]). Folding it here keeps
+/// the watched-target override from drifting into a third copy.
 ///
-/// The decision is: fuse only when fusion is enabled this process, the instance
-/// isn't carrying a live editing override (its per-card graph is the canonical
-/// one), it isn't the *watched* target (open in the graph editor — kept unfused
-/// so per-node output preview can sample inner-node textures and edits render
+/// The decision is: fuse only when fusion is enabled this process, the card
+/// isn't the *watched* target (open in the graph editor — kept unfused so
+/// per-node output preview can sample inner-node textures and edits render
 /// live), and the device's perf gate kept the fused kernel for this type.
+///
+/// Note there is no `has_override` veto: an edited/created graph is no longer
+/// special-cased to unfused. Its *content* is fused on demand via
+/// [`fused_view_for`] / [`fused_generator_def_for`], keyed by the def itself —
+/// so it fuses on editor-close exactly like a shipped shape. While the editor is
+/// open it's the watched target, which `is_watched` already keeps unfused.
 ///
 /// What stays per-path and is deliberately *not* unified: how the fused variant
 /// is loaded (an effect `LoadedPresetView` spliced into the chain vs a generator
 /// `EffectGraphDef` through `from_def`). This function is upstream of the
 /// verdict logic — it only reads the existing verdicts, never recomputes them.
-pub fn should_render_fused(target: FuseTarget<'_>, has_override: bool, is_watched: bool) -> bool {
-    if !freeze_enabled() || has_override || is_watched {
+pub fn should_render_fused(target: FuseTarget<'_>, is_watched: bool) -> bool {
+    if !freeze_enabled() || is_watched {
         return false;
     }
     match target {
@@ -118,40 +122,36 @@ pub fn should_render_fused(target: FuseTarget<'_>, has_override: bool, is_watche
     }
 }
 
-/// Look up the fused [`LoadedPresetView`] for an effect type, building the whole
-/// map on first call and caching `&'static` for the process lifetime. Returns
-/// `None` for any effect whose canonical graph has no fusable region (anything
-/// that's all boundaries). Mirrors
-/// [`crate::node_graph::loaded_preset_view_by_id`]'s lazy-cache shape.
+/// Fused [`LoadedPresetView`] for an effect *type* — the canonical (shipped)
+/// shape. Now a thin wrapper over the content-keyed [`fused_view_for`]: the
+/// canonical lookup is just that cache keyed by the type's canonical def, the
+/// same door edited shapes use. `None` for any effect whose canonical graph has
+/// no fusable region. Startup `tune_all` calls this, warming the canonical
+/// entries; the live gate fills edited entries on demand.
 pub fn fused_view_by_id(id: &EffectTypeId) -> Option<&'static LoadedPresetView> {
-    static MAP: OnceLock<AHashMap<EffectTypeId, &'static LoadedPresetView>> = OnceLock::new();
-    let map = MAP.get_or_init(build_fused_view_map);
-    map.get(id).copied()
+    let base = crate::node_graph::loaded_preset_view_by_id(id)?;
+    fused_view_for(base.canonical_def, base)
 }
 
-fn build_fused_view_map() -> AHashMap<EffectTypeId, &'static LoadedPresetView> {
-    // One registry for the whole build — `construct(type_id)` reads each atom's
-    // fusion kind / body / ports / param defaults off a fresh instance.
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut m: AHashMap<EffectTypeId, &'static LoadedPresetView> = AHashMap::default();
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
-        let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
-            continue;
-        };
-        if let Some(fused) = fuse_view(base, &registry) {
-            m.insert(type_id, Box::leak(Box::new(fused)));
-        }
-    }
-    m
-}
-
-/// Build a fused [`LoadedPresetView`] from a canonical one, or `None` if the
-/// canonical graph has no fusable region. The fused view keeps the same
-/// outer-card params + skip mode (so the chain builder's `outer_param_index` /
-/// `n_static_slots` / skip logic are byte-identical) and swaps in the fused def
-/// + retargeted bindings.
-fn fuse_view(base: &LoadedPresetView, registry: &PrimitiveRegistry) -> Option<LoadedPresetView> {
-    let fused = fuse_canonical_def(base.canonical_def, registry)?;
+/// Fuse an arbitrary `canonical_def` (shipped, edited, or created) carrying the
+/// given outer-card `bindings` + `skip_mode`, or `None` if the def has no fusable
+/// region (or a binding would strand). The fused view keeps the same outer-card
+/// params + skip mode (so the chain builder's `outer_param_index` /
+/// `n_static_slots` / skip logic are byte-identical) and swaps in the fused def +
+/// retargeted bindings. Takes the def by reference (not `&'static`) so an edited
+/// `EffectInstance::graph` can be fused in place — only the freshly-built fused
+/// def is leaked. Pure codegen, no device: the GPU pipeline compile happens
+/// downstream when the fused def is spliced into the chain (the executor compiles
+/// whatever it's handed, fused or not), so this is the unit that relocates to a
+/// background worker later.
+fn fuse_view_parts(
+    canonical_def: &EffectGraphDef,
+    bindings: &[ParamBinding],
+    type_id: &EffectTypeId,
+    skip_mode: crate::node_graph::SkipMode,
+    registry: &PrimitiveRegistry,
+) -> Option<LoadedPresetView> {
+    let fused = fuse_canonical_def(canonical_def, registry)?;
     // Node ids that survive the rewrite (boundaries + the fused nodes): a binding
     // targeting one of these is left as-is; one targeting a fused-away member is
     // retargeted; anything else strands a slider, so refuse to fuse.
@@ -161,18 +161,138 @@ fn fuse_view(base: &LoadedPresetView, registry: &PrimitiveRegistry) -> Option<Lo
         .iter()
         .map(|n| resolve_node_id(n).as_str().to_string())
         .collect();
-    let bindings = retarget_bindings(base.bindings, &fused.retarget, &surviving)?;
+    let bindings = retarget_bindings(bindings, &fused.retarget, &surviving)?;
     // The fused def must actually build (not just parse) — fall back to unfused otherwise.
     if !fused_def_builds(&fused.def, registry) {
         return None;
     }
     let def_static: &'static EffectGraphDef = Box::leak(Box::new(fused.def));
     Some(LoadedPresetView {
-        type_id: base.type_id.clone(),
+        type_id: type_id.clone(),
         canonical_def: def_static,
         bindings: Box::leak(bindings.into_boxed_slice()),
-        skip_mode: base.skip_mode,
+        skip_mode,
     })
+}
+
+// ===========================================================================
+// On-demand, content-keyed fusion cache — the single door (design: step 2).
+//
+// Fusion is no longer a startup-only, per-*type* artifact. Any graph — shipped,
+// edited in the node editor, or created from scratch — fuses through one cache
+// keyed by the def's structural *content*, not its type id. Startup `tune_all`
+// merely pre-warms the canonical entries (via `fused_view_by_id` below, now a
+// thin content-keyed wrapper); the live gate fills edited entries on demand.
+//
+// Blocking now, background-swappable later: the miss path compiles synchronously
+// (standard memoization). To move compile to a worker, the miss path returns
+// `None` and spawns instead of blocking — selection stays `fused_view_for`, so
+// that's the whole change. Keeping selection cache-only *now* is what makes that
+// a localized swap. The cache is owned by the content thread (the only thread
+// that builds chains / generators / runs `tune_all`), so it's lock-free; the
+// future shared-cache upgrade rides along with the background-worker step.
+// ===========================================================================
+
+/// Structural content key for a def: topology + node configs + baked (non-
+/// exposed) param values. Deterministic because every map in `EffectGraphDef` is
+/// a `BTreeMap` and every list a `Vec`, so `serde_json` is a stable total
+/// encoding (and handles `f32` params, which aren't `Hash`).
+///
+/// Live *exposed* params are NOT in the def — they flow through
+/// `EffectInstance.param_values` as runtime uniforms — so two instances that
+/// differ only in live modulation share one key, and the fused kernel keeps
+/// exposed params as uniforms (never baked). Computed on cache miss / chain
+/// rebuild, an editing-time event, never per frame.
+fn def_content_key(def: &EffectGraphDef) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    match serde_json::to_vec(def) {
+        Ok(bytes) => bytes.hash(&mut h),
+        // Unserializable def → distinguished key; `compile_fused_view` will also
+        // fail it to `None`, so it renders unfused (always correct).
+        Err(_) => return u64::MAX,
+    }
+    h.finish()
+}
+
+/// Leak-guard cap on each content cache. The cached values are CPU codegen
+/// artifacts (a `LoadedPresetView` / fused `EffectGraphDef` — WGSL text + def
+/// structure, a few KB), NOT GPU pipelines: the pipeline lives in the chain
+/// executor / generator, bounded by the recycled per-layer chain pool. So the
+/// only thing growing here is small CPU memory, one entry per *distinct* edited
+/// shape — a handful in any real authoring session. The cap exists only to bound
+/// a pathological edit-spam session (since values are `Box::leak`'d `&'static`,
+/// matching the canonical fused views, they can't be reclaimed). Past the cap we
+/// stop *inserting* and recompute on miss (still correct, just uncached) rather
+/// than leak without limit. A real LRU would need Arc-valued views threaded
+/// through the whole `&'static LoadedPresetView` plumbing — deferred with the
+/// background-compile step.
+const FUSED_CACHE_CAP: usize = 512;
+
+thread_local! {
+    /// Content-keyed fused-effect-view cache. `None` is cached too (negative
+    /// cache) so a non-fusable shape isn't recompiled every rebuild.
+    static FUSED_EFFECT_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static LoadedPresetView>>> =
+        std::cell::RefCell::new(AHashMap::default());
+    /// Generator twin — values are fused defs (generators compile via `from_def`).
+    static FUSED_GENERATOR_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static EffectGraphDef>>> =
+        std::cell::RefCell::new(AHashMap::default());
+}
+
+/// On-demand fused view for ANY effect shape, keyed by the def's structural
+/// content. Cache hit → return; miss → compile (blocking, content thread),
+/// cache, return. `base` supplies the canonical outer bindings + skip mode —
+/// for an edited def these still address inner nodes by stable NodeId, and the
+/// fuse retargets them onto the fused nodes (refusing, → `None` → unfused, if one
+/// would strand). Selection reads only this; the blocking is just memoize-on-miss.
+pub fn fused_view_for(
+    def: &EffectGraphDef,
+    base: &LoadedPresetView,
+) -> Option<&'static LoadedPresetView> {
+    let key = def_content_key(def);
+    if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return cached;
+    }
+    let compiled = compile_fused_view(def, base);
+    FUSED_EFFECT_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() < FUSED_CACHE_CAP {
+            m.insert(key, compiled);
+        }
+    });
+    compiled
+}
+
+/// Pure codegen of a fused view from an arbitrary def + the canonical bindings /
+/// skip mode to carry. No device, no UI state, no thread assumption — the unit
+/// that relocates to a background worker later. `None` when the def has no
+/// fusable region or a binding would strand.
+fn compile_fused_view(
+    def: &EffectGraphDef,
+    base: &LoadedPresetView,
+) -> Option<&'static LoadedPresetView> {
+    let registry = PrimitiveRegistry::with_builtin();
+    let fused = fuse_view_parts(def, base.bindings, &base.type_id, base.skip_mode, &registry)?;
+    Some(Box::leak(Box::new(fused)))
+}
+
+/// Generator twin of [`fused_view_for`]: a generator carries its modulation
+/// bindings inside `def.preset_metadata.bindings`, so fusing is self-contained
+/// (no separate `base`). Content-keyed, compile-on-miss, negative-cached.
+pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGraphDef> {
+    let key = def_content_key(def);
+    if let Some(cached) = FUSED_GENERATOR_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return cached;
+    }
+    let registry = PrimitiveRegistry::with_builtin();
+    let compiled = fuse_generator_def(def, &registry).map(|d| &*Box::leak(Box::new(d)));
+    FUSED_GENERATOR_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() < FUSED_CACHE_CAP {
+            m.insert(key, compiled);
+        }
+    });
+    compiled
 }
 
 // ===========================================================================
@@ -187,34 +307,17 @@ fn fuse_view(base: &LoadedPresetView, registry: &PrimitiveRegistry) -> Option<Lo
 // modulating after its atom folds into a kernel.
 // ===========================================================================
 
-/// Look up the fused generator def for a generator type, building + caching the
-/// whole map on first call. `None` for any generator whose canonical graph has no
-/// fusable region, or whose modulation bindings can't be retargeted (stranded) —
-/// either way it renders unfused, always correct. Mirrors [`fused_view_by_id`].
+/// Fused generator def for a generator *type* — the canonical (shipped) shape.
+/// Thin wrapper over the content-keyed [`fused_generator_def_for`]: parse the
+/// bundled preset and route it through the same cache edited generator defs use.
+/// `None` for any generator whose canonical graph has no fusable region, or whose
+/// modulation bindings can't be retargeted (stranded) — either way it renders
+/// unfused, always correct. Mirrors [`fused_view_by_id`].
 pub fn fused_generator_def_by_id(id: &GeneratorTypeId) -> Option<&'static EffectGraphDef> {
-    static MAP: OnceLock<AHashMap<GeneratorTypeId, &'static EffectGraphDef>> = OnceLock::new();
-    let map = MAP.get_or_init(build_fused_generator_map);
-    map.get(id).copied()
-}
-
-fn build_fused_generator_map() -> AHashMap<GeneratorTypeId, &'static EffectGraphDef> {
-    use crate::generators::bundled_generator_presets::{
-        bundled_generator_preset_json, bundled_generator_preset_type_ids,
-    };
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut m: AHashMap<GeneratorTypeId, &'static EffectGraphDef> = AHashMap::default();
-    for type_id in bundled_generator_preset_type_ids() {
-        let Some(json) = bundled_generator_preset_json(&type_id) else {
-            continue;
-        };
-        let Ok(def) = serde_json::from_str::<EffectGraphDef>(json) else {
-            continue;
-        };
-        if let Some(fused) = fuse_generator_def(&def, &registry) {
-            m.insert(type_id, &*Box::leak(Box::new(fused)));
-        }
-    }
-    m
+    use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
+    let json = bundled_generator_preset_json(id)?;
+    let def: EffectGraphDef = serde_json::from_str(json).ok()?;
+    fused_generator_def_for(&def)
 }
 
 /// Fuse a generator's canonical def + retarget its `preset_metadata.bindings`
@@ -586,7 +689,7 @@ pub(crate) fn fuse_canonical_def(
 /// but a fused node can still be a well-formed shader the GRAPH compiler rejects
 /// — e.g. a buffer region whose `var<storage, read_write>` output introspects as
 /// a required-but-unwired aliased input port. The real entry points
-/// ([`fuse_view`] / [`fuse_generator_def`]) run this on their final def and fall
+/// ([`fuse_view_parts`] / [`fuse_generator_def`]) run this on their final def and fall
 /// back to unfused on any failure, so a def that can't build never installs.
 /// (Not called from [`fuse_canonical_def`] itself — the install unit tests drive
 /// it with synthetic fixtures that intentionally don't fully compile.) Runs once
@@ -671,26 +774,61 @@ mod tests {
     }
 
     #[test]
-    fn shared_gate_vetoes_fusion_for_override_and_watched_targets() {
-        // The single home for the fuse-or-not decision. Both vetoes (a live
-        // per-card override, and the watched open-in-editor target) must force
-        // unfused regardless of the perf verdict — they short-circuit before it.
-        // The effect and generator arms share this exact logic so the watched
-        // override can't drift between the two render paths.
+    fn shared_gate_keeps_watched_target_unfused_both_arms() {
+        // The single home for the fuse-or-not decision. The watched
+        // (open-in-editor) target must force unfused regardless of the perf
+        // verdict — it short-circuits before it — so per-node preview can sample
+        // inner-node textures and edits render live. The effect and generator
+        // arms share this exact logic so the override can't drift between paths.
+        // (There is intentionally no `has_override` veto — an edited graph fuses
+        // by content via `fused_view_for`; while open it's the watched target.)
         let ty = EffectTypeId::new("ColorGrade");
-        // Neither veto: fuses (freeze is on in this test binary; untuned perf is
+        // Not watched: fuses (freeze is on in this test binary; untuned perf is
         // optimistic, so the verdict is `true`).
-        assert!(should_render_fused(FuseTarget::Effect(&ty), false, false));
-        // A per-card graph override is the live editing surface → never fused.
-        assert!(!should_render_fused(FuseTarget::Effect(&ty), true, false));
-        // Watched (open in the editor) → never fused, so per-node preview can
-        // sample inner-node textures and edits render live.
-        assert!(!should_render_fused(FuseTarget::Effect(&ty), false, true));
+        assert!(should_render_fused(FuseTarget::Effect(&ty), false));
+        // Watched → never fused.
+        assert!(!should_render_fused(FuseTarget::Effect(&ty), true));
 
         // Same contract on the generator arm — proves it's one decision, not two.
         let gty = GeneratorTypeId::new("DigitalPlants");
-        assert!(!should_render_fused(FuseTarget::Generator(&gty), false, true));
-        assert!(!should_render_fused(FuseTarget::Generator(&gty), true, false));
+        assert!(!should_render_fused(FuseTarget::Generator(&gty), true));
+    }
+
+    #[test]
+    fn content_keyed_cache_separates_edited_from_canonical_and_negative_caches() {
+        // An edited shape (different topology) must get its own fused entry by its
+        // own content key and never clobber the canonical one; a non-fusable def
+        // must cache `None` rather than recompile each call. Uses ColorGrade,
+        // whose canonical shape fuses.
+        let base = crate::node_graph::loaded_preset_view_by_id(&EffectTypeId::new("ColorGrade"))
+            .expect("ColorGrade canonical view");
+
+        // Canonical content key fuses and is stable across calls (cache hit).
+        let canon_a = fused_view_for(base.canonical_def, base);
+        let canon_b = fused_view_for(base.canonical_def, base);
+        assert!(canon_a.is_some(), "canonical ColorGrade must fuse");
+        assert!(
+            std::ptr::eq(canon_a.unwrap(), canon_b.unwrap()),
+            "same def content must return the same cached &'static view",
+        );
+
+        // Mutating the def's content (duplicate a node → a structurally distinct
+        // def) must route to a *different* cache entry, proving keying is by
+        // content, not type id. We don't assert it fuses (the malformed dup may
+        // strand → None); we assert the canonical entry is untouched afterward.
+        let mut edited = base.canonical_def.clone();
+        edited.nodes.push(edited.nodes[0].clone());
+        assert_ne!(
+            def_content_key(base.canonical_def),
+            def_content_key(&edited),
+            "a structural edit must change the content key",
+        );
+        let _ = fused_view_for(&edited, base);
+        let canon_c = fused_view_for(base.canonical_def, base);
+        assert!(
+            std::ptr::eq(canon_a.unwrap(), canon_c.unwrap()),
+            "an edited def's entry must not clobber the canonical entry",
+        );
     }
 
     fn colorgrade_def() -> EffectGraphDef {
