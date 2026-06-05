@@ -333,6 +333,13 @@ struct EffectSlot {
     /// port name (`forceField`), which drives the preview encoding. Empty for
     /// groupless effects.
     group_preview_map: Vec<(NodeId, NodeId, String)>,
+    /// Propagated preview data-kind per node `NodeId`, computed once at chain
+    /// build from the flattened def via [`PreviewEncoding::propagate`]. Lets the
+    /// node-output preview follow the *data*: a Gaussian Blur whose input was a
+    /// force field resolves to `VectorField` here even though the blur's own
+    /// descriptor says nothing. [`ChainGraph::set_preview_target`] looks the
+    /// previewed node up here before falling back to single-node `derive`.
+    preview_kinds: ahash::AHashMap<NodeId, crate::node_graph::PreviewEncoding>,
     /// Unified resolved binding list — `bindings[0..n_static]` are
     /// spec bindings hydrated via [`ResolvedBinding::from_static`];
     /// `bindings[n_static..]` are user-exposed bindings hydrated via
@@ -681,6 +688,13 @@ impl ChainGraph {
             // groups the editor is showing.
             let group_preview_map =
                 manifold_core::flatten::group_output_producer_map(splice_def);
+            // Propagated per-node preview kind, computed from the flattened def
+            // (groups inlined) so a filter inherits the data kind of whatever
+            // upstream node feeds it. `node_id`s survive flatten (nodeId-safety
+            // invariant), so these keys match `node_map` / `group_preview_map`.
+            let preview_kinds = manifold_core::flatten::flatten_groups(splice_def)
+                .map(|flat| crate::node_graph::PreviewEncoding::propagate(&flat))
+                .unwrap_or_default();
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
@@ -777,6 +791,7 @@ impl ChainGraph {
                 handles,
                 node_map,
                 group_preview_map,
+                preview_kinds,
                 bindings,
                 n_static,
                 n_static_slots,
@@ -1173,23 +1188,29 @@ impl ChainGraph {
     /// [`Self::run`]; the preserved texture is then read via
     /// [`Self::preview_texture`].
     pub fn set_preview_target(&mut self, effect_id: &EffectId, node_id: Option<&NodeId>) {
-        // `(target instance, port-name override for a group output)`.
-        let resolved: Option<(NodeInstanceId, Option<String>)> = node_id.and_then(|nid| {
+        use crate::node_graph::PreviewEncoding;
+        // `(target instance, encoding)`, resolved against the owning slot.
+        let resolved: Option<(NodeInstanceId, PreviewEncoding)> = node_id.and_then(|nid| {
             self.effect_nodes
                 .iter()
                 .find(|slot| &slot.effect_id == effect_id)
                 .and_then(|slot| {
-                    // Direct node hit.
+                    // Direct node hit: prefer the propagated kind (so a blur of
+                    // a field reads as a field); fall back to single-node derive.
                     if let Some((_, instance)) =
                         slot.node_map.iter().find(|(mapped, _)| mapped == nid)
                     {
-                        return Some((*instance, None));
+                        let enc = slot
+                            .preview_kinds
+                            .get(nid)
+                            .copied()
+                            .unwrap_or_else(|| self.encoding_for_instance(*instance, None));
+                        return Some((*instance, enc));
                     }
                     // A selected group container isn't in `node_map` (it
                     // flattened away); resolve it to its primary texture-output
-                    // producer. Carry the group's output port name so the
-                    // preview encoding follows the data, not the producer's own
-                    // (possibly generic) descriptor.
+                    // producer. The group's output port name is the strongest
+                    // signal (`forceField`); else the producer's propagated kind.
                     slot.group_preview_map
                         .iter()
                         .find(|(group, _, _)| group == nid)
@@ -1197,23 +1218,25 @@ impl ChainGraph {
                             slot.node_map
                                 .iter()
                                 .find(|(mapped, _)| mapped == producer)
-                                .map(|(_, instance)| (*instance, Some(port.clone())))
+                                .map(|(_, instance)| {
+                                    let enc = PreviewEncoding::from_port_name(port)
+                                        .or_else(|| slot.preview_kinds.get(producer).copied())
+                                        .unwrap_or(PreviewEncoding::Color);
+                                    (*instance, enc)
+                                })
                         })
                 })
         });
         let (target, encoding) = match resolved {
-            Some((instance, port_override)) => (
-                Some(instance),
-                self.encoding_for_instance(instance, port_override.as_deref()),
-            ),
-            None => (None, crate::node_graph::PreviewEncoding::Color),
+            Some((instance, encoding)) => (Some(instance), encoding),
+            None => (None, PreviewEncoding::Color),
         };
         self.preview_encoding = encoding;
         self.executor.set_preview_target(target);
     }
 
-    /// Derive the preview encoding for a runtime node off the live graph: its
-    /// `type_id` and output port name (or `port_override` for a group output).
+    /// Single-node fallback when no propagated kind is on hand: derive from the
+    /// runtime node's `type_id` and first output port off the live graph.
     fn encoding_for_instance(
         &self,
         inst: NodeInstanceId,

@@ -163,6 +163,18 @@ pub struct ContentPipeline {
     /// brightness). Used for force fields, flow, gradients, displacement.
     #[cfg(target_os = "macos")]
     node_preview_vector_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Signed-scalar blit: a diverging blue → black → red ramp centred at 0, so
+    /// the sign reads at a glance. Used for SDFs, divergence, signed height.
+    #[cfg(target_os = "macos")]
+    node_preview_signed_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Normal-map blit: xyz in `[-1,1]` decoded to the familiar blue-dominant
+    /// RGB. Used for surface normals / bump output.
+    #[cfg(target_os = "macos")]
+    node_preview_normal_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Depth blit: a perceptual near-far colour ramp (turbo-like) so subtle
+    /// distance gradients read instead of washing to flat grey.
+    #[cfg(target_os = "macos")]
+    node_preview_depth_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Live node-output preview info from the most recent render — the
     /// previewed node's id, whether it produced an image, and its scalar I/O.
     /// Pulled into [`ContentState`](crate::content_state::ContentState) each
@@ -182,6 +194,20 @@ pub struct ContentPipeline {
     /// strip maps 1:1 to one column. Updated by ContentThread when the LED
     /// controller is initialized; defaults to LedSettings defaults otherwise.
     led_grid_size: (u32, u32),
+}
+
+/// The semantic node-preview render pipelines, borrowed as one bundle so the
+/// preview blit takes a single argument instead of one `Option<&pipeline>` per
+/// [`PreviewEncoding`](manifold_renderer::node_graph::PreviewEncoding). `raw`
+/// is the plain blit used for `Color` and smart-off.
+#[cfg(target_os = "macos")]
+struct PreviewPipelines<'a> {
+    scalar_lift: Option<&'a manifold_gpu::GpuRenderPipeline>,
+    scalar_signed: Option<&'a manifold_gpu::GpuRenderPipeline>,
+    vector: Option<&'a manifold_gpu::GpuRenderPipeline>,
+    normal: Option<&'a manifold_gpu::GpuRenderPipeline>,
+    depth: Option<&'a manifold_gpu::GpuRenderPipeline>,
+    raw: Option<&'a manifold_gpu::GpuRenderPipeline>,
 }
 
 impl ContentPipeline {
@@ -245,6 +271,12 @@ impl ContentPipeline {
             node_preview_scalar_pipeline: None,
             #[cfg(target_os = "macos")]
             node_preview_vector_pipeline: None,
+            #[cfg(target_os = "macos")]
+            node_preview_signed_pipeline: None,
+            #[cfg(target_os = "macos")]
+            node_preview_normal_pipeline: None,
+            #[cfg(target_os = "macos")]
+            node_preview_depth_pipeline: None,
             node_preview_normalize: true,
             #[cfg(target_os = "macos")]
             recording_session: None,
@@ -392,6 +424,94 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             None,
             "Node Preview Vector Wheel",
         ));
+
+        // Signed scalar: diverging ramp centred at 0. Negative → blue, 0 →
+        // black, positive → red, with the asinh lift on |value| so small
+        // swings either side of zero are visible. No per-frame statistics.
+        let signed_shader = format!(
+            "{preview_vs}
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+    let c = textureSample(t_source, s_source, in.uv).r;
+    let inv_k = 20.0;
+    let norm = asinh_approx(inv_k);
+    let mag = clamp(asinh_approx(abs(c) * inv_k) / norm, 0.0, 1.0);
+    let pos = vec3<f32>(0.9, 0.2, 0.15);   // warm red for c > 0
+    let neg = vec3<f32>(0.15, 0.35, 0.95); // cool blue for c < 0
+    let tint = select(neg, pos, c >= 0.0);
+    return vec4<f32>(tint * mag, 1.0);
+}}"
+        );
+        self.node_preview_signed_pipeline = Some(device.create_render_pipeline(
+            &signed_shader,
+            "vs_main",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
+            "Node Preview Signed Diverging",
+        ));
+
+        // Normal map: decode xyz from [-1,1] to the familiar blue-dominant RGB.
+        // Tolerant of already-encoded [0,1] normals (re-normalising a unit-ish
+        // vector is a no-op). No per-frame statistics.
+        let normal_shader = format!(
+            "{preview_vs}
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+    let raw = textureSample(t_source, s_source, in.uv).xyz;
+    // Treat values already in [0,1] as encoded; those spanning negatives as
+    // raw [-1,1]. Decode raw → [0,1] for display.
+    let mn = min(min(raw.x, raw.y), raw.z);
+    let n = select(raw, raw * 0.5 + vec3<f32>(0.5), mn < 0.0);
+    return vec4<f32>(clamp(n, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}}"
+        );
+        self.node_preview_normal_pipeline = Some(device.create_render_pipeline(
+            &normal_shader,
+            "vs_main",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
+            "Node Preview Normal Decode",
+        ));
+
+        // Depth: a turbo-like near-far colour ramp. Depth is read from R; the
+        // asinh lift spreads near values (where detail clusters) without a
+        // per-frame window, so it never flickers as the scene changes.
+        let depth_shader = format!(
+            "{preview_vs}
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+// Compact turbo approximation: smooth blue→cyan→green→yellow→red.
+fn turbo(t: f32) -> vec3<f32> {{
+    let x = clamp(t, 0.0, 1.0);
+    let r = clamp(1.5 - abs(2.0 * x - 1.5) * 2.0, 0.0, 1.0);
+    let g = clamp(1.5 - abs(2.0 * x - 1.0) * 2.0, 0.0, 1.0);
+    let b = clamp(1.5 - abs(2.0 * x - 0.5) * 2.0, 0.0, 1.0);
+    return vec3<f32>(r, g, b);
+}}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+    let d = textureSample(t_source, s_source, in.uv).r;
+    let inv_k = 20.0;
+    let norm = asinh_approx(inv_k);
+    let t = clamp(asinh_approx(max(d, 0.0) * inv_k) / norm, 0.0, 1.0);
+    return vec4<f32>(turbo(t), 1.0);
+}}"
+        );
+        self.node_preview_depth_pipeline = Some(device.create_render_pipeline(
+            &depth_shader,
+            "vs_main",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
+            "Node Preview Depth Ramp",
+        ));
+
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.fence_waiter = Some(manifold_gpu::GpuFenceWaiter::new());
@@ -795,9 +915,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.node_preview_textures[self.write_surface_index].as_ref(),
                         self.node_preview_normalize,
                         encoding,
-                        self.node_preview_scalar_pipeline.as_ref(),
-                        self.node_preview_vector_pipeline.as_ref(),
-                        self.preview_pipeline.as_ref(),
+                        &self.preview_pipelines(),
                         self.preview_sampler.as_ref(),
                     );
                 } else if let Some(target) =
@@ -1031,9 +1149,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.node_preview_textures[self.write_surface_index].as_ref(),
                     self.node_preview_normalize,
                     encoding,
-                    self.node_preview_scalar_pipeline.as_ref(),
-                    self.node_preview_vector_pipeline.as_ref(),
-                    self.preview_pipeline.as_ref(),
+                    &self.preview_pipelines(),
                     self.preview_sampler.as_ref(),
                 );
             } else if self.node_preview_request.is_some()
@@ -1379,15 +1495,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// goes through here; the live render and workspace preview are untouched.
     #[cfg(target_os = "macos")]
     #[allow(clippy::too_many_arguments)]
+    /// Borrow the semantic node-preview pipelines as one bundle, so the preview
+    /// blit takes a single argument instead of one `Option<&pipeline>` per
+    /// encoding. `None` on a platform / state where a pipeline wasn't built.
+    #[cfg(target_os = "macos")]
+    fn preview_pipelines(&self) -> PreviewPipelines<'_> {
+        PreviewPipelines {
+            scalar_lift: self.node_preview_scalar_pipeline.as_ref(),
+            scalar_signed: self.node_preview_signed_pipeline.as_ref(),
+            vector: self.node_preview_vector_pipeline.as_ref(),
+            normal: self.node_preview_normal_pipeline.as_ref(),
+            depth: self.node_preview_depth_pipeline.as_ref(),
+            raw: self.preview_pipeline.as_ref(),
+        }
+    }
+
     fn update_node_preview(
         enc: &mut manifold_gpu::GpuEncoder,
         source: &manifold_gpu::GpuTexture,
         target: Option<&manifold_gpu::GpuTexture>,
         smart: bool,
         encoding: manifold_renderer::node_graph::PreviewEncoding,
-        scalar_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
-        vector_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
-        raw_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
+        pipelines: &PreviewPipelines<'_>,
         sampler: Option<&manifold_gpu::GpuSampler>,
     ) {
         use manifold_renderer::node_graph::PreviewEncoding;
@@ -1398,8 +1527,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // the raw blit; a missing pipeline also falls through.
         let pipeline = if smart {
             match encoding {
-                PreviewEncoding::ScalarLift => scalar_pipeline,
-                PreviewEncoding::VectorField => vector_pipeline,
+                PreviewEncoding::ScalarLift => pipelines.scalar_lift,
+                PreviewEncoding::ScalarSigned => pipelines.scalar_signed,
+                PreviewEncoding::VectorField => pipelines.vector,
+                PreviewEncoding::Normal => pipelines.normal,
+                PreviewEncoding::Depth => pipelines.depth,
                 PreviewEncoding::Color => None,
             }
         } else {
@@ -1425,7 +1557,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
             return;
         }
-        Self::update_workspace_preview(enc, source, Some(target), raw_pipeline, sampler);
+        Self::update_workspace_preview(enc, source, Some(target), pipelines.raw, sampler);
     }
 
     /// Toggle auto-gain/normalization on the node-output preview. On by

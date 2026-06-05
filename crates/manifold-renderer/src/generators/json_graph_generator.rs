@@ -261,6 +261,11 @@ pub struct JsonGraphGenerator {
     /// the host so the node-preview blit picks the right encoding (flow wheel /
     /// lift / raw). `Color` when nothing is previewed.
     preview_encoding: crate::node_graph::PreviewEncoding,
+    /// Propagated preview data-kind per node `NodeId`, computed once at load via
+    /// [`PreviewEncoding::propagate`] over the flattened document so a filter
+    /// inherits the data kind of whatever upstream node feeds it. Consulted by
+    /// [`Generator::set_preview_node`] before the single-node `derive` fallback.
+    preview_kinds: ahash::AHashMap<manifold_core::NodeId, crate::node_graph::PreviewEncoding>,
 }
 
 /// One resolved String outer-card → inner-node binding. The String
@@ -376,6 +381,12 @@ impl JsonGraphGenerator {
         // `into_graph` flattens the groups away (the flattened graph has no
         // group nodes to resolve a selected collapsed group against).
         let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
+        // Propagated per-node preview kind, from the flattened document so a
+        // filter inherits its upstream data kind. `node_id`s survive flatten,
+        // so these keys match `group_preview_map` and the runtime instances.
+        let preview_kinds = manifold_core::flatten::flatten_groups(&doc)
+            .map(|flat| crate::node_graph::PreviewEncoding::propagate(&flat))
+            .unwrap_or_default();
 
         let mut graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
@@ -533,6 +544,7 @@ impl JsonGraphGenerator {
             last_note_version: u32::MAX,
             group_preview_map,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
+            preview_kinds,
         };
         g.apply_string_defaults();
         Ok(g)
@@ -898,21 +910,29 @@ impl Generator for JsonGraphGenerator {
     /// map and preview the group's primary texture-output producer instead.
     /// Plain nodes and groups thus share one capture mechanism.
     fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
-        let mut encoding = crate::node_graph::PreviewEncoding::Color;
+        use crate::node_graph::PreviewEncoding;
+        let mut encoding = PreviewEncoding::Color;
         let target = node_id.and_then(|nid| {
-            // Direct node hit: encoding from the node itself.
+            // Direct node hit: prefer the propagated kind (a blur of a field
+            // reads as a field); fall back to single-node derive.
             if let Some(inst) = self.graph.instance_by_node_id(nid) {
-                encoding = self.encoding_for_instance(inst, None);
+                encoding = self
+                    .preview_kinds
+                    .get(nid)
+                    .copied()
+                    .unwrap_or_else(|| self.encoding_for_instance(inst, None));
                 return Some(inst);
             }
-            // Group container: capture its producer, but derive the encoding
-            // from the group's output port name (`forceField`) — the producer
-            // may be a generic blur whose own descriptor would mislead.
+            // Group container: capture its producer. The group's output port
+            // name is the strongest signal (`forceField`); else the producer's
+            // propagated kind.
             if let Some((_, producer, port)) =
                 self.group_preview_map.iter().find(|(group, _, _)| group == nid)
                 && let Some(inst) = self.graph.instance_by_node_id(producer)
             {
-                encoding = self.encoding_for_instance(inst, Some(port));
+                encoding = PreviewEncoding::from_port_name(port)
+                    .or_else(|| self.preview_kinds.get(producer).copied())
+                    .unwrap_or(PreviewEncoding::Color);
                 return Some(inst);
             }
             None
