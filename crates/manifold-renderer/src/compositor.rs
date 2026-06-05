@@ -25,8 +25,8 @@ pub struct CompositeLayerDescriptor<'a> {
 
 /// Frame context passed to the compositor each tick.
 pub struct CompositorFrame<'a> {
-    pub time: f32,
-    pub beat: f32,
+    pub time: f64,
+    pub beat: f64,
     pub dt: f32,
     pub frame_count: u64,
     pub compositor_dirty: bool,

@@ -5,13 +5,14 @@
 //
 // Same logic, same variables, same constants, same edge cases.
 // AsyncGPUReadback → poll-based ReadbackRequest (submit + try_read).
-// Time.frameCount → EffectContext.frame_count.
+// Time.frameCount → PresetContext.frame_count.
 // Graphics.Blit → compute dispatch per pass.
 
 use crate::background_worker::BackgroundWorker;
-use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effect::PostProcessEffect;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
+use crate::preset_context::PresetContext;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -1620,7 +1621,7 @@ impl PostProcessEffect for WireframeDepthFX {
         source: &manifold_gpu::GpuTexture,
         target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
-        ctx: &EffectContext,
+        ctx: &PresetContext,
     ) {
         // WireframeDepthFX.cs line 281-282
         let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.0);

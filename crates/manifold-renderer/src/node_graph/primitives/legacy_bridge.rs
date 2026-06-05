@@ -1,9 +1,9 @@
-//! Bridges `EffectNodeContext` ↔ `EffectInstance` + `EffectContext`
+//! Bridges `EffectNodeContext` ↔ `EffectInstance` + `PresetContext`
 //! for the few node-graph primitives that still wrap a legacy
 //! `PostProcessEffect` instance (Infrared, QuadMirror, WireframeDepth).
 //!
 //! Each wrapper primitive rebuilds the legacy effect's positional-param
-//! `EffectInstance` and `EffectContext` per frame from its named
+//! `EffectInstance` and `PresetContext` per frame from its named
 //! `EffectNodeContext`. The two helpers here are the shared bridge
 //! code; they used to live in the AutoGain bundle's primitive file and
 //! moved here when AutoGain was atom-decomposed (Tranche 7).
@@ -11,7 +11,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 
-use crate::effect::EffectContext;
+use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::ParamValue;
 
@@ -48,7 +48,7 @@ pub(super) fn build_effect_instance(
     fx
 }
 
-/// Build a legacy `EffectContext` from the graph's `EffectNodeContext`.
+/// Build a legacy `PresetContext` from the graph's `EffectNodeContext`.
 /// Width/height come from the output texture; time/beat/dt from the
 /// frame's `FrameTime`. Fields the graph doesn't track
 /// (`is_clip_level`, `output_width/height`) get sensible defaults —
@@ -64,17 +64,26 @@ pub(super) fn build_effect_context(
     ctx: &EffectNodeContext<'_, '_>,
     width: u32,
     height: u32,
-) -> EffectContext {
-    EffectContext {
-        time: ctx.time.seconds.0 as f32,
-        beat: ctx.time.beats.0 as f32,
+) -> PresetContext {
+    PresetContext {
+        time: ctx.time.seconds.0,
+        beat: ctx.time.beats.0,
         dt: ctx.time.delta.0 as f32,
         width,
         height,
         output_width: width,
         output_height: height,
+        aspect: if height > 0 {
+            width as f32 / height as f32
+        } else {
+            1.0
+        },
         owner_key: ctx.owner_key,
         is_clip_level: false,
         frame_count: ctx.time.frame_count,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
     }
 }

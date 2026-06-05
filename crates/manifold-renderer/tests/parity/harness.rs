@@ -41,9 +41,9 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_renderer::chain_dispatch::dispatch_chain;
-use manifold_renderer::effect::EffectContext;
 use manifold_renderer::effect_chain_graph::ChainGraph;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::node_graph::{
     Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
     NodeInstanceId, ResourceId, Slot, Source, compile,
@@ -160,7 +160,7 @@ impl ParityHarness {
         &self,
         fx: &EffectInstance,
         input: &GpuTexture,
-        ctx: &EffectContext,
+        ctx: &PresetContext,
     ) -> Vec<u8> {
         // Stable destination — we GPU-copy the chain's output into here
         // so readback isn't borrow-locked by the chain's internal
@@ -208,7 +208,7 @@ impl ParityHarness {
         &self,
         prim: Box<dyn EffectNode>,
         input: &GpuTexture,
-        ctx: &EffectContext,
+        ctx: &PresetContext,
         set_params: F,
     ) -> Vec<u8>
     where
@@ -266,8 +266,8 @@ impl ParityHarness {
         let prim_output_slot = Slot(backend.slot_count());
 
         let frame_time = FrameTime {
-            beats: Beats(f64::from(ctx.beat)),
-            seconds: Seconds(f64::from(ctx.time)),
+            beats: Beats(ctx.beat),
+            seconds: Seconds(ctx.time),
             delta: Seconds(f64::from(ctx.dt)),
             frame_count: ctx.frame_count,
         };
@@ -304,7 +304,7 @@ impl ParityHarness {
         prim: Box<dyn EffectNode>,
         input: &GpuTexture,
         aux_inputs: &[(&str, &GpuTexture)],
-        ctx: &EffectContext,
+        ctx: &PresetContext,
         set_params: F,
     ) -> Vec<u8>
     where
@@ -401,8 +401,8 @@ impl ParityHarness {
         let prim_output_slot = Slot(backend.slot_count());
 
         let frame_time = FrameTime {
-            beats: Beats(f64::from(ctx.beat)),
-            seconds: Seconds(f64::from(ctx.time)),
+            beats: Beats(ctx.beat),
+            seconds: Seconds(ctx.time),
             delta: Seconds(f64::from(ctx.dt)),
             frame_count: ctx.frame_count,
         };
@@ -634,11 +634,11 @@ pub fn assert_bytewise_equal(label: &str, a: &[u8], b: &[u8]) {
 // Effect context defaults
 // ---------------------------------------------------------------------------
 
-/// Deterministic `EffectContext` for parity runs. Time/beat are fixed so
+/// Deterministic `PresetContext` for parity runs. Time/beat are fixed so
 /// any time-dependent effect (Glitch, Strobe, VoronoiPrism) produces
 /// reproducible output across runs.
-pub fn default_ctx(width: u32, height: u32) -> EffectContext {
-    EffectContext {
+pub fn default_ctx(width: u32, height: u32) -> PresetContext {
+    PresetContext {
         time: 1.234,
         beat: 2.5,
         dt: 1.0 / 60.0,
@@ -646,9 +646,18 @@ pub fn default_ctx(width: u32, height: u32) -> EffectContext {
         height,
         output_width: width,
         output_height: height,
+        aspect: if height > 0 {
+            width as f32 / height as f32
+        } else {
+            1.0
+        },
         owner_key: 0,
         is_clip_level: false,
         frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
     }
 }
 
@@ -692,4 +701,4 @@ fn leak_static_str(s: String) -> &'static str {
 // imports each helper. The harness is a foundation commit — concrete
 // tests follow in §6.1.
 #[allow(dead_code)]
-fn _unused_anchor(_: Fixture, _: ParityHarness, _: EffectContext) {}
+fn _unused_anchor(_: Fixture, _: ParityHarness, _: PresetContext) {}

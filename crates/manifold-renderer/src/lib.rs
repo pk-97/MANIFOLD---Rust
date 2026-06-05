@@ -6,7 +6,6 @@ pub mod effect_chain_graph;
 pub mod effects;
 pub mod fsr1;
 pub mod generator;
-pub mod generator_context;
 pub mod generator_renderer;
 pub mod generators;
 pub mod gpu;
@@ -21,6 +20,7 @@ pub mod native_text;
 pub mod node_graph;
 pub mod plugin_prewarm;
 pub mod pq_encoder;
+pub mod preset_context;
 pub mod render_target;
 pub mod render_target_pool;
 #[cfg(target_os = "macos")]

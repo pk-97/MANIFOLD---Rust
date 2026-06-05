@@ -752,9 +752,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // instead of busy-spinning. Export mode waits via wait_for_gpu_idle().
         let _poll_ms = self.last_fence_wait_ms;
 
-        // Extract timing values before split borrow
-        let time = engine.current_time();
-        let beat = engine.current_beat();
+        // Extract timing values before split borrow. Time/beat stay f64 from
+        // the playback clock all the way to the GPU uniform boundary — no f32
+        // round-trip — so beat phase stays exact over a long show.
         let time_f64 = engine.current_time_double();
         let beat_f64 = engine.current_beat_f64();
 
@@ -769,8 +769,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 tick_result,
                 dt,
                 frame_count,
-                time.as_f32(),
-                beat.as_f32(),
                 time_f64,
                 beat_f64,
                 _t_frame,
@@ -789,8 +787,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 tick_result,
                 dt,
                 frame_count,
-                time,
-                beat,
                 time_f64,
                 beat_f64,
             );
@@ -811,8 +807,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         tick_result: &TickResult,
         dt: f64,
         frame_count: u64,
-        time: f32,
-        beat: f32,
         time_f64: f64,
         beat_f64: f64,
         _t_frame: std::time::Instant,
@@ -995,8 +989,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let led_exit_index = project.map_or(-1, |p| p.settings.led_exit_index);
 
         let frame = CompositorFrame {
-            time,
-            beat,
+            time: time_f64,
+            beat: beat_f64,
             dt: dt as f32,
             frame_count,
             compositor_dirty: tick_result.compositor_dirty,

@@ -372,9 +372,9 @@ mod tests {
     fn dump_blackhole_headless() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
         use manifold_renderer::generator::Generator;
-        use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
         use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use manifold_renderer::node_graph::PrimitiveRegistry;
         use manifold_renderer::render_target::RenderTarget;
 
@@ -393,7 +393,7 @@ mod tests {
                 .expect("build BlackHole generator");
         let target = RenderTarget::new(&device, w, h, FMT, "dump-target");
 
-        let mk_ctx = |t: f64| GeneratorContext {
+        let mk_ctx = |t: f64| PresetContext {
             time: t,
             beat: t * 2.0,
             dt: 1.0 / 60.0,
@@ -402,6 +402,9 @@ mod tests {
             output_width: w,
             output_height: h,
             aspect: w as f32 / h as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
             params: [0.0; MAX_GEN_PARAMS],
@@ -463,9 +466,9 @@ mod tests {
     fn sweep_blackhole_cloud() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
         use manifold_renderer::generator::Generator;
-        use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
         use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use manifold_renderer::node_graph::PrimitiveRegistry;
         use manifold_renderer::render_target::RenderTarget;
 
@@ -537,7 +540,7 @@ mod tests {
             )
             .expect("build variant");
             let target = RenderTarget::new(&device, w, h, FMT, "sweep-target");
-            let mk = |t: f64| GeneratorContext {
+            let mk = |t: f64| PresetContext {
                 time: t,
                 beat: t * 2.0,
                 dt: 1.0 / 60.0,
@@ -546,6 +549,9 @@ mod tests {
                 output_width: w,
                 output_height: h,
                 aspect: w as f32 / h as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
                 params: [0.0; MAX_GEN_PARAMS],

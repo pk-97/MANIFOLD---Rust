@@ -101,7 +101,7 @@ fn wireframe_depth_is_pixel_exact_across_fixtures_and_setups() {
 
         for s in SETUPS {
             owner_key += 1;
-            let ctx = manifold_renderer::effect::EffectContext {
+            let ctx = manifold_renderer::preset_context::PresetContext {
                 owner_key,
                 ..default_ctx(h.width, h.height)
             };

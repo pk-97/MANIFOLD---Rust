@@ -418,7 +418,7 @@ mod tests {
 
     /// **Bit-perfect parity hook for the legacy Lissajous generator.**
     /// Legacy code does `a = 2.0 + 1.5 * (time * freq_x_rate).sin()`
-    /// where `time` is `ctx.time` (seconds, see GeneratorContext) and
+    /// where `time` is `ctx.time` (seconds, see PresetContext) and
     /// `freq_x_rate` is the user param.
     ///
     /// The equivalent graph node is `Lfo(rate_mode=Free, sine,

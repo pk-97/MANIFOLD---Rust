@@ -24,10 +24,10 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::effect::EffectContext;
 use crate::effect_chain_graph::ChainGraph;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::PrimitiveRegistry;
+use crate::preset_context::PresetContext;
 use manifold_core::EffectId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_gpu::GpuTexture;
@@ -141,7 +141,7 @@ pub fn dispatch_chain<'a>(
     input_texture: &'a GpuTexture,
     effects: &[EffectInstance],
     groups: &[EffectGroup],
-    ctx: &EffectContext,
+    ctx: &PresetContext,
     preview_effect: Option<&EffectId>,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {

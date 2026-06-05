@@ -27,7 +27,7 @@ use std::any::Any;
 
 use crate::node_graph::effect_node::NodeInstanceId;
 
-/// Owner identity, matching the legacy `EffectContext::owner_key` shape:
+/// Owner identity, matching the `PresetContext::owner_key` shape:
 /// `0` for master, `layer_index + 1` for a layer, `hash(clip_id)` for a
 /// clip. Stays as a typedef rather than a newtype so existing call sites
 /// can flow `i64` through unchanged.

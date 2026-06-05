@@ -1,7 +1,7 @@
 use crate::generator::Generator;
-use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use crate::generators::registry::GeneratorRegistry;
 use crate::gpu_encoder::GpuEncoder;
+use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use crate::render_target::RenderTarget;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
@@ -480,7 +480,7 @@ impl GeneratorRenderer {
                 continue; // sentinel — clip not found
             }
 
-            // Build GeneratorContext from layer params (zero allocation)
+            // Build PresetContext from layer params (zero allocation)
             let mut params = [0.0f32; MAX_GEN_PARAMS];
             let mut param_count = 0u32;
             if let Some(layer) = layers.get(layer_index as usize)
@@ -492,7 +492,7 @@ impl GeneratorRenderer {
                 }
             }
 
-            let ctx = GeneratorContext {
+            let ctx = PresetContext {
                 time,
                 beat,
                 dt,
@@ -501,6 +501,9 @@ impl GeneratorRenderer {
                 output_width: self.width,
                 output_height: self.height,
                 aspect: self.width as f32 / self.height as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: 0,
                 anim_progress,
                 trigger_count,
                 params,

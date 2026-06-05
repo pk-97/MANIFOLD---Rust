@@ -126,7 +126,7 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     pub node_id: NodeInstanceId,
     /// Owner identity for state keying — `0` for master, `layer_index +
     /// 1` for a layer, `hash(clip_id)` for a clip. Matches the legacy
-    /// `EffectContext::owner_key` namespace.
+    /// `PresetContext::owner_key` namespace.
     pub owner_key: OwnerKey,
     /// Did this primitive's `evaluate` / `run` access the GPU encoder?
     /// Set to `true` by [`gpu_encoder`](Self::gpu_encoder) on first

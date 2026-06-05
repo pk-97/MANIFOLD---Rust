@@ -1020,7 +1020,7 @@ fn grouped_presets_fuse_through_entry_points() {
 fn every_fused_generator_executes_one_frame() {
     use super::install::fused_generator_def_by_id;
     use crate::generator::Generator;
-    use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::bundled_generator_presets::bundled_generator_preset_type_ids;
     use crate::generators::json_graph_generator::JsonGraphGenerator;
     use std::panic::AssertUnwindSafe;
@@ -1028,7 +1028,7 @@ fn every_fused_generator_executes_one_frame() {
     let device = crate::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (192u32, 192u32);
-    let ctx = GeneratorContext {
+    let ctx = PresetContext {
         time: 0.0,
         beat: 0.0,
         dt: 1.0 / 60.0,
@@ -1037,6 +1037,9 @@ fn every_fused_generator_executes_one_frame() {
         output_width: w,
         output_height: h,
         aspect: 1.0,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
         params: [0.0; MAX_GEN_PARAMS],
@@ -1098,7 +1101,7 @@ fn every_fused_generator_executes_one_frame() {
 fn fused_generator_renders_like_unfused() {
     use super::install::fuse_generator_def;
     use crate::generator::Generator;
-    use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::json_graph_generator::JsonGraphGenerator;
 
     let device = crate::test_device();
@@ -1129,7 +1132,7 @@ fn fused_generator_renders_like_unfused() {
     let canonical: EffectGraphDef = serde_json::from_str(json).unwrap();
     let fused_def = fuse_generator_def(&canonical, &registry).expect("the generator fuses");
 
-    let ctx = GeneratorContext {
+    let ctx = PresetContext {
         time: 0.0,
         beat: 0.0,
         dt: 1.0 / 60.0,
@@ -1138,6 +1141,9 @@ fn fused_generator_renders_like_unfused() {
         output_width: w,
         output_height: h,
         aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
         params: [0.0; MAX_GEN_PARAMS],
@@ -1191,7 +1197,7 @@ fn fused_generator_renders_like_unfused() {
 fn digitalplants_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
     use crate::generator::Generator;
-    use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
     use crate::generators::json_graph_generator::JsonGraphGenerator;
 
@@ -1208,7 +1214,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     let fused_def =
         fuse_generator_def(&canonical, &registry).expect("DigitalPlants buffer region fuses + builds");
 
-    let ctx = |t: f64| GeneratorContext {
+    let ctx = |t: f64| PresetContext {
         time: t,
         beat: t * 2.0,
         dt: 1.0 / 60.0,
@@ -1217,6 +1223,9 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
         output_width: w,
         output_height: h,
         aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
         params: [0.0; MAX_GEN_PARAMS],

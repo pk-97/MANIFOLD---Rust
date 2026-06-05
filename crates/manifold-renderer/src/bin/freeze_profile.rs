@@ -24,8 +24,8 @@ use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::generator::Generator;
-use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::primitives::Gain;
 use manifold_renderer::node_graph::{
@@ -700,7 +700,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                 )
                 .map_err(|e| e.to_string())?;
                 let target = RenderTarget::new(device, w, h, FORMAT, "freeze-profile-gen");
-                let mk_ctx = |t: f64| GeneratorContext {
+                let mk_ctx = |t: f64| PresetContext {
                     time: t,
                     beat: t * 2.0,
                     dt: 1.0_f32 / 60.0,
@@ -709,6 +709,9 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                     output_width: w,
                     output_height: h,
                     aspect: w as f32 / h as f32,
+                    owner_key: 0,
+                    is_clip_level: false,
+                    frame_count: 0,
                     anim_progress: 0.0,
                     trigger_count: 0,
                     params: [0.0; MAX_GEN_PARAMS],
@@ -819,7 +822,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
                 JsonGraphGenerator::from_def_with_device(def, registry, device, w, h, FORMAT)
                     .map_err(|e| e.to_string())?;
             let target = RenderTarget::new(device, w, h, FORMAT, "fluidsweep-gen");
-            let mk_ctx = |t: f64| GeneratorContext {
+            let mk_ctx = |t: f64| PresetContext {
                 time: t,
                 beat: t * 2.0,
                 dt: 1.0_f32 / 60.0,
@@ -828,6 +831,9 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
                 output_width: w,
                 output_height: h,
                 aspect: w as f32 / h as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
                 params: [0.0; MAX_GEN_PARAMS],

@@ -1,5 +1,5 @@
-use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use crate::preset_context::PresetContext;
 use manifold_core::GeneratorTypeId;
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ pub trait Generator: Send {
         &mut self,
         gpu: &mut GpuEncoder,
         target: &manifold_gpu::GpuTexture,
-        ctx: &GeneratorContext,
+        ctx: &PresetContext,
     ) -> f32;
 
     /// Recreate resolution-dependent resources.

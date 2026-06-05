@@ -228,8 +228,8 @@ mod tests {
     #[test]
     fn every_bundled_preset_executes_one_frame() {
         use crate::generator::Generator;
-        use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
         use crate::generators::json_graph_generator::JsonGraphGenerator;
+        use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use crate::node_graph::PrimitiveRegistry;
         use crate::render_target::RenderTarget;
         use manifold_gpu::GpuTextureFormat;
@@ -260,7 +260,7 @@ mod tests {
             };
 
             let target = RenderTarget::new(&device, w, h, format, "first-frame-test");
-            let ctx = GeneratorContext {
+            let ctx = PresetContext {
                 time: 0.0,
                 beat: 0.0,
                 dt: 1.0 / 60.0,
@@ -269,6 +269,9 @@ mod tests {
                 output_width: w,
                 output_height: h,
                 aspect: w as f32 / h as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
                 params: [0.0; MAX_GEN_PARAMS],

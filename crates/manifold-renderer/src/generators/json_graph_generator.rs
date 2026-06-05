@@ -24,8 +24,8 @@ use manifold_core::{
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 
 use crate::generator::Generator;
-use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use crate::preset_context::PresetContext;
 use crate::node_graph::{
     BindingSource, BoundGraph, EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID,
     FrameTime, GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, MetalBackend, NodeInstanceId,
@@ -196,7 +196,7 @@ pub struct JsonGraphGenerator {
     /// Outer-card → inner-node binding lifecycle — the resolved binding list +
     /// the skip-on-unchanged cache — shared with the effect chain via
     /// [`BoundGraph`]. Each render frame walks these via [`BoundGraph::apply`],
-    /// which pushes the corresponding `GeneratorContext::params[i]` into the
+    /// which pushes the corresponding `PresetContext::params[i]` into the
     /// target node's param, skipping writes whose outer value hasn't changed (so
     /// per-card inner edits survive at-rest sliders — the same property effects
     /// have) and logging structured errors on routing failures instead of
@@ -981,7 +981,7 @@ impl Generator for JsonGraphGenerator {
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         target: &GpuTexture,
-        ctx: &GeneratorContext,
+        ctx: &PresetContext,
     ) -> f32 {
         // 1. Push the per-frame timing into the system.generator_input
         // node's params. Downstream primitives read these as scalar

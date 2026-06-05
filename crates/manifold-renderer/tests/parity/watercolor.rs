@@ -88,7 +88,7 @@ const SETUPS: &[Setup] = &[
 fn watercolor_is_pixel_exact_across_fixtures_and_setups() {
     let h = harness::shared();
     // Watercolor owns persistent feedback state in its legacy
-    // implementation, keyed by `EffectContext::owner_key`. The parity
+    // implementation, keyed by `PresetContext::owner_key`. The parity
     // harness shares one `EffectRegistry` across the whole loop, so
     // every setup must use a unique owner_key — otherwise the legacy
     // sees stale feedback from the previous setup's pass 6, while
@@ -103,7 +103,7 @@ fn watercolor_is_pixel_exact_across_fixtures_and_setups() {
 
         for s in SETUPS {
             owner_key += 1;
-            let ctx = manifold_renderer::effect::EffectContext {
+            let ctx = manifold_renderer::preset_context::PresetContext {
                 owner_key,
                 ..default_ctx(h.width, h.height)
             };
@@ -132,7 +132,7 @@ fn watercolor_is_pixel_exact_across_fixtures_and_setups() {
                         .set_param(prim_id, "decay", ParamValue::Float(s.decay))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "time", ParamValue::Float(ctx.time))
+                        .set_param(prim_id, "time", ParamValue::Float(ctx.time as f32))
                         .unwrap();
                 },
             );

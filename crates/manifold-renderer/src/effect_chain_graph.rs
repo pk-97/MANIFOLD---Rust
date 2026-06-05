@@ -55,7 +55,6 @@ use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
-use crate::effect::EffectContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
@@ -65,6 +64,7 @@ use crate::node_graph::{
     splice_def_into_chain,
 };
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
+use crate::preset_context::PresetContext;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::render_target::RenderTarget;
 
@@ -1010,7 +1010,7 @@ impl ChainGraph {
         input_texture: &GpuTexture,
         effects: &[EffectInstance],
         groups: &[EffectGroup],
-        ctx: &EffectContext,
+        ctx: &PresetContext,
     ) -> Option<&GpuTexture> {
         // Refresh Mix `amount` for every wet/dry group — picks up
         // live slider drags / modulation without rebuilding the graph.
@@ -1146,8 +1146,12 @@ impl ChainGraph {
                 } else {
                     1.0
                 };
-                let _ = self.graph.set_param(node, "time", ParamValue::Float(ctx.time));
-                let _ = self.graph.set_param(node, "beat", ParamValue::Float(ctx.beat));
+                let _ = self
+                    .graph
+                    .set_param(node, "time", ParamValue::Float(ctx.time as f32));
+                let _ = self
+                    .graph
+                    .set_param(node, "beat", ParamValue::Float(ctx.beat as f32));
                 let _ = self.graph.set_param(node, "aspect", ParamValue::Float(aspect));
                 let _ = self.graph.set_param(
                     node,
@@ -1183,8 +1187,8 @@ impl ChainGraph {
         debug_assert!(ok, "source slot pre-bound at build time");
 
         let frame_time = FrameTime {
-            beats: manifold_core::Beats(f64::from(ctx.beat)),
-            seconds: manifold_core::Seconds(f64::from(ctx.time)),
+            beats: manifold_core::Beats(ctx.beat),
+            seconds: manifold_core::Seconds(ctx.time),
             delta: manifold_core::Seconds(f64::from(ctx.dt)),
             // Forward host frame counter so legacy effects (DoF /
             // WireframeDepth / BlobTracking) dispatched via the
@@ -2503,7 +2507,7 @@ mod generator_input_tests {
     //!    `system.generator_input` causes [`SpliceResult::generator_input_id`]
     //!    to be `Some`, threaded onto [`EffectSlot::generator_input_node`].
     //! 2. **Per-frame push**: [`ChainGraph::run`] writes the
-    //!    [`EffectContext`]'s `time` / `beat` / `aspect` / output dims
+    //!    [`PresetContext`]'s `time` / `beat` / `aspect` / output dims
     //!    into the generator_input node's params via `set_param`.
     use super::*;
     use crate::node_graph::ParamValue;
@@ -2599,14 +2603,14 @@ mod generator_input_tests {
 
     /// Per-frame contract: after `ChainGraph::run`, the generator_input
     /// node's `time` / `beat` / `aspect` / `output_width` /
-    /// `output_height` params reflect the [`EffectContext`].
+    /// `output_height` params reflect the [`PresetContext`].
     /// Exercises the param-write half of the system; the
     /// scalar-wire-propagation half is covered by the
     /// `generator_input_params_drive_scalar_outputs` test in
     /// `boundary_nodes.rs`.
     #[test]
     fn run_pushes_frame_context_into_generator_input_params() {
-        use crate::effect::EffectContext;
+        use crate::preset_context::{PresetContext, MAX_GEN_PARAMS};
         use crate::gpu_encoder::GpuEncoder;
 
         let device = crate::test_device();
@@ -2635,7 +2639,7 @@ mod generator_input_tests {
         let mut native_enc = device.create_encoder("generator-input-test");
         let mut gpu = GpuEncoder::new(&mut native_enc, &device);
 
-        let ctx = EffectContext {
+        let ctx = PresetContext {
             time: 1.5,
             beat: 2.25,
             dt: 1.0 / 60.0,
@@ -2643,9 +2647,14 @@ mod generator_input_tests {
             height: 1080,
             output_width: 3840,
             output_height: 2160,
+            aspect: 1920.0 / 1080.0,
             owner_key: 0,
             is_clip_level: false,
             frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+            params: [0.0; MAX_GEN_PARAMS],
+            param_count: 0,
         };
 
         cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx);
@@ -2677,7 +2686,7 @@ mod generator_input_tests {
     /// output texture. This is what puts the optimised fused kernel on screen.
     #[test]
     fn colorgrade_chain_renders_via_fused_node() {
-        use crate::effect::EffectContext;
+        use crate::preset_context::{PresetContext, MAX_GEN_PARAMS};
         use crate::gpu_encoder::GpuEncoder;
 
         // Honor the kill-switch: when MANIFOLD_FREEZE is off this path is
@@ -2723,7 +2732,7 @@ mod generator_input_tests {
             GRAPH_FORMAT,
             "cg-fused-input",
         );
-        let ctx = EffectContext {
+        let ctx = PresetContext {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
@@ -2731,9 +2740,14 @@ mod generator_input_tests {
             height: 256,
             output_width: 256,
             output_height: 256,
+            aspect: 1.0,
             owner_key: 0,
             is_clip_level: false,
             frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+            params: [0.0; MAX_GEN_PARAMS],
+            param_count: 0,
         };
         let mut native_enc = device.create_encoder("cg-fused-run");
         {

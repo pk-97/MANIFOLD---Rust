@@ -22,8 +22,8 @@
 //!   message names the generator so you can grep its WGSL.
 
 use half::f16;
-use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use manifold_renderer::generators::registration::GeneratorFactory;
+use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
 use crate::harness;
@@ -58,11 +58,11 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
     eprintln!("smoke-tested {count} generators");
 }
 
-/// Deterministic `GeneratorContext` paralleling `default_ctx` for
+/// Deterministic `PresetContext` paralleling `default_ctx` for
 /// effects. Time / beat fixed so any time-dependent generator
 /// (FluidSimulation, Plasma) produces reproducible output across runs.
-fn default_generator_ctx(width: u32, height: u32) -> GeneratorContext {
-    GeneratorContext {
+fn default_generator_ctx(width: u32, height: u32) -> PresetContext {
+    PresetContext {
         time: 1.234,
         beat: 2.5,
         dt: 1.0 / 60.0,
@@ -71,6 +71,9 @@ fn default_generator_ctx(width: u32, height: u32) -> GeneratorContext {
         output_width: width,
         output_height: height,
         aspect: width as f32 / height as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
         // Default-zero params: matches what align_to_definition lands

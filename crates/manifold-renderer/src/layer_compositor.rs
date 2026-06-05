@@ -1,8 +1,9 @@
 use crate::chain_dispatch::{clear_chain_state, dispatch_chain};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effect::PostProcessEffect;
 use crate::effect_chain_graph::ChainGraph;
 use crate::gpu_encoder::GpuEncoder;
+use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
@@ -429,7 +430,7 @@ pub struct LayerCompositor {
     /// Dedicated effect chain for LED master FX. Stored as a standalone field
     /// (not in `effect_chains` Vec) so the shared resize path doesn't force it
     /// to full resolution — the LED chain auto-allocates at half-res via
-    /// `ensure_buffers` driven by the LED EffectContext.
+    /// `ensure_buffers` driven by the LED PresetContext.
     /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
     /// from the main master chain.
     led_master_ec: Option<Option<ChainGraph>>,
@@ -447,7 +448,7 @@ pub struct LayerCompositor {
     /// temporal state on the LED path doesn't bleed into the screen
     /// path (and vice versa) — physically impossible because they
     /// are different fields, even though both use `LayerId` keys.
-    /// Lazy-allocates at LED grid resolution via the `EffectContext`
+    /// Lazy-allocates at LED grid resolution via the `PresetContext`
     /// passed to `apply_effects`.
     led_group_effect_chains: AHashMap<LayerId, Option<ChainGraph>>,
     /// Per-LED-group-chain last-used frame counter for time-based pruning.
@@ -701,7 +702,7 @@ impl LayerCompositor {
 
     /// Ensure an LED group chain exists for the given `LayerId`.
     /// Internal effect-chain buffers lazy-allocate at LED grid resolution
-    /// via the `EffectContext` passed to `apply_effects`.
+    /// via the `PresetContext` passed to `apply_effects`.
     fn ensure_led_group_chain(&mut self, group_id: &LayerId) {
         self.led_group_effect_chains
             .entry(group_id.clone())
@@ -851,7 +852,7 @@ impl LayerCompositor {
         input_texture: &'a GpuTexture,
         effects: &[EffectInstance],
         groups: &[EffectGroup],
-        ctx: &EffectContext,
+        ctx: &PresetContext,
         preview_effect: Option<&EffectId>,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
@@ -1070,7 +1071,7 @@ impl LayerCompositor {
                     let effect_chain = chains
                         .get_mut(ld.layer_id)
                         .expect("chain pre-inserted in active scan");
-                    let ctx = EffectContext {
+                    let ctx = PresetContext {
                         time: frame.time,
                         beat: frame.beat,
                         dt: frame.dt,
@@ -1078,9 +1079,18 @@ impl LayerCompositor {
                         height,
                         output_width: frame.output_width,
                         output_height: frame.output_height,
+                        aspect: if height > 0 {
+                            width as f32 / height as f32
+                        } else {
+                            1.0
+                        },
                         owner_key: layer_id_owner_key(ld.layer_id),
                         is_clip_level: false,
                         frame_count: frame.frame_count as i64,
+                        anim_progress: 0.0,
+                        trigger_count: 0,
+                        params: [0.0; MAX_GEN_PARAMS],
+                        param_count: 0,
                     };
                     Self::apply_effects(
                         effect_chain,
@@ -1337,7 +1347,7 @@ impl LayerCompositor {
                         // Apply group effects (if any) at LED resolution.
                         let group_source: *const GpuTexture = if has_enabled_effects(group.effects)
                         {
-                            let ctx = EffectContext {
+                            let ctx = PresetContext {
                                 time: frame.time,
                                 beat: frame.beat,
                                 dt: frame.dt,
@@ -1345,9 +1355,14 @@ impl LayerCompositor {
                                 height: h,
                                 output_width: frame.output_width,
                                 output_height: frame.output_height,
+                                aspect: if h > 0 { w as f32 / h as f32 } else { 1.0 },
                                 owner_key: led_group_owner_key(group.layer_id),
                                 is_clip_level: false,
                                 frame_count: frame.frame_count as i64,
+                                anim_progress: 0.0,
+                                trigger_count: 0,
+                                params: [0.0; MAX_GEN_PARAMS],
+                                param_count: 0,
                             };
                             match Self::apply_effects(
                                 group_ec,
@@ -1540,17 +1555,28 @@ impl LayerCompositor {
                     .group_effect_chains
                     .get_mut(group_id)
                     .expect("ensured above");
-                let ctx = EffectContext {
+                let main_w = self.main.width();
+                let main_h = self.main.height();
+                let ctx = PresetContext {
                     time: frame.time,
                     beat: frame.beat,
                     dt: frame.dt,
-                    width: self.main.width(),
-                    height: self.main.height(),
+                    width: main_w,
+                    height: main_h,
                     output_width: frame.output_width,
                     output_height: frame.output_height,
+                    aspect: if main_h > 0 {
+                        main_w as f32 / main_h as f32
+                    } else {
+                        1.0
+                    },
                     owner_key: group_id_owner_key(group_id),
                     is_clip_level: false,
                     frame_count: frame.frame_count as i64,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                    params: [0.0; MAX_GEN_PARAMS],
+                    param_count: 0,
                 };
                 let result = Self::apply_effects(
                     effect_chain,
@@ -1794,7 +1820,7 @@ impl LayerCompositor {
                         let effect_chain = chains
                             .get_mut(ld.layer_id)
                             .expect("chain pre-inserted in active scan");
-                        let ctx = EffectContext {
+                        let ctx = PresetContext {
                             time: frame.time,
                             beat: frame.beat,
                             dt: frame.dt,
@@ -1802,9 +1828,18 @@ impl LayerCompositor {
                             height,
                             output_width: frame.output_width,
                             output_height: frame.output_height,
+                            aspect: if height > 0 {
+                                width as f32 / height as f32
+                            } else {
+                                1.0
+                            },
                             owner_key: layer_id_owner_key(ld.layer_id),
                             is_clip_level: false,
                             frame_count: frame.frame_count as i64,
+                            anim_progress: 0.0,
+                            trigger_count: 0,
+                            params: [0.0; MAX_GEN_PARAMS],
+                            param_count: 0,
                         };
                         Self::apply_effects(
                             effect_chain,
@@ -2082,7 +2117,7 @@ impl Compositor for LayerCompositor {
             let width = self.main.width();
             let height = self.main.height();
 
-            let ctx = EffectContext {
+            let ctx = PresetContext {
                 time: frame.time,
                 beat: frame.beat,
                 dt: frame.dt,
@@ -2090,9 +2125,18 @@ impl Compositor for LayerCompositor {
                 height,
                 output_width: frame.output_width,
                 output_height: frame.output_height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
                 owner_key: 0,
                 is_clip_level: false,
                 frame_count: frame.frame_count as i64,
+                anim_progress: 0.0,
+                trigger_count: 0,
+                params: [0.0; MAX_GEN_PARAMS],
+                param_count: 0,
             };
 
             // Master effects use a dedicated `EffectChain` instance,
@@ -2145,7 +2189,7 @@ impl Compositor for LayerCompositor {
 
             let led_ec = self.led_master_ec.get_or_insert_with(Option::<ChainGraph>::default);
 
-            let ctx = EffectContext {
+            let ctx = PresetContext {
                 time: frame.time,
                 beat: frame.beat,
                 dt: frame.dt,
@@ -2153,9 +2197,18 @@ impl Compositor for LayerCompositor {
                 height,
                 output_width: frame.output_width,
                 output_height: frame.output_height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
                 owner_key: LED_MASTER_OWNER_KEY,
                 is_clip_level: false,
                 frame_count: frame.frame_count as i64,
+                anim_progress: 0.0,
+                trigger_count: 0,
+                params: [0.0; MAX_GEN_PARAMS],
+                param_count: 0,
             };
 
             // Run master FX directly on raw HDR `led_main`, copy result back
