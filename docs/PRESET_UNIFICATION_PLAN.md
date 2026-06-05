@@ -618,7 +618,9 @@ Ordered so no single step is bigger than one fork. Each step builds green, passe
 - **Step 2 — Define `PresetDef` + `PresetKind { Effect | Generator }`.** Type only, no migration.
 - **Step 3 — Binding storage → one single list.** `user_param_bindings` + generator `preset_metadata.bindings` → the generator single-list shape. Foundational.
 - **Step 4 — Frame context → one `PresetContext`.** Collapse `EffectContext`/`GeneratorContext`.
-- **Step 5 — Per-instance graph → one host.** `EffectInstance.graph` vs `Layer.generator_graph` via the existing `GraphHost` seam.
+- **Step 5 — Per-instance graph → one host. ALREADY DONE (prior work), verified 2026-06-05.** The `GraphHost` trait in `crates/manifold-core/src/graph_host.rs` abstracts the per-instance graph override for both `EffectInstance` and (via the `GeneratorHost` wrapper) generators; the mutation path — the graph + param editing commands — routes through `Project::with_graph_host_mut`, and there are **zero** behavior-forking consumers of `host_kind()`/`GraphHostKind`. The audit's "every editing command match-arms on host type" was stale. Residual direct `.generator_graph` accesses are read-only (serialization, UI display, render snapshot) and fold into Steps 6/9, not a behavior fork.
+
+  Note: parity suite has 3 pre-existing failures on this branch unrelated to the migration — `smoke`, `lut1d`, `watercolor` — confirmed identical at pre-migration commit c7558688 (in-flight fusion branch state). Steps 3+4 are parity value-neutral against that baseline.
 - **Step 6 — Runtime → one.** `ChainGraph`/`JsonGraphGenerator`; migrate effects then generators behind the `PresetDef` interface.
 - **Step 7 — `EffectDef`/`GeneratorDef` → `PresetDef`.** Consumers one at a time.
 - **Step 8 — Capstone: registry + disk-load loader.** Scan a JSON preset directory into one `PresetDef` registry; delete the compiled-in registries and `include_str!` bundling. Makes "JSON is the only source, no second copy" structurally true everywhere.
