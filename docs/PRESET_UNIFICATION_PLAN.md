@@ -1,6 +1,16 @@
 # Preset System Unification Plan
 
-**Status:** IN PROGRESS (started 2026-05-29). Done: Phase 0 (baseline), 1a (storage), 4-core (shared apply loop), 5c (OSC), 5a (modulation-core dedup), 7 (UI panel collapse). Deferred (gated on the Phase 1b effect-fold-in, which is itself deferred per the predecessor doc): 5b (Ableton dispatch), 6 (editing commands), 4-struct (`PresetRuntime` wrapper). Skipped: 2 (registry collapse — superseded by disk-load rework). The behavioral fork is closed everywhere user-visible; what remains is internal consolidation gated on a deliberately-parked storage change. See memory `project_preset_unification` for the running record.
+**Status:** IN PROGRESS — final unification pass (started 2026-06-05). Earlier status claimed Phase 1b (the param-storage fold-in) was "deferred, everything gated on it." **That was stale and is corrected here: 1b is DONE** — generators already carry `Vec<ParamSlot>` with the exposed flag ([generator.rs:29](../crates/manifold-core/src/generator.rs)). A 2026-06-05 audit reconciled the fork table against the code; findings below drive a single ordered worklist that lands one fork per commit (the "too big to hold" failure mode of six prior attempts).
+
+**Done (audited):** Phase 0 (baseline), 1a + 1b (param storage — generators on `Vec<ParamSlot>`; residue: `base_param_values` still `Vec<f32>`), 4-core (shared apply loop), 5a (modulation-core dedup; thin `evaluate_gen_param_envelopes` residue remains), 5c (OSC), 7 (UI panel collapse — `EffectCardPanel`/`GenParamPanel` gone). No prior-attempt zombie types (`PresetDef`/`PresetRuntime`/`PresetKind` = 0 files).
+
+**Still forked — core spine (entangled, must collapse bottom-up behind one interface):** binding storage (`user_param_bindings` vs generator `preset_metadata.bindings`), per-instance graph host (`EffectInstance.graph` vs `Layer.generator_graph`), frame context (`EffectContext`/`GeneratorContext`), runtime (`ChainGraph`/`JsonGraphGenerator`), definition type (`EffectDef`/`GeneratorDef`).
+
+**Still forked — capstone:** the two definition registries + two type/picker registries + two bundled loaders collapse INTO the disk-load loader (this is the old skipped "Phase 2", superseded by disk-load).
+
+**Still forked — peripheral / capability gaps:** `LoadedPresetView` effect-only (causes the generator range-shadow bug — fix first), Ableton dispatch, state-sync helpers, snapshot entry points, persistence migration, editing-command generator mirrors, skip-mode (effect-only), string-bindings (effect runtime), legacy aliases (generator-only), skip-on-unchanged cache (generator-only).
+
+See the "Final worklist" section at the end of this doc and memory `project_preset_unification` for the running record.
 **Owner:** Peter (with Claude as implementation collaborator)
 **Scope:** Effect + generator infrastructure unification across `manifold-core`, `manifold-renderer`, `manifold-editing`, `manifold-playback`, `manifold-ui`, `manifold-app`, `manifold-io`
 **Predecessors:** `docs/EFFECT_RUNTIME_UNIFICATION.md` (runtime layer, complete), `docs/BINDINGS_UNIFICATION_PLAN.md` (bindings layer, complete), `docs/EFFECT_GENERATOR_CARD_UNIFICATION.md` (inspector-card UI, partial)
@@ -596,3 +606,21 @@ After phase 9:
 - The next time MANIFOLD grows a feature touching presets (graph editor enhancement, MCP authoring surface, new modulation source), the cost is one implementation, not two.
 
 This is the work the rest of the next year of MANIFOLD features depends on. Worth doing once, properly.
+
+---
+
+## Final worklist (2026-06-05 audit-driven)
+
+Ordered so no single step is bigger than one fork. Each step builds green, passes the Liveschool fixture + focused tests, and is committed before the next; no scaffolding left at any commit boundary except the brief in-spine coexistence behind `PresetDef` (steps 6–7).
+
+- **Step 0 — Fix this doc.** (done — see Status above)
+- **Step 1 — Generator JSON-backed def view.** Give generators the runtime `LoadedPresetView` effects have; point the mapping panel's native-range lookup + fresh-mapping seed at it, not `generator_definition_registry`. Kills the range-shadow bug class on the generator side. Independent.
+- **Step 2 — Define `PresetDef` + `PresetKind { Effect | Generator }`.** Type only, no migration.
+- **Step 3 — Binding storage → one single list.** `user_param_bindings` + generator `preset_metadata.bindings` → the generator single-list shape. Foundational.
+- **Step 4 — Frame context → one `PresetContext`.** Collapse `EffectContext`/`GeneratorContext`.
+- **Step 5 — Per-instance graph → one host.** `EffectInstance.graph` vs `Layer.generator_graph` via the existing `GraphHost` seam.
+- **Step 6 — Runtime → one.** `ChainGraph`/`JsonGraphGenerator`; migrate effects then generators behind the `PresetDef` interface.
+- **Step 7 — `EffectDef`/`GeneratorDef` → `PresetDef`.** Consumers one at a time.
+- **Step 8 — Capstone: registry + disk-load loader.** Scan a JSON preset directory into one `PresetDef` registry; delete the compiled-in registries and `include_str!` bundling. Makes "JSON is the only source, no second copy" structurally true everywhere.
+- **Step 9 — Cleanup / fall-out.** Delete generator mirror commands + simplify `GraphTarget`; merge state-sync helpers, snapshot entry points, persistence migrations; fold the `evaluate_gen_param_envelopes` residue; close capability gaps (skip-mode on generators, string-bindings on effects, legacy aliases on generators, skip-on-unchanged cache on generators). Decide `base_param_values` fold-or-leave.
+- **Step 10 — Hot-reload.** File-watcher → the existing rebuild path. Removes the restart.
