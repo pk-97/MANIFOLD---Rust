@@ -970,6 +970,18 @@ impl Generator for JsonGraphGenerator {
                 let _ = self.graph.set_param(inst, name, value.clone().into());
             }
         }
+        // Re-assert the live card bindings over what we just wrote. This pushes
+        // the def value into EVERY inner node — including the ones an outer-card
+        // slider drives — so without clearing the apply cache, the next
+        // `apply_param_values` would skip the (unchanged) outer value and the
+        // bound inner param would stay stuck at the def default. A position-only
+        // editor edit (auto-format / node move) bumps `generator_graph_version`
+        // and lands here, so the Speed slider snapped back to its baked value on
+        // every such bump. Mirrors the effect chain's `binding_cache.clear()`
+        // after `apply_inner_param_overrides`, and this generator's own
+        // `apply_param_notes`. The clear only forces a re-apply; bound params
+        // re-take their card value, unbound params keep the def value.
+        self.binding_cache.clear();
     }
 
     /// The preview target's captured output texture from the most recent
@@ -1307,6 +1319,66 @@ mod tests {
             inst.params.get("scale"),
             Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
         ));
+    }
+
+    /// Regression for the OilyFluid "Speed slider snaps back" bug.
+    /// `apply_inner_param_overrides` pushes the def value into EVERY inner
+    /// node — including ones an outer-card slider drives — so it MUST clear
+    /// the binding cache, or the next `apply_param_values` skips the
+    /// (unchanged) outer value and the bound inner param stays stuck at the
+    /// def default. A position-only editor edit (auto-format / node move)
+    /// bumps `generator_graph_version` and lands on this path, which is why
+    /// it only bit with the graph editor open. The effect chain already
+    /// clears its cache here; this is the generator parity fix.
+    #[test]
+    fn inner_param_overrides_re_assert_bound_card_values() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+        let json = include_str!("../../assets/generator-presets/Plasma.json");
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut g = JsonGraphGenerator::from_json_str(json, &registry)
+            .expect("Plasma preset must load");
+        let plasma_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "plasma")
+            .map(|(_, id)| id)
+            .expect("plasma handle");
+
+        // The card sets Speed → plasma.speed = 2.5. (params order:
+        // pattern, complexity, contrast, speed, scale, clip_trigger.)
+        let card_values = [3.0_f32, 0.75, 0.42, 2.5, 1.5, 1.0];
+        g.apply_param_values(&card_values);
+        assert!(matches!(
+            g.graph.get_node(plasma_id).unwrap().params.get("speed"),
+            Some(ParamValue::Float(v)) if (*v - 2.5).abs() < 1e-5
+        ));
+
+        // An editor position edit lands here: the def carries the baked
+        // inner value (speed = 9.0) and gets pushed into every node,
+        // clobbering the bound plasma.speed.
+        let mut def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        for node in &mut def.nodes {
+            if node.handle.as_deref() == Some("plasma") {
+                node.params
+                    .insert("speed".to_string(), SerializedParamValue::Float { value: 9.0 });
+            }
+        }
+        g.apply_inner_param_overrides(&def);
+
+        // Re-push the SAME card values (the slider didn't move). Without the
+        // cache clear inside `apply_inner_param_overrides`, this skips the
+        // unchanged Speed and plasma.speed stays 9.0 — the snap-back. With
+        // the clear, the binding re-asserts the card's 2.5.
+        g.apply_param_values(&card_values);
+        assert!(
+            matches!(
+                g.graph.get_node(plasma_id).unwrap().params.get("speed"),
+                Some(ParamValue::Float(v)) if (*v - 2.5).abs() < 1e-5
+            ),
+            "bound Speed must re-assert its card value (2.5) over the def's \
+             baked 9.0 after an inner-param override; got {:?}",
+            g.graph.get_node(plasma_id).unwrap().params.get("speed"),
+        );
     }
 
     /// Generator mirror of the effect proof: a per-instance reshape NOTE
