@@ -764,7 +764,27 @@ impl ChainGraph {
             let n_static = bindings.len();
             for (user_slot, core) in fx.user_param_bindings.iter().enumerate() {
                 let source_index = n_static_slots + user_slot;
-                match ResolvedBinding::from_user(core, &graph, &node_map, source_index) {
+                // When this effect renders FUSED, the inner node this user
+                // binding targets was collapsed into a fused kernel, so its
+                // stable `node_id` no longer resolves against `node_map`.
+                // Repoint the binding onto the fused node's uniform field
+                // (`n{idx}_<param>`) via the view's retarget map — the same
+                // retarget the static card bindings already went through.
+                // The map is empty on an unfused view (the live editor path),
+                // so this is a no-op clone-free lookup there. Without this,
+                // a user-exposed slider silently goes inert the moment the
+                // effect re-fuses on editor close.
+                let retargeted = view
+                    .fused_retarget
+                    .get(&(core.node_id.as_str().to_string(), core.inner_param.clone()))
+                    .map(|(fused_id, field)| {
+                        let mut c = core.clone();
+                        c.node_id = fused_id.clone();
+                        c.inner_param = field.clone();
+                        c
+                    });
+                let resolve_core = retargeted.as_ref().unwrap_or(core);
+                match ResolvedBinding::from_user(resolve_core, &graph, &node_map, source_index) {
                     Some(rb) => bindings.push(rb),
                     None => record_chain_error(
                         &mut errors,

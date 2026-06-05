@@ -166,12 +166,21 @@ fn fuse_view_parts(
     if !fused_def_builds(&fused.def, registry) {
         return None;
     }
-    let def_static: &'static EffectGraphDef = Box::leak(Box::new(fused.def));
+    let FusedDef {
+        def: fused_def,
+        retarget,
+    } = fused;
+    let def_static: &'static EffectGraphDef = Box::leak(Box::new(fused_def));
     Some(LoadedPresetView {
         type_id: type_id.clone(),
         canonical_def: def_static,
         bindings: Box::leak(bindings.into_boxed_slice()),
         skip_mode,
+        // Carry the full retarget map so the chain builder can repoint a
+        // per-instance user binding (off-def, invisible to the content-keyed
+        // fuse) onto the fused node — the same retarget the static bindings
+        // above already went through.
+        fused_retarget: retarget,
     })
 }
 
@@ -829,6 +838,42 @@ mod tests {
             std::ptr::eq(canon_a.unwrap(), canon_c.unwrap()),
             "an edited def's entry must not clobber the canonical entry",
         );
+    }
+
+    /// The fused view must carry the full binding-retarget map so the chain
+    /// builder can repoint a per-instance USER binding (which lives off the def,
+    /// on `EffectInstance.user_param_bindings`, and so is invisible to the
+    /// content-keyed fuse) onto the fused node — exactly as the static card
+    /// bindings are. Without this the map was discarded after retargeting the
+    /// statics, and a user-exposed slider went inert the moment the effect
+    /// re-fused on editor close (the effect/generator divergence: generators
+    /// keep bindings in the def, so they retargeted; effects didn't).
+    #[test]
+    fn fused_view_carries_retarget_map_for_user_bindings() {
+        let base = crate::node_graph::loaded_preset_view_by_id(&EffectTypeId::new("ColorGrade"))
+            .expect("ColorGrade canonical view");
+        // Plain JSON-loaded view: no fusion, so nothing to retarget.
+        assert!(
+            base.fused_retarget.is_empty(),
+            "unfused view must carry an empty retarget map",
+        );
+
+        let fused = fused_view_for(base.canonical_def, base).expect("ColorGrade fuses");
+        // Same routing the standalone `fuse_canonical_def` retarget asserts —
+        // proving the map survived onto the cached view rather than being
+        // dropped after the static-binding rewrite.
+        assert_eq!(
+            fused
+                .fused_retarget
+                .get(&("gain".to_string(), "gain".to_string()))
+                .map(|(id, f)| (id.as_str(), f.as_str())),
+            Some(("fused_region_0", "n0_gain")),
+            "an inner (node_id, param) the fuse collapsed must resolve to its \
+             fused uniform field so a user binding can be repointed onto it",
+        );
+        // The map is total over fused-away inner params (every param of every
+        // collapsed node), so a user binding can never strand under fusion.
+        assert_eq!(fused.fused_retarget.len(), 14, "all 7 ColorGrade atoms' params");
     }
 
     fn colorgrade_def() -> EffectGraphDef {

@@ -2360,22 +2360,39 @@ impl Application {
         // the sidebar; the expose/param rows start below it so they don't
         // overlap. Logical units; the present pass draws the pane to match.
         let preview_pad = 8.0_f32;
+        let preview_title_h = 18.0_f32;
         let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
         let preview_h = preview_w * 9.0 / 16.0;
-        // The preview pane reserves the sidebar top ONLY for an image. A
-        // previewed node with no image (control / math / envelope) hands that
-        // space to the panel, which draws a value inspector there instead.
+        // The sidebar top hosts up to two stacked 16:9 monitors, each a titled
+        // pane (title row + image): the selected node's output on top, and the
+        // master compositor output below it. The node monitor is reserved only
+        // when the selected node has an image — control / math / envelope nodes
+        // hand that space to the value inspector instead. The master monitor is
+        // always present so the editor always shows what the live show is
+        // putting out. The param rows / inspector begin below whatever panes
+        // are reserved (`sidebar_content_top`).
         let node_preview_info = self.content_state.node_preview_info.clone();
         let preview_has_image = node_preview_info
             .as_ref()
             .map(|i| i.has_image)
             .unwrap_or(false);
         let show_image = self.last_preview_node.is_some() && preview_has_image;
-        let sidebar_content_top = if show_image {
-            preview_pad + preview_h + preview_pad
+        let mut pane_y = preview_pad;
+        // Node-output monitor: `(title_y, image_y)`, reserved only when an
+        // image node is selected.
+        let node_pane_y = if show_image {
+            let title_y = pane_y;
+            let img_y = title_y + preview_title_h;
+            pane_y = img_y + preview_h + preview_pad;
+            Some((title_y, img_y))
         } else {
-            0.0
+            None
         };
+        // Master-out monitor: always present, stacked below the node monitor.
+        let master_title_y = pane_y;
+        let master_img_y = master_title_y + preview_title_h;
+        pane_y = master_img_y + preview_h + preview_pad;
+        let sidebar_content_top = pane_y;
         let sidebar_viewport = manifold_ui::Rect::new(
             sidebar_x,
             sidebar_content_top,
@@ -2534,6 +2551,40 @@ impl Application {
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
 
+        // Titles for the sidebar-top preview monitors. Added to the editor tree
+        // so they composite into the offscreen; the monitor images blit onto
+        // the drawable just below each title in the present pass.
+        {
+            use manifold_ui::node::{TextAlign, UIStyle};
+            let title_style = UIStyle {
+                text_color: manifold_ui::color::TEXT_WHITE_C32,
+                font_size: 14,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            };
+            let title_x = sidebar_x + preview_pad;
+            if let Some((title_y, _)) = node_pane_y {
+                ws.ui_root.tree.add_label(
+                    -1,
+                    title_x,
+                    title_y,
+                    preview_w,
+                    preview_title_h,
+                    "Node Output",
+                    title_style,
+                );
+            }
+            ws.ui_root.tree.add_label(
+                -1,
+                title_x,
+                master_title_y,
+                preview_w,
+                preview_title_h,
+                "Master Out",
+                title_style,
+            );
+        }
+
         // Node picker overlays the whole editor window when open. Keep its
         // screen size in lockstep with the editor logical size (drives the
         // backdrop extent + edge-clamp), then build it last so its nodes
@@ -2617,45 +2668,71 @@ impl Application {
             "Editor Offscreen → Drawable",
         );
 
-        // ── Node-output preview pane ──
-        // Composite the captured node texture into the top of the editor
-        // sidebar, over the panel background. Only when a node is being
-        // previewed and its IOSurface front buffer is available. The blit
-        // pipeline targets the drawable's Bgra8Unorm format, so this draws
-        // into the drawable (Load) rather than the Rgba16Float offscreen.
+        // ── Sidebar-top preview monitors ──
+        // Composite the captured node texture (top) and the master compositor
+        // output (below it) into the editor sidebar, each below its title.
+        // Only when the IOSurface front buffer is available. The blit pipeline
+        // targets the drawable's Bgra8Unorm format, so these draw into the
+        // drawable (Load) rather than the Rgba16Float offscreen.
         #[cfg(target_os = "macos")]
-        if show_image
-            && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
         {
-            let front = bridge.front_index() as usize;
-            if let Some(tex) = self
-                .ui_node_preview_textures
-                .get(front)
-                .and_then(|t| t.as_ref())
+            let scale = scale as f32;
+            let w = preview_w * scale;
+            let h = preview_h * scale;
+            let x = (sidebar_x + preview_pad) * scale;
+            // Node-output monitor — the selected image node's captured output.
+            if let (Some((_, img_y)), Some(bridge)) =
+                (node_pane_y, self.node_preview_texture_bridge.as_ref())
             {
-                let scale = scale as f32;
-                // Same pad / dimensions used to offset the param rows above.
-                let w = preview_w * scale;
-                let h = preview_h * scale;
-                let x = (sidebar_x + preview_pad) * scale;
-                let y = preview_pad * scale;
-                present_enc.draw_fullscreen_viewport(
-                    blit_p,
-                    &drawable_tex,
-                    &[
-                        manifold_gpu::GpuBinding::Texture {
-                            binding: 0,
-                            texture: tex,
-                        },
-                        manifold_gpu::GpuBinding::Sampler {
-                            binding: 1,
-                            sampler: blit_s,
-                        },
-                    ],
-                    (x, y, w, h),
-                    manifold_gpu::GpuLoadAction::Load,
-                    "Node Preview → Sidebar",
-                );
+                let front = bridge.front_index() as usize;
+                if let Some(tex) = self
+                    .ui_node_preview_textures
+                    .get(front)
+                    .and_then(|t| t.as_ref())
+                {
+                    present_enc.draw_fullscreen_viewport(
+                        blit_p,
+                        &drawable_tex,
+                        &[
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 0,
+                                texture: tex,
+                            },
+                            manifold_gpu::GpuBinding::Sampler {
+                                binding: 1,
+                                sampler: blit_s,
+                            },
+                        ],
+                        (x, img_y * scale, w, h),
+                        manifold_gpu::GpuLoadAction::Load,
+                        "Node Preview → Sidebar",
+                    );
+                }
+            }
+            // Master-out monitor — the live compositor output, the same texture
+            // the main/perform window presents. Imported into `ui_preview_textures`
+            // by the workspace-preview present path that runs just before this.
+            if let Some(bridge) = self.preview_texture_bridge.as_ref() {
+                let front = bridge.front_index() as usize;
+                if let Some(tex) = self.ui_preview_textures.get(front).and_then(|t| t.as_ref()) {
+                    present_enc.draw_fullscreen_viewport(
+                        blit_p,
+                        &drawable_tex,
+                        &[
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 0,
+                                texture: tex,
+                            },
+                            manifold_gpu::GpuBinding::Sampler {
+                                binding: 1,
+                                sampler: blit_s,
+                            },
+                        ],
+                        (x, master_img_y * scale, w, h),
+                        manifold_gpu::GpuLoadAction::Load,
+                        "Master Out → Sidebar",
+                    );
+                }
             }
         }
 
