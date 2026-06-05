@@ -151,6 +151,10 @@ const HEADER_FONT_SIZE: u16 = 14;
 /// inner-node rows now.
 #[derive(Debug, Clone)]
 enum RowState {
+    /// The auto-gain toggle under the node-output preview. Click flips
+    /// normalization on the preview pane via
+    /// [`PanelAction::SetNodePreviewNormalize`].
+    PreviewNormalizeToggle { button_node_id: u32 },
     /// A row backed by an inner-node param. Click semantics depend on
     /// whether the param is a target of one of the effect's
     /// static-block bindings (`static_block_slot: Some(i)`) or not.
@@ -291,6 +295,11 @@ pub struct GraphEditorPanel {
     /// handler short-circuits on the disabled targets. Built from
     /// the live `EffectGraphDef.wires` by `app_render`.
     wire_driven_keys: HashSet<(String, String)>,
+    /// Whether the node-output preview pane is applying auto-gain /
+    /// normalization. Mirrors the app-side state (pushed in each `configure`);
+    /// drives the preview toggle's checkmark. Default off only until the first
+    /// `configure` lands the real value (app default is on).
+    normalize_preview: bool,
     /// Per-row state, populated during `build`.
     rows: Vec<RowState>,
     /// Root container for everything this panel owns inside the tree.
@@ -329,6 +338,15 @@ impl GraphEditorPanel {
         self.wire_driven_keys = wire_driven_keys;
     }
 
+    /// Set whether the node-output preview pane shows auto-gain /
+    /// normalization, so the toggle under the preview renders the right
+    /// checkmark. Mirrors the app-side state; called each frame before
+    /// [`Self::build`]. Separate from [`Self::configure`] so it doesn't churn
+    /// the many param-inspector inputs.
+    pub fn set_node_preview_normalize(&mut self, on: bool) {
+        self.normalize_preview = on;
+    }
+
     /// Build the UITree subtree at the given viewport. Idempotent
     /// w.r.t. tree state — clears the previous root and re-adds.
     pub fn build(&mut self, tree: &mut UITree, viewport: Rect) {
@@ -352,6 +370,44 @@ impl GraphEditorPanel {
         self.root_id = bg_id;
 
         let mut y = viewport.y + PADDING;
+
+        // ── Node-preview auto-gain toggle ─────────────────────────
+        // Sits directly under the preview image. Flips normalization on the
+        // preview pane so dark intermediates (force fields, normals, depth,
+        // flow) are legible. Node preview only — never touches the live render.
+        // Added before the early-returns below so it's always clickable.
+        {
+            let cb_x = viewport.x + PADDING;
+            let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
+            let cb_id = tree.add_button(
+                bg_id,
+                cb_x,
+                cb_y,
+                CHECKBOX_W,
+                CHECKBOX_H,
+                checkbox_style(self.normalize_preview, true),
+                if self.normalize_preview { "✓" } else { "" },
+            );
+            let label_x = cb_x + CHECKBOX_W + CHECKBOX_GAP;
+            tree.add_label(
+                bg_id,
+                label_x,
+                y,
+                (viewport.x + viewport.width - PADDING - label_x).max(10.0),
+                ROW_H,
+                "Auto-gain preview",
+                UIStyle {
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            self.rows.push(RowState::PreviewNormalizeToggle {
+                button_node_id: cb_id,
+            });
+            y += ROW_H;
+        }
 
         // ── Selected Node section (the inspector) ─────────────────
         // The effect-card mirror moved to the editor's left lane, so this
@@ -654,6 +710,13 @@ impl GraphEditorPanel {
         // Value-cell clicks always route to SetGraphNodeParam.
         for row in &self.rows {
             match row {
+                RowState::PreviewNormalizeToggle { button_node_id } => {
+                    if *button_node_id == node_id {
+                        return vec![PanelAction::SetNodePreviewNormalize(
+                            !self.normalize_preview,
+                        )];
+                    }
+                }
                 RowState::InnerNode {
                     checkbox_node_id,
                     value_cell_node_id,
@@ -977,15 +1040,29 @@ mod tests {
     /// "Effect Parameters" list became read-only labels (no row
     /// state), every entry in `panel.rows` is an `InnerNode` now.
     fn inner_param_of(row: &RowState) -> &str {
-        let RowState::InnerNode { inner_param, .. } = row;
+        let RowState::InnerNode { inner_param, .. } = row else {
+            panic!("expected an InnerNode row, got {row:?}");
+        };
         inner_param.as_str()
     }
 
     fn checkbox_id_of(row: &RowState) -> u32 {
         let RowState::InnerNode {
             checkbox_node_id, ..
-        } = row;
+        } = row
+        else {
+            panic!("expected an InnerNode row, got {row:?}");
+        };
         *checkbox_node_id
+    }
+
+    /// Inner-node rows only — skips the always-present preview-toggle row.
+    fn inner_rows(panel: &GraphEditorPanel) -> Vec<&RowState> {
+        panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::InnerNode { .. }))
+            .collect()
     }
 
     #[test]
@@ -1027,7 +1104,8 @@ mod tests {
             HashSet::new(),
         );
         panel.build(&mut tree, viewport());
-        assert!(panel.rows.is_empty());
+        // Only the always-present preview-toggle row; no inner-node rows.
+        assert!(inner_rows(&panel).is_empty());
     }
 
     #[test]
@@ -1045,8 +1123,57 @@ mod tests {
         );
         panel.build(&mut tree, viewport());
         assert!(
-            panel.rows.is_empty(),
+            inner_rows(&panel).is_empty(),
             "anonymous nodes don't expose user-exposable params"
+        );
+    }
+
+    fn preview_toggle_id(panel: &GraphEditorPanel) -> u32 {
+        panel
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                RowState::PreviewNormalizeToggle { button_node_id } => Some(*button_node_id),
+                _ => None,
+            })
+            .expect("preview-toggle row present")
+    }
+
+    #[test]
+    fn preview_toggle_click_emits_flipped_normalize() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        // On by default → clicking requests off. The toggle is present even
+        // with no node selected (it's a persistent preview preference).
+        panel.set_node_preview_normalize(true);
+        panel.configure(
+            Some(0),
+            None,
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        let actions = panel.handle_click(preview_toggle_id(&panel));
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [PanelAction::SetNodePreviewNormalize(false)]
+            ),
+            "clicking the on toggle must request off, got {actions:?}"
+        );
+
+        // Off → clicking requests on.
+        panel.set_node_preview_normalize(false);
+        panel.build(&mut tree, viewport());
+        let actions = panel.handle_click(preview_toggle_id(&panel));
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [PanelAction::SetNodePreviewNormalize(true)]
+            ),
+            "clicking the off toggle must request on, got {actions:?}"
         );
     }
 
@@ -1177,7 +1304,8 @@ mod tests {
             HashSet::new(),
         );
         panel.build(&mut tree, viewport());
-        let row = panel.rows.first().expect("at least one inner-node row");
+        let rows = inner_rows(&panel);
+        let row = rows.first().expect("at least one inner-node row");
         let actions = panel.handle_click(checkbox_id_of(row));
         assert_eq!(
             actions.len(),
@@ -1196,7 +1324,10 @@ mod tests {
     fn value_cell_id_of(row: &RowState) -> Option<u32> {
         let RowState::InnerNode {
             value_cell_node_id, ..
-        } = row;
+        } = row
+        else {
+            panic!("expected an InnerNode row, got {row:?}");
+        };
         *value_cell_node_id
     }
 

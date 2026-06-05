@@ -434,6 +434,10 @@ pub enum PanelAction {
         scope_path: Vec<u32>,
         group_id: u32,
     },
+    /// Flip auto-gain/normalization on the editor's node-output preview pane.
+    /// `on` is the new state. Emitted by the toggle under the preview; routed to
+    /// `ContentCommand::SetNodePreviewNormalize`. Node preview only.
+    SetNodePreviewNormalize(bool),
 
     // ── Generator-only per-param actions ───────────────────────────────
     //

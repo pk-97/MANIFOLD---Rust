@@ -284,6 +284,11 @@ pub struct Application {
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
     /// Shares the editor window with `graph_canvas`.
     pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
+    /// UI-side mirror of the node-output preview's auto-gain toggle. On by
+    /// default; the editor's preview pane flips it and sends
+    /// `ContentCommand::SetNodePreviewNormalize` to the content thread. Drives
+    /// the toggle checkmark each `configure`.
+    pub(crate) node_preview_normalize: bool,
     /// The REAL effect/generator card rendered in the graph editor's left
     /// lane — the same `ParamCardPanel` the inspector shows, configured each
     /// editor frame from the edited target's `EffectInstance` /
@@ -487,6 +492,7 @@ impl Application {
             graph_editor_geometry: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
+            node_preview_normalize: true,
             editor_card: {
                 // The editor lane is the authoring surface: Author chrome
                 // (no cog / drag-reorder / perform-mapping menu, plus the
@@ -1714,6 +1720,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 watched_graph_effect: None,
                 watched_graph_generator_layer: None,
                 preview_graph_node: None,
+                node_preview_normalize: true,
                 cached_generator_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
                 cached_midi_clock_position: Arc::from(""),

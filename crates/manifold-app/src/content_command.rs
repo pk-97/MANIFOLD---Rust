@@ -228,6 +228,13 @@ pub enum ContentCommand {
     /// the editor's node selection changes.
     SetGraphPreviewNode(Option<manifold_core::NodeId>),
 
+    /// Toggle auto-gain/normalization on the graph editor's node-output
+    /// preview. On by default; remaps the previewed texture's min..max to 0..1
+    /// so dark intermediates (force fields, normals, depth) are legible. Only
+    /// affects the node preview pane, never the live render. Sent when the user
+    /// flips the toggle under the preview.
+    SetNodePreviewNormalize(bool),
+
     /// Dump every node output of the currently-watched effect to a temp folder
     /// as 16-bit linear PNGs + a manifest, for visual inspection. One-shot;
     /// the content thread picks the output directory and logs it. No-op unless

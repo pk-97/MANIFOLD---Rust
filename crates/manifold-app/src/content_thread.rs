@@ -125,6 +125,10 @@ pub struct ContentThread {
     /// any. Combined with `watched_graph_effect` / `watched_graph_generator_layer`
     /// each frame to drive the per-node output capture. `None` = no preview.
     pub preview_graph_node: Option<manifold_core::NodeId>,
+    /// Whether the node-output preview applies auto-gain/normalization. On by
+    /// default; toggled from the editor's preview pane. Pushed to the pipeline
+    /// each frame. Node preview only — never affects the live render.
+    pub node_preview_normalize: bool,
     /// Cached editor-canvas snapshot for the watched generator layer.
     ///
     /// Built lazily by [`Self::active_generator_graph_snapshot`] and
@@ -644,6 +648,8 @@ impl ContentThread {
             .set_node_preview_request(effect_preview);
         self.content_pipeline
             .set_node_preview_generator(generator_preview);
+        self.content_pipeline
+            .set_node_preview_normalize(self.node_preview_normalize);
 
         let render_work_start = std::time::Instant::now();
         self.content_pipeline.render_content(

@@ -1196,6 +1196,14 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::SetNodePreviewNormalize(on) => {
+                    // Preview-only display preference — no undo, no model
+                    // mutation. Update the UI mirror and tell the content
+                    // thread to flip the node-preview blit.
+                    self.node_preview_normalize = *on;
+                    self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(*on));
+                    continue;
+                }
                 PanelAction::EffectMappingRangeSnapshot { binding_id } => {
                     // Pre-drag (min, max) so the commit can record one undo
                     // for the whole range drag. Store-aware (user binding /
@@ -2409,6 +2417,8 @@ impl Application {
             static_block_targets,
             wire_driven_keys,
         );
+        self.graph_editor_panel
+            .set_node_preview_normalize(self.node_preview_normalize);
 
         // The left lane renders the REAL effect/generator card for the edited
         // target — the same `ParamCardPanel` the inspector shows, configured

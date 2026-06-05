@@ -76,6 +76,9 @@ impl ContentThread {
             ContentCommand::SetGraphPreviewNode(node_id) => {
                 self.preview_graph_node = node_id;
             }
+            ContentCommand::SetNodePreviewNormalize(on) => {
+                self.node_preview_normalize = on;
+            }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(effect_id) = self.watched_graph_effect.clone() {
                     let ts = std::time::SystemTime::now()
