@@ -3,11 +3,11 @@
 //! Each effect submits an `EffectMetadata` from its implementation file.
 //! The definition and type registries collect these at startup.
 
-use crate::effect_definition_registry::EffectDef;
 use crate::effect_type_id::EffectTypeId;
 use crate::effect_type_registry::EffectTypeRegistration;
 use crate::effects::ParamDef;
 use crate::generator_registration::ParamSpec;
+use crate::preset_def::{PresetDef, PresetKind};
 
 /// Declarative migration entry: an old `param_id` and its current
 /// replacement (`Some(new_id)`) or `None` if the param was dropped.
@@ -37,9 +37,9 @@ pub type ParamAlias = (&'static str, Option<&'static str>);
 /// - `None` if the alias chain ends at `None` (param was dropped) or a
 ///   cycle is detected.
 ///
-/// Pure slice utility — no registry coupling. Both `EffectDef` and
-/// `GeneratorDef` carry their own `&[ParamAlias]` slice; this function
-/// walks either.
+/// Pure slice utility — no registry coupling. Every `PresetDef` (effect
+/// or generator) carries its own `&[ParamAlias]` slice; this function
+/// walks any of them.
 ///
 /// Termination: bounded chain walk (`aliases.len() + 1` hops). Aliases
 /// are static-author data; cycles indicate a developer mistake at
@@ -79,7 +79,7 @@ inventory::collect!(EffectMetadata);
 /// the common case — don't need to spell out an empty slice.
 ///
 /// Discovered at registry-build time and merged into the matching
-/// [`EffectDef::legacy_param_aliases`].
+/// [`crate::preset_def::PresetDef::legacy_param_aliases`].
 pub struct EffectAliasMetadata {
     pub id: EffectTypeId,
     pub aliases: &'static [ParamAlias],
@@ -126,7 +126,7 @@ pub type ParamValueAlias = (i32, i32);
 /// ```
 ///
 /// Discovered at registry-build time and merged into
-/// [`crate::effect_definition_registry::EffectDef::legacy_value_aliases`].
+/// [`crate::preset_def::PresetDef::legacy_value_aliases`].
 /// `Project::migrate_legacy_param_values` walks each effect
 /// instance's `param_values` and applies the table.
 ///
@@ -142,8 +142,8 @@ pub struct EffectValueAliasMetadata {
 inventory::collect!(EffectValueAliasMetadata);
 
 impl EffectMetadata {
-    /// Convert to the existing `EffectDef` type.
-    pub fn to_effect_def(&self) -> EffectDef {
+    /// Convert to the unified `PresetDef` (kind = `Effect`).
+    pub fn to_effect_def(&self) -> PresetDef {
         let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
         let param_count = param_defs.len();
         let id_to_index = self
@@ -153,12 +153,15 @@ impl EffectMetadata {
             .filter(|(_, p)| !p.id.is_empty())
             .map(|(i, p)| (p.id.to_string(), i))
             .collect();
-        let param_ids: Vec<&'static str> = self.params.iter().map(|p| p.id).collect();
-        EffectDef {
-            display_name: self.display_name,
+        let param_ids: Vec<String> = self.params.iter().map(|p| p.id.to_string()).collect();
+        PresetDef {
+            kind: PresetKind::Effect,
+            display_name: self.display_name.to_string(),
             param_count,
             param_defs,
-            osc_prefix: Some(self.osc_prefix),
+            string_param_defs: Vec::new(),
+            osc_prefix: Some(self.osc_prefix.to_string()),
+            is_line_based: false,
             id_to_index,
             param_ids,
             legacy_param_aliases: &[],

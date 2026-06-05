@@ -4,9 +4,10 @@
 //! The definition and type registries collect these at startup.
 
 use crate::effects::ParamDef;
-use crate::generator_definition_registry::{GeneratorDef, StringParamDef};
+use crate::generator_definition_registry::StringParamDef;
 use crate::generator_type_id::GeneratorTypeId;
 use crate::generator_type_registry::GeneratorTypeRegistration;
+use crate::preset_def::{PresetDef, PresetKind};
 
 /// Static parameter specification — all fields are `'static` so the struct
 /// can live in `inventory::submit!` blocks without allocation.
@@ -209,8 +210,8 @@ pub struct GeneratorAliasMetadata {
 inventory::collect!(GeneratorAliasMetadata);
 
 impl GeneratorMetadata {
-    /// Convert to the existing `GeneratorDef` type.
-    pub fn to_generator_def(&self) -> GeneratorDef {
+    /// Convert to the unified `PresetDef` (kind = `Generator`).
+    pub fn to_generator_def(&self) -> PresetDef {
         let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
         let param_count = param_defs.len();
         let string_param_defs: Vec<StringParamDef> = self
@@ -230,17 +231,19 @@ impl GeneratorMetadata {
             .filter(|(_, p)| !p.id.is_empty())
             .map(|(i, p)| (p.id.to_string(), i))
             .collect();
-        let param_ids: Vec<&'static str> = self.params.iter().map(|p| p.id).collect();
-        GeneratorDef {
-            display_name: self.display_name,
+        let param_ids: Vec<String> = self.params.iter().map(|p| p.id.to_string()).collect();
+        PresetDef {
+            kind: PresetKind::Generator,
+            display_name: self.display_name.to_string(),
             is_line_based: self.is_line_based,
             param_count,
             param_defs,
             string_param_defs,
-            osc_prefix: Some(self.osc_prefix),
+            osc_prefix: Some(self.osc_prefix.to_string()),
             id_to_index,
             param_ids,
             legacy_param_aliases: &[],
+            legacy_value_aliases: &[],
         }
     }
 

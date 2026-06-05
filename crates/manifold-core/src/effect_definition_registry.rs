@@ -4,45 +4,16 @@ use crate::effect_graph_def::{
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectInstance, ParamDef};
+use crate::preset_def::{PresetDef, PresetKind};
 use ahash::AHashMap;
 use std::collections::HashMap;
 use std::sync::{LazyLock, OnceLock};
 
 // ─── Effect Definition ───
-
-/// Metadata for one effect type: display name, parameter schema, OSC prefix.
-/// Mechanical translation of Unity's EffectDefinitionRegistry.EffectDef.
-#[derive(Debug, Clone)]
-pub struct EffectDef {
-    pub display_name: &'static str,
-    pub param_count: usize,
-    pub param_defs: Vec<ParamDef>,
-    pub osc_prefix: Option<&'static str>,
-    /// Stable `ParamSpec::id` → storage index, built once when this def is
-    /// inserted into the registry. The lookup table for every external
-    /// addressing site (drivers, envelopes, Ableton, OSC, macros, project
-    /// file storage). Built from the **authoritative** `ParamSpec` list so
-    /// V1 projects with empty `ParamDef.id` strings still resolve via
-    /// post-load alignment + this table.
-    pub id_to_index: AHashMap<String, usize>,
-    /// Storage-index → param id, parallel to `param_defs`. Each entry
-    /// is the same `&'static str` carried in the original `ParamSpec`
-    /// at registration time. Empty for legacy slots where the spec
-    /// did not carry an id. Lets reverse lookups (`param_index_to_id`)
-    /// return `&'static str` without unsafe transmutes.
-    pub param_ids: Vec<&'static str>,
-    /// Declarative legacy id migration table. See
-    /// [`crate::effect_registration::ParamAlias`].
-    pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
-    /// Declarative legacy **slot-value** migration table — translates
-    /// pre-migration enum / numeric values when loading old projects.
-    /// Each entry is `(param_id, &[(from, to)])`. Submitted via
-    /// [`crate::effect_registration::EffectValueAliasMetadata`]
-    /// sidecar. Walked by `Project::migrate_legacy_param_values`
-    /// during `on_after_deserialize`.
-    pub legacy_value_aliases:
-        &'static [(&'static str, &'static [crate::effect_registration::ParamValueAlias])],
-}
+//
+// The value type is now [`crate::preset_def::PresetDef`] (kind =
+// `Effect`). This module keeps its own `EffectTypeId`-keyed registry and
+// `try_get` signature; only the stored/returned struct unified.
 
 /// Re-export for callers within this module's namespace. Canonical home
 /// is [`crate::effect_registration::resolve_param_alias`] — it's a pure
@@ -52,7 +23,7 @@ pub use crate::effect_registration::resolve_param_alias;
 
 // ─── Static Registry ───
 
-static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|| {
+static DEFINITIONS: LazyLock<HashMap<EffectTypeId, PresetDef>> = LazyLock::new(|| {
     let mut m = build_definitions();
     for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
         m.insert(meta.id.clone(), meta.to_effect_def());
@@ -75,8 +46,8 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
         }
     }
     // JSON-loaded presets (§11 unified-registry migration). Each
-    // entry in `loaded_preset_metadata()` is converted to an
-    // [`EffectDef`] the same way `EffectMetadata` is, then inserted —
+    // entry in `loaded_preset_metadata()` is converted to a
+    // `PresetDef` the same way `EffectMetadata` is, then inserted —
     // a JSON-loaded preset wins over an inventory submission for the
     // same id. Post-§11 every shipping effect lives in JSON; the
     // inventory loop above only fires for tests that submit
@@ -91,7 +62,7 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
 
 /// Get the definition for an effect type. Panics if not found.
 /// Matches Unity's `EffectDefinitionRegistry.Get(EffectType)`.
-pub fn get(effect_type: &EffectTypeId) -> &'static EffectDef {
+pub fn get(effect_type: &EffectTypeId) -> &'static PresetDef {
     DEFINITIONS.get(effect_type).unwrap_or_else(|| {
         panic!(
             "EffectDefinitionRegistry: unknown EffectTypeId '{}'",
@@ -102,7 +73,7 @@ pub fn get(effect_type: &EffectTypeId) -> &'static EffectDef {
 
 /// Try to get the definition for an effect type.
 /// Matches Unity's `EffectDefinitionRegistry.TryGet(EffectType, out EffectDef)`.
-pub fn try_get(effect_type: &EffectTypeId) -> Option<&'static EffectDef> {
+pub fn try_get(effect_type: &EffectTypeId) -> Option<&'static PresetDef> {
     DEFINITIONS.get(effect_type)
 }
 
@@ -123,7 +94,7 @@ pub fn param_id_to_index(effect_type: &EffectTypeId, id: &str) -> Option<usize> 
 /// has an empty id (V1 fixture / pre-step-6 entry).
 pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<&'static str> {
     let def = DEFINITIONS.get(effect_type)?;
-    let id = *def.param_ids.get(index)?;
+    let id = def.param_ids.get(index)?.as_str();
     if id.is_empty() { None } else { Some(id) }
 }
 
@@ -167,8 +138,8 @@ pub fn format_value(effect_type: &EffectTypeId, param_index: usize, value: f32) 
 /// Returns `None` if the effect has no OSC prefix or the slot has no stable id.
 pub fn get_osc_address(effect_type: &EffectTypeId, param_index: usize) -> Option<String> {
     let def = try_get(effect_type)?;
-    let prefix = def.osc_prefix?;
-    let &param_id = def.param_ids.get(param_index)?;
+    let prefix = def.osc_prefix.as_deref()?;
+    let param_id = def.param_ids.get(param_index)?;
     if param_id.is_empty() {
         return None;
     }
@@ -187,8 +158,8 @@ pub fn get_osc_address_for_layer(
         return None;
     }
     let def = try_get(effect_type)?;
-    let prefix = def.osc_prefix?;
-    let &param_id = def.param_ids.get(param_index)?;
+    let prefix = def.osc_prefix.as_deref()?;
+    let param_id = def.param_ids.get(param_index)?;
     if param_id.is_empty() {
         return None;
     }
@@ -222,7 +193,7 @@ pub fn get_all_effect_types_sorted() -> Vec<EffectTypeId> {
 
 // ─── Build Definitions ───
 
-fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
+fn build_definitions() -> HashMap<EffectTypeId, PresetDef> {
     // All effects are registered via inventory::submit! in their
     // implementation files (manifold-renderer/src/effects/*.rs).
     HashMap::new()
@@ -285,16 +256,17 @@ pub struct LoadedPresetSource {
 inventory::collect!(LoadedPresetSource);
 
 /// Convert a parsed [`PresetMetadata`] (JSON wire shape) into the
-/// existing [`EffectDef`] consumed by the rest of the codebase.
+/// unified [`PresetDef`] (kind = `Effect`) consumed by the rest of the
+/// codebase.
 ///
-/// String fields move from owned to `&'static str` via `Box::leak`.
-/// The leak is bounded by the (finite) number of shipping presets and
-/// happens once at startup when the `DEFINITIONS` `LazyLock`
-/// initialises — in practice it's the same lifetime as the existing
-/// `inventory::iter::<EffectMetadata>` data, just sourced differently.
+/// `PresetDef`'s string fields are owned (`String` / `Vec<String>`), so
+/// these are cloned from the metadata; only the `'static` alias tables
+/// still leak via `Box::leak`, bounded by the (finite) number of
+/// shipping presets and done once at startup when `DEFINITIONS`
+/// initialises.
 ///
 /// `bindings` and `skip_mode` are renderer-side concerns and are NOT
-/// projected into [`EffectDef`]; they live on the renderer's
+/// projected into [`PresetDef`]; they live on the renderer's
 /// `LoadedPresetView` (post-§11) which pairs the [`PresetMetadata`]
 /// with the [`crate::effect_graph_def::EffectGraphDef`]'s `nodes` and
 /// `wires`.
@@ -315,7 +287,7 @@ pub fn preset_metadata_to_type_registration(
     }
 }
 
-pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> EffectDef {
+pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> PresetDef {
     let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
     let param_count = param_defs.len();
     let id_to_index: AHashMap<String, usize> = meta
@@ -325,12 +297,15 @@ pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> EffectDef {
         .filter(|(_, p)| !p.id.is_empty())
         .map(|(i, p)| (p.id.clone(), i))
         .collect();
-    let param_ids: Vec<&'static str> = meta.params.iter().map(|p| leak_str(&p.id)).collect();
-    EffectDef {
-        display_name: leak_str(&meta.display_name),
+    let param_ids: Vec<String> = meta.params.iter().map(|p| p.id.clone()).collect();
+    PresetDef {
+        kind: PresetKind::Effect,
+        display_name: meta.display_name.clone(),
         param_count,
         param_defs,
-        osc_prefix: Some(leak_str(&meta.osc_prefix)),
+        string_param_defs: Vec::new(),
+        osc_prefix: Some(meta.osc_prefix.clone()),
+        is_line_based: false,
         id_to_index,
         param_ids,
         legacy_param_aliases: leak_alias_table(&meta.param_aliases),
@@ -781,7 +756,7 @@ mod tests {
         let def = preset_metadata_to_effect_def(&meta);
 
         assert_eq!(def.display_name, "Bloom (from JSON)");
-        assert_eq!(def.osc_prefix, Some("bloom_from_json"));
+        assert_eq!(def.osc_prefix.as_deref(), Some("bloom_from_json"));
         assert_eq!(def.param_count, 1);
         assert_eq!(def.param_defs.len(), 1);
         assert_eq!(def.param_defs[0].id, "amount");

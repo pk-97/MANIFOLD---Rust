@@ -560,7 +560,7 @@ impl ParamSource for GeneratorParamState {
     fn display_name(&self) -> &str {
         use crate::generator_definition_registry;
         generator_definition_registry::try_get(&self.generator_type)
-            .map(|d| d.display_name)
+            .map(|d| d.display_name.as_str())
             .unwrap_or("Generator")
     }
 

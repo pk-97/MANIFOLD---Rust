@@ -47,7 +47,7 @@ pub struct GraphSnapshot {
 /// overwritten — they match the snapshot's `NodeSnapshot.node_handle`
 /// and `ParamSnapshot.name`. `outer_param_id` is the stable
 /// `ParamSpec::id` of the outer slot — UI code resolves this to a
-/// static-block slot index via `EffectDef::id_to_index`, so the
+/// static-block slot index via `PresetDef::id_to_index`, so the
 /// per-node "Expose to card" checkbox can toggle the matching
 /// `param_values[slot_index].exposed` directly instead of layering
 /// a redundant user-binding on top of an already-routed param.

@@ -1048,7 +1048,7 @@ impl Application {
                         // param id the unified by-id command addresses.
                         let param_id =
                             manifold_core::generator_definition_registry::try_get(gen_type)
-                                .and_then(|d| d.param_ids.get(param_idx).copied());
+                                .and_then(|d| d.param_ids.get(param_idx).map(|s| s.as_str()));
                         if (old_val - new_val).abs() > f32::EPSILON
                             && let Some(param_id) = param_id
                         {

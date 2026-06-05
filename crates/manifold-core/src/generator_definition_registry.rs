@@ -6,8 +6,15 @@ use crate::effect_graph_def::{ParamSpecDef, PresetMetadata};
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::effects::ParamDef;
 use crate::generator_type_id::GeneratorTypeId;
+use crate::preset_def::{PresetDef, PresetKind};
 
 // ─── Generator Definition ───
+//
+// The value type is now [`crate::preset_def::PresetDef`] (kind =
+// `Generator`). This module keeps its own `GeneratorTypeId`-keyed
+// registry and `try_get` signature; only the stored/returned struct
+// unified. [`StringParamDef`] stays here — it's generator-only state
+// carried on `PresetDef::string_param_defs`.
 
 /// A string parameter definition for generators that accept text input.
 #[derive(Debug, Clone)]
@@ -22,29 +29,9 @@ pub struct StringParamDef {
     pub use_dropdown: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct GeneratorDef {
-    pub display_name: &'static str,
-    pub is_line_based: bool,
-    pub param_count: usize,
-    pub param_defs: Vec<ParamDef>,
-    pub string_param_defs: Vec<StringParamDef>,
-    pub osc_prefix: Option<&'static str>,
-    /// Stable `ParamSpec::id` → storage index. See
-    /// [`crate::effect_definition_registry::EffectDef::id_to_index`] —
-    /// same role, parallel structure for generators.
-    pub id_to_index: AHashMap<String, usize>,
-    /// Storage-index → static param id. See
-    /// [`crate::effect_definition_registry::EffectDef::param_ids`].
-    pub param_ids: Vec<&'static str>,
-    /// Declarative legacy id migration table. See
-    /// [`crate::effect_registration::ParamAlias`].
-    pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
-}
-
 // ─── Static Registry ───
 
-static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> = LazyLock::new(|| {
+static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, PresetDef>> = LazyLock::new(|| {
     let mut m = build_definitions();
     for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
         m.insert(meta.id.clone(), meta.to_generator_def());
@@ -82,7 +69,7 @@ static MAX_PARAM_COUNT: LazyLock<usize> = LazyLock::new(|| {
 
 // ─── Public API ───
 
-pub fn get(gen_type: &GeneratorTypeId) -> &'static GeneratorDef {
+pub fn get(gen_type: &GeneratorTypeId) -> &'static PresetDef {
     DEFINITIONS.get(gen_type).unwrap_or_else(|| {
         panic!(
             "GeneratorDefinitionRegistry: unknown GeneratorTypeId '{}'",
@@ -91,7 +78,7 @@ pub fn get(gen_type: &GeneratorTypeId) -> &'static GeneratorDef {
     })
 }
 
-pub fn try_get(gen_type: &GeneratorTypeId) -> Option<&'static GeneratorDef> {
+pub fn try_get(gen_type: &GeneratorTypeId) -> Option<&'static PresetDef> {
     DEFINITIONS.get(gen_type)
 }
 
@@ -108,7 +95,7 @@ pub fn param_id_to_index(gen_type: &GeneratorTypeId, id: &str) -> Option<usize> 
 /// the slot has an empty id (V1 fixture / pre-step-6 entry).
 pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<&'static str> {
     let def = DEFINITIONS.get(gen_type)?;
-    let id = *def.param_ids.get(index)?;
+    let id = def.param_ids.get(index)?.as_str();
     if id.is_empty() { None } else { Some(id) }
 }
 
@@ -158,8 +145,8 @@ pub fn format_gen_value(gen_type: &GeneratorTypeId, index: usize, value: f32) ->
 
 pub fn get_osc_address(gen_type: &GeneratorTypeId, index: usize) -> Option<String> {
     let def = DEFINITIONS.get(gen_type)?;
-    let prefix = def.osc_prefix.as_ref()?;
-    let &param_id = def.param_ids.get(index)?;
+    let prefix = def.osc_prefix.as_deref()?;
+    let param_id = def.param_ids.get(index)?;
     if param_id.is_empty() {
         return None;
     }
@@ -180,8 +167,8 @@ pub fn get_osc_address_for_layer(
         return None;
     }
     let def = DEFINITIONS.get(gen_type)?;
-    let prefix = def.osc_prefix.as_ref()?;
-    let &param_id = def.param_ids.get(index)?;
+    let prefix = def.osc_prefix.as_deref()?;
+    let param_id = def.param_ids.get(index)?;
     if param_id.is_empty() {
         return None;
     }
@@ -266,13 +253,14 @@ pub struct LoadedPresetSource {
 inventory::collect!(LoadedPresetSource);
 
 /// Convert a parsed [`PresetMetadata`] (shared JSON wire shape with
-/// effects) into the existing [`GeneratorDef`] consumed by the rest of
-/// the codebase. String fields move from owned to `&'static str` via
-/// `Box::leak`; bounded by the (finite) number of shipping presets and
-/// happens once at startup.
+/// effects) into the unified [`PresetDef`] (kind = `Generator`) consumed
+/// by the rest of the codebase. `PresetDef`'s string fields are owned, so
+/// they're cloned from the metadata; only the `'static` alias table still
+/// leaks via `Box::leak`, bounded by the (finite) number of shipping
+/// presets and done once at startup.
 ///
 /// Mirrors [`crate::effect_definition_registry::preset_metadata_to_effect_def`].
-pub fn preset_metadata_to_generator_def(meta: &PresetMetadata) -> GeneratorDef {
+pub fn preset_metadata_to_generator_def(meta: &PresetMetadata) -> PresetDef {
     let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
     let param_count = param_defs.len();
     let id_to_index: AHashMap<String, usize> = meta
@@ -282,9 +270,10 @@ pub fn preset_metadata_to_generator_def(meta: &PresetMetadata) -> GeneratorDef {
         .filter(|(_, p)| !p.id.is_empty())
         .map(|(i, p)| (p.id.clone(), i))
         .collect();
-    let param_ids: Vec<&'static str> = meta.params.iter().map(|p| leak_str(&p.id)).collect();
-    GeneratorDef {
-        display_name: leak_str(&meta.display_name),
+    let param_ids: Vec<String> = meta.params.iter().map(|p| p.id.clone()).collect();
+    PresetDef {
+        kind: PresetKind::Generator,
+        display_name: meta.display_name.clone(),
         is_line_based: meta.is_line_based,
         param_count,
         param_defs,
@@ -293,10 +282,12 @@ pub fn preset_metadata_to_generator_def(meta: &PresetMetadata) -> GeneratorDef {
         // their inventory submission; the §11 path applies to graph-
         // backed generators without string-param surface.
         string_param_defs: Vec::new(),
-        osc_prefix: Some(leak_str(&meta.osc_prefix)),
+        osc_prefix: Some(meta.osc_prefix.clone()),
         id_to_index,
         param_ids,
         legacy_param_aliases: leak_alias_table(&meta.param_aliases),
+        // Generators carry no slot-value alias table yet.
+        legacy_value_aliases: &[],
     }
 }
 
@@ -357,22 +348,24 @@ fn leak_alias_table(
     Box::leak(v.into_boxed_slice())
 }
 
-// `ParamValueAlias` is unused by generators today (no value-alias path
-// in `GeneratorDef`); held in scope to keep the conversion shape
-// identical to the effect side when value aliases land for generators.
+// `ParamValueAlias` is unused by generators today — the generator
+// `PresetDef` always carries an empty `legacy_value_aliases`; held in
+// scope to keep the conversion shape identical to the effect side when
+// value aliases land for generators.
 #[allow(dead_code)]
 fn _value_alias_keepalive(_: ParamValueAlias) {}
 
 // ─── Registry Builder ───
 
-fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
+fn build_definitions() -> HashMap<GeneratorTypeId, PresetDef> {
     let mut m = HashMap::new();
 
     // ── None ──
     m.insert(
         GeneratorTypeId::NONE,
-        GeneratorDef {
-            display_name: "None",
+        PresetDef {
+            kind: PresetKind::Generator,
+            display_name: "None".to_string(),
             is_line_based: false,
             param_count: 0,
             param_defs: Vec::new(),
@@ -381,6 +374,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
             id_to_index: AHashMap::new(),
             param_ids: Vec::new(),
             legacy_param_aliases: &[],
+            legacy_value_aliases: &[],
         },
     );
 

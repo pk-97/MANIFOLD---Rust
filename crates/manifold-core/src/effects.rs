@@ -150,7 +150,7 @@ pub enum ParamConvert {
 }
 
 /// Free-function form of [`EffectInstance::resolve_param`]. Takes the
-/// `EffectDef` and the effect instance directly so callers in
+/// `PresetDef` and the effect instance directly so callers in
 /// borrow-tight closures (the modulation evaluators iterating
 /// `fx.drivers`) can resolve without going through the borrowing
 /// `&self` method.
@@ -161,7 +161,7 @@ pub enum ParamConvert {
 /// graph's binding iterator rather than materializing a Vec, so it stays
 /// safe on the per-frame modulation path.
 pub fn resolve_param_in(
-    def: &crate::effect_definition_registry::EffectDef,
+    def: &crate::preset_def::PresetDef,
     fx: &EffectInstance,
     id: &str,
 ) -> Option<ResolvedParam> {
@@ -966,7 +966,7 @@ where
         let def = def.expect("checked above");
         let mut map = serializer.serialize_map(Some(values.len()))?;
         for (i, &v) in values.iter().enumerate() {
-            map.serialize_entry(def.param_ids[i], &v)?;
+            map.serialize_entry(&def.param_ids[i], &v)?;
         }
         map.end()
     } else {
@@ -1008,7 +1008,7 @@ where
         let def = def.expect("checked above");
         let mut map = serializer.serialize_map(Some(values.len()))?;
         for (i, pv) in values.iter().enumerate() {
-            map.serialize_entry(def.param_ids[i], pv)?;
+            map.serialize_entry(&def.param_ids[i], pv)?;
         }
         map.end()
     } else {
@@ -1053,7 +1053,7 @@ where
         let def = def.expect("checked above");
         let mut map = serializer.serialize_map(Some(values.len()))?;
         for (i, pv) in values.iter().take(static_touch).enumerate() {
-            map.serialize_entry(def.param_ids[i], pv)?;
+            map.serialize_entry(&def.param_ids[i], pv)?;
         }
         for (j, id) in user_binding_ids.iter().enumerate() {
             let idx = static_count + j;
@@ -1099,7 +1099,7 @@ where
         let def = def.expect("checked above");
         let mut map = serializer.serialize_map(Some(values.len()))?;
         for (i, &v) in values.iter().take(static_touch).enumerate() {
-            map.serialize_entry(def.param_ids[i], &v)?;
+            map.serialize_entry(&def.param_ids[i], &v)?;
         }
         for (j, id) in user_binding_ids.iter().enumerate() {
             let idx = static_count + j;
@@ -2167,7 +2167,7 @@ impl ParamSource for EffectInstance {
     fn display_name(&self) -> &str {
         use crate::effect_definition_registry;
         match effect_definition_registry::try_get(&self.effect_type) {
-            Some(def) => def.display_name,
+            Some(def) => def.display_name.as_str(),
             None => "?",
         }
     }

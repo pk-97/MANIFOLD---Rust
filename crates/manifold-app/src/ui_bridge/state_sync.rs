@@ -1586,7 +1586,7 @@ fn gen_params_to_config(
     // is built from the same source so user-added ids resolve.
     enum Source<'a> {
         Graph(&'a Vec<manifold_core::effect_graph_def::ParamSpecDef>),
-        Registry(&'a manifold_core::generator_definition_registry::GeneratorDef),
+        Registry(&'a manifold_core::preset_def::PresetDef),
     }
     let source = match (graph_meta, reg_def) {
         (Some(m), _) if !m.params.is_empty() => Source::Graph(&m.params),
@@ -1923,7 +1923,9 @@ fn describe_macro_mapping(
             param_id,
         } => {
             let def = manifold_core::effect_definition_registry::try_get(effect_type);
-            let effect_name = def.map(|d| d.display_name).unwrap_or(effect_type.as_str());
+            let effect_name = def
+                .map(|d| d.display_name.as_str())
+                .unwrap_or(effect_type.as_str());
             let param_name = def
                 .and_then(|d| d.id_to_index.get(param_id.as_ref()).copied())
                 .and_then(|i| def.and_then(|d| d.param_defs.get(i)))
@@ -1954,7 +1956,9 @@ fn describe_macro_mapping(
                 .map(|l| l.name.as_str())
                 .unwrap_or("?");
             let def = manifold_core::effect_definition_registry::try_get(effect_type);
-            let effect_name = def.map(|d| d.display_name).unwrap_or(effect_type.as_str());
+            let effect_name = def
+                .map(|d| d.display_name.as_str())
+                .unwrap_or(effect_type.as_str());
             let param_name = def
                 .and_then(|d| d.id_to_index.get(param_id.as_ref()).copied())
                 .and_then(|i| def.and_then(|d| d.param_defs.get(i)))

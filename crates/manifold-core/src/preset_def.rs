@@ -1,17 +1,17 @@
 //! The unified preset definition — one type for effects and generators.
 //!
 //! Effects and generators do the same job: render through a node graph,
-//! expose params, modulate, save/load, surface to the editor. They have
-//! been defined twice ([`EffectDef`](crate::effect_definition_registry::EffectDef)
-//! and [`GeneratorDef`](crate::generator_definition_registry::GeneratorDef)).
-//! [`PresetDef`] is the single shape both collapse into, carrying the small
-//! set of real differences behind a [`PresetKind`] discriminator.
+//! expose params, modulate, save/load, surface to the editor. They were
+//! defined twice (legacy `EffectDef` / `GeneratorDef`). [`PresetDef`] is
+//! the single shape both collapsed into, carrying the small set of real
+//! differences behind a [`PresetKind`] discriminator.
 //!
-//! Step 2 of the unification (see `docs/PRESET_UNIFICATION_PLAN.md`):
-//! this introduces the target type only. No consumer is migrated yet — the
-//! two registries still produce `EffectDef` / `GeneratorDef`. The
-//! [`PresetDef::from_effect_def`] / [`PresetDef::from_generator_def`]
-//! bridges let later steps fold consumers onto `PresetDef` one at a time.
+//! Step 7 of the unification (see `docs/PRESET_UNIFICATION_PLAN.md`):
+//! both definition registries now STORE and RETURN `PresetDef`. The two
+//! legacy structs and the `from_effect_def` / `from_generator_def`
+//! bridges are gone — the registries build `PresetDef` directly. The
+//! two registry modules and their `EffectTypeId` / `GeneratorTypeId`
+//! keying stay separate; only the value type unified here.
 
 use ahash::AHashMap;
 
@@ -66,45 +66,6 @@ pub struct PresetDef {
 }
 
 impl PresetDef {
-    /// Bridge from the legacy effect def. Clones the owned fields; used while
-    /// consumers migrate onto `PresetDef` (steps 6–7). The `'static` alias
-    /// tables are shared by reference.
-    pub fn from_effect_def(d: &crate::effect_definition_registry::EffectDef) -> Self {
-        PresetDef {
-            kind: PresetKind::Effect,
-            display_name: d.display_name.to_string(),
-            param_count: d.param_count,
-            param_defs: d.param_defs.clone(),
-            string_param_defs: Vec::new(),
-            osc_prefix: d.osc_prefix.map(str::to_string),
-            is_line_based: false,
-            id_to_index: d.id_to_index.clone(),
-            param_ids: d.param_ids.iter().map(|s| s.to_string()).collect(),
-            legacy_param_aliases: d.legacy_param_aliases,
-            legacy_value_aliases: d.legacy_value_aliases,
-        }
-    }
-
-    /// Bridge from the legacy generator def. Generators carry no slot-value
-    /// alias table yet, so `legacy_value_aliases` is empty.
-    pub fn from_generator_def(
-        d: &crate::generator_definition_registry::GeneratorDef,
-    ) -> Self {
-        PresetDef {
-            kind: PresetKind::Generator,
-            display_name: d.display_name.to_string(),
-            param_count: d.param_count,
-            param_defs: d.param_defs.clone(),
-            string_param_defs: d.string_param_defs.clone(),
-            osc_prefix: d.osc_prefix.map(str::to_string),
-            is_line_based: d.is_line_based,
-            id_to_index: d.id_to_index.clone(),
-            param_ids: d.param_ids.iter().map(|s| s.to_string()).collect(),
-            legacy_param_aliases: d.legacy_param_aliases,
-            legacy_value_aliases: &[],
-        }
-    }
-
     /// Resolve a param id to its storage index, honoring the legacy alias
     /// table — the same contract both legacy defs expose.
     pub fn index_for_param(&self, id: &str) -> Option<usize> {
