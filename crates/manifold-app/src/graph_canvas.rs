@@ -839,6 +839,12 @@ pub struct GraphCanvas {
     /// doc's mandate: let the canvas tell Peter what it thinks is happening
     /// without a debugger.
     debug_overlay: bool,
+    /// Set when the view descends into a group; consumed by the next
+    /// `set_snapshot`, which auto-formats the level *only if it has never been
+    /// laid out* (every node's `editor_pos` is `None`). Preserves any manual
+    /// arrangement — once a layout exists (hand-moved or a prior auto-format),
+    /// this never fires for that group again.
+    format_on_enter: bool,
 }
 
 /// Max seconds between two empty-canvas presses for them to count as a
@@ -875,6 +881,7 @@ impl GraphCanvas {
             last_click_node: None,
             scope: Vec::new(),
             scope_titles: Vec::new(),
+            format_on_enter: false,
             debug_overlay: false,
         }
     }
@@ -1138,6 +1145,24 @@ impl GraphCanvas {
                 view.pos_graph = p;
             }
         }
+
+        // Auto-format on first entry into a never-laid-out group. `auto_layout`
+        // above already positioned the nodes (all were unplaced); persist those
+        // positions so the tidy layout sticks. Only fires when EVERY node lacks
+        // a saved `editor_pos`, so a manual arrangement is never overwritten.
+        // RelayoutGraph routes through the non-structural layout command, so it
+        // doesn't rebuild the chain or reset state.
+        if std::mem::take(&mut self.format_on_enter)
+            && !self.nodes.is_empty()
+            && level_nodes.iter().all(|n| n.editor_pos.is_none())
+        {
+            let positions: Vec<(u32, (f32, f32))> =
+                self.nodes.iter().map(|n| (n.id, n.pos_graph)).collect();
+            self.pending_actions.push(PanelAction::RelayoutGraph {
+                scope_path: self.scope.clone(),
+                positions,
+            });
+        }
     }
 
     // ── Group navigation (scope) ────────────────────────────────────
@@ -1169,6 +1194,9 @@ impl GraphCanvas {
         self.selected.clear();
         self.scope.push(group_id);
         self.scope_titles.push(title);
+        // Auto-format this group the first time we open it (handled in the next
+        // set_snapshot, and only if it has no saved layout).
+        self.format_on_enter = true;
     }
 
     /// Pop one level back toward the root. Returns `true` if it moved (there
