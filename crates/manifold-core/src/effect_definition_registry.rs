@@ -214,9 +214,9 @@ fn build_definitions() -> HashMap<EffectTypeId, PresetDef> {
 /// Each [`LoadedPresetSource`] submission in the inventory contributes
 /// a function pointer that produces a `Vec<PresetMetadata>` when
 /// called. The renderer crate submits one source pointing at
-/// `loaded_presets_from_bundled` — which parses
-/// `assets/effect-presets/*.json` (via the `BUNDLED_PRESETS_GENERATED`
-/// table from `build.rs`) and returns every entry whose `version`
+/// `loaded_presets_from_bundled` — which reads the effect preset JSON
+/// scanned from disk at startup by the renderer's `preset_loader`
+/// (stock + optional user dirs) and returns every entry whose `version`
 /// makes it carry [`PresetMetadata`].
 ///
 /// Sources are invoked once on first access and cached for the

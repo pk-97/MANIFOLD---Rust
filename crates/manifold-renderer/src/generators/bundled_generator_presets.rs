@@ -1,38 +1,29 @@
 //! Bundled generator preset registry.
 //!
 //! Mirror of `node_graph::bundled_presets` (effect presets) for the
-//! generator side. Each JSON file in `assets/generator-presets/*.json`
-//! is picked up by `build.rs`, embedded via `include_str!`, and exposed
-//! here as a lookup by `GeneratorTypeId`.
+//! generator side. Each JSON generator preset is **scanned from disk at
+//! startup** by [`crate::preset_loader`] (stock + optional user dirs),
+//! not embedded into the binary, and exposed here as a lookup by
+//! `GeneratorTypeId`.
 //!
 //! The [`GeneratorRegistry`](crate::generators::registry::GeneratorRegistry)
 //! consults this table when creating a generator: if an entry matches
 //! the requested type id, the registry constructs a
 //! [`JsonGraphGenerator`](crate::generators::json_graph_generator::JsonGraphGenerator)
-//! from the embedded JSON; otherwise it falls back to the
-//! `inventory::submit!` Rust factories.
+//! from the JSON; otherwise it falls back to the `inventory::submit!`
+//! Rust factories.
 //!
 //! ## Add a new generator preset
 //!
-//! 1. Drop a JSON file at `assets/generator-presets/<TypeId>.json` —
+//! 1. Drop a JSON file at the stock generator dir `<TypeId>.json` —
 //!    must reference `system.generator_input` + `system.final_output`
 //!    boundary nodes (see [`crate::generators::json_graph_generator`]).
-//! 2. Build — `build.rs` picks up the new file automatically and the
-//!    preset becomes available in the picker on next launch.
+//! 2. Relaunch — the loader scans it; no rebuild required.
 
 use manifold_core::GeneratorTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-// build.rs emits `BUNDLED_GENERATOR_PRESETS_GENERATED` — one entry per
-// `assets/generator-presets/*.json`, sorted by filename stem.
-include!(concat!(
-    env!("OUT_DIR"),
-    "/bundled_generator_presets_generated.rs"
-));
-
-/// Alias for the build.rs-generated array; stable name kept for
-/// downstream consumers.
-const BUNDLED_GENERATOR_PRESETS: &[(&str, &str)] = BUNDLED_GENERATOR_PRESETS_GENERATED;
+use crate::preset_loader::GENERATOR_CATALOG;
 
 /// Loader function for the core's
 /// [`manifold_core::generator_definition_registry::LoadedPresetSource`]
@@ -47,8 +38,8 @@ const BUNDLED_GENERATOR_PRESETS: &[(&str, &str)] = BUNDLED_GENERATOR_PRESETS_GEN
 /// and the legacy inventory submission (if any) is overridden.
 pub fn loaded_generator_presets_from_bundled()
 -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
-    BUNDLED_GENERATOR_PRESETS
-        .iter()
+    GENERATOR_CATALOG
+        .entries()
         .filter_map(|(id, json)| {
             let def: EffectGraphDef = serde_json::from_str(json)
                 .unwrap_or_else(|e| panic!("bundled generator preset {id}: parse failed: {e}"));
@@ -68,10 +59,7 @@ inventory::submit! {
 pub fn bundled_generator_preset_json(
     generator_type: &GeneratorTypeId,
 ) -> Option<&'static str> {
-    BUNDLED_GENERATOR_PRESETS
-        .iter()
-        .find(|(id, _)| *id == generator_type.as_str())
-        .map(|(_, json)| *json)
+    GENERATOR_CATALOG.json(generator_type.as_str())
 }
 
 /// Every `GeneratorTypeId` that has a bundled JSON preset registered.
@@ -79,9 +67,9 @@ pub fn bundled_generator_preset_json(
 /// JSON-defined generators alongside the inventory-registered Rust
 /// generators.
 pub fn bundled_generator_preset_type_ids() -> impl Iterator<Item = GeneratorTypeId> {
-    BUNDLED_GENERATOR_PRESETS
-        .iter()
-        .map(|(id, _)| GeneratorTypeId::from_string((*id).to_string()))
+    GENERATOR_CATALOG
+        .type_ids()
+        .map(|id| GeneratorTypeId::from_string(id.to_string()))
 }
 
 #[cfg(test)]
@@ -109,13 +97,14 @@ mod tests {
         );
     }
 
-    /// Every embedded JSON must be parseable. Structural checks already
-    /// happen in build.rs; this is the deeper schema check that the
-    /// bytes round-trip through serde.
+    /// Every disk-loaded JSON must be parseable. The loader does a
+    /// structural JSON parse and skips malformed files; this is the
+    /// deeper schema check that the bytes round-trip through serde into
+    /// an `EffectGraphDef`.
     #[test]
     fn every_bundled_generator_preset_parses() {
         use manifold_core::effect_graph_def::EffectGraphDef;
-        for (id, json) in BUNDLED_GENERATOR_PRESETS {
+        for (id, json) in GENERATOR_CATALOG.entries() {
             let _: EffectGraphDef = serde_json::from_str(json).unwrap_or_else(|e| {
                 panic!("bundled generator preset {id}: parse failed: {e}")
             });
@@ -139,7 +128,7 @@ mod tests {
     fn every_bundled_preset_binding_resolves_to_an_outer_param() {
         use manifold_core::effect_graph_def::EffectGraphDef;
         let mut violations: Vec<String> = Vec::new();
-        for (preset_id, json) in BUNDLED_GENERATOR_PRESETS {
+        for (preset_id, json) in GENERATOR_CATALOG.entries() {
             let doc: EffectGraphDef = serde_json::from_str(json).unwrap_or_else(|e| {
                 panic!("bundled preset {preset_id}: parse failed: {e}")
             });
@@ -185,7 +174,7 @@ mod tests {
         let device = crate::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures: Vec<String> = Vec::new();
-        for (preset_id, json) in BUNDLED_GENERATOR_PRESETS {
+        for (preset_id, json) in GENERATOR_CATALOG.entries() {
             if let Err(e) = JsonGraphGenerator::from_json_str_with_device(
                 json,
                 &registry,
@@ -245,7 +234,7 @@ mod tests {
 
         let mut failures: Vec<String> = Vec::new();
 
-        for (preset_id, json) in BUNDLED_GENERATOR_PRESETS {
+        for (preset_id, json) in GENERATOR_CATALOG.entries() {
             let mut g = match JsonGraphGenerator::from_json_str_with_device(
                 json, &registry, &device, w, h, format,
             ) {

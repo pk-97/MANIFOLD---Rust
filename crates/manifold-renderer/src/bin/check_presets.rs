@@ -17,8 +17,10 @@
 //! device init + per-preset buffer allocations (~ a couple of seconds
 //! total) but stays sub-GPU-dispatch fast.
 //!
-//! Reads from disk, not the build.rs-baked bundle — edit JSON, run this,
-//! no rebuild needed.
+//! Reads the dev stock dirs (`assets/{effect,generator}-presets`) from
+//! disk directly via `CARGO_MANIFEST_DIR` — edit JSON, run this, no
+//! rebuild needed. This is the same set the runtime preset loader scans
+//! as its dev stock root.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

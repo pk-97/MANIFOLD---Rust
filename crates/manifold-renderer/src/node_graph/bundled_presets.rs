@@ -1,14 +1,12 @@
 //! Bundled effect preset registry.
 //!
 //! Each shipping effect ships with one **bundled preset** — a JSON
-//! [`EffectGraphDef`] living in
-//! `crates/manifold-renderer/assets/effect-presets/<EffectTypeId>.json`.
-//! The file is the on-disk source of truth; `build.rs` scans the
-//! directory at compile time and emits the
-//! [`BUNDLED_PRESETS`](BUNDLED_PRESETS) array of
-//! `(type_id, include_str!(json))` pairs. Adding a preset is just
-//! dropping a JSON file in the directory — no hand-maintained table,
-//! no central registration to forget.
+//! [`EffectGraphDef`]. The JSON files are **scanned from disk at
+//! startup** by [`crate::preset_loader`] (stock from the packaged
+//! bundle or the dev workspace assets dir, plus optional user presets),
+//! not embedded into the binary. The binary has zero compile-time
+//! knowledge of which effects exist. Adding a preset is just dropping a
+//! JSON file in the stock directory — no rebuild required.
 //!
 //! The bundled preset for `EffectTypeId::X` is the canonical default
 //! graph for that effect. Post-§11 the JSON file is authoritative —
@@ -22,12 +20,8 @@
 //! shapes use the same [`EffectGraphDef`] schema and the same
 //! [`PrimitiveRegistry`] loader; they differ only in storage location.
 //!
-//! ## Add a new preset
-//!
-//! 1. Drop a JSON file at `assets/effect-presets/<TypeId>.json` with
-//!    a populated `presetMetadata` block (display name, params,
-//!    bindings, skip mode).
-//! 2. Build — `build.rs` picks up the new file automatically.
+//! The type id is the JSON filename stem, exactly as before — type ids
+//! are forever (save files reference them).
 
 use std::sync::OnceLock;
 
@@ -35,26 +29,17 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-// build.rs emits the `BUNDLED_PRESETS_GENERATED` array — one entry
-// per `assets/effect-presets/*.json`, sorted alphabetically, with each
-// JSON embedded via `include_str!`.
-include!(concat!(env!("OUT_DIR"), "/bundled_presets_generated.rs"));
+use crate::preset_loader::EFFECT_CATALOG;
 
-/// Bundled preset table — alias for the build.rs-generated array.
-/// Stable name kept for the existing test/consumer code.
-const BUNDLED_PRESETS: &[(&str, &str)] = BUNDLED_PRESETS_GENERATED;
-
-/// Raw embedded JSON for the bundled preset of `effect_type`, or
-/// `None` if no preset is registered.
+/// Raw JSON for the bundled preset of `effect_type`, or `None` if no
+/// preset has that type id.
 ///
-/// The string is the on-disk file verbatim — same bytes the drift
-/// test compares against. Useful when a caller wants to re-export the
-/// preset (e.g., copy-on-write into a per-instance override).
+/// The string is the on-disk file verbatim — same bytes the drift test
+/// compares against. Useful when a caller wants to re-export the preset
+/// (e.g., copy-on-write into a per-instance override). The catalog is
+/// process-`'static` (a `LazyLock`), so the borrow is `'static`.
 pub fn bundled_preset_json(effect_type: &EffectTypeId) -> Option<&'static str> {
-    BUNDLED_PRESETS
-        .iter()
-        .find(|(id, _)| *id == effect_type.as_str())
-        .map(|(_, json)| *json)
+    EFFECT_CATALOG.json(effect_type.as_str())
 }
 
 /// Parsed [`EffectGraphDef`] for the bundled preset of `effect_type`,
@@ -71,7 +56,7 @@ pub fn bundled_preset_def(effect_type: &EffectTypeId) -> Option<&'static EffectG
     static CACHE: OnceLock<AHashMap<&'static str, EffectGraphDef>> = OnceLock::new();
     let map = CACHE.get_or_init(|| {
         let mut m: AHashMap<&'static str, EffectGraphDef> = AHashMap::default();
-        for (id, json) in BUNDLED_PRESETS {
+        for (id, json) in EFFECT_CATALOG.entries() {
             let def: EffectGraphDef = serde_json::from_str(json)
                 .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
             m.insert(id, def);
@@ -83,9 +68,7 @@ pub fn bundled_preset_def(effect_type: &EffectTypeId) -> Option<&'static EffectG
 
 /// Every [`EffectTypeId`] that has a bundled preset registered.
 pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
-    BUNDLED_PRESETS
-        .iter()
-        .map(|(id, _)| EffectTypeId::new(id))
+    EFFECT_CATALOG.type_ids().map(EffectTypeId::new)
 }
 
 /// Loader function for the core's [`LoadedPresetSource`] inventory.
@@ -99,8 +82,8 @@ pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
 /// Cached at the `loaded_preset_metadata()` callsite — invoked once
 /// per process.
 pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
-    BUNDLED_PRESETS
-        .iter()
+    EFFECT_CATALOG
+        .entries()
         .filter_map(|(id, json)| {
             let def: EffectGraphDef = serde_json::from_str(json)
                 .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
