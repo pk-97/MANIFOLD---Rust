@@ -21,7 +21,6 @@ use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot, PortKindSnapsho
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::PanelAction;
 
-use manifold_core::NodeId;
 use manifold_core::effect_graph_def::GROUP_TYPE_ID;
 
 use crate::mapping_popover::MappingPopover;
@@ -186,10 +185,6 @@ impl PortView {
 #[derive(Debug, Clone)]
 struct NodeView {
     id: u32,
-    /// Stable [`NodeId`] from the def — the identity bindings and the
-    /// output-preview capture address the node by (survives handle/grouping
-    /// changes). Used to tell the content thread which node to preview.
-    node_id: NodeId,
     /// Stable string handle from the def, if any (`None` for boundary /
     /// anonymous nodes). Used to mint a collision-free handle when this
     /// node's level gets a new group, and by Ctrl+G's payload.
@@ -980,20 +975,6 @@ impl GraphCanvas {
         });
     }
 
-    /// The stable [`NodeId`] of the single selected node, for the output
-    /// preview. `None` when zero or more than one node is selected — the
-    /// preview shows one node at a time, so a multi-selection clears it.
-    pub fn selected_single_node_id(&self) -> Option<NodeId> {
-        if self.selected.len() != 1 {
-            return None;
-        }
-        let id = *self.selected.iter().next()?;
-        self.nodes
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| n.node_id.clone())
-    }
-
     /// Push the latest snapshot. Rebuilds nodes+wires; recomputes
     /// auto-layout only when topology changed.
     pub fn set_snapshot(&mut self, snap: &GraphSnapshot) {
@@ -1057,7 +1038,6 @@ impl GraphCanvas {
             .iter()
             .map(|n| NodeView {
                 id: n.id,
-                node_id: n.node_id.clone(),
                 handle: n.node_handle.clone(),
                 title: n.title.clone(),
                 params: n

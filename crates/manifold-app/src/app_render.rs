@@ -2268,10 +2268,19 @@ impl Application {
         // it can capture that node's output for the preview pane. Deduplicated
         // against the last send. A closed editor (`graph_canvas == None`)
         // yields `None`, clearing the preview.
-        let preview_node = self
-            .graph_canvas
-            .as_ref()
-            .and_then(|c| c.selected_single_node_id());
+        // Resolve the single selection to a preview target. A boundary node
+        // (Group Input/Output, final output) has no runtime instance of its
+        // own, so resolve it against the hierarchical snapshot at the canvas
+        // scope to the concrete node whose texture stands in for that boundary.
+        let preview_node = match (
+            self.graph_canvas.as_ref(),
+            self.content_state.active_graph_snapshot.as_deref(),
+        ) {
+            (Some(canvas), Some(snap)) => canvas
+                .selected_node_id()
+                .and_then(|id| resolve_preview_target(snap, canvas.scope_path(), id)),
+            _ => None,
+        };
         if preview_node != self.last_preview_node {
             if let Some(tx) = self.content_tx.as_ref() {
                 crate::content_command::ContentCommand::send(
@@ -3227,6 +3236,128 @@ fn build_graph_editor_view(
     })
 }
 
+/// Resolve the selected canvas node — which may be a *boundary* node that has
+/// no runtime instance of its own — to a concrete preview-target [`NodeId`] the
+/// content thread can capture. Walks the hierarchical snapshot at the canvas
+/// scope:
+///
+/// - A plain node previews itself.
+/// - A **Group Output** boundary previews the enclosing group's *container*
+///   node_id, so the content side resolves it through the existing
+///   `group_preview_map` (producer + interface port name for encoding).
+/// - A **Group Input** boundary previews the external node feeding that group's
+///   primary input, one scope level up.
+/// - A `final_output` sink previews its input producer.
+/// - A sub-group producer is previewed by its container node_id (also via
+///   `group_preview_map`); a `group_input` producer recurses to the parent feed.
+///
+/// Pure over the snapshot, so it's unit-tested below.
+fn resolve_preview_target(
+    snap: &manifold_renderer::node_graph::GraphSnapshot,
+    scope: &[u32],
+    selected: u32,
+) -> Option<manifold_core::NodeId> {
+    let (nodes, wires) =
+        crate::graph_canvas::resolve_level(snap, scope).unwrap_or((&snap.nodes, &snap.wires));
+    let node = nodes.iter().find(|n| n.id == selected)?;
+    resolve_boundary_node(node, nodes, wires, snap, scope)
+}
+
+fn resolve_boundary_node(
+    node: &manifold_renderer::node_graph::NodeSnapshot,
+    nodes: &[manifold_renderer::node_graph::NodeSnapshot],
+    wires: &[manifold_renderer::node_graph::WireSnapshot],
+    snap: &manifold_renderer::node_graph::GraphSnapshot,
+    scope: &[u32],
+) -> Option<manifold_core::NodeId> {
+    use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID};
+    match node.type_id.as_str() {
+        GROUP_OUTPUT_TYPE_ID => {
+            // The enclosing group's output. Send the group container's node_id;
+            // the content side maps it to the producer (+ port name) itself.
+            let (group_u32, parent) = scope.split_last()?;
+            let (p_nodes, _) =
+                crate::graph_canvas::resolve_level(snap, parent).unwrap_or((&snap.nodes, &snap.wires));
+            non_empty_node_id(&p_nodes.iter().find(|n| n.id == *group_u32)?.node_id)
+        }
+        GROUP_INPUT_TYPE_ID => {
+            // Data entering the enclosing group: its external feeder, one level up.
+            // The boundary's outputs are the group's input ports.
+            let port = primary_texture_port(&node.outputs)?;
+            let (group_u32, parent) = scope.split_last()?;
+            let (p_nodes, p_wires) =
+                crate::graph_canvas::resolve_level(snap, parent).unwrap_or((&snap.nodes, &snap.wires));
+            let producer = producer_into(*group_u32, port, p_nodes, p_wires)?;
+            resolve_producer(producer, p_nodes, p_wires, snap, parent)
+        }
+        "system.final_output" => {
+            let port = primary_texture_port(&node.inputs)?;
+            let producer = producer_into(node.id, port, nodes, wires)?;
+            resolve_producer(producer, nodes, wires, snap, scope)
+        }
+        // Plain node, Source, generator_input: preview the node itself.
+        _ => non_empty_node_id(&node.node_id),
+    }
+}
+
+/// Concrete preview target for a producer node: a sub-group resolves by its
+/// container id (content `group_preview_map`); a `group_input` producer recurses
+/// to the parent feed; anything else previews itself.
+fn resolve_producer(
+    producer: &manifold_renderer::node_graph::NodeSnapshot,
+    nodes: &[manifold_renderer::node_graph::NodeSnapshot],
+    wires: &[manifold_renderer::node_graph::WireSnapshot],
+    snap: &manifold_renderer::node_graph::GraphSnapshot,
+    scope: &[u32],
+) -> Option<manifold_core::NodeId> {
+    use manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID;
+    if producer.group.is_some() {
+        return non_empty_node_id(&producer.node_id);
+    }
+    if producer.type_id == GROUP_INPUT_TYPE_ID {
+        return resolve_boundary_node(producer, nodes, wires, snap, scope);
+    }
+    non_empty_node_id(&producer.node_id)
+}
+
+/// The node feeding `(to_node, to_port)`, or any wire into `to_node` as a
+/// fallback when the exact port name doesn't match.
+fn producer_into<'a>(
+    to_node: u32,
+    to_port: &str,
+    nodes: &'a [manifold_renderer::node_graph::NodeSnapshot],
+    wires: &[manifold_renderer::node_graph::WireSnapshot],
+) -> Option<&'a manifold_renderer::node_graph::NodeSnapshot> {
+    let w = wires
+        .iter()
+        .find(|w| w.to_node == to_node && w.to_port == to_port)
+        .or_else(|| wires.iter().find(|w| w.to_node == to_node))?;
+    nodes.iter().find(|n| n.id == w.from_node)
+}
+
+/// First `Texture2D`(-typed) port name, else the first port of any type.
+fn primary_texture_port(ports: &[manifold_renderer::node_graph::PortSnapshot]) -> Option<&str> {
+    use manifold_renderer::node_graph::PortKindSnapshot;
+    ports
+        .iter()
+        .find(|p| {
+            matches!(
+                p.kind,
+                PortKindSnapshot::Texture2D | PortKindSnapshot::Texture2DTyped { .. }
+            )
+        })
+        .or_else(|| ports.first())
+        .map(|p| p.name.as_str())
+}
+
+fn non_empty_node_id(id: &manifold_core::NodeId) -> Option<manifold_core::NodeId> {
+    if id.as_str().is_empty() {
+        None
+    } else {
+        Some(id.clone())
+    }
+}
+
 /// Resolve an on-canvas param row `(node_id, inner_param)` to the
 /// matching card `UserParamBinding` on the watched effect, returning the
 /// data the mapping popover needs to open. `None` when there's no active
@@ -3413,3 +3544,125 @@ fn build_static_block_targets(
 }
 
 
+
+
+#[cfg(test)]
+mod preview_target_tests {
+    use super::resolve_preview_target;
+    use manifold_core::NodeId;
+    use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
+    use manifold_renderer::node_graph::{
+        GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
+    };
+
+    fn tex(name: &str) -> PortSnapshot {
+        PortSnapshot {
+            name: name.to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }
+    }
+
+    fn node(
+        id: u32,
+        node_id: &str,
+        type_id: &str,
+        ins: Vec<PortSnapshot>,
+        outs: Vec<PortSnapshot>,
+    ) -> NodeSnapshot {
+        NodeSnapshot {
+            id,
+            node_id: NodeId::new(node_id),
+            node_handle: None,
+            type_id: type_id.to_string(),
+            title: String::new(),
+            inputs: ins,
+            outputs: outs,
+            parameters: Vec::new(),
+            editor_pos: None,
+            breaks_dependency_cycle: false,
+            group: None,
+        }
+    }
+
+    fn wire(fnode: u32, fport: &str, tnode: u32, tport: &str) -> WireSnapshot {
+        WireSnapshot {
+            from_node: fnode,
+            from_port: fport.to_string(),
+            to_node: tnode,
+            to_port: tport.to_string(),
+        }
+    }
+
+    fn snap(nodes: Vec<NodeSnapshot>, wires: Vec<WireSnapshot>) -> GraphSnapshot {
+        GraphSnapshot {
+            nodes,
+            wires,
+            outer_routings: Vec::new(),
+        }
+    }
+
+    /// Group container (id 5, node_id "grp"): body is
+    /// group_input(0) -> inner(1) -> group_output(2).
+    fn group_container() -> NodeSnapshot {
+        let mut g = node(5, "grp", GROUP_TYPE_ID, vec![tex("src")], vec![tex("out")]);
+        g.group = Some(Box::new(GroupSnapshot {
+            nodes: vec![
+                node(0, "", GROUP_INPUT_TYPE_ID, vec![], vec![tex("src")]),
+                node(1, "inner", "node.blur", vec![tex("in")], vec![tex("out")]),
+                node(2, "", GROUP_OUTPUT_TYPE_ID, vec![tex("out")], vec![]),
+            ],
+            wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
+        }));
+        g
+    }
+
+    #[test]
+    fn plain_node_previews_itself() {
+        let s = snap(
+            vec![node(1, "blur", "node.blur", vec![tex("in")], vec![tex("out")])],
+            vec![],
+        );
+        assert_eq!(resolve_preview_target(&s, &[], 1), Some(NodeId::new("blur")));
+    }
+
+    #[test]
+    fn group_output_boundary_resolves_to_container() {
+        let s = snap(
+            vec![
+                node(10, "src", "system.source", vec![], vec![tex("out")]),
+                group_container(),
+            ],
+            vec![wire(10, "out", 5, "src")],
+        );
+        // Inside the group, the output boundary previews the group container,
+        // so the content side maps it (+ port name) via group_preview_map.
+        assert_eq!(resolve_preview_target(&s, &[5], 2), Some(NodeId::new("grp")));
+    }
+
+    #[test]
+    fn group_input_boundary_resolves_to_external_feeder() {
+        let s = snap(
+            vec![
+                node(10, "src", "system.source", vec![], vec![tex("out")]),
+                group_container(),
+            ],
+            vec![wire(10, "out", 5, "src")],
+        );
+        // Inside the group, the input boundary previews whatever feeds the
+        // group from outside (the source).
+        assert_eq!(resolve_preview_target(&s, &[5], 0), Some(NodeId::new("src")));
+    }
+
+    #[test]
+    fn final_output_resolves_to_its_input_producer() {
+        let s = snap(
+            vec![
+                node(0, "src", "system.source", vec![], vec![tex("out")]),
+                node(1, "inv", "node.invert", vec![tex("in")], vec![tex("out")]),
+                node(2, "", "system.final_output", vec![tex("in")], vec![]),
+            ],
+            vec![wire(0, "out", 1, "in"), wire(1, "out", 2, "in")],
+        );
+        assert_eq!(resolve_preview_target(&s, &[], 2), Some(NodeId::new("inv")));
+    }
+}
