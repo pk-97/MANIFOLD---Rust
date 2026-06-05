@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Oily Fluid",
-  "description": "Oily Fluid — decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) `feedback_velocity` is downsampled 4× (`node.downsample`) then H+V Gaussian blurred at quarter-res, mirroring the legacy `cs_downsample → 2× separable blur` path; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90°) and advects the quarter-res blurred velocity using the full-res unblurred velocity as the displacement field, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of simplex noise injection (z-axis driven by `system.generator_input.time × speed × 0.6` so the noise field evolves frame-to-frame, matching the legacy `noise_time` term), then carries the result back to the color feedback. Both advect timesteps are `speed × disp` via `node.math` so the outer-card Speed slider scales both advection and noise rate. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines); only the selected one's producer subgraph runs each frame via mux short-circuit (`EffectNode::selected_input_branch`), and the result is graded by the decomposed Color Grade chain (`node.gain` → `node.saturation` → `node.hue_saturation` → `node.contrast` → `node.clamp_texture`, the used subset of the legacy `node.color_grade` kernel — colorize/tint and the amount crossfade were never wired here so they are dropped; the trailing clamp keeps the legacy `max(result, 0)` floor).\n\nKnown parity deltas vs legacy: (1) 1-frame state delay through `node.feedback`'s `late_capture` phase, matching legacy's same-frame ping-pong + swap, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted — recover via the outer-card Hue / Saturation, (3) sim evolves from black via per-frame noise injection — takes a few seconds to build visible patterns, (4) state textures are rgba16float pending the Feedback compute-shader copy path that will lift the cross-format blit restriction so fp32 state can be opt-in without requiring every intermediate node in the loop to also be annotated fp32.",
+  "description": "Oily Fluid \u2014 decomposed from the legacy `OilyFluidGenerator` Rust struct into the curated primitive library. Two state-store feedback loops (color, velocity) carry the simulation across frames. Each frame: (a) `feedback_velocity` is downsampled 4\u00d7 (`node.downsample`) then H+V Gaussian blurred at quarter-res, mirroring the legacy `cs_downsample \u2192 2\u00d7 separable blur` path; (b) the velocity step extracts per-channel curl forcing from |color|'s normalised gradients (rotated 90\u00b0) and advects the quarter-res blurred velocity using the full-res unblurred velocity as the displacement field, then damps and adds the forcing; (c) the color step advects color by the new velocity, mixes in two channels of simplex noise injection (z-axis driven by `system.generator_input.time \u00d7 speed \u00d7 0.6` so the noise field evolves frame-to-frame, matching the legacy `noise_time` term), then carries the result back to the color feedback. Both advect timesteps are `speed \u00d7 disp` via `node.math` so the outer-card Speed slider scales both advection and noise rate. The render layer offers 5 modes (Oil Slick / Flow Field / Height Map / PBR / Lines); only the selected one's producer subgraph runs each frame via mux short-circuit (`EffectNode::selected_input_branch`), and the result is graded by the decomposed Color Grade chain (`node.gain` \u2192 `node.saturation` \u2192 `node.hue_saturation` \u2192 `node.contrast` \u2192 `node.clamp_texture`, the used subset of the legacy `node.color_grade` kernel \u2014 colorize/tint and the amount crossfade were never wired here so they are dropped; the trailing clamp keeps the legacy `max(result, 0)` floor).\n\nKnown parity deltas vs legacy: (1) 1-frame state delay through `node.feedback`'s `late_capture` phase, matching legacy's same-frame ping-pong + swap, (2) ColorRamp / ChannelMix stubs mean the Flow Field warm-sepia tint is omitted \u2014 recover via the outer-card Hue / Saturation, (3) sim evolves from black via per-frame noise injection \u2014 takes a few seconds to build visible patterns, (4) state textures are rgba16float pending the Feedback compute-shader copy path that will lift the cross-format blit restriction so fp32 state can be opt-in without requiring every intermediate node in the loop to also be annotated fp32.\n\nGraph organization: the 50 flat nodes are wrapped into ten labeled boxes that flatten to the exact same graph at load (byte-for-byte identical wiring, params, and shaders \u2014 grouping is presentation only, the runtime never sees a box). The two state textures `feedback_color` and `feedback_velocity` stay visible at the top level so both feedback loops read at a glance. The velocity loop is three boxes: Curl Forcing (derives the rotational forcing from the colour field's gradients), Smooth Velocity (4x downsample then separable Gaussian blur), and Advect Velocity (self-advect, damp, add the curl force). The colour loop is two: Inject Noise (time-driven two-channel simplex injection) and Advect Color (advect by the new velocity, fade, add noise). Render Modes is the one nested box \u2014 it holds the shared Surface base (`heightmap` -> `normal_main`) and the mode mux at its own level, fanning into four sub-boxes (Oil Slick, Height Map, PBR, Lines); the single-node Flow Field branch stays flat beside them. Color Grade is the final gain -> saturation -> hue -> contrast -> clamp chain. All sixteen performance bindings target inner nodes by stable nodeId, so every slider drives exactly what it drove before grouping.",
   "presetMetadata": {
     "id": "OilyFluid",
     "displayName": "Oily Fluid",
@@ -10,263 +10,2115 @@
     "legacyDiscriminant": 24,
     "available": true,
     "params": [
-      { "id": "speed",     "name": "Speed",            "min": 0.1,   "max": 4.0,    "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "feedback",  "name": "Feedback",         "min": 0.95,  "max": 0.9999, "defaultValue": 0.998, "wholeNumbers": false, "isToggle": false, "formatString": "F4" },
-      { "id": "noise",     "name": "Noise",            "min": 0.0,   "max": 0.02,   "defaultValue": 0.002, "wholeNumbers": false, "isToggle": false, "formatString": "F4" },
-      { "id": "vel_damp",  "name": "Velocity Damp",    "min": 0.85,  "max": 0.999,  "defaultValue": 0.98,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "curl",      "name": "Curl",             "min": 0.0,   "max": 1.0,    "defaultValue": 0.2,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "relief",    "name": "Relief",           "min": 0.05,  "max": 2.0,    "defaultValue": 0.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "chroma",    "name": "Chroma",           "min": 0.0,   "max": 8.0,    "defaultValue": 2.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "contrast",  "name": "Contrast",         "min": 0.5,   "max": 3.0,    "defaultValue": 1.4,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "hue",       "name": "Hue",              "min": 0.0,   "max": 1.0,    "defaultValue": 0.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "sat",       "name": "Saturation",       "min": 0.0,   "max": 2.0,    "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "bright",    "name": "Brightness",       "min": 0.0,   "max": 2.0,    "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "vel_disp",  "name": "Velocity Displace","min": 0.1,   "max": 10.0,   "defaultValue": 0.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "col_disp",  "name": "Color Displace",   "min": 0.1,   "max": 10.0,   "defaultValue": 1.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "mode",      "name": "Mode",             "min": 0.0,   "max": 4.0,    "defaultValue": 0.0,   "wholeNumbers": true,  "isToggle": false, "valueLabels": ["Oil Slick", "Flow Field", "Height Map", "PBR", "Lines"] }
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.1,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "feedback",
+        "name": "Feedback",
+        "min": 0.95,
+        "max": 0.9999,
+        "defaultValue": 0.998,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "noise",
+        "name": "Noise",
+        "min": 0.0,
+        "max": 0.02,
+        "defaultValue": 0.002,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "vel_damp",
+        "name": "Velocity Damp",
+        "min": 0.85,
+        "max": 0.999,
+        "defaultValue": 0.98,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "curl",
+        "name": "Curl",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "relief",
+        "name": "Relief",
+        "min": 0.05,
+        "max": 2.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "chroma",
+        "name": "Chroma",
+        "min": 0.0,
+        "max": 8.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 0.5,
+        "max": 3.0,
+        "defaultValue": 1.4,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "sat",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "bright",
+        "name": "Brightness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "vel_disp",
+        "name": "Velocity Displace",
+        "min": 0.1,
+        "max": 10.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "col_disp",
+        "name": "Color Displace",
+        "min": 0.1,
+        "max": 10.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Oil Slick",
+          "Flow Field",
+          "Height Map",
+          "PBR",
+          "Lines"
+        ]
+      }
     ],
     "bindings": [
-      { "id": "feedback", "label": "Feedback", "defaultValue": 0.998,
-        "target": { "kind": "node", "nodeId": "color_retention", "param": "gain" },
-        "convert": { "type": "Float" } },
-      { "id": "noise", "label": "Noise", "defaultValue": 0.002,
-        "target": { "kind": "node", "nodeId": "noise_inject_gain", "param": "gain" },
-        "convert": { "type": "Float" } },
-      { "id": "vel_damp", "label": "Velocity Damp", "defaultValue": 0.98,
-        "target": { "kind": "node", "nodeId": "vel_damp_gain", "param": "gain" },
-        "convert": { "type": "Float" } },
-      { "id": "curl", "label": "Curl", "defaultValue": 0.2,
-        "target": { "kind": "node", "nodeId": "curl_gain", "param": "gain" },
-        "convert": { "type": "Float" } },
-      { "id": "relief", "label": "Relief", "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "normal_main", "param": "z_scale" },
-        "convert": { "type": "Float" } },
-      { "id": "chroma", "label": "Chroma", "defaultValue": 2.0,
-        "target": { "kind": "node", "nodeId": "oilslick_chroma", "param": "amount" },
-        "convert": { "type": "Float" } },
-      { "id": "contrast", "label": "Contrast", "defaultValue": 1.4,
-        "target": { "kind": "node", "nodeId": "grade_contrast", "param": "contrast" },
-        "convert": { "type": "Float" } },
-      { "id": "hue", "label": "Hue", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "grade_hue", "param": "hue" },
-        "convert": { "type": "Float" } },
-      { "id": "sat", "label": "Saturation", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "grade_saturation", "param": "saturation" },
-        "convert": { "type": "Float" } },
-      { "id": "bright", "label": "Brightness", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "grade_gain", "param": "gain" },
-        "convert": { "type": "Float" } },
-      { "id": "vel_disp", "label": "Velocity Displace", "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "vel_speed_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "col_disp", "label": "Color Displace", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "color_speed_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "vel_speed_mul", "param": "a" },
-        "convert": { "type": "Float" } },
-      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "color_speed_mul", "param": "a" },
-        "convert": { "type": "Float" } },
-      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "noise_speed_factor", "param": "a" },
-        "convert": { "type": "Float" } },
-      { "id": "mode", "label": "Mode", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mode_mux", "param": "selector" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "feedback",
+        "label": "Feedback",
+        "defaultValue": 0.998,
+        "target": {
+          "kind": "node",
+          "nodeId": "color_retention",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "noise",
+        "label": "Noise",
+        "defaultValue": 0.002,
+        "target": {
+          "kind": "node",
+          "nodeId": "noise_inject_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "vel_damp",
+        "label": "Velocity Damp",
+        "defaultValue": 0.98,
+        "target": {
+          "kind": "node",
+          "nodeId": "vel_damp_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "curl",
+        "label": "Curl",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "curl_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "relief",
+        "label": "Relief",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "normal_main",
+          "param": "z_scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "chroma",
+        "label": "Chroma",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "oilslick_chroma",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 1.4,
+        "target": {
+          "kind": "node",
+          "nodeId": "grade_contrast",
+          "param": "contrast"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "grade_hue",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "sat",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "grade_saturation",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "bright",
+        "label": "Brightness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "grade_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "vel_disp",
+        "label": "Velocity Displace",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "vel_speed_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "col_disp",
+        "label": "Color Displace",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "color_speed_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "vel_speed_mul",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "color_speed_mul",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "noise_speed_factor",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_mux",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    }
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-
-    { "id": 1,  "typeId": "node.feedback", "handle": "feedback_color", "nodeId": "feedback_color",    "outputFormats": { "out": "rgba32float" } },
-    { "id": 2,  "typeId": "node.feedback", "handle": "feedback_velocity", "nodeId": "feedback_velocity", "outputFormats": { "out": "rgba32float" } },
-
-    { "id": 3,  "typeId": "node.abs_texture", "handle": "abs_color", "nodeId": "abs_color" },
-    { "id": 4,  "typeId": "node.gradient_central_diff", "handle": "grad_r", "nodeId": "grad_r", "params": { "channel": { "type": "Enum", "value": 0 } } },
-    { "id": 5,  "typeId": "node.gradient_central_diff", "handle": "grad_g", "nodeId": "grad_g", "params": { "channel": { "type": "Enum", "value": 1 } } },
-    { "id": 6,  "typeId": "node.normalize_vec2", "handle": "norm_r", "nodeId": "norm_r" },
-    { "id": 7,  "typeId": "node.normalize_vec2", "handle": "norm_g", "nodeId": "norm_g" },
-    { "id": 8,  "typeId": "node.mix", "handle": "grad_sum", "nodeId": "grad_sum",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-    { "id": 9,  "typeId": "node.gain", "handle": "curl_gain", "nodeId": "curl_gain", "params": { "gain": { "type": "Float", "value": 0.2 } } },
-    { "id": 10, "typeId": "node.rotate_vec2_by_angle", "handle": "curl_rotate", "nodeId": "curl_rotate",
-      "params": { "angle": { "type": "Float", "value": 1.5707963 } } },
-
-    { "id": 41, "typeId": "node.downsample", "handle": "vel_downsample", "nodeId": "vel_downsample",
-      "params": { "factor": { "type": "Enum", "value": 1 } } },
-    { "id": 11, "typeId": "node.gaussian_blur", "handle": "blur_h", "nodeId": "blur_h",
-      "params": { "kernel_size": { "type": "Enum", "value": 1 }, "axis": { "type": "Enum", "value": 0 }, "step": { "type": "Float", "value": 1.0 } } },
-    { "id": 12, "typeId": "node.gaussian_blur", "handle": "blur_v", "nodeId": "blur_v",
-      "params": { "kernel_size": { "type": "Enum", "value": 1 }, "axis": { "type": "Enum", "value": 1 }, "step": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 13, "typeId": "node.texture_advect", "handle": "vel_advect", "nodeId": "vel_advect",
-      "params": { "dt": { "type": "Float", "value": 1.0 }, "boundary": { "type": "Enum", "value": 0 } } },
-    { "id": 14, "typeId": "node.gain", "handle": "vel_damp_gain", "nodeId": "vel_damp_gain", "params": { "gain": { "type": "Float", "value": 0.98 } } },
-    { "id": 15, "typeId": "node.mix", "handle": "vel_combine", "nodeId": "vel_combine",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-    { "id": 42, "typeId": "node.math", "handle": "vel_speed_mul", "nodeId": "vel_speed_mul",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 16, "typeId": "node.texture_advect", "handle": "color_advect", "nodeId": "color_advect",
-      "params": { "dt": { "type": "Float", "value": 1.0 }, "boundary": { "type": "Enum", "value": 0 } } },
-    { "id": 43, "typeId": "node.math", "handle": "color_speed_mul", "nodeId": "color_speed_mul",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 17, "typeId": "node.gain", "handle": "color_retention", "nodeId": "color_retention", "params": { "gain": { "type": "Float", "value": 0.998 } } },
-
-    { "id": 18, "typeId": "node.simplex_field_2d", "handle": "noise_r", "nodeId": "noise_r",
-      "params": { "scale_x": { "type": "Float", "value": 3.0 }, "scale_y": { "type": "Float", "value": 3.0 }, "offset_x": { "type": "Float", "value": 0.0 }, "offset_y": { "type": "Float", "value": 0.0 }, "z": { "type": "Float", "value": 0.0 }, "output_channel": { "type": "Enum", "value": 0 } } },
-    { "id": 19, "typeId": "node.simplex_field_2d", "handle": "noise_g", "nodeId": "noise_g",
-      "params": { "scale_x": { "type": "Float", "value": 3.0 }, "scale_y": { "type": "Float", "value": 3.0 }, "offset_x": { "type": "Float", "value": 31.7 }, "offset_y": { "type": "Float", "value": 17.3 }, "z": { "type": "Float", "value": 0.0 }, "output_channel": { "type": "Enum", "value": 1 } } },
-    { "id": 44, "typeId": "node.math", "handle": "noise_speed_factor", "nodeId": "noise_speed_factor",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.6 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 45, "typeId": "node.math", "handle": "noise_time_mul", "nodeId": "noise_time_mul",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-    { "id": 20, "typeId": "node.mix", "handle": "noise_combine", "nodeId": "noise_combine",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-    { "id": 21, "typeId": "node.gain", "handle": "noise_inject_gain", "nodeId": "noise_inject_gain", "params": { "gain": { "type": "Float", "value": 0.002 } } },
-
-    { "id": 22, "typeId": "node.mix", "handle": "color_combine", "nodeId": "color_combine",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-
-    { "id": 23, "typeId": "node.length_vec2", "handle": "heightmap", "nodeId": "heightmap" },
-    { "id": 24, "typeId": "node.heightmap_to_normal", "handle": "normal_main", "nodeId": "normal_main",
-      "params": { "z_scale": { "type": "Float", "value": 0.5 } } },
-
-    { "id": 25, "typeId": "node.chromatic_displace", "handle": "oilslick_chroma", "nodeId": "oilslick_chroma",
-      "params": { "amount": { "type": "Float", "value": 2.0 } } },
-    { "id": 26, "typeId": "node.abs_texture", "handle": "oilslick_abs", "nodeId": "oilslick_abs" },
-
-    { "id": 27, "typeId": "node.lic_integrate", "handle": "flow_lic", "nodeId": "flow_lic",
-      "params": { "steps": { "type": "Int", "value": 16 }, "dt": { "type": "Float", "value": 2.0 } } },
-
-    { "id": 28, "typeId": "node.heightmap_to_normal", "handle": "normal_flat", "nodeId": "normal_flat",
-      "params": { "z_scale": { "type": "Float", "value": 0.1 } } },
-    { "id": 29, "typeId": "node.lambert_directional", "handle": "lambert", "nodeId": "lambert",
-      "params": { "light_x": { "type": "Float", "value": 0.4 }, "light_y": { "type": "Float", "value": 0.6 }, "light_z": { "type": "Float", "value": 0.7 }, "ambient": { "type": "Float", "value": 0.1 } } },
-
-    { "id": 30, "typeId": "node.matcap_two_tone", "handle": "matcap", "nodeId": "matcap",
-      "params": {
-        "color_y_low":  { "type": "Color", "value": [0.08, 0.05, 0.22, 1.0] },
-        "color_y_high": { "type": "Color", "value": [0.55, 0.75, 0.95, 1.0] },
-        "color_x_low":  { "type": "Color", "value": [0.25, 0.10, 0.45, 1.0] },
-        "color_x_high": { "type": "Color", "value": [0.15, 0.55, 0.60, 1.0] }
-      } },
-    { "id": 31, "typeId": "node.fresnel_rim", "handle": "fresnel", "nodeId": "fresnel",
-      "params": { "view_x": { "type": "Float", "value": 0.0 }, "view_y": { "type": "Float", "value": 0.0 }, "view_z": { "type": "Float", "value": 1.0 }, "power": { "type": "Float", "value": 3.0 }, "color": { "type": "Color", "value": [0.55, 0.30, 0.85, 1.0] } } },
-    { "id": 32, "typeId": "node.blinn_specular", "handle": "blinn", "nodeId": "blinn",
-      "params": { "light_x": { "type": "Float", "value": 0.35 }, "light_y": { "type": "Float", "value": 0.55 }, "light_z": { "type": "Float", "value": 0.75 }, "view_x": { "type": "Float", "value": 0.0 }, "view_y": { "type": "Float", "value": 0.0 }, "view_z": { "type": "Float", "value": 1.0 }, "power": { "type": "Float", "value": 48.0 }, "color": { "type": "Color", "value": [1.0, 0.95, 1.0, 1.0] } } },
-    { "id": 33, "typeId": "node.mix", "handle": "pbr_base_rim", "nodeId": "pbr_base_rim",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-    { "id": 34, "typeId": "node.mix", "handle": "pbr_plus_spec", "nodeId": "pbr_plus_spec",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } },
-
-    { "id": 35, "typeId": "node.hash_noise_field_2d", "handle": "lines_ink", "nodeId": "lines_ink",
-      "params": { "scale": { "type": "Float", "value": 1024.0 }, "offset_x": { "type": "Float", "value": 4096.0 }, "offset_y": { "type": "Float", "value": 4096.0 } } },
-    { "id": 36, "typeId": "node.lic_integrate", "handle": "lines_lic", "nodeId": "lines_lic",
-      "params": { "steps": { "type": "Int", "value": 20 }, "dt": { "type": "Float", "value": 1.5 } } },
-    { "id": 37, "typeId": "node.smoothstep_texture", "handle": "lines_threshold", "nodeId": "lines_threshold",
-      "params": { "low": { "type": "Float", "value": 0.45 }, "high": { "type": "Float", "value": 0.62 } } },
-
-    { "id": 38, "typeId": "node.mux_texture", "handle": "mode_mux", "nodeId": "mode_mux",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 39, "typeId": "node.gain", "handle": "grade_gain", "nodeId": "grade_gain",
-      "params": { "gain": { "type": "Float", "value": 1.0 } } },
-    { "id": 46, "typeId": "node.saturation", "handle": "grade_saturation", "nodeId": "grade_saturation",
-      "params": { "saturation": { "type": "Float", "value": 1.0 } } },
-    { "id": 47, "typeId": "node.hue_saturation", "handle": "grade_hue", "nodeId": "grade_hue",
-      "params": {
-        "hue":        { "type": "Float", "value": 0.0 },
-        "saturation": { "type": "Float", "value": 1.0 },
-        "value":      { "type": "Float", "value": 1.0 }
-      } },
-    { "id": 48, "typeId": "node.contrast", "handle": "grade_contrast", "nodeId": "grade_contrast",
-      "params": { "contrast": { "type": "Float", "value": 1.4 } } },
-    { "id": 49, "typeId": "node.clamp_texture", "handle": "grade_clamp", "nodeId": "grade_clamp",
-      "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 65000.0 } } },
-
-    { "id": 40, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "nodeId": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.feedback",
+      "handle": "feedback_color",
+      "nodeId": "feedback_color",
+      "outputFormats": {
+        "out": "rgba32float"
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.feedback",
+      "handle": "feedback_velocity",
+      "nodeId": "feedback_velocity",
+      "outputFormats": {
+        "out": "rgba32float"
+      }
+    },
+    {
+      "id": 50,
+      "typeId": "group",
+      "handle": "Curl Forcing",
+      "nodeId": "curl_forcing",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "color",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "curlForce",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.abs_texture",
+            "handle": "abs_color",
+            "nodeId": "abs_color"
+          },
+          {
+            "id": 2,
+            "typeId": "node.gradient_central_diff",
+            "handle": "grad_r",
+            "nodeId": "grad_r",
+            "params": {
+              "channel": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.gradient_central_diff",
+            "handle": "grad_g",
+            "nodeId": "grad_g",
+            "params": {
+              "channel": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.normalize_vec2",
+            "handle": "norm_r",
+            "nodeId": "norm_r"
+          },
+          {
+            "id": 5,
+            "typeId": "node.normalize_vec2",
+            "handle": "norm_g",
+            "nodeId": "norm_g"
+          },
+          {
+            "id": 6,
+            "typeId": "node.mix",
+            "handle": "grad_sum",
+            "nodeId": "grad_sum",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 7,
+            "typeId": "node.gain",
+            "handle": "curl_gain",
+            "nodeId": "curl_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 0.2
+              }
+            }
+          },
+          {
+            "id": 8,
+            "typeId": "node.rotate_vec2_by_angle",
+            "handle": "curl_rotate",
+            "nodeId": "curl_rotate",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 1.5707963
+              }
+            }
+          },
+          {
+            "id": 9,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "color",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "curlForce"
+          }
+        ]
+      }
+    },
+    {
+      "id": 51,
+      "typeId": "group",
+      "handle": "Smooth Velocity",
+      "nodeId": "smooth_velocity",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "velocity",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "blurredVelocity",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.downsample",
+            "handle": "vel_downsample",
+            "nodeId": "vel_downsample",
+            "params": {
+              "factor": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_h",
+            "nodeId": "blur_h",
+            "params": {
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_v",
+            "nodeId": "blur_v",
+            "params": {
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "velocity",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "blurredVelocity"
+          }
+        ]
+      }
+    },
+    {
+      "id": 52,
+      "typeId": "group",
+      "handle": "Advect Velocity",
+      "nodeId": "advect_velocity",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "blurredVelocity",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "velocityField",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "curlForce",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "newVelocity",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.texture_advect",
+            "handle": "vel_advect",
+            "nodeId": "vel_advect",
+            "params": {
+              "dt": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "boundary": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.math",
+            "handle": "vel_speed_mul",
+            "nodeId": "vel_speed_mul",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.gain",
+            "handle": "vel_damp_gain",
+            "nodeId": "vel_damp_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 0.98
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.mix",
+            "handle": "vel_combine",
+            "nodeId": "vel_combine",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 5,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "blurredVelocity",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "velocityField",
+            "toNode": 1,
+            "toPort": "velocity"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "dt"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "curlForce",
+            "toNode": 4,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "newVelocity"
+          }
+        ]
+      }
+    },
+    {
+      "id": 53,
+      "typeId": "group",
+      "handle": "Inject Noise",
+      "nodeId": "inject_noise",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "time",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "noiseInjection",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.math",
+            "handle": "noise_speed_factor",
+            "nodeId": "noise_speed_factor",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.6
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.math",
+            "handle": "noise_time_mul",
+            "nodeId": "noise_time_mul",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.simplex_field_2d",
+            "handle": "noise_r",
+            "nodeId": "noise_r",
+            "params": {
+              "scale_x": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "offset_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "output_channel": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.simplex_field_2d",
+            "handle": "noise_g",
+            "nodeId": "noise_g",
+            "params": {
+              "scale_x": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "offset_x": {
+                "type": "Float",
+                "value": 31.7
+              },
+              "offset_y": {
+                "type": "Float",
+                "value": 17.3
+              },
+              "z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "output_channel": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 5,
+            "typeId": "node.mix",
+            "handle": "noise_combine",
+            "nodeId": "noise_combine",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 6,
+            "typeId": "node.gain",
+            "handle": "noise_inject_gain",
+            "nodeId": "noise_inject_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 0.002
+              }
+            }
+          },
+          {
+            "id": 7,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "time",
+            "toNode": 2,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "z"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "z"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "noiseInjection"
+          }
+        ]
+      }
+    },
+    {
+      "id": 54,
+      "typeId": "group",
+      "handle": "Advect Color",
+      "nodeId": "advect_color",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "colorField",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "newVelocity",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "noiseInjection",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "newColor",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.texture_advect",
+            "handle": "color_advect",
+            "nodeId": "color_advect",
+            "params": {
+              "dt": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "boundary": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.math",
+            "handle": "color_speed_mul",
+            "nodeId": "color_speed_mul",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.gain",
+            "handle": "color_retention",
+            "nodeId": "color_retention",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 0.998
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.mix",
+            "handle": "color_combine",
+            "nodeId": "color_combine",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 5,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "colorField",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "newVelocity",
+            "toNode": 1,
+            "toPort": "velocity"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 1,
+            "toPort": "dt"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "noiseInjection",
+            "toNode": 4,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "newColor"
+          }
+        ]
+      }
+    },
+    {
+      "id": 55,
+      "typeId": "group",
+      "handle": "Render Modes",
+      "nodeId": "render_modes",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "color",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "velocity",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "rendered",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.length_vec2",
+            "handle": "heightmap",
+            "nodeId": "heightmap"
+          },
+          {
+            "id": 2,
+            "typeId": "node.heightmap_to_normal",
+            "handle": "normal_main",
+            "nodeId": "normal_main",
+            "params": {
+              "z_scale": {
+                "type": "Float",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.lic_integrate",
+            "handle": "flow_lic",
+            "nodeId": "flow_lic",
+            "params": {
+              "steps": {
+                "type": "Int",
+                "value": 16
+              },
+              "dt": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "group",
+            "handle": "Oil Slick",
+            "nodeId": "oil_slick",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "normal",
+                    "portType": "Texture2D"
+                  },
+                  {
+                    "name": "velocity",
+                    "portType": "Texture2D"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "image",
+                    "portType": "Texture2D"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 0,
+                  "typeId": "system.group_input"
+                },
+                {
+                  "id": 1,
+                  "typeId": "node.chromatic_displace",
+                  "handle": "oilslick_chroma",
+                  "nodeId": "oilslick_chroma",
+                  "params": {
+                    "amount": {
+                      "type": "Float",
+                      "value": 2.0
+                    }
+                  }
+                },
+                {
+                  "id": 2,
+                  "typeId": "node.abs_texture",
+                  "handle": "oilslick_abs",
+                  "nodeId": "oilslick_abs"
+                },
+                {
+                  "id": 3,
+                  "typeId": "system.group_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 0,
+                  "fromPort": "normal",
+                  "toNode": 1,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 0,
+                  "fromPort": "velocity",
+                  "toNode": 1,
+                  "toPort": "velocity"
+                },
+                {
+                  "fromNode": 1,
+                  "fromPort": "out",
+                  "toNode": 2,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "out",
+                  "toNode": 3,
+                  "toPort": "image"
+                }
+              ]
+            }
+          },
+          {
+            "id": 5,
+            "typeId": "group",
+            "handle": "Height Map",
+            "nodeId": "height_map",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "height",
+                    "portType": "Texture2D"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "image",
+                    "portType": "Texture2D"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 0,
+                  "typeId": "system.group_input"
+                },
+                {
+                  "id": 1,
+                  "typeId": "node.heightmap_to_normal",
+                  "handle": "normal_flat",
+                  "nodeId": "normal_flat",
+                  "params": {
+                    "z_scale": {
+                      "type": "Float",
+                      "value": 0.1
+                    }
+                  }
+                },
+                {
+                  "id": 2,
+                  "typeId": "node.lambert_directional",
+                  "handle": "lambert",
+                  "nodeId": "lambert",
+                  "params": {
+                    "light_x": {
+                      "type": "Float",
+                      "value": 0.4
+                    },
+                    "light_y": {
+                      "type": "Float",
+                      "value": 0.6
+                    },
+                    "light_z": {
+                      "type": "Float",
+                      "value": 0.7
+                    },
+                    "ambient": {
+                      "type": "Float",
+                      "value": 0.1
+                    }
+                  }
+                },
+                {
+                  "id": 3,
+                  "typeId": "system.group_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 0,
+                  "fromPort": "height",
+                  "toNode": 1,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 1,
+                  "fromPort": "out",
+                  "toNode": 2,
+                  "toPort": "normal"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "out",
+                  "toNode": 3,
+                  "toPort": "image"
+                }
+              ]
+            }
+          },
+          {
+            "id": 6,
+            "typeId": "group",
+            "handle": "PBR",
+            "nodeId": "pbr",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "normal",
+                    "portType": "Texture2D"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "image",
+                    "portType": "Texture2D"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 0,
+                  "typeId": "system.group_input"
+                },
+                {
+                  "id": 1,
+                  "typeId": "node.matcap_two_tone",
+                  "handle": "matcap",
+                  "nodeId": "matcap",
+                  "params": {
+                    "color_y_low": {
+                      "type": "Color",
+                      "value": [
+                        0.08,
+                        0.05,
+                        0.22,
+                        1.0
+                      ]
+                    },
+                    "color_y_high": {
+                      "type": "Color",
+                      "value": [
+                        0.55,
+                        0.75,
+                        0.95,
+                        1.0
+                      ]
+                    },
+                    "color_x_low": {
+                      "type": "Color",
+                      "value": [
+                        0.25,
+                        0.1,
+                        0.45,
+                        1.0
+                      ]
+                    },
+                    "color_x_high": {
+                      "type": "Color",
+                      "value": [
+                        0.15,
+                        0.55,
+                        0.6,
+                        1.0
+                      ]
+                    }
+                  }
+                },
+                {
+                  "id": 2,
+                  "typeId": "node.fresnel_rim",
+                  "handle": "fresnel",
+                  "nodeId": "fresnel",
+                  "params": {
+                    "view_x": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "view_y": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "view_z": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "power": {
+                      "type": "Float",
+                      "value": 3.0
+                    },
+                    "color": {
+                      "type": "Color",
+                      "value": [
+                        0.55,
+                        0.3,
+                        0.85,
+                        1.0
+                      ]
+                    }
+                  }
+                },
+                {
+                  "id": 3,
+                  "typeId": "node.blinn_specular",
+                  "handle": "blinn",
+                  "nodeId": "blinn",
+                  "params": {
+                    "light_x": {
+                      "type": "Float",
+                      "value": 0.35
+                    },
+                    "light_y": {
+                      "type": "Float",
+                      "value": 0.55
+                    },
+                    "light_z": {
+                      "type": "Float",
+                      "value": 0.75
+                    },
+                    "view_x": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "view_y": {
+                      "type": "Float",
+                      "value": 0.0
+                    },
+                    "view_z": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "power": {
+                      "type": "Float",
+                      "value": 48.0
+                    },
+                    "color": {
+                      "type": "Color",
+                      "value": [
+                        1.0,
+                        0.95,
+                        1.0,
+                        1.0
+                      ]
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "typeId": "node.mix",
+                  "handle": "pbr_base_rim",
+                  "nodeId": "pbr_base_rim",
+                  "params": {
+                    "amount": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "mode": {
+                      "type": "Enum",
+                      "value": 2
+                    }
+                  }
+                },
+                {
+                  "id": 5,
+                  "typeId": "node.mix",
+                  "handle": "pbr_plus_spec",
+                  "nodeId": "pbr_plus_spec",
+                  "params": {
+                    "amount": {
+                      "type": "Float",
+                      "value": 1.0
+                    },
+                    "mode": {
+                      "type": "Enum",
+                      "value": 2
+                    }
+                  }
+                },
+                {
+                  "id": 6,
+                  "typeId": "system.group_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 0,
+                  "fromPort": "normal",
+                  "toNode": 1,
+                  "toPort": "normal"
+                },
+                {
+                  "fromNode": 0,
+                  "fromPort": "normal",
+                  "toNode": 2,
+                  "toPort": "normal"
+                },
+                {
+                  "fromNode": 0,
+                  "fromPort": "normal",
+                  "toNode": 3,
+                  "toPort": "normal"
+                },
+                {
+                  "fromNode": 1,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "a"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "b"
+                },
+                {
+                  "fromNode": 4,
+                  "fromPort": "out",
+                  "toNode": 5,
+                  "toPort": "a"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 5,
+                  "toPort": "b"
+                },
+                {
+                  "fromNode": 5,
+                  "fromPort": "out",
+                  "toNode": 6,
+                  "toPort": "image"
+                }
+              ]
+            }
+          },
+          {
+            "id": 7,
+            "typeId": "group",
+            "handle": "Lines",
+            "nodeId": "lines",
+            "group": {
+              "interface": {
+                "inputs": [
+                  {
+                    "name": "velocity",
+                    "portType": "Texture2D"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "name": "image",
+                    "portType": "Texture2D"
+                  }
+                ]
+              },
+              "nodes": [
+                {
+                  "id": 0,
+                  "typeId": "system.group_input"
+                },
+                {
+                  "id": 1,
+                  "typeId": "node.hash_noise_field_2d",
+                  "handle": "lines_ink",
+                  "nodeId": "lines_ink",
+                  "params": {
+                    "scale": {
+                      "type": "Float",
+                      "value": 1024.0
+                    },
+                    "offset_x": {
+                      "type": "Float",
+                      "value": 4096.0
+                    },
+                    "offset_y": {
+                      "type": "Float",
+                      "value": 4096.0
+                    }
+                  }
+                },
+                {
+                  "id": 2,
+                  "typeId": "node.lic_integrate",
+                  "handle": "lines_lic",
+                  "nodeId": "lines_lic",
+                  "params": {
+                    "steps": {
+                      "type": "Int",
+                      "value": 20
+                    },
+                    "dt": {
+                      "type": "Float",
+                      "value": 1.5
+                    }
+                  }
+                },
+                {
+                  "id": 3,
+                  "typeId": "node.smoothstep_texture",
+                  "handle": "lines_threshold",
+                  "nodeId": "lines_threshold",
+                  "params": {
+                    "low": {
+                      "type": "Float",
+                      "value": 0.45
+                    },
+                    "high": {
+                      "type": "Float",
+                      "value": 0.62
+                    }
+                  }
+                },
+                {
+                  "id": 4,
+                  "typeId": "system.group_output"
+                }
+              ],
+              "wires": [
+                {
+                  "fromNode": 1,
+                  "fromPort": "out",
+                  "toNode": 2,
+                  "toPort": "source"
+                },
+                {
+                  "fromNode": 0,
+                  "fromPort": "velocity",
+                  "toNode": 2,
+                  "toPort": "velocity"
+                },
+                {
+                  "fromNode": 2,
+                  "fromPort": "out",
+                  "toNode": 3,
+                  "toPort": "in"
+                },
+                {
+                  "fromNode": 3,
+                  "fromPort": "out",
+                  "toNode": 4,
+                  "toPort": "image"
+                }
+              ]
+            }
+          },
+          {
+            "id": 8,
+            "typeId": "node.mux_texture",
+            "handle": "mode_mux",
+            "nodeId": "mode_mux",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 9,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "color",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "normal"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "velocity",
+            "toNode": 4,
+            "toPort": "velocity"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "velocity",
+            "toNode": 3,
+            "toPort": "velocity"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "height"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "normal"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "velocity",
+            "toNode": 7,
+            "toPort": "velocity"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "image",
+            "toNode": 8,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "image",
+            "toNode": 8,
+            "toPort": "in_2"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "image",
+            "toNode": 8,
+            "toPort": "in_3"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "rendered"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "image",
+            "toNode": 8,
+            "toPort": "in_4"
+          }
+        ]
+      }
+    },
+    {
+      "id": 56,
+      "typeId": "group",
+      "handle": "Color Grade",
+      "nodeId": "color_grade",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "rendered",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "graded",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.gain",
+            "handle": "grade_gain",
+            "nodeId": "grade_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.saturation",
+            "handle": "grade_saturation",
+            "nodeId": "grade_saturation",
+            "params": {
+              "saturation": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 3,
+            "typeId": "node.hue_saturation",
+            "handle": "grade_hue",
+            "nodeId": "grade_hue",
+            "params": {
+              "hue": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "saturation": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "typeId": "node.contrast",
+            "handle": "grade_contrast",
+            "nodeId": "grade_contrast",
+            "params": {
+              "contrast": {
+                "type": "Float",
+                "value": 1.4
+              }
+            }
+          },
+          {
+            "id": 5,
+            "typeId": "node.clamp_texture",
+            "handle": "grade_clamp",
+            "nodeId": "grade_clamp",
+            "params": {
+              "min": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "max": {
+                "type": "Float",
+                "value": 65000.0
+              }
+            }
+          },
+          {
+            "id": 6,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "rendered",
+            "toNode": 1,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "graded"
+          }
+        ]
+      }
+    },
+    {
+      "id": 40,
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "nodeId": "final_output"
+    }
   ],
   "wires": [
-    { "fromNode": 1,  "fromPort": "out", "toNode": 3,  "toPort": "in" },
-    { "fromNode": 3,  "fromPort": "out", "toNode": 4,  "toPort": "in" },
-    { "fromNode": 3,  "fromPort": "out", "toNode": 5,  "toPort": "in" },
-    { "fromNode": 4,  "fromPort": "out", "toNode": 6,  "toPort": "in" },
-    { "fromNode": 5,  "fromPort": "out", "toNode": 7,  "toPort": "in" },
-    { "fromNode": 6,  "fromPort": "out", "toNode": 8,  "toPort": "a" },
-    { "fromNode": 7,  "fromPort": "out", "toNode": 8,  "toPort": "b" },
-    { "fromNode": 8,  "fromPort": "out", "toNode": 9,  "toPort": "in" },
-    { "fromNode": 9,  "fromPort": "out", "toNode": 10, "toPort": "in" },
-
-    { "fromNode": 2,  "fromPort": "out", "toNode": 41, "toPort": "in" },
-    { "fromNode": 41, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
-
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
-    { "fromNode": 2,  "fromPort": "out", "toNode": 13, "toPort": "velocity" },
-    { "fromNode": 42, "fromPort": "out", "toNode": 13, "toPort": "dt" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "a" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 15, "toPort": "b" },
-
-    { "fromNode": 15, "fromPort": "out", "toNode": 2,  "toPort": "in" },
-
-    { "fromNode": 1,  "fromPort": "out", "toNode": 16, "toPort": "in" },
-    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "velocity" },
-    { "fromNode": 43, "fromPort": "out", "toNode": 16, "toPort": "dt" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "in" },
-
-    { "fromNode": 0,  "fromPort": "time", "toNode": 45, "toPort": "a" },
-    { "fromNode": 44, "fromPort": "out",  "toNode": 45, "toPort": "b" },
-    { "fromNode": 45, "fromPort": "out",  "toNode": 18, "toPort": "z" },
-    { "fromNode": 45, "fromPort": "out",  "toNode": 19, "toPort": "z" },
-
-    { "fromNode": 18, "fromPort": "out", "toNode": 20, "toPort": "a" },
-    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "b" },
-    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "in" },
-
-    { "fromNode": 17, "fromPort": "out", "toNode": 22, "toPort": "a" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 22, "toPort": "b" },
-
-    { "fromNode": 22, "fromPort": "out", "toNode": 1,  "toPort": "in" },
-
-    { "fromNode": 1,  "fromPort": "out", "toNode": 23, "toPort": "in" },
-    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "in" },
-
-    { "fromNode": 24, "fromPort": "out", "toNode": 25, "toPort": "in" },
-    { "fromNode": 2,  "fromPort": "out", "toNode": 25, "toPort": "velocity" },
-    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "in" },
-    { "fromNode": 26, "fromPort": "out", "toNode": 38, "toPort": "in_0" },
-
-    { "fromNode": 23, "fromPort": "out", "toNode": 27, "toPort": "source" },
-    { "fromNode": 2,  "fromPort": "out", "toNode": 27, "toPort": "velocity" },
-    { "fromNode": 27, "fromPort": "out", "toNode": 38, "toPort": "in_1" },
-
-    { "fromNode": 23, "fromPort": "out", "toNode": 28, "toPort": "in" },
-    { "fromNode": 28, "fromPort": "out", "toNode": 29, "toPort": "normal" },
-    { "fromNode": 29, "fromPort": "out", "toNode": 38, "toPort": "in_2" },
-
-    { "fromNode": 24, "fromPort": "out", "toNode": 30, "toPort": "normal" },
-    { "fromNode": 24, "fromPort": "out", "toNode": 31, "toPort": "normal" },
-    { "fromNode": 24, "fromPort": "out", "toNode": 32, "toPort": "normal" },
-    { "fromNode": 30, "fromPort": "out", "toNode": 33, "toPort": "a" },
-    { "fromNode": 31, "fromPort": "out", "toNode": 33, "toPort": "b" },
-    { "fromNode": 33, "fromPort": "out", "toNode": 34, "toPort": "a" },
-    { "fromNode": 32, "fromPort": "out", "toNode": 34, "toPort": "b" },
-    { "fromNode": 34, "fromPort": "out", "toNode": 38, "toPort": "in_3" },
-
-    { "fromNode": 35, "fromPort": "out", "toNode": 36, "toPort": "source" },
-    { "fromNode": 2,  "fromPort": "out", "toNode": 36, "toPort": "velocity" },
-    { "fromNode": 36, "fromPort": "out", "toNode": 37, "toPort": "in" },
-    { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "in_4" },
-
-    { "fromNode": 38, "fromPort": "out", "toNode": 39, "toPort": "in" },
-    { "fromNode": 39, "fromPort": "out", "toNode": 46, "toPort": "in" },
-    { "fromNode": 46, "fromPort": "out", "toNode": 47, "toPort": "in" },
-    { "fromNode": 47, "fromPort": "out", "toNode": 48, "toPort": "in" },
-    { "fromNode": 48, "fromPort": "out", "toNode": 49, "toPort": "in" },
-    { "fromNode": 49, "fromPort": "out", "toNode": 40, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 50,
+      "toPort": "color"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 54,
+      "toPort": "colorField"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 55,
+      "toPort": "color"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 51,
+      "toPort": "velocity"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 52,
+      "toPort": "velocityField"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 55,
+      "toPort": "velocity"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 53,
+      "toPort": "time"
+    },
+    {
+      "fromNode": 50,
+      "fromPort": "curlForce",
+      "toNode": 52,
+      "toPort": "curlForce"
+    },
+    {
+      "fromNode": 51,
+      "fromPort": "blurredVelocity",
+      "toNode": 52,
+      "toPort": "blurredVelocity"
+    },
+    {
+      "fromNode": 52,
+      "fromPort": "newVelocity",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 52,
+      "fromPort": "newVelocity",
+      "toNode": 54,
+      "toPort": "newVelocity"
+    },
+    {
+      "fromNode": 53,
+      "fromPort": "noiseInjection",
+      "toNode": 54,
+      "toPort": "noiseInjection"
+    },
+    {
+      "fromNode": 54,
+      "fromPort": "newColor",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 55,
+      "fromPort": "rendered",
+      "toNode": 56,
+      "toPort": "rendered"
+    },
+    {
+      "fromNode": 56,
+      "fromPort": "graded",
+      "toNode": 40,
+      "toPort": "in"
+    }
   ]
 }
