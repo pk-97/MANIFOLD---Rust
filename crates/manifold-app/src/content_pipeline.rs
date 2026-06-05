@@ -151,18 +151,13 @@ pub struct ContentPipeline {
     /// Linear sampler for preview downscaling.
     #[cfg(target_os = "macos")]
     preview_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Auto-gain/normalize blit for the *node-output* preview only. Remaps the
-    /// captured texture's min..max (computed per frame via MPS) into 0..1 so
-    /// dark intermediates — force fields, normals, depth, flow — are legible.
-    /// The workspace preview keeps the plain `preview_pipeline`; only node
-    /// previews use this.
+    /// Auto-gain blit for the *node-output* preview only. Applies a fixed
+    /// per-channel signed asinh exposure curve so dark/signed intermediates —
+    /// force fields, normals, depth, flow — are legible, with no per-frame
+    /// statistics (so it never flickers). The workspace preview keeps the plain
+    /// `preview_pipeline`; only node previews use this.
     #[cfg(target_os = "macos")]
     node_preview_normalize_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    /// 2×1 texture holding the per-frame min (texel 0) / max (texel 1) of the
-    /// previewed node texture, written by `GpuEncoder::mps_min_max` and read by
-    /// `node_preview_normalize_pipeline`. Allocated once with the device.
-    #[cfg(target_os = "macos")]
-    node_preview_stats_tex: Option<manifold_gpu::GpuTexture>,
     /// Whether the node-output preview applies auto-gain/normalization.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
@@ -237,8 +232,6 @@ impl ContentPipeline {
             preview_sampler: None,
             #[cfg(target_os = "macos")]
             node_preview_normalize_pipeline: None,
-            #[cfg(target_os = "macos")]
-            node_preview_stats_tex: None,
             node_preview_normalize: true,
             #[cfg(target_os = "macos")]
             recording_session: None,
@@ -302,14 +295,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ..Default::default()
         }));
         // Node-preview auto-gain blit: same fullscreen downscale as above, plus
-        // a 2-texel stats texture (min @ texel 0, max @ texel 1) that remaps the
-        // source's value range into 0..1. A single affine across RGB (global
-        // min/max, not per-channel) preserves hue — a red/green force field
-        // stays red/green, just brightened; signed data centers 0 at mid-grey.
+        // a FIXED per-channel signed asinh curve so dark/signed intermediates
+        // (force fields, normals, flow, depth) are legible. Deliberately uses
+        // NO per-frame statistics — a data-derived window flickers and crushes
+        // to black on outliers. asinh is ~linear near 0 (faithful for small
+        // values) and log-compressed far out (no clipping); it's odd, so 0 maps
+        // to mid-grey, + brighter, - darker, with hue preserved per channel.
+        // `K` is the linear→log knee: values around `K` sit in the revealing
+        // part of the curve. ~0.05 favors sim-scale data; larger keeps ordinary
+        // images more natural. Stable across every frame and every node.
         let node_preview_shader = r#"
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
-@group(0) @binding(2) var t_stats: texture_2d<f32>;
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -323,16 +320,24 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
 }
+// asinh(x) = log(x + sqrt(x*x + 1)); valid for negative x too (odd function).
+fn asinh_approx(x: f32) -> f32 {
+    return log(x + sqrt(x * x + 1.0));
+}
+fn signed_exposure(c: f32, inv_k: f32, norm: f32) -> f32 {
+    return 0.5 + 0.5 * asinh_approx(c * inv_k) / norm;
+}
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let c = textureSample(t_source, s_source, in.uv).rgb;
-    let mn3 = textureLoad(t_stats, vec2<i32>(0, 0), 0).rgb;
-    let mx3 = textureLoad(t_stats, vec2<i32>(1, 0), 0).rgb;
-    let mn = min(mn3.r, min(mn3.g, mn3.b));
-    let mx = max(mx3.r, max(mx3.g, mx3.b));
-    let range = max(mx - mn, 1e-4);
-    let rgb = clamp((c - vec3<f32>(mn)) / range, vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(rgb, 1.0);
+    let inv_k = 20.0;                    // 1 / K, K = 0.05 (linear→log knee)
+    let norm = asinh_approx(inv_k);      // so c = +/-1 maps to white / black
+    let rgb = vec3<f32>(
+        signed_exposure(c.r, inv_k, norm),
+        signed_exposure(c.g, inv_k, norm),
+        signed_exposure(c.b, inv_k, norm),
+    );
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 "#;
         self.node_preview_normalize_pipeline = Some(device.create_render_pipeline(
@@ -343,16 +348,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             None,
             "Node Preview Auto-Gain Blit",
         ));
-        self.node_preview_stats_tex = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: 2,
-            height: 1,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "node preview min/max stats",
-            mip_levels: 1,
-        }));
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.fence_waiter = Some(manifold_gpu::GpuFenceWaiter::new());
@@ -738,10 +733,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.node_preview_textures[self.write_surface_index].as_ref(),
                         self.node_preview_normalize,
                         self.node_preview_normalize_pipeline.as_ref(),
-                        self.node_preview_stats_tex.as_ref(),
                         self.preview_pipeline.as_ref(),
                         self.preview_sampler.as_ref(),
-                        native_device,
                     );
                 } else if let Some(target) =
                     self.node_preview_textures[self.write_surface_index].as_ref()
@@ -961,10 +954,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.node_preview_textures[self.write_surface_index].as_ref(),
                     self.node_preview_normalize,
                     self.node_preview_normalize_pipeline.as_ref(),
-                    self.node_preview_stats_tex.as_ref(),
                     self.preview_pipeline.as_ref(),
                     self.preview_sampler.as_ref(),
-                    native_device,
                 );
             } else if self.node_preview_request.is_some()
                 && let Some(target) = self.node_preview_textures[self.write_surface_index].as_ref()
@@ -1301,10 +1292,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// Downscale the previewed node's texture into the node-output preview
-    /// surface. When `normalize` is on (the default), the source's per-frame
-    /// min..max is computed via MPS and remapped to 0..1 so dark intermediates
-    /// (force fields, normals, depth, flow) are legible; otherwise it's the
-    /// same raw blit the workspace preview uses. Only the node preview pane
+    /// surface. When `normalize` is on (the default), a fixed per-channel
+    /// signed asinh exposure curve lifts dark/signed intermediates (force
+    /// fields, normals, depth, flow) into a legible range — no per-frame
+    /// statistics, so it's stable across frames and outliers. Otherwise it's
+    /// the same raw blit the workspace preview uses. Only the node preview pane
     /// goes through here — the live render and workspace preview are untouched.
     #[cfg(target_os = "macos")]
     #[allow(clippy::too_many_arguments)]
@@ -1314,22 +1306,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         target: Option<&manifold_gpu::GpuTexture>,
         normalize: bool,
         normalize_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
-        stats_tex: Option<&manifold_gpu::GpuTexture>,
         raw_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
         sampler: Option<&manifold_gpu::GpuSampler>,
-        device: &manifold_gpu::GpuDevice,
     ) {
         let Some(target) = target else {
             return;
         };
         if normalize
-            && let (Some(pipeline), Some(stats), Some(sampler)) =
-                (normalize_pipeline, stats_tex, sampler)
+            && let (Some(pipeline), Some(sampler)) = (normalize_pipeline, sampler)
         {
-            // Per-frame min/max over the full source → 2-texel stats texture,
-            // then a fullscreen remap. MPS ends the current encoder; the draw
-            // opens a fresh render pass that reads the stats it just wrote.
-            enc.mps_min_max(source, stats, device.raw_device());
             enc.draw_fullscreen(
                 pipeline,
                 target,
@@ -1341,10 +1326,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     manifold_gpu::GpuBinding::Sampler {
                         binding: 1,
                         sampler,
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 2,
-                        texture: stats,
                     },
                 ],
                 true,
