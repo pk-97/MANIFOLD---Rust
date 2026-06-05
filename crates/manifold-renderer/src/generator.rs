@@ -92,4 +92,17 @@ pub trait Generator: Send {
     fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
         (Vec::new(), Vec::new())
     }
+
+    /// Push the override def's inner-node param values into the live runtime
+    /// graph without rebuilding it — the in-place path for a value-only graph
+    /// edit, which bumps the layer's snapshot `generator_graph_version` but not
+    /// its `generator_graph_structure_version`, so the generator wasn't
+    /// re-instantiated. Default no-op (Rust generators have no inner graph);
+    /// `JsonGraphGenerator` overrides it so a slider tweak in the editor lands
+    /// without resetting the generator's sim/particle state.
+    fn apply_inner_param_overrides(
+        &mut self,
+        _def: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) {
+    }
 }

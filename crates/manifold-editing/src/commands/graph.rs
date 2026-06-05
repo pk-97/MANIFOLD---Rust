@@ -41,10 +41,16 @@ use crate::command::Command;
 /// Returns `Some(R)` from `f`, or `None` if the target no longer
 /// resolves (effect / layer was deleted between command creation and
 /// execution — both possible across undo/redo cycles).
+/// `structural` decides which version counter advances: `true` for an edit
+/// that changes topology (node/wire add or remove) → bumps the structure
+/// version → forces a chain rebuild; `false` for a value- or position-only edit
+/// → bumps only the snapshot version → the renderer applies it in place with no
+/// rebuild and no state reset.
 fn with_target_graph_mut<F, R>(
     project: &mut Project,
     target: &GraphTarget,
     catalog_default: &EffectGraphDef,
+    structural: bool,
     f: F,
 ) -> Option<R>
 where
@@ -55,7 +61,11 @@ where
             .graph_def_mut()
             .get_or_insert_with(|| catalog_default.clone());
         let r = f(def);
-        host.bump_graph_version();
+        if structural {
+            host.bump_graph_structure_version();
+        } else {
+            host.bump_graph_version();
+        }
         r
     })
 }
@@ -68,6 +78,7 @@ where
 fn with_existing_target_graph_mut<F, R>(
     project: &mut Project,
     target: &GraphTarget,
+    structural: bool,
     f: F,
 ) -> Option<R>
 where
@@ -77,7 +88,11 @@ where
         .with_graph_host_mut(target, |host| {
             let def = host.graph_def_mut().as_mut()?;
             let r = f(def);
-            host.bump_graph_version();
+            if structural {
+                host.bump_graph_structure_version();
+            } else {
+                host.bump_graph_version();
+            }
             Some(r)
         })
         .flatten()
@@ -92,7 +107,7 @@ fn take_target_graph(
 ) -> Option<Option<EffectGraphDef>> {
     project.with_graph_host_mut(target, |host| {
         let prev = host.graph_def_mut().take();
-        host.bump_graph_version();
+        host.bump_graph_structure_version();
         prev
     })
 }
@@ -106,7 +121,7 @@ fn install_target_graph(
 ) {
     project.with_graph_host_mut(target, |host| {
         *host.graph_def_mut() = graph;
-        host.bump_graph_version();
+        host.bump_graph_structure_version();
     });
 }
 
@@ -181,7 +196,7 @@ impl Command for AddGraphNodeCommand {
             .clone()
             .unwrap_or_else(|| NodeId::new(manifold_core::short_id()));
         let node_id_for_store = node_id.clone();
-        let minted = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+        let minted = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
             let id = prev_minted.unwrap_or(next_id);
@@ -218,7 +233,7 @@ impl Command for AddGraphNodeCommand {
     fn undo(&mut self, project: &mut Project) {
         let Some(id) = self.minted_id else { return };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 nodes.retain(|n| n.id != id);
                 wires.retain(|w| w.from_node != id && w.to_node != id);
@@ -278,7 +293,7 @@ impl Command for RemoveGraphNodeCommand {
         let node_id = self.node_id;
         let scope = self.scope_path.clone();
         let removed =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let node_pos = nodes.iter().position(|n| n.id == node_id)?;
                 let node = nodes.remove(node_pos);
@@ -304,7 +319,7 @@ impl Command for RemoveGraphNodeCommand {
             return;
         };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 nodes.push(removed.node);
                 wires.extend(removed.wires);
@@ -376,7 +391,7 @@ impl Command for ConnectPortsCommand {
         let to_port = self.to_port.clone();
         let scope = self.scope_path.clone();
         let displaced =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (_nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let displaced = wires
                     .iter()
@@ -401,7 +416,7 @@ impl Command for ConnectPortsCommand {
         let to_port = self.to_port.clone();
         let displaced = self.displaced.take();
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             let Some((_nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
             else {
                 return;
@@ -472,7 +487,7 @@ impl Command for DisconnectPortsCommand {
         let to_node = self.to_node;
         let to_port = self.to_port.clone();
         let scope = self.scope_path.clone();
-        let removed = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+        let removed = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let (_nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             wires
                 .iter()
@@ -488,7 +503,7 @@ impl Command for DisconnectPortsCommand {
             return;
         };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((_nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 wires.push(wire);
             }
@@ -550,7 +565,7 @@ impl Command for MoveGraphNodeCommand {
         let prev_already_captured = self.previous_pos.is_some();
         let scope = self.scope_path.clone();
         let captured =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let node = nodes.iter_mut().find(|n| n.id == node_id)?;
                 let prev = node.editor_pos;
@@ -569,7 +584,7 @@ impl Command for MoveGraphNodeCommand {
         };
         let node_id = self.node_id;
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, false, |def| {
             if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
                 && let Some(node) = nodes.iter_mut().find(|n| n.id == node_id)
             {
@@ -636,7 +651,7 @@ impl Command for LayoutGraphNodesCommand {
         let scope = self.scope_path.clone();
         let positions = self.positions.clone();
         let captured =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let mut prev = Vec::with_capacity(positions.len());
                 for (node_id, new_pos) in &positions {
@@ -658,7 +673,7 @@ impl Command for LayoutGraphNodesCommand {
             return;
         };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, false, |def| {
             if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 for (node_id, prior) in &previous {
                     if let Some(node) = nodes.iter_mut().find(|n| n.id == *node_id) {
@@ -737,7 +752,7 @@ impl Command for SetGraphNodeParamCommand {
         // didn't resolve, the scope path didn't resolve, OR the node id
         // wasn't in the (descended) graph level.
         let captured: Option<Option<SerializedParamValue>> =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+            with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 nodes
                     .iter_mut()
@@ -760,7 +775,7 @@ impl Command for SetGraphNodeParamCommand {
         let node_id = self.node_id;
         let param_name = self.param_name.clone();
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, false, |def| {
             if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
                 && let Some(node) = nodes.iter_mut().find(|n| n.id == node_id)
             {
@@ -1218,6 +1233,7 @@ impl Command for ToggleNodeParamExposeCommand {
             project,
             &self.target,
             &self.catalog_default,
+            true,
             |def| {
                 let prev_in_set = flip_graph_exposed(def, &node_id, &inner_param, expose)
                     .unwrap_or(false);
@@ -1412,7 +1428,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 // generator-side restore handles its own graph
                 // bookkeeping inline because the layer borrow
                 // covers it.
-                let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+                let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
                     restore_graph_exposed(def, &node_id, &inner_param, prev_in_set);
                 });
             }
@@ -2170,7 +2186,7 @@ impl Command for GroupNodesCommand {
         let selected: std::collections::BTreeSet<u32> = self.selected.iter().copied().collect();
         let handle = self.handle.clone();
         let centroid = self.centroid;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let prev = (nodes.clone(), wires.clone());
             match manifold_core::group_edit::group_selection(
@@ -2199,7 +2215,7 @@ impl Command for GroupNodesCommand {
             return;
         };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;
@@ -2244,7 +2260,7 @@ impl Command for UngroupNodeCommand {
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let group_node_id = self.group_node_id;
-        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, |def| {
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let prev = (nodes.clone(), wires.clone());
             match manifold_core::group_edit::ungroup(nodes.clone(), wires.clone(), group_node_id) {
@@ -2267,7 +2283,7 @@ impl Command for UngroupNodeCommand {
             return;
         };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, |def| {
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;

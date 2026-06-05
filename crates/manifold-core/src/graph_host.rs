@@ -77,8 +77,18 @@ pub trait GraphHost {
     fn graph_def(&self) -> &Option<EffectGraphDef>;
     /// Mutable handle to the override, for the graph editing commands.
     fn graph_def_mut(&mut self) -> &mut Option<EffectGraphDef>;
-    /// Bump the graph version so the renderer rehydrates the runtime graph.
+    /// Bump the graph version so the renderer re-snapshots the graph for the
+    /// UI. Bumped by *every* graph edit (value, position, structure). Does NOT
+    /// on its own force a chain rebuild — see [`Self::bump_graph_structure_version`].
     fn bump_graph_version(&mut self);
+
+    /// Bump the *structure* version — and the snapshot version with it — for an
+    /// edit that changes the graph's topology (node/wire add or remove, a full
+    /// revert). The renderer keys its rebuild on the structure version, so this
+    /// is the only path that forces a chain rebuild (and the state reset that
+    /// comes with it). Value-only and position-only edits must call
+    /// [`Self::bump_graph_version`] instead, so they refresh in place.
+    fn bump_graph_structure_version(&mut self);
 
     // ── Value bus (`param_values`) ────────────────────────────────────
 
@@ -154,6 +164,10 @@ impl GraphHost for EffectInstance {
         &mut self.graph
     }
     fn bump_graph_version(&mut self) {
+        self.graph_version = self.graph_version.wrapping_add(1);
+    }
+    fn bump_graph_structure_version(&mut self) {
+        self.graph_structure_version = self.graph_structure_version.wrapping_add(1);
         self.graph_version = self.graph_version.wrapping_add(1);
     }
 
@@ -233,6 +247,7 @@ pub struct GeneratorHost<'a> {
     pub params: Option<&'a mut GeneratorParamState>,
     pub graph: &'a mut Option<EffectGraphDef>,
     pub graph_version: &'a mut u32,
+    pub graph_structure_version: &'a mut u32,
 }
 
 impl GraphHost for GeneratorHost<'_> {
@@ -247,6 +262,10 @@ impl GraphHost for GeneratorHost<'_> {
         self.graph
     }
     fn bump_graph_version(&mut self) {
+        *self.graph_version = self.graph_version.wrapping_add(1);
+    }
+    fn bump_graph_structure_version(&mut self) {
+        *self.graph_structure_version = self.graph_structure_version.wrapping_add(1);
         *self.graph_version = self.graph_version.wrapping_add(1);
     }
 

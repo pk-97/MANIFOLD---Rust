@@ -652,6 +652,16 @@ pub struct EffectInstance {
     /// `Some(graph)`.
     pub graph_version: u32,
 
+    /// Monotonically bumped only when `graph`'s **structure** changes —
+    /// a node added/removed, a wire connected/disconnected, the whole def
+    /// reverted. NOT bumped by a value-only edit (an inner param tweak) or a
+    /// pure-layout edit (dragging a node), both of which still bump
+    /// `graph_version` for the UI snapshot. The renderer hashes *this* into
+    /// its rebuild key, so value/position edits refresh in place (state
+    /// preserved) while only a real topology change forces a chain rebuild.
+    /// Not serialized; resets to 0 on load.
+    pub graph_structure_version: u32,
+
     // Legacy flat param fields (V1.0.0 format).
     pub legacy_param0: Option<f32>,
     pub legacy_param1: Option<f32>,
@@ -1333,6 +1343,7 @@ impl<'de> Deserialize<'de> for EffectInstance {
             param_mappings_version: 0,
             graph: raw.graph,
             graph_version: 0,
+            graph_structure_version: 0,
             legacy_param0: raw.legacy_param0,
             legacy_param1: raw.legacy_param1,
             legacy_param2: raw.legacy_param2,
@@ -1361,6 +1372,7 @@ impl EffectInstance {
             param_mappings_version: 0,
             graph: None,
             graph_version: 0,
+            graph_structure_version: 0,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,
@@ -2848,6 +2860,7 @@ mod tests {
             param_mappings_version: 0,
             graph: None,
             graph_version: 0,
+            graph_structure_version: 0,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,
@@ -2909,6 +2922,7 @@ mod tests {
             param_mappings_version: 0,
             graph: None,
             graph_version: 0,
+            graph_structure_version: 0,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,

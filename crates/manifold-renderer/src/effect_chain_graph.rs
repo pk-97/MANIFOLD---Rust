@@ -340,6 +340,13 @@ struct EffectSlot {
     /// descriptor says nothing. [`ChainGraph::set_preview_target`] looks the
     /// previewed node up here before falling back to single-node `derive`.
     preview_kinds: ahash::AHashMap<NodeId, crate::node_graph::PreviewEncoding>,
+    /// Last `fx.graph_version` whose inner-node param overrides were pushed into
+    /// the live graph. When the host's `graph_version` advances without a
+    /// structure change (a value or position edit — no rebuild), `run` re-reads
+    /// the def's node params and applies them in place via
+    /// [`apply_inner_param_overrides`], so the edit lands without wiping
+    /// primitive state. Seeded to `fx.graph_version` at build.
+    applied_graph_version: u32,
     /// Unified resolved binding list — `bindings[0..n_static]` are
     /// spec bindings hydrated via [`ResolvedBinding::from_static`];
     /// `bindings[n_static..]` are user-exposed bindings hydrated via
@@ -792,6 +799,7 @@ impl ChainGraph {
                 node_map,
                 group_preview_map,
                 preview_kinds,
+                applied_graph_version: fx.graph_version,
                 bindings,
                 n_static,
                 n_static_slots,
@@ -1008,6 +1016,20 @@ impl ChainGraph {
                 // rather than panic on a live stage.
                 continue;
             };
+            // Value-only / position-only graph edits bump `graph_version` but
+            // NOT `graph_structure_version`, so the chain wasn't rebuilt. Push
+            // the new inner-node param values into the live graph in place —
+            // primitive state (feedback, sims) is preserved because nothing was
+            // torn down. Only runs on the frame an edit lands, not per frame.
+            // Clearing the binding cache makes the `apply_bindings` call below
+            // re-assert every bound (live-driven) param over what we just set,
+            // so bound params keep their live value and only the unbound
+            // inner-node values change.
+            if fx.graph_version != slot.applied_graph_version {
+                apply_inner_param_overrides(fx.graph.as_ref(), &slot.node_map, &mut self.graph);
+                slot.applied_graph_version = fx.graph_version;
+                slot.binding_cache.clear();
+            }
             // Re-hydrate the user tail if the effect's binding list
             // moved since this slot was built. Exposing or unexposing
             // a param bumps the core-side version without rebuilding
@@ -1459,13 +1481,13 @@ fn compute_topology_hash(
             Some(g) => g.as_str().hash(&mut h),
             None => "".hash(&mut h),
         }
-        // Phase 3: per-card graph divergence. Bumping `graph_version`
-        // when an editing command mutates `fx.graph` flips this hash,
-        // forcing a chain rebuild on the next frame so the renderer
-        // re-runs `apply_graph_def` with the new def. Primitive state is
-        // lost across the rebuild — acceptable because graph edits are
-        // editing-time events, not performance-time.
-        fx.graph_version.hash(&mut h);
+        // Per-card graph divergence — but keyed on the *structure* version,
+        // not the snapshot `graph_version`. Only a topology change (node/wire
+        // add or remove, full revert) bumps this and forces a rebuild that
+        // wipes primitive state. A value-only param edit or a node move bumps
+        // only `graph_version` (for the UI snapshot) and is applied in place by
+        // `run`'s `apply_inner_param_overrides`, so feedback/sim state survives.
+        fx.graph_structure_version.hash(&mut h);
         // Skip-on-zero predicate state — see the doc-comment above.
         // Effects without a `LoadedPresetView` are ignored here
         // (legacy fallback); `try_build` will short-circuit anyway.
@@ -1480,6 +1502,34 @@ fn compute_topology_hash(
     width.hash(&mut h);
     height.hash(&mut h);
     h.finish()
+}
+
+/// Push a card's inner-node param values into the live runtime graph without
+/// rebuilding it — the in-place path for a value-only edit (an inner param
+/// tweak in the graph editor), which bumps `graph_version` but not
+/// `graph_structure_version`. Flattening first means a group-interface override
+/// is already routed onto its concrete inner node, so every param resolves by
+/// the stable `node_id` the runtime `node_map` keys on (the nodeId-safety
+/// invariant survives flatten). Cheap and edit-time only — never per frame.
+fn apply_inner_param_overrides(
+    def: Option<&EffectGraphDef>,
+    node_map: &[(NodeId, NodeInstanceId)],
+    graph: &mut Graph,
+) {
+    let Some(def) = def else { return };
+    let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
+        return;
+    };
+    for node in &flat.nodes {
+        let Some((_, inst)) = node_map.iter().find(|(nid, _)| *nid == node.node_id) else {
+            continue;
+        };
+        for (name, value) in &node.params {
+            // `set_param` (not unchecked) so a dynamic-port param re-runs the
+            // node's `reconfigure` hook, matching a live slider write.
+            let _ = graph.set_param(*inst, name, value.clone().into());
+        }
+    }
 }
 
 /// State tracked for an open partial-wet-dry group during
@@ -1975,6 +2025,34 @@ mod topology_hash_tests {
         assert!(
             cg_off.is_none(),
             "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
+        );
+    }
+
+    #[test]
+    fn value_edit_keeps_hash_but_structure_edit_changes_it() {
+        // The core of the "don't reset state on every edit" fix: a value- or
+        // position-only graph edit bumps `graph_version` (for the UI snapshot)
+        // but NOT `graph_structure_version`, so the topology hash is unchanged
+        // and the chain is NOT rebuilt (state preserved). Only a structural
+        // edit moves the hash.
+        let mut fx = make_default(EffectTypeId::MIRROR);
+        let base = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+
+        // Value / position edit: snapshot version moves, structure doesn't.
+        fx.graph_version = fx.graph_version.wrapping_add(1);
+        assert_eq!(
+            base,
+            compute_topology_hash(&[fx.clone()], &[], 256, 256, None),
+            "a value/position edit must NOT change the topology hash (no rebuild, \
+             state preserved)",
+        );
+
+        // Structural edit: structure version moves → hash changes → rebuild.
+        fx.graph_structure_version = fx.graph_structure_version.wrapping_add(1);
+        assert_ne!(
+            base,
+            compute_topology_hash(&[fx], &[], 256, 256, None),
+            "a structural edit MUST change the topology hash so the chain rebuilds",
         );
     }
 
@@ -2476,9 +2554,11 @@ mod generator_input_tests {
         .expect("test fixture parses");
 
         let mut fx = make_default(EffectTypeId::INVERT_COLORS);
-        // Mark the divergent path live so try_build picks it up.
+        // Mark the divergent path live so try_build picks it up. A divergent
+        // def is a structural change, so bump the structure version too.
         fx.graph = Some(custom_def);
         fx.graph_version = fx.graph_version.wrapping_add(1);
+        fx.graph_structure_version = fx.graph_structure_version.wrapping_add(1);
         fx
     }
 

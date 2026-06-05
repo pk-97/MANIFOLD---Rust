@@ -952,6 +952,26 @@ impl Generator for JsonGraphGenerator {
         )
     }
 
+    fn apply_inner_param_overrides(
+        &mut self,
+        def: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) {
+        // Flatten so a group-interface override is already routed onto its
+        // concrete inner node; every param then resolves by the stable node_id
+        // the runtime graph keys on. Edit-time only — never per frame.
+        let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
+            return;
+        };
+        for node in &flat.nodes {
+            let Some(inst) = self.graph.instance_by_node_id(&node.node_id) else {
+                continue;
+            };
+            for (name, value) in &node.params {
+                let _ = self.graph.set_param(inst, name, value.clone().into());
+            }
+        }
+    }
+
     /// The preview target's captured output texture from the most recent
     /// `render`. `None` if no target, the node was pruned, or it has no
     /// texture output.

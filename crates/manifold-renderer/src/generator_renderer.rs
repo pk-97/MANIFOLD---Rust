@@ -40,14 +40,20 @@ struct LayerGeneratorState {
     generator: Box<dyn Generator>,
     generator_type: GeneratorTypeId,
     trigger_count: u32,
-    /// `Layer::generator_graph_version` at the time this generator
-    /// was constructed. When the layer's version bumps (graph-editor
-    /// edit landed via `ToggleNodeParamExposeCommand` / `AddGraphNodeCommand`
-    /// / `SetGraphNodeParamCommand` / etc), `acquire_clip` rebuilds
-    /// the generator with the new override def. `None` when the
-    /// generator was built from the bundled preset (no override
-    /// present at construction time).
+    /// `Layer::generator_graph_structure_version` at the time this generator
+    /// was constructed. Only a topology change (node/wire add or remove, type
+    /// swap, revert) bumps it, so `acquire_clip` / the per-frame sweep rebuild
+    /// the generator only when structure actually changed. A value-only edit
+    /// (an inner param tweak) bumps the snapshot version instead and is applied
+    /// in place — see [`Self::applied_param_version`]. `None` when built from
+    /// the bundled preset (no override present at construction time).
     override_version: Option<u32>,
+    /// `Layer::generator_graph_version` (the snapshot counter, bumped by every
+    /// edit) last reflected into the live graph. When it advances without a
+    /// structure change, the sweep pushes the new inner-node param values into
+    /// the running generator via `apply_inner_param_overrides` — no rebuild, so
+    /// sim/particle state survives. `None` mirrors no override present.
+    applied_param_version: Option<u32>,
     /// Cached string params from the layer's clips. When a clip provides a
     /// string param (e.g. fontFamily), it's stored here so that subsequent clips
     /// without that key still get the layer's value. This avoids the first-clip
@@ -233,6 +239,7 @@ impl GeneratorRenderer {
         clip_index: u32,
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         override_version: u32,
+        param_version: u32,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
             return true;
@@ -247,6 +254,7 @@ impl GeneratorRenderer {
         // initial bundled-preset path from a v0 override.
         let current_override_version: Option<u32> =
             override_def.map(|_| override_version);
+        let current_param_version: Option<u32> = override_def.map(|_| param_version);
         let is_watched_now = self.preview_layer.as_ref() == Some(&layer_id);
         let needs_create = self
             .layer_generators
@@ -278,6 +286,7 @@ impl GeneratorRenderer {
                 gen_type.clone(),
                 override_def,
                 current_override_version,
+                current_param_version,
                 preserved_trigger_count,
                 std::collections::BTreeMap::new(),
             ) {
@@ -391,16 +400,32 @@ impl GeneratorRenderer {
             let Some(layer) = layers.iter().find(|l| &l.layer_id == layer_id) else {
                 continue;
             };
-            let current_override_version: Option<u32> =
+            let current_override_version: Option<u32> = layer
+                .generator_graph
+                .as_ref()
+                .map(|_| layer.generator_graph_structure_version);
+            let current_param_version: Option<u32> =
                 layer.generator_graph.as_ref().map(|_| layer.generator_graph_version);
-            // Rebuild on a graph-editor edit (override version bump) OR when the
-            // layer's watched state flipped (editor opened/closed on it) — the
-            // latter swaps the generator fused ⇄ unfused so preview/edits work.
+            // Rebuild only on a *structure* change (override structure-version
+            // bump) OR when the layer's watched state flipped (editor
+            // opened/closed — swaps the generator fused ⇄ unfused). A value-only
+            // edit lands in place below, with no rebuild and no state reset.
             let is_watched_now = self.preview_layer.as_ref() == Some(layer_id);
             let needs_rebuild = self.layer_generators.get(layer_id).is_some_and(|ls| {
                 ls.override_version != current_override_version || ls.built_watched != is_watched_now
             });
             if !needs_rebuild {
+                // Value-only edit (inner param tweak): push the new values into
+                // the live generator without tearing it down, so sim/particle
+                // state survives.
+                if let Some(ls) = self.layer_generators.get_mut(layer_id)
+                    && ls.applied_param_version != current_param_version
+                {
+                    if let Some(def) = layer.generator_graph.as_ref() {
+                        ls.generator.apply_inner_param_overrides(def);
+                    }
+                    ls.applied_param_version = current_param_version;
+                }
                 continue;
             }
             let preserved_trigger_count = self
@@ -415,6 +440,7 @@ impl GeneratorRenderer {
                 gen_type,
                 override_def,
                 current_override_version,
+                current_param_version,
                 preserved_trigger_count,
                 std::collections::BTreeMap::new(),
             );
@@ -641,6 +667,7 @@ impl GeneratorRenderer {
                 new_type.clone(),
                 None,
                 None,
+                None,
                 old_trigger_count,
                 old_defaults,
             );
@@ -682,6 +709,7 @@ impl GeneratorRenderer {
         gen_type: GeneratorTypeId,
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         override_version: Option<u32>,
+        param_version: Option<u32>,
         trigger_count: u32,
         layer_string_defaults: std::collections::BTreeMap<String, String>,
     ) -> bool {
@@ -706,6 +734,7 @@ impl GeneratorRenderer {
                 generator_type: gen_type,
                 trigger_count,
                 override_version,
+                applied_param_version: param_version,
                 layer_string_defaults,
                 merged_string_params: std::collections::BTreeMap::new(),
                 string_params_dirty: true,
@@ -759,12 +788,14 @@ impl ClipRenderer for GeneratorRenderer {
         let clip_index = layer
             .and_then(|l| l.clips.iter().position(|c| c.id == clip.id))
             .unwrap_or(0) as u32;
-        // Per-layer generator graph override + its monotonic version
-        // counter. `acquire_clip` rebuilds the generator when the
-        // version changes so graph-editor edits actually drive
-        // rendering.
+        // Per-layer generator graph override + its version counters. The
+        // generator rebuilds only on a *structure* change; a value-only edit
+        // bumps the snapshot `param_version` and is applied in place.
         let override_def = layer.and_then(|l| l.generator_graph.as_ref());
-        let override_version = layer.map(|l| l.generator_graph_version).unwrap_or(0);
+        let override_version = layer
+            .map(|l| l.generator_graph_structure_version)
+            .unwrap_or(0);
+        let param_version = layer.map(|l| l.generator_graph_version).unwrap_or(0);
         let acquired = self.acquire_clip(
             &clip.id,
             gen_type,
@@ -773,6 +804,7 @@ impl ClipRenderer for GeneratorRenderer {
             clip_index,
             override_def,
             override_version,
+            param_version,
         );
 
         // Populate layer string defaults by scanning ALL clips on this layer.
@@ -954,6 +986,7 @@ mod tests {
             renderer.install_layer_generator(
                 layer_id.clone(),
                 trivial.clone(),
+                None,
                 None,
                 None,
                 0,

@@ -101,6 +101,16 @@ pub struct Layer {
     #[serde(default)]
     pub generator_graph_version: u32,
 
+    /// Bumped only on a generator-graph **structure** change (node/wire
+    /// add/remove, revert) — not on a value-only param edit or a node move,
+    /// which still bump `generator_graph_version` for the UI snapshot. The
+    /// generator registry hashes *this* into its rebuild key so value/position
+    /// edits refresh in place (state preserved). Parallel to
+    /// `EffectInstance.graph_structure_version`. `#[serde(default)]` so
+    /// pre-existing projects load at 0.
+    #[serde(default)]
+    pub generator_graph_structure_version: u32,
+
     // ── Video/MIDI assignment ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_folder_path: Option<String>,
@@ -315,6 +325,7 @@ impl Layer {
             params: self.gen_params.as_mut(),
             graph: &mut self.generator_graph,
             graph_version: &mut self.generator_graph_version,
+            graph_structure_version: &mut self.generator_graph_structure_version,
         }
     }
 
@@ -711,6 +722,9 @@ impl Layer {
             .get_or_insert_with(GeneratorParamState::default);
         gp.change_type(new_type.clone());
         if self.generator_graph.take().is_some() {
+            // Dropping the override swaps in a different def — structural.
+            self.generator_graph_structure_version =
+                self.generator_graph_structure_version.wrapping_add(1);
             self.generator_graph_version =
                 self.generator_graph_version.wrapping_add(1);
         }
@@ -897,6 +911,7 @@ impl Default for Layer {
             gen_params: None,
             generator_graph: None,
             generator_graph_version: 0,
+            generator_graph_structure_version: 0,
             video_folder_path: None,
             relative_video_folder_path: None,
             midi_note: -1,
