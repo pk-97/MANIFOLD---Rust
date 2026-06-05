@@ -1722,13 +1722,12 @@ mod multi_segment_tests {
     //! `amount` param on every segment uniformly.
     use super::*;
     use manifold_core::EffectTypeId;
-    use manifold_core::effect_definition_registry;
     use manifold_core::effects::{EffectGroup, EffectInstance};
     use manifold_core::id::EffectGroupId;
     
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
-        effect_definition_registry::create_default(&ty)
+        manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
     #[test]
@@ -1857,12 +1856,11 @@ mod binding_seed_tests {
     use super::*;
     use crate::node_graph::ParamValue;
     use manifold_core::EffectTypeId;
-    use manifold_core::effect_definition_registry;
     use manifold_core::effects::EffectInstance;
     
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
-        effect_definition_registry::create_default(&ty)
+        manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
     /// SoftFocus is the canonical reproducer: its outer `radius`
@@ -1921,10 +1919,9 @@ mod topology_hash_tests {
     use super::*;
     use manifold_core::EffectTypeId;
     use manifold_core::effects::EffectInstance;
-    use manifold_core::effect_definition_registry;
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
-        effect_definition_registry::create_default(&ty)
+        manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
     #[test]
@@ -2101,14 +2098,13 @@ mod user_binding_tests {
     use super::*;
     use crate::node_graph::ParamValue;
     use manifold_core::EffectTypeId;
-    use manifold_core::effect_definition_registry;
     use manifold_core::effects::{
         EffectInstance, ParamMapping, ParamSlot, UserParamBinding, ParamConvert,
     };
 
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
-        effect_definition_registry::create_default(&ty)
+        manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
     /// A bare scale-only reshape note for `param_id` (no invert/curve, so
@@ -2512,11 +2508,10 @@ mod generator_input_tests {
     use super::*;
     use crate::node_graph::ParamValue;
     use manifold_core::EffectTypeId;
-    use manifold_core::effect_definition_registry;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
-        effect_definition_registry::create_default(&ty)
+        manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
     /// A divergent EffectInstance whose graph contains a
@@ -2773,11 +2768,10 @@ mod chain_error_tests {
     //! doesn't silently regress.
     use super::*;
     use manifold_core::EffectTypeId;
-    use manifold_core::effect_definition_registry;
     use manifold_core::effects::{EffectInstance, ParamConvert, UserParamBinding};
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
-        effect_definition_registry::create_default(&ty)
+        manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
     /// A user-exposed binding pointing at a handle the splice didn't

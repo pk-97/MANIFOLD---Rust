@@ -57,16 +57,16 @@ static REGISTRY: LazyLock<Vec<EffectTypeRegistration>> = LazyLock::new(|| {
         }
     }
     // JSON-loaded presets (§11 unified-registry migration). Same
-    // dual-source pattern as `effect_definition_registry::DEFINITIONS`
+    // dual-source pattern as `crate::preset_definition_registry::EFFECT_DEFINITIONS`
     // — every shipping effect post-§11 has its `presetMetadata` block
     // populated in `assets/effect-presets/*.json` and surfaces here
-    // through `LoadedPresetSource`. Without this loop, the picker only
+    // through `effect::PresetSource`. Without this loop, the picker only
     // shows the 6 plugin-bridge effects whose legacy `EffectMetadata`
     // submissions survived block 8f.
-    for preset in crate::effect_definition_registry::loaded_preset_metadata() {
+    for preset in crate::preset_definition_registry::effect::loaded_preset_metadata() {
         if !v.iter().any(|r| r.id == preset.id) {
             v.push(
-                crate::effect_definition_registry::preset_metadata_to_type_registration(preset),
+                crate::preset_definition_registry::effect::preset_metadata_to_type_registration(preset),
             );
         }
     }

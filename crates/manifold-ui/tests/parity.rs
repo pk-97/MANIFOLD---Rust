@@ -172,12 +172,12 @@ fn color_track_background_deep_level() {
 // ── Generator param counts (from GeneratorDefinitionRegistry.cs) ──
 
 use manifold_core::GeneratorTypeId;
-use manifold_core::generator_definition_registry;
+use manifold_core::preset_definition_registry;
 
 #[test]
 fn generator_param_count_plasma() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::PLASMA).param_count,
         6
     );
 }
@@ -199,49 +199,49 @@ fn generator_param_count_concentric_tunnel() {
     // `assets/generator-presets/ConcentricTunnel.json`; the inventory
     // entry in manifold-core's generator_metadata_submissions matches.
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count,
         6
     );
 }
 #[test]
 fn generator_param_count_tesseract() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::TESSERACT).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::TESSERACT).param_count,
         11
     );
 }
 #[test]
 fn generator_param_count_duocylinder() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::DUOCYLINDER).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::DUOCYLINDER).param_count,
         11
     );
 }
 #[test]
 fn generator_param_count_lissajous() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::LISSAJOUS).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::LISSAJOUS).param_count,
         11
     );
 }
 #[test]
 fn generator_param_count_wireframe_zoo() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::WIREFRAME_ZOO).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::WIREFRAME_ZOO).param_count,
         9
     );
 }
 #[test]
 fn generator_param_count_fluid_sim() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::FLUID_SIMULATION).param_count,
         14
     );
 }
 #[test]
 fn generator_param_count_fluid_sim_3d() {
     assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count,
+        preset_definition_registry::generator::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count,
         21
     );
 }
@@ -252,7 +252,7 @@ fn generator_all_types_have_params() {
     use manifold_core::generator_type_registry;
     for reg in generator_type_registry::all() {
         assert!(
-            generator_definition_registry::get(&reg.id).param_count > 0,
+            preset_definition_registry::generator::get(&reg.id).param_count > 0,
             "{:?} has no param definitions",
             reg.id
         );
@@ -265,7 +265,7 @@ fn generator_max_param_count() {
     use manifold_core::generator_type_registry;
     let max = generator_type_registry::all()
         .iter()
-        .map(|reg| generator_definition_registry::get(&reg.id).param_count)
+        .map(|reg| preset_definition_registry::generator::get(&reg.id).param_count)
         .max()
         .unwrap_or(0);
     assert_eq!(max, 21);

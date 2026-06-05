@@ -199,11 +199,11 @@ impl GraphHost for EffectInstance {
     }
 
     fn param_id_to_static_index(&self, param_id: &str) -> Option<usize> {
-        crate::effect_definition_registry::param_id_to_index(self.effect_type(), param_id)
+        crate::preset_definition_registry::effect::param_id_to_index(self.effect_type(), param_id)
     }
 
     fn param_range(&self, index: usize) -> (f32, f32) {
-        crate::effect_definition_registry::try_get(self.effect_type())
+        crate::preset_definition_registry::effect::try_get(self.effect_type())
             .and_then(|d| d.param_defs.get(index))
             .map(|p| (p.min, p.max))
             .unwrap_or((0.0, 1.0))
@@ -297,7 +297,7 @@ impl GraphHost for GeneratorHost<'_> {
             return meta.params.iter().position(|p| p.id == param_id);
         }
         let params = self.params.as_deref()?;
-        crate::generator_definition_registry::param_id_to_index(
+        crate::preset_definition_registry::generator::param_id_to_index(
             params.generator_type(),
             param_id,
         )
@@ -324,7 +324,7 @@ impl GraphHost for GeneratorHost<'_> {
 
     fn param_id_to_static_index(&self, param_id: &str) -> Option<usize> {
         let params = self.params.as_deref()?;
-        crate::generator_definition_registry::param_id_to_index(
+        crate::preset_definition_registry::generator::param_id_to_index(
             params.generator_type(),
             param_id,
         )
@@ -334,7 +334,7 @@ impl GraphHost for GeneratorHost<'_> {
         self.params
             .as_deref()
             .and_then(|p| {
-                crate::generator_definition_registry::try_get(p.generator_type())
+                crate::preset_definition_registry::generator::try_get(p.generator_type())
                     .and_then(|d| d.param_defs.get(index))
                     .map(|pd| (pd.min, pd.max))
             })

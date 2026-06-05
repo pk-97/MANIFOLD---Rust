@@ -4,7 +4,7 @@
 //! The definition and type registries collect these at startup.
 
 use crate::effects::ParamDef;
-use crate::generator_definition_registry::StringParamDef;
+use crate::preset_definition_registry::StringParamDef;
 use crate::generator_type_id::GeneratorTypeId;
 use crate::generator_type_registry::GeneratorTypeRegistration;
 use crate::preset_def::{PresetDef, PresetKind};

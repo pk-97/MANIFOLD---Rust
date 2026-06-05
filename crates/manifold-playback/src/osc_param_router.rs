@@ -119,12 +119,12 @@ impl OscParamRouter {
 
         // Master effects
         for fx in &project.settings.master_effects {
-            let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type())
+            let Some(def) = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())
             else {
                 continue;
             };
             for pi in 0..def.param_count {
-                let Some(addr) = manifold_core::effect_definition_registry::get_osc_address(
+                let Some(addr) = manifold_core::preset_definition_registry::effect::get_osc_address(
                     fx.effect_type(),
                     pi,
                 ) else {
@@ -171,13 +171,13 @@ impl OscParamRouter {
         if let Some(effects) = &layer.effects {
             for fx in effects {
                 let Some(def) =
-                    manifold_core::effect_definition_registry::try_get(fx.effect_type())
+                    manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())
                 else {
                     continue;
                 };
                 for pi in 0..def.param_count {
                     let Some(addr) =
-                        manifold_core::effect_definition_registry::get_osc_address_for_layer(
+                        manifold_core::preset_definition_registry::effect::get_osc_address_for_layer(
                             fx.effect_type(),
                             lid_str,
                             pi,
@@ -204,13 +204,13 @@ impl OscParamRouter {
         // Generator params
         if let Some(gp) = layer.gen_params() {
             let Some(def) =
-                manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())
             else {
                 return;
             };
             for pi in 0..def.param_count {
                 let Some(addr) =
-                    manifold_core::generator_definition_registry::get_osc_address_for_layer(
+                    manifold_core::preset_definition_registry::generator::get_osc_address_for_layer(
                         gp.generator_type(),
                         lid_str,
                         pi,

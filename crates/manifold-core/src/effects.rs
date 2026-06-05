@@ -603,7 +603,7 @@ pub struct EffectInstance {
     pub enabled: bool,
     pub collapsed: bool,
     /// Positional parameter storage. The first
-    /// `effect_definition_registry::get(&effect_type).param_count`
+    /// `crate::preset_definition_registry::effect::get(&effect_type).param_count`
     /// slots correspond to the effect's static-spec bindings in
     /// declaration order; the remaining slots correspond to
     /// [`Self::user_param_bindings`] in declaration order. After the
@@ -723,7 +723,7 @@ impl ParamValuesWire {
         match self {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
-                let Some(def) = crate::effect_definition_registry::try_get(effect_type) else {
+                let Some(def) = crate::preset_definition_registry::effect::try_get(effect_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
                          effect type '{}' (Map keys: {:?}). align_to_definition will fill with \
@@ -789,7 +789,7 @@ impl ParamValuesWire {
         match self {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
-                let Some(def) = crate::generator_definition_registry::try_get(gen_type) else {
+                let Some(def) = crate::preset_definition_registry::generator::try_get(gen_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
                          generator type '{}' (Map keys: {:?}). In production this should never \
@@ -851,7 +851,7 @@ impl FloatValuesWire {
         match self {
             FloatValuesWire::Positional(v) => v,
             FloatValuesWire::Keyed(map) => {
-                let Some(def) = crate::effect_definition_registry::try_get(effect_type) else {
+                let Some(def) = crate::preset_definition_registry::effect::try_get(effect_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ baseParamValues for \
                          unregistered effect type '{}' (Map keys: {:?}).",
@@ -904,7 +904,7 @@ impl FloatValuesWire {
         match self {
             FloatValuesWire::Positional(v) => v,
             FloatValuesWire::Keyed(map) => {
-                let Some(def) = crate::generator_definition_registry::try_get(gen_type) else {
+                let Some(def) = crate::preset_definition_registry::generator::try_get(gen_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
                          generator type '{}' (Map keys: {:?}). In production this should never \
@@ -953,7 +953,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::generator_definition_registry::try_get(gen_type);
+    let def = crate::preset_definition_registry::generator::try_get(gen_type);
     let can_emit_map = def.is_some_and(|d| {
         values.len() <= d.param_ids.len()
             && d.param_ids
@@ -995,7 +995,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::generator_definition_registry::try_get(gen_type);
+    let def = crate::preset_definition_registry::generator::try_get(gen_type);
     let can_emit_map = def.is_some_and(|d| {
         values.len() <= d.param_ids.len()
             && d.param_ids
@@ -1039,7 +1039,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::effect_definition_registry::try_get(effect_type);
+    let def = crate::preset_definition_registry::effect::try_get(effect_type);
     let static_count = def.map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
     let can_emit_map = def.is_some_and(|d| {
@@ -1085,7 +1085,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::effect_definition_registry::try_get(effect_type);
+    let def = crate::preset_definition_registry::effect::try_get(effect_type);
     let static_count = def.map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
     let can_emit_map = def.is_some_and(|d| {
@@ -1647,11 +1647,10 @@ impl EffectInstance {
     /// Ableton update, OSC dispatch) treat this as orphaned addressing.
     /// Boundary-frequency lookup, not a per-pixel hot path.
     pub fn param_id_to_value_index(&self, id: &str) -> Option<usize> {
-        use crate::effect_definition_registry;
-        if let Some(idx) = effect_definition_registry::param_id_to_index(&self.effect_type, id) {
+        if let Some(idx) = crate::preset_definition_registry::effect::param_id_to_index(&self.effect_type, id) {
             return Some(idx);
         }
-        let n_static = effect_definition_registry::try_get(&self.effect_type)
+        let n_static = crate::preset_definition_registry::effect::try_get(&self.effect_type)
             .map(|d| d.param_count)
             .unwrap_or(0);
         self.user_binding_index(id).map(|j| n_static + j)
@@ -1711,8 +1710,7 @@ impl EffectInstance {
     /// edit — at typical driver counts (<50) the scan is cheaper than
     /// the bookkeeping.
     pub fn resolve_param(&self, id: &str) -> Option<ResolvedParam> {
-        use crate::effect_definition_registry;
-        let def = effect_definition_registry::try_get(&self.effect_type)?;
+        let def = crate::preset_definition_registry::effect::try_get(&self.effect_type)?;
         resolve_param_in(def, self, id)
     }
 
@@ -1844,9 +1842,8 @@ impl EffectInstance {
     /// (use [`Self::get_param`] / [`Self::get_base_param`] at the slot
     /// returned by [`Self::param_id_to_value_index`]).
     pub fn remove_user_binding_by_id(&mut self, id: &str) -> Option<UserParamBinding> {
-        use crate::effect_definition_registry;
         let j = self.user_binding_index(id)?;
-        let n_static = effect_definition_registry::try_get(&self.effect_type)
+        let n_static = crate::preset_definition_registry::effect::try_get(&self.effect_type)
             .map(|d| d.param_count)
             .unwrap_or(0);
         let value_idx = n_static + j;
@@ -1896,7 +1893,6 @@ impl EffectInstance {
         position: usize,
         slot_value: ParamSlot,
     ) {
-        use crate::effect_definition_registry;
         use crate::effect_graph_def::{
             BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
         };
@@ -1993,7 +1989,7 @@ impl EffectInstance {
         }
 
         // Value slot at the original tail index `n_static + position`.
-        let n_static = effect_definition_registry::try_get(&self.effect_type)
+        let n_static = crate::preset_definition_registry::effect::try_get(&self.effect_type)
             .map(|d| d.param_count)
             .unwrap_or(0);
         let value_idx = n_static + position;
@@ -2020,7 +2016,6 @@ impl EffectInstance {
     /// the user_param_bindings vec is the single source of truth for
     /// "how many user slots exist."
     pub fn align_to_definition(&mut self) {
-        use crate::effect_definition_registry;
 
         // Migration: WireframeDepth 14-param (old) → 12-param (new).
         // Old: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Persist(5) Depth(6)
@@ -2066,7 +2061,7 @@ impl EffectInstance {
             .map(|b| b.default_value)
             .collect();
 
-        if let Some(def) = effect_definition_registry::try_get(&self.effect_type) {
+        if let Some(def) = crate::preset_definition_registry::effect::try_get(&self.effect_type) {
             let static_target = def.param_count;
             let n_user = user_defaults.len();
             let target = static_target + n_user;
@@ -2165,8 +2160,7 @@ impl EffectInstance {
 /// Port of Unity EffectInstance : IParamSource.
 impl ParamSource for EffectInstance {
     fn display_name(&self) -> &str {
-        use crate::effect_definition_registry;
-        match effect_definition_registry::try_get(&self.effect_type) {
+        match crate::preset_definition_registry::effect::try_get(&self.effect_type) {
             Some(def) => def.display_name.as_str(),
             None => "?",
         }
@@ -2177,8 +2171,7 @@ impl ParamSource for EffectInstance {
     }
 
     fn get_param_def(&self, index: usize) -> ParamDef {
-        use crate::effect_definition_registry;
-        if let Some(def) = effect_definition_registry::try_get(&self.effect_type) {
+        if let Some(def) = crate::preset_definition_registry::effect::try_get(&self.effect_type) {
             if index < def.param_count {
                 return def.param_defs[index].clone();
             }
@@ -3400,7 +3393,7 @@ mod tests {
     // verify the alias-walking behavior by directly calling
     // `resolve_param_alias` on a synthetic table — the integration
     // path is covered indirectly by `resolve_param_alias_*` tests in
-    // `effect_definition_registry`.
+    // `preset_definition_registry`.
 
     #[test]
     fn into_positional_keyed_drops_unknown_id() {

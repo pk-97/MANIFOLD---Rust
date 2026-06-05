@@ -26,7 +26,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::preset_loader::GENERATOR_CATALOG;
 
 /// Loader function for the core's
-/// [`manifold_core::generator_definition_registry::LoadedPresetSource`]
+/// [`manifold_core::preset_definition_registry::generator::PresetSource`]
 /// inventory. Walks the bundled preset table, parses each JSON document,
 /// and returns the `preset_metadata` field from every entry that carries
 /// one (v2 schema). Mirrors `loaded_presets_from_bundled` on the
@@ -49,7 +49,7 @@ pub fn loaded_generator_presets_from_bundled()
 }
 
 inventory::submit! {
-    manifold_core::generator_definition_registry::LoadedPresetSource {
+    manifold_core::preset_definition_registry::generator::PresetSource {
         load: loaded_generator_presets_from_bundled,
     }
 }

@@ -93,7 +93,7 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
 }
 
 inventory::submit! {
-    manifold_core::effect_definition_registry::LoadedPresetSource {
+    manifold_core::preset_definition_registry::effect::PresetSource {
         load: loaded_presets_from_bundled,
     }
 }
@@ -109,7 +109,7 @@ mod tests {
     /// Regression guard: every bundled preset must surface in the
     /// picker via `effect_type_registry`. The picker's data source
     /// (`effect_type_registry::REGISTRY`) is a separate `LazyLock` from
-    /// `effect_definition_registry::DEFINITIONS`; both must iterate
+    /// `preset_definition_registry::EFFECT_DEFINITIONS`; both must iterate
     /// the JSON-loaded preset metadata or the dual-source migration
     /// silently strands shipping effects.
     ///

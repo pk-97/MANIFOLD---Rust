@@ -1541,7 +1541,7 @@ fn mirror_effect_side(
         let binding_id = binding.id.clone();
         // Capture the slot value BEFORE removal (the slot lives at
         // static_count + position).
-        let static_count = manifold_core::effect_definition_registry::try_get(effect.effect_type())
+        let static_count = manifold_core::preset_definition_registry::effect::try_get(effect.effect_type())
             .map(|def| def.param_count)
             .unwrap_or(0);
         let slot_idx = static_count + position;

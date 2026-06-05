@@ -300,8 +300,8 @@ impl Layer {
     /// per-instance `generator_graph` with `preset_metadata`, the lookup
     /// walks the graph's `params` list (which includes user-added
     /// bindings); otherwise it falls back to the static
-    /// `generator_definition_registry`. Returns `None` if the id isn't
-    /// recognised.
+    /// `preset_definition_registry::generator`. Returns `None` if the id
+    /// isn't recognised.
     pub fn resolve_gen_param_slot(&self, param_id: &str) -> Option<usize> {
         if let Some(graph) = &self.generator_graph
             && let Some(meta) = graph.preset_metadata.as_ref()
@@ -310,7 +310,7 @@ impl Layer {
             return meta.params.iter().position(|p| p.id == param_id);
         }
         let gen_type = self.generator_type();
-        crate::generator_definition_registry::param_id_to_index(gen_type, param_id)
+        crate::preset_definition_registry::generator::param_id_to_index(gen_type, param_id)
     }
 
     /// A [`crate::graph_host::GraphHost`] view over this layer's

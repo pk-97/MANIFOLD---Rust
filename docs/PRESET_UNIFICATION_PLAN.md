@@ -555,6 +555,28 @@ The original single-list design follows for reference:
 
 **Commit shape:** one or two commits.
 
+#### Step 9 cleanup pass — landed 2026-06-06
+
+**Collapsed / deleted (structural residue):**
+
+- **The two definition-registry modules are now one** — `effect_definition_registry` + `generator_definition_registry` → `manifold-core/src/preset_definition_registry.rs`. The byte-identical converter and leak helpers (`param_spec_def_to_param_def`, `leak_str`, `leak_alias_table`, `leak_value_alias_table`, and the two `preset_metadata_to_*_def` bodies, which differed only by `kind`) collapsed into single shared fns; the `kind`-branching `preset_metadata_to_def(meta, PresetKind)` replaces the two converters. The two `EffectTypeId` / `GeneratorTypeId` stores and the two preset-source inventory buckets (`effect::PresetSource` / `generator::PresetSource`) stay distinct — they are populated from two distinct disk sources (`assets/effect-presets` vs `assets/generator-presets`) and merging them into one `String`-keyed store would cross-contaminate the buckets or collide an effect id with a like-named generator, both on the stable-addressing path. Call sites change the module path only (`…::effect::X` / `…::generator::X`); the function names are byte-identical to the legacy surface, so stable param ids / OSC addresses are unchanged. ~44 consumers + 2 renderer `PresetSource` submissions updated. `StringParamDef` moved into the new module.
+
+**Left in place, with reason (not dead / not duplicated):**
+
+- **Generator mirror commands** (`prepare_generator_mirror` / `apply_generator_mirror` / `unmirror_generator_side` in `manifold-editing/src/commands/graph.rs`) are **live and load-bearing**, not residue. They mirror a graph-side expose/unexpose edit into the layer's `GeneratorParamState` — the real persisted generator performance/modulation surface (`feedback_param_values_is_performance_surface`) — and carry the matching undo capture. The graph host (`with_graph_host_mut`) exposes that state but does not itself perform the append/remove-user-binding spec or the undo bookkeeping; that work lives only here and isn't otherwise handled. Deleting them would break generator graph editing. Kept.
+
+#### Step 9 enabled follow-ups — DOCUMENTED, not implemented
+
+These are net-new **features** or hot/save-format-adjacent changes, out of scope for a cleanup pass:
+
+- **Skip-mode honored on generators** — generators ignore `SkipModeDef` today; honoring it needs runtime skip-on-zero/unchanged wiring on the generator execute path. Net-new behavior, deferred.
+- **String-bindings exposed on effects** — `string_param_defs` / `string_bindings` are generator-only at runtime; surfacing them on effects needs schema + UI + save-format work. Deferred.
+- **Legacy param/value aliases applied on the generator load path** — the generator `PresetDef` always carries an empty `legacy_value_aliases`, and the param-alias table is read but generators have no load-time value-migration pass. Wiring it touches the load/migration path. Deferred.
+- **`is_angle` degree-display on user bindings** — degree formatting for user-added angle params is not plumbed through the binding display surface. UI/schema work, deferred.
+- **Parallel modulation walk** — `evaluate_gen_param_envelopes` in `manifold-playback/src/modulation.rs` is a per-frame hot path. Merging it with the effect envelope walk is cosmetic and risks a regression on the live modulation path for no functional gain. **Document, do not merge.**
+- **`base_param_values: Option<Vec<f32>>` on `GeneratorParamState`** (the un-exposed base bus) — candidate to fold into the `Vec<ParamSlot>` storage so generators carry one bus like effects, but that is a save-format change. **Left as-is**; revisit alongside the effect physical fold-in (Phase 1 deferred item), not in cleanup.
+- **`GraphTarget` (`Effect(EffectId)` / `Generator(LayerId)`)** — legitimate addressing: effects and generators have different host identity (an effect by `EffectId`, a generator by its host `LayerId`). The *handling* is already unified through `with_graph_host_mut`; the enum is the irreducible identity difference. **Intentionally NOT collapsed.**
+
 ---
 
 ## Resolved decisions

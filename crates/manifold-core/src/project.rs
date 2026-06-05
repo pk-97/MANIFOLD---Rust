@@ -244,9 +244,8 @@ impl Project {
     ///
     /// Walks master + every layer's effects.
     fn migrate_legacy_param_values(&mut self) {
-        use crate::effect_definition_registry;
         fn apply_to_effect(fx: &mut crate::effects::EffectInstance) {
-            let Some(def) = effect_definition_registry::try_get(fx.effect_type()) else {
+            let Some(def) = crate::preset_definition_registry::effect::try_get(fx.effect_type()) else {
                 return;
             };
             if def.legacy_value_aliases.is_empty() {
@@ -324,9 +323,7 @@ impl Project {
     ///   harness which doesn't link `manifold-renderer` would silently
     ///   strip every driver's addressing data on the first save.
     fn resolve_legacy_param_ids(&mut self) {
-        use crate::effect_definition_registry;
         use crate::effect_registration::resolve_param_alias;
-        use crate::generator_definition_registry;
 
         /// Outcome of a single addressing-site resolution attempt.
         ///
@@ -417,7 +414,7 @@ impl Project {
             current_id: &str,
             legacy_index: Option<i32>,
         ) -> ResolveOutcome {
-            let Some(def) = effect_definition_registry::try_get(effect_type) else {
+            let Some(def) = crate::preset_definition_registry::effect::try_get(effect_type) else {
                 return ResolveOutcome::RegistryMissing;
             };
             resolve_against(
@@ -433,7 +430,7 @@ impl Project {
             current_id: &str,
             legacy_index: Option<i32>,
         ) -> ResolveOutcome {
-            let Some(def) = generator_definition_registry::try_get(gen_type) else {
+            let Some(def) = crate::preset_definition_registry::generator::try_get(gen_type) else {
                 return ResolveOutcome::RegistryMissing;
             };
             resolve_against(

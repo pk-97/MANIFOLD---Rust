@@ -31,7 +31,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::ableton_mapping::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
 };
-use manifold_core::effect_definition_registry;
+use manifold_core::preset_definition_registry;
 use manifold_core::effects::{ParameterDriver, ParamConvert};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::command::Command;
@@ -59,7 +59,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     // Build a project with a Mirror master effect at well-aligned
     // static state. Mirror has 2 static params (amount, mode).
     let mut project = Project::default();
-    let fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
+    let fx = preset_definition_registry::effect::create_default(&EffectTypeId::MIRROR);
     // create_default lands param_values at registry defaults; verify.
     assert_eq!(fx.param_values.len(), 2, "Mirror has 2 static params");
     project.settings.master_effects.push(fx);
@@ -206,7 +206,7 @@ fn unexpose_then_re_expose_yields_same_canonical_id() {
     use manifold_core::project::Project;
 
     let mut project = Project::default();
-    let fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
+    let fx = preset_definition_registry::effect::create_default(&EffectTypeId::MIRROR);
     project.settings.master_effects.push(fx);
     let effect_id = project.settings.master_effects[0].id.clone();
 
@@ -266,7 +266,7 @@ fn second_expose_under_same_handle_increments_n() {
     use manifold_core::project::Project;
 
     let mut project = Project::default();
-    let fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
+    let fx = preset_definition_registry::effect::create_default(&EffectTypeId::MIRROR);
     project.settings.master_effects.push(fx);
     let effect_id = project.settings.master_effects[0].id.clone();
 

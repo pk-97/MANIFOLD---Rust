@@ -280,12 +280,11 @@ impl GeneratorParamState {
     /// Clamping against the registry's declared range still happens
     /// when a def exists; absence is treated as "pass through unchanged."
     pub fn set_param(&mut self, index: usize, value: f32) {
-        use crate::generator_definition_registry;
         while self.param_values.len() <= index {
             self.param_values.push(ParamSlot::default());
         }
         self.param_values[index].value =
-            generator_definition_registry::clamp_param(&self.generator_type, index, value);
+            crate::preset_definition_registry::generator::clamp_param(&self.generator_type, index, value);
     }
 
     /// Ensure `param_values` (and `base_param_values`, if present) is
@@ -303,8 +302,7 @@ impl GeneratorParamState {
     /// saved before a new bundled param was added would call
     /// `init_defaults_for_type` and wipe every saved value.
     pub fn migrate_to_registry_length(&mut self) {
-        use crate::generator_definition_registry;
-        let Some(def) = generator_definition_registry::try_get(&self.generator_type) else {
+        let Some(def) = crate::preset_definition_registry::generator::try_get(&self.generator_type) else {
             return;
         };
         let min_target = def.param_count;
@@ -344,7 +342,7 @@ impl GeneratorParamState {
     /// only consulted for clamping, never as a gate on the write
     /// itself. Without this, JSON-only generators (Wireframe, etc.)
     /// silently dropped every slider drag — they have no Rust-side
-    /// `inventory::submit!` entry and `generator_definition_registry::try_get`
+    /// `inventory::submit!` entry and `crate::preset_definition_registry::generator::try_get`
     /// returns `None`. User-added bindings (whose slot indices sit
     /// past the registry's declared `param_count`) ride the same path.
     ///
@@ -354,8 +352,7 @@ impl GeneratorParamState {
     /// with registry defaults — same migrate-on-touch behaviour the
     /// pre-unification code relied on.
     pub fn set_param_base(&mut self, index: usize, value: f32) {
-        use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(&self.generator_type)
+        if let Some(def) = crate::preset_definition_registry::generator::try_get(&self.generator_type)
             && self.param_values.len() < def.param_count
         {
             self.migrate_to_registry_length();
@@ -370,7 +367,7 @@ impl GeneratorParamState {
             }
         }
         let clamped =
-            generator_definition_registry::clamp_param(&self.generator_type, index, value);
+            crate::preset_definition_registry::generator::clamp_param(&self.generator_type, index, value);
         if let Some(base) = &mut self.base_param_values {
             base[index] = clamped;
         }
@@ -420,7 +417,6 @@ impl GeneratorParamState {
     /// Reset effective param values to base — ONLY for params with active drivers or envelopes.
     /// Port of C# GeneratorParamState.ResetEffectives().
     pub fn reset_effectives(&mut self) {
-        use crate::generator_definition_registry;
 
         if self.param_values.is_empty() {
             return;
@@ -431,7 +427,7 @@ impl GeneratorParamState {
             None => return,
         };
         let id_to_index =
-            generator_definition_registry::try_get(&self.generator_type).map(|d| &d.id_to_index);
+            crate::preset_definition_registry::generator::try_get(&self.generator_type).map(|d| &d.id_to_index);
 
         if let Some(drivers) = &self.drivers {
             for driver in drivers {
@@ -481,8 +477,7 @@ impl GeneratorParamState {
     /// Unity GeneratorParamState.cs InitDefaults(GeneratorType genType) lines 143-155.
     /// Takes a type parameter and sets self.generator_type = genType.
     pub fn init_defaults_for_type(&mut self, gen_type: GeneratorTypeId) {
-        use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(&gen_type) {
+        if let Some(def) = crate::preset_definition_registry::generator::try_get(&gen_type) {
             self.generator_type = gen_type;
             self.param_values = def
                 .param_defs
@@ -558,8 +553,7 @@ impl GeneratorParamState {
 /// Unified parameter interface — mirrors `impl ParamSource for EffectInstance`.
 impl ParamSource for GeneratorParamState {
     fn display_name(&self) -> &str {
-        use crate::generator_definition_registry;
-        generator_definition_registry::try_get(&self.generator_type)
+        crate::preset_definition_registry::generator::try_get(&self.generator_type)
             .map(|d| d.display_name.as_str())
             .unwrap_or("Generator")
     }
@@ -569,8 +563,7 @@ impl ParamSource for GeneratorParamState {
     }
 
     fn get_param_def(&self, index: usize) -> ParamDef {
-        use crate::generator_definition_registry;
-        match generator_definition_registry::try_get(&self.generator_type) {
+        match crate::preset_definition_registry::generator::try_get(&self.generator_type) {
             Some(def) if index < def.param_count => def.param_defs[index].clone(),
             _ => ParamDef::default(),
         }
@@ -616,7 +609,6 @@ impl ParamSource for GeneratorParamState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generator_definition_registry;
     use crate::generator_registration::{GeneratorMetadata, ParamSpec};
 
     // Test-only inventory submission — BLACK_HOLE isn't linked from manifold-renderer in unit tests.
@@ -652,7 +644,7 @@ mod tests {
     #[test]
     fn migrate_pads_short_param_arrays_with_defaults_preserving_existing() {
         let gt = GeneratorTypeId::BLACK_HOLE;
-        let target_count = generator_definition_registry::try_get(&gt)
+        let target_count = crate::preset_definition_registry::generator::try_get(&gt)
             .expect("BLACK_HOLE registered")
             .param_count;
         assert!(
@@ -680,7 +672,7 @@ mod tests {
         assert_eq!(state.param_values[2].value, 3.5);
 
         // The new tail entries should match the registry defaults exactly.
-        let def = generator_definition_registry::try_get(&gt).unwrap();
+        let def = crate::preset_definition_registry::generator::try_get(&gt).unwrap();
         for i in 3..target_count {
             assert_eq!(
                 state.param_values[i].value, def.param_defs[i].default_value,
@@ -700,7 +692,7 @@ mod tests {
         // Regression test for the bug where set_param's length-mismatch branch
         // called init_defaults_for_type, wiping every saved value.
         let gt = GeneratorTypeId::BLACK_HOLE;
-        let target_count = generator_definition_registry::try_get(&gt)
+        let target_count = crate::preset_definition_registry::generator::try_get(&gt)
             .expect("BLACK_HOLE registered")
             .param_count;
 
@@ -739,7 +731,7 @@ mod tests {
         // Clamping is the only thing that depends on a def existing.
         let unknown_type = GeneratorTypeId::from_string("DoesNotExist".to_string());
         assert!(
-            generator_definition_registry::try_get(&unknown_type).is_none(),
+            crate::preset_definition_registry::generator::try_get(&unknown_type).is_none(),
             "fixture relies on this type NOT being in the registry"
         );
 

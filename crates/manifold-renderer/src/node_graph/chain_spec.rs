@@ -67,7 +67,7 @@ pub enum SkipMode {
 
 /// Standalone skip check used by the JSON-loaded preset path
 /// (`LoadedPresetView`). Lookup goes through
-/// `effect_definition_registry::param_id_to_index` which is
+/// `preset_definition_registry::effect::param_id_to_index` which is
 /// dual-source aware — works for both inventory-submitted
 /// `EffectMetadata` and JSON-loaded `PresetMetadata`.
 pub fn is_skipped_for(skip: SkipMode, type_id: &EffectTypeId, fx: &EffectInstance) -> bool {
@@ -75,7 +75,7 @@ pub fn is_skipped_for(skip: SkipMode, type_id: &EffectTypeId, fx: &EffectInstanc
         SkipMode::Never => false,
         SkipMode::OnZero { param_id } => {
             let Some(idx) =
-                manifold_core::effect_definition_registry::param_id_to_index(type_id, param_id)
+                manifold_core::preset_definition_registry::effect::param_id_to_index(type_id, param_id)
             else {
                 return false;
             };

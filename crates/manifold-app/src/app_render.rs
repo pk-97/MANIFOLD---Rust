@@ -80,7 +80,7 @@ impl Application {
                 if let Some(b) = fx.user_param_bindings().iter().find(|b| b.id == param_id) {
                     return Some((b.min, b.max, b.scale, b.offset));
                 }
-                let def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
+                let def = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())?;
                 let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
                 Some((pd.min, pd.max, 1.0, 0.0))
             }
@@ -96,7 +96,7 @@ impl Application {
                     return Some((n.min, n.max, n.scale, n.offset));
                 }
                 let def =
-                    manifold_core::generator_definition_registry::try_get(gp.generator_type())?;
+                    manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())?;
                 let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
                 Some((pd.min, pd.max, 1.0, 0.0))
             }
@@ -123,7 +123,7 @@ impl Application {
                     .find(|l| &l.layer_id == lid)?
                     .gen_params()?;
                 let def =
-                    manifold_core::generator_definition_registry::try_get(gp.generator_type())?;
+                    manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())?;
                 let idx = *def.id_to_index.get(param_id)?;
                 gp.param_values.get(idx).map(|p| p.value)
             }
@@ -2155,7 +2155,7 @@ impl Application {
                     )
                 } else {
                     let Some((pd_name, pd_min, pd_max)) =
-                        manifold_core::effect_definition_registry::try_get(fx.effect_type())
+                        manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())
                             .and_then(|def| {
                                 def.id_to_index.get(param_id).map(|&i| {
                                     let pd = &def.param_defs[i];
@@ -2195,7 +2195,7 @@ impl Application {
                     return;
                 };
                 let Some((pd_name, pd_min, pd_max)) =
-                    manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                    manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())
                         .and_then(|def| {
                             def.id_to_index.get(param_id).map(|&i| {
                                 let pd = &def.param_defs[i];
@@ -3656,7 +3656,7 @@ fn build_static_block_targets(
     let Some(fx) = project.find_effect_by_id(eid) else {
         return Default::default();
     };
-    let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type()) else {
+    let Some(def) = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type()) else {
         return Default::default();
     };
     snap.outer_routings

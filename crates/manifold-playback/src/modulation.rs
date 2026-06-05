@@ -11,9 +11,9 @@
 
 use manifold_core::Beats;
 use manifold_core::effects::{EffectInstance, EnvelopeMode, ParamEnvelope, ParameterDriver};
+use manifold_core::preset_definition_registry;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::{effect_definition_registry, generator_definition_registry};
 
 // ── Random envelope helpers ─────────────────────────────────────────────────
 
@@ -252,7 +252,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
             && let Some(gp) = layer.gen_params_mut()
         {
             let gen_type = gp.generator_type();
-            let gen_def = match generator_definition_registry::try_get(gen_type) {
+            let gen_def = match preset_definition_registry::generator::try_get(gen_type) {
                 Some(d) => d,
                 None => continue,
             };
@@ -300,7 +300,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         _ => return false,
     };
 
-    let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+    let effect_def = match preset_definition_registry::effect::try_get(fx.effect_type()) {
         Some(d) => d,
         None => return false,
     };
@@ -455,7 +455,7 @@ pub fn evaluate_all_envelopes(
                         continue;
                     }
                 };
-                let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+                let effect_def = match preset_definition_registry::effect::try_get(fx.effect_type()) {
                     Some(d) => d,
                     None => continue,
                 };
@@ -548,7 +548,7 @@ pub fn evaluate_all_envelopes(
                 Some(f) => f,
                 None => continue,
             };
-            let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+            let effect_def = match preset_definition_registry::effect::try_get(fx.effect_type()) {
                 Some(d) => d,
                 None => continue,
             };
@@ -615,7 +615,7 @@ pub fn evaluate_gen_param_envelopes(
         }
 
         let gen_type = gp.generator_type();
-        let gen_def = match generator_definition_registry::try_get(gen_type) {
+        let gen_def = match preset_definition_registry::generator::try_get(gen_type) {
             Some(d) => d,
             None => continue,
         };

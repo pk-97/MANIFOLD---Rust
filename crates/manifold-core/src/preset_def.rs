@@ -17,7 +17,7 @@ use ahash::AHashMap;
 
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::effects::ParamDef;
-use crate::generator_definition_registry::StringParamDef;
+use crate::preset_definition_registry::StringParamDef;
 
 /// Which kind of preset this is. The one word that carries every real
 /// effect/generator difference — skip-mode semantics, wet/dry, OSC scheme,

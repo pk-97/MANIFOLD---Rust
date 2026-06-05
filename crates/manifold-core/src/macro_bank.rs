@@ -435,7 +435,7 @@ impl MacroBank {
                     effect_type,
                     param_id,
                 } => {
-                    let Some(idx) = crate::effect_definition_registry::param_id_to_index(
+                    let Some(idx) = crate::preset_definition_registry::effect::param_id_to_index(
                         effect_type,
                         param_id.as_ref(),
                     ) else {
@@ -462,7 +462,7 @@ impl MacroBank {
                     effect_type,
                     param_id,
                 } => {
-                    let Some(idx) = crate::effect_definition_registry::param_id_to_index(
+                    let Some(idx) = crate::preset_definition_registry::effect::param_id_to_index(
                         effect_type,
                         param_id.as_ref(),
                     ) else {
@@ -483,7 +483,7 @@ impl MacroBank {
                         && let Some(gp) = layer.gen_params_mut()
                     {
                         let gen_type = gp.generator_type().clone();
-                        let Some(idx) = crate::generator_definition_registry::param_id_to_index(
+                        let Some(idx) = crate::preset_definition_registry::generator::param_id_to_index(
                             &gen_type,
                             param_id.as_ref(),
                         ) else {

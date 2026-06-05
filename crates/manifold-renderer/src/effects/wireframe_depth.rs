@@ -1629,7 +1629,7 @@ impl PostProcessEffect for WireframeDepthFX {
             return;
         }
 
-        // Read params — new 12-param layout (see effect_definition_registry.rs)
+        // Read params — new 12-param layout (see preset_definition_registry.rs)
         let wire_scale = fx
             .param_values
             .get(7)
