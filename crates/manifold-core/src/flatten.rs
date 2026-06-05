@@ -559,21 +559,30 @@ fn check_unique_interface(group: &GroupDef, group_handle: &str) -> Result<(), Fl
 // the same one the executor's step map keys on.
 
 /// Every group container in `def` (at any nesting depth) paired with the
-/// concrete inner producer of its primary texture output. One entry per group
-/// whose primary output resolves to a concrete (non-group) node; groups whose
-/// primary output is an unsupported input→output passthrough are omitted.
+/// concrete inner producer of its primary texture output, plus that output
+/// port's interface name. One entry per group whose primary output resolves to
+/// a concrete (non-group) node; groups whose primary output is an unsupported
+/// input→output passthrough are omitted.
 ///
 /// Built once at graph-build time (both the effect splice path and the
 /// generator load path) and consulted by the node-output preview: a selected
-/// collapsed group's `NodeId` maps to the producer `NodeId` here, which then
-/// resolves through the normal node→instance map to a real flattened step.
-pub fn group_output_producer_map(def: &EffectGraphDef) -> Vec<(crate::NodeId, crate::NodeId)> {
+/// collapsed group's `NodeId` maps to the producer `NodeId` here (so capture
+/// targets a real flattened step), and the port name (`forceField`,
+/// `blurredDensity`) tells the preview how to render it — a force field as a
+/// flow wheel, a density as a lift — even though the producing node is a
+/// generic blur.
+pub fn group_output_producer_map(
+    def: &EffectGraphDef,
+) -> Vec<(crate::NodeId, crate::NodeId, String)> {
     let mut out = Vec::new();
     collect_group_producers(&def.nodes, &mut out);
     out
 }
 
-fn collect_group_producers(nodes: &[EffectGraphNode], out: &mut Vec<(crate::NodeId, crate::NodeId)>) {
+fn collect_group_producers(
+    nodes: &[EffectGraphNode],
+    out: &mut Vec<(crate::NodeId, crate::NodeId, String)>,
+) {
     for node in nodes {
         let Some(group) = node.group.as_deref() else {
             continue;
@@ -581,7 +590,7 @@ fn collect_group_producers(nodes: &[EffectGraphNode], out: &mut Vec<(crate::Node
         if let Some(port) = primary_output_port(group)
             && let Some(producer) = producer_for_output(group, port)
         {
-            out.push((node.node_id.clone(), producer));
+            out.push((node.node_id.clone(), producer, port.to_string()));
         }
         // Recurse so a nested group can be previewed on its own when collapsed.
         collect_group_producers(&group.nodes, out);
@@ -1064,7 +1073,11 @@ mod tests {
         let map = group_output_producer_map(&d);
         assert_eq!(
             map,
-            vec![(crate::NodeId::new("group_sf"), crate::NodeId::new("mix_node"))],
+            vec![(
+                crate::NodeId::new("group_sf"),
+                crate::NodeId::new("mix_node"),
+                "out".to_string()
+            )],
             "selecting the group should preview its output producer (mix)"
         );
     }
@@ -1107,11 +1120,19 @@ mod tests {
         let map = group_output_producer_map(&d);
         // Both groups resolve to the concrete `mix` node behind the nesting.
         assert!(
-            map.contains(&(crate::NodeId::new("group_wrap"), crate::NodeId::new("mix_node"))),
+            map.contains(&(
+                crate::NodeId::new("group_wrap"),
+                crate::NodeId::new("mix_node"),
+                "out".to_string()
+            )),
             "outer group should resolve through the nested group to `mix`; got {map:?}"
         );
         assert!(
-            map.contains(&(crate::NodeId::new("group_inner"), crate::NodeId::new("mix_node"))),
+            map.contains(&(
+                crate::NodeId::new("group_inner"),
+                crate::NodeId::new("mix_node"),
+                "out".to_string()
+            )),
             "inner group should resolve to `mix` directly; got {map:?}"
         );
     }
@@ -1155,7 +1176,11 @@ mod tests {
         let map = group_output_producer_map(&d);
         assert_eq!(
             map,
-            vec![(crate::NodeId::new("group_g"), crate::NodeId::new("blur_node"))],
+            vec![(
+                crate::NodeId::new("group_g"),
+                crate::NodeId::new("blur_node"),
+                "tex".to_string()
+            )],
             "the Texture2D output `tex` (producer blur), not the scalar `amount`, should win"
         );
     }

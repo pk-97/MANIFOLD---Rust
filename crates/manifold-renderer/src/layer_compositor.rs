@@ -1901,6 +1901,31 @@ impl Compositor for LayerCompositor {
             })
     }
 
+    /// Encoding for this frame's previewed node. Walks the same chains as
+    /// [`Self::preview_texture`] and returns the watched chain's encoding.
+    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+        if self.preview_request.is_none() {
+            return crate::node_graph::PreviewEncoding::Color;
+        }
+        if let Some(cg) = self
+            .master_effect_chain
+            .as_ref()
+            .filter(|cg| cg.preview_texture().is_some())
+        {
+            return cg.preview_encoding();
+        }
+        for chain in self
+            .effect_chains
+            .values()
+            .chain(self.group_effect_chains.values())
+        {
+            if let Some(cg) = chain.as_ref().filter(|cg| cg.preview_texture().is_some()) {
+                return cg.preview_encoding();
+            }
+        }
+        crate::node_graph::PreviewEncoding::Color
+    }
+
     fn set_dump_request(&mut self, effect_id: Option<EffectId>) {
         self.dump_request = effect_id;
     }

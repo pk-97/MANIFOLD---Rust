@@ -119,6 +119,13 @@ pub trait Compositor: Send {
         None
     }
 
+    /// How the previewed node's output should be rendered in the editor preview
+    /// (flow wheel for a vector field, lift for a scalar, raw for colour).
+    /// Default `Color`.
+    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+        crate::node_graph::PreviewEncoding::Color
+    }
+
     /// Request a one-shot "dump every output" of effect `effect_id` on the next
     /// `render`, or clear it. Default no-op. See [`Self::dump_textures`].
     fn set_dump_request(&mut self, _effect_id: Option<EffectId>) {}

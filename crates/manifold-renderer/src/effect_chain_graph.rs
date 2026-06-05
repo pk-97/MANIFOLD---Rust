@@ -180,6 +180,11 @@ pub struct ChainGraph {
     /// with the consistent `[chain-error]` prefix so logs grep
     /// cleanly.
     errors: Vec<ChainError>,
+    /// How the currently-previewed node's output should be rendered (flow wheel
+    /// / lift / raw), derived from its descriptor + port name when
+    /// [`Self::set_preview_target`] resolves a target. `Color` when nothing on
+    /// this chain is previewed. Read by the host via [`Self::preview_encoding`].
+    preview_encoding: crate::node_graph::PreviewEncoding,
 }
 
 /// Structured error variants the chain runner produces. Every variant
@@ -324,8 +329,10 @@ struct EffectSlot {
     /// Computed once at chain build from the pre-flatten preset def via
     /// [`manifold_core::flatten::group_output_producer_map`]; consulted by
     /// [`ChainGraph::set_preview_target`] to substitute the group's primary
-    /// texture-output producer. Empty for groupless effects.
-    group_preview_map: Vec<(NodeId, NodeId)>,
+    /// texture-output producer. The third element is that output's interface
+    /// port name (`forceField`), which drives the preview encoding. Empty for
+    /// groupless effects.
+    group_preview_map: Vec<(NodeId, NodeId, String)>,
     /// Unified resolved binding list — `bindings[0..n_static]` are
     /// spec bindings hydrated via [`ResolvedBinding::from_static`];
     /// `bindings[n_static..]` are user-exposed bindings hydrated via
@@ -917,6 +924,7 @@ impl ChainGraph {
             topology_hash,
             state_store: StateStore::new(),
             errors,
+            preview_encoding: crate::node_graph::PreviewEncoding::default(),
         })
     }
 
@@ -1165,34 +1173,65 @@ impl ChainGraph {
     /// [`Self::run`]; the preserved texture is then read via
     /// [`Self::preview_texture`].
     pub fn set_preview_target(&mut self, effect_id: &EffectId, node_id: Option<&NodeId>) {
-        let target = node_id.and_then(|nid| {
+        // `(target instance, port-name override for a group output)`.
+        let resolved: Option<(NodeInstanceId, Option<String>)> = node_id.and_then(|nid| {
             self.effect_nodes
                 .iter()
                 .find(|slot| &slot.effect_id == effect_id)
                 .and_then(|slot| {
-                    let direct = slot
-                        .node_map
-                        .iter()
-                        .find(|(mapped, _)| mapped == nid)
-                        .map(|(_, instance)| *instance);
+                    // Direct node hit.
+                    if let Some((_, instance)) =
+                        slot.node_map.iter().find(|(mapped, _)| mapped == nid)
+                    {
+                        return Some((*instance, None));
+                    }
                     // A selected group container isn't in `node_map` (it
                     // flattened away); resolve it to its primary texture-output
-                    // producer and look that up instead, so plain nodes and
-                    // groups share one capture mechanism.
-                    direct.or_else(|| {
-                        slot.group_preview_map
-                            .iter()
-                            .find(|(group, _)| group == nid)
-                            .and_then(|(_, producer)| {
-                                slot.node_map
-                                    .iter()
-                                    .find(|(mapped, _)| mapped == producer)
-                                    .map(|(_, instance)| *instance)
-                            })
-                    })
+                    // producer. Carry the group's output port name so the
+                    // preview encoding follows the data, not the producer's own
+                    // (possibly generic) descriptor.
+                    slot.group_preview_map
+                        .iter()
+                        .find(|(group, _, _)| group == nid)
+                        .and_then(|(_, producer, port)| {
+                            slot.node_map
+                                .iter()
+                                .find(|(mapped, _)| mapped == producer)
+                                .map(|(_, instance)| (*instance, Some(port.clone())))
+                        })
                 })
         });
+        let (target, encoding) = match resolved {
+            Some((instance, port_override)) => (
+                Some(instance),
+                self.encoding_for_instance(instance, port_override.as_deref()),
+            ),
+            None => (None, crate::node_graph::PreviewEncoding::Color),
+        };
+        self.preview_encoding = encoding;
         self.executor.set_preview_target(target);
+    }
+
+    /// Derive the preview encoding for a runtime node off the live graph: its
+    /// `type_id` and output port name (or `port_override` for a group output).
+    fn encoding_for_instance(
+        &self,
+        inst: NodeInstanceId,
+        port_override: Option<&str>,
+    ) -> crate::node_graph::PreviewEncoding {
+        let Some(n) = self.graph.get_node(inst) else {
+            return crate::node_graph::PreviewEncoding::Color;
+        };
+        let port = port_override
+            .or_else(|| n.node.outputs().first().map(|p| p.name))
+            .unwrap_or("out");
+        crate::node_graph::PreviewEncoding::derive(n.node.type_id().as_str(), port)
+    }
+
+    /// How the previewed node's output should be rendered (flow wheel / lift /
+    /// raw). `Color` when this chain holds no watched node.
+    pub fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+        self.preview_encoding
     }
 
     /// Clear any preview capture on this chain. Called each frame for chains
@@ -1200,6 +1239,7 @@ impl ChainGraph {
     /// texture pinned.
     pub fn clear_preview_target(&mut self) {
         self.executor.set_preview_target(None);
+        self.preview_encoding = crate::node_graph::PreviewEncoding::Color;
     }
 
     /// The preview target's captured output texture from the most recent

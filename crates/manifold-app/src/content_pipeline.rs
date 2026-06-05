@@ -151,14 +151,19 @@ pub struct ContentPipeline {
     /// Linear sampler for preview downscaling.
     #[cfg(target_os = "macos")]
     preview_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Auto-gain blit for the *node-output* preview only. Applies a fixed
-    /// per-channel signed asinh exposure curve so dark/signed intermediates —
-    /// force fields, normals, depth, flow — are legible, with no per-frame
-    /// statistics (so it never flickers). The workspace preview keeps the plain
-    /// `preview_pipeline`; only node previews use this.
+    /// Scalar-field blit for the node-output preview: a fixed per-channel
+    /// black-floor asinh lift (0 stays black, dark values raised), with no
+    /// per-frame statistics so it never flickers. Used for density / mask /
+    /// depth and as the safe default. The workspace preview keeps the plain
+    /// `preview_pipeline`; only node previews use these.
     #[cfg(target_os = "macos")]
-    node_preview_normalize_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    /// Whether the node-output preview applies auto-gain/normalization.
+    node_preview_scalar_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Vector-field blit: the RG channels are read as a 2D vector and shown as
+    /// the standard optical-flow colour wheel (direction → hue, magnitude →
+    /// brightness). Used for force fields, flow, gradients, displacement.
+    #[cfg(target_os = "macos")]
+    node_preview_vector_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Whether the node-output preview applies its smart (semantic) encoding.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
     node_preview_normalize: bool,
@@ -231,7 +236,9 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             preview_sampler: None,
             #[cfg(target_os = "macos")]
-            node_preview_normalize_pipeline: None,
+            node_preview_scalar_pipeline: None,
+            #[cfg(target_os = "macos")]
+            node_preview_vector_pipeline: None,
             node_preview_normalize: true,
             #[cfg(target_os = "macos")]
             recording_session: None,
@@ -294,19 +301,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             mag_filter: manifold_gpu::GpuFilterMode::Linear,
             ..Default::default()
         }));
-        // Node-preview auto-gain blit: same fullscreen downscale as above, plus
-        // a FIXED per-channel signed asinh curve so dark/signed intermediates
-        // (force fields, normals, flow, depth) are legible. Deliberately uses
-        // NO per-frame statistics — a data-derived window flickers and crushes
-        // to black on outliers. asinh is ~linear near 0 (faithful for small
-        // values) and log-compressed far out (no clipping); it's odd, so 0 maps
-        // to mid-grey, + brighter, - darker, with hue preserved per channel.
-        // `K` is the linear→log knee: values around `K` sit in the revealing
-        // part of the curve. ~0.05 favors sim-scale data; larger keeps ordinary
-        // images more natural. Stable across every frame and every node.
-        let node_preview_shader = r#"
-@group(0) @binding(0) var t_source: texture_2d<f32>;
-@group(0) @binding(1) var s_source: sampler;
+        // Node-preview semantic encodings. Both share the fullscreen-triangle
+        // vertex stage above and use NO per-frame statistics, so they're stable
+        // across frames and outliers (a data-derived window flickers and
+        // crushes to black). `asinh` is the shared lift curve: ~linear near 0
+        // (faithful for small values), log-compressed far out (no clipping).
+        // K = 0.05 (inv_k = 20) sets the linear→log knee around sim-scale data.
+        let preview_vs = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -320,33 +321,70 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
 }
-// asinh(x) = log(x + sqrt(x*x + 1)); valid for negative x too (odd function).
+// asinh(x) = log(x + sqrt(x*x + 1)); arg is always > 0, valid for negative x.
 fn asinh_approx(x: f32) -> f32 {
     return log(x + sqrt(x * x + 1.0));
 }
-fn signed_exposure(c: f32, inv_k: f32, norm: f32) -> f32 {
-    return 0.5 + 0.5 * asinh_approx(c * inv_k) / norm;
-}
+"#;
+
+        // Scalar lift: 0 stays black (clamp negatives), dark values raised.
+        let scalar_shader = format!(
+            "{preview_vs}
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+fn lift(c: f32, inv_k: f32, norm: f32) -> f32 {{
+    return asinh_approx(max(c, 0.0) * inv_k) / norm;
+}}
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     let c = textureSample(t_source, s_source, in.uv).rgb;
-    let inv_k = 20.0;                    // 1 / K, K = 0.05 (linear→log knee)
-    let norm = asinh_approx(inv_k);      // so c = +/-1 maps to white / black
+    let inv_k = 20.0;
+    let norm = asinh_approx(inv_k);     // so c = 1 maps to white
     let rgb = vec3<f32>(
-        signed_exposure(c.r, inv_k, norm),
-        signed_exposure(c.g, inv_k, norm),
-        signed_exposure(c.b, inv_k, norm),
+        lift(c.r, inv_k, norm),
+        lift(c.g, inv_k, norm),
+        lift(c.b, inv_k, norm),
     );
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
-}
-"#;
-        self.node_preview_normalize_pipeline = Some(device.create_render_pipeline(
-            node_preview_shader,
+}}"
+        );
+        self.node_preview_scalar_pipeline = Some(device.create_render_pipeline(
+            &scalar_shader,
             "vs_main",
             "fs_main",
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             None,
-            "Node Preview Auto-Gain Blit",
+            "Node Preview Scalar Lift",
+        ));
+
+        // Vector field: RG → 2D vector → optical-flow colour wheel
+        // (direction = hue, magnitude = brightness). Zero vector → black.
+        let vector_shader = format!(
+            "{preview_vs}
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+fn hsv2rgb(h: f32, s: f32, v: f32) -> vec3<f32> {{
+    let p = abs(fract(vec3<f32>(h) + vec3<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return v * mix(vec3<f32>(1.0), clamp(p - 1.0, vec3<f32>(0.0), vec3<f32>(1.0)), s);
+}}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+    let v = textureSample(t_source, s_source, in.uv).rg;
+    let two_pi = 6.2831853;
+    let hue = atan2(v.g, v.r) / two_pi + 0.5;
+    let inv_k = 20.0;
+    let norm = asinh_approx(inv_k);
+    let val = clamp(asinh_approx(length(v) * inv_k) / norm, 0.0, 1.0);
+    return vec4<f32>(hsv2rgb(hue, 1.0, val), 1.0);
+}}"
+        );
+        self.node_preview_vector_pipeline = Some(device.create_render_pipeline(
+            &vector_shader,
+            "vs_main",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
+            "Node Preview Vector Wheel",
         ));
         self.native_device = Some(device);
         self.native_event = Some(event);
@@ -722,17 +760,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // or clear to black when nothing was captured (non-texture node).
             #[cfg(target_os = "macos")]
             if let Some((layer_id, _)) = &self.node_preview_generator {
-                let node_tex = renderers
+                let gen_ref = renderers
                     .iter()
-                    .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
-                    .and_then(|gr| gr.preview_texture(layer_id));
+                    .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
+                let node_tex = gen_ref.and_then(|gr| gr.preview_texture(layer_id));
+                let encoding = gen_ref
+                    .map(|gr| gr.preview_encoding(layer_id))
+                    .unwrap_or_default();
                 if let Some(node_tex) = node_tex {
                     Self::update_node_preview(
                         &mut gen_enc,
                         node_tex,
                         self.node_preview_textures[self.write_surface_index].as_ref(),
                         self.node_preview_normalize,
-                        self.node_preview_normalize_pipeline.as_ref(),
+                        encoding,
+                        self.node_preview_scalar_pipeline.as_ref(),
+                        self.node_preview_vector_pipeline.as_ref(),
                         self.preview_pipeline.as_ref(),
                         self.preview_sampler.as_ref(),
                     );
@@ -948,12 +991,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // has no Texture2D output), clear the surface to black so the pane
             // reads as "no image output" rather than showing a stale frame.
             if let Some(node_tex) = self.compositor.preview_texture() {
+                let encoding = self.compositor.preview_encoding();
                 Self::update_node_preview(
                     &mut native_enc,
                     node_tex,
                     self.node_preview_textures[self.write_surface_index].as_ref(),
                     self.node_preview_normalize,
-                    self.node_preview_normalize_pipeline.as_ref(),
+                    encoding,
+                    self.node_preview_scalar_pipeline.as_ref(),
+                    self.node_preview_vector_pipeline.as_ref(),
                     self.preview_pipeline.as_ref(),
                     self.preview_sampler.as_ref(),
                 );
@@ -1292,29 +1338,41 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// Downscale the previewed node's texture into the node-output preview
-    /// surface. When `normalize` is on (the default), a fixed per-channel
-    /// signed asinh exposure curve lifts dark/signed intermediates (force
-    /// fields, normals, depth, flow) into a legible range — no per-frame
-    /// statistics, so it's stable across frames and outliers. Otherwise it's
+    /// surface. When `smart` is on (the default), the texture is rendered with
+    /// the semantic `encoding` for that node — a vector field as an optical-flow
+    /// colour wheel, a scalar field as a black-floor lift, a colour image raw —
+    /// so dark/signed intermediates are legible without flicker. When off, it's
     /// the same raw blit the workspace preview uses. Only the node preview pane
-    /// goes through here — the live render and workspace preview are untouched.
+    /// goes through here; the live render and workspace preview are untouched.
     #[cfg(target_os = "macos")]
     #[allow(clippy::too_many_arguments)]
     fn update_node_preview(
         enc: &mut manifold_gpu::GpuEncoder,
         source: &manifold_gpu::GpuTexture,
         target: Option<&manifold_gpu::GpuTexture>,
-        normalize: bool,
-        normalize_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
+        smart: bool,
+        encoding: manifold_renderer::node_graph::PreviewEncoding,
+        scalar_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
+        vector_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
         raw_pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
         sampler: Option<&manifold_gpu::GpuSampler>,
     ) {
+        use manifold_renderer::node_graph::PreviewEncoding;
         let Some(target) = target else {
             return;
         };
-        if normalize
-            && let (Some(pipeline), Some(sampler)) = (normalize_pipeline, sampler)
-        {
+        // Pick the encoding pipeline. `Color` (and smart-off) fall through to
+        // the raw blit; a missing pipeline also falls through.
+        let pipeline = if smart {
+            match encoding {
+                PreviewEncoding::ScalarLift => scalar_pipeline,
+                PreviewEncoding::VectorField => vector_pipeline,
+                PreviewEncoding::Color => None,
+            }
+        } else {
+            None
+        };
+        if let (Some(pipeline), Some(sampler)) = (pipeline, sampler) {
             enc.draw_fullscreen(
                 pipeline,
                 target,
@@ -1330,7 +1388,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 ],
                 true,
                 true,
-                "Node Preview Auto-Gain Blit",
+                "Node Preview Encoding Blit",
             );
             return;
         }

@@ -77,4 +77,12 @@ pub trait Generator: Send {
     fn preview_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
         None
     }
+
+    /// How the currently-previewed node's output should be rendered in the
+    /// editor preview (flow wheel for a vector field, lift for a scalar, raw
+    /// for colour). Default `Color`. Set when [`Self::set_preview_node`] resolves
+    /// a target.
+    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+        crate::node_graph::PreviewEncoding::Color
+    }
 }

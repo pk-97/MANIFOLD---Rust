@@ -184,6 +184,15 @@ impl GeneratorRenderer {
             .preview_texture()
     }
 
+    /// How the watched generator's previewed node should be rendered (flow
+    /// wheel / lift / raw). `Color` if the layer has no generator.
+    pub fn preview_encoding(&self, layer_id: &LayerId) -> crate::node_graph::PreviewEncoding {
+        self.layer_generators
+            .get(layer_id)
+            .map(|s| s.generator.preview_encoding())
+            .unwrap_or_default()
+    }
+
     pub fn set_device(&mut self, device: &GpuDevice) {
         self.device_ptr = device as *const GpuDevice;
     }

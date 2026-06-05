@@ -20,6 +20,7 @@ pub mod catalog_gen;
 mod chain_spec;
 pub mod composites;
 pub mod descriptor;
+pub mod preview_encoding;
 mod effect_node;
 mod execution;
 mod execution_plan;
@@ -94,6 +95,7 @@ pub use ports::{
     std430_stride, std430_stride_and_align,
 };
 pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
+pub use preview_encoding::PreviewEncoding;
 pub use param_doc::{ParamDoc, tooltip_for};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{

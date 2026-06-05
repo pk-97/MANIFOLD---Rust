@@ -252,8 +252,15 @@ pub struct JsonGraphGenerator {
     /// pre-flatten document via
     /// [`manifold_core::flatten::group_output_producer_map`]; consulted by
     /// [`Generator::set_preview_node`] to substitute the group's primary
-    /// texture-output producer. Empty for groupless presets.
-    group_preview_map: Vec<(manifold_core::NodeId, manifold_core::NodeId)>,
+    /// texture-output producer. The third element is that output's interface
+    /// port name (`forceField`), which drives the preview encoding. Empty for
+    /// groupless presets.
+    group_preview_map: Vec<(manifold_core::NodeId, manifold_core::NodeId, String)>,
+    /// How the currently-previewed node's output should be rendered, derived
+    /// from its descriptor + port name when the preview target is set. Read by
+    /// the host so the node-preview blit picks the right encoding (flow wheel /
+    /// lift / raw). `Color` when nothing is previewed.
+    preview_encoding: crate::node_graph::PreviewEncoding,
 }
 
 /// One resolved String outer-card → inner-node binding. The String
@@ -525,6 +532,7 @@ impl JsonGraphGenerator {
             binding_specs,
             last_note_version: u32::MAX,
             group_preview_map,
+            preview_encoding: crate::node_graph::PreviewEncoding::default(),
         };
         g.apply_string_defaults();
         Ok(g)
@@ -856,6 +864,23 @@ impl JsonGraphGenerator {
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
     }
+
+    /// Derive the preview encoding for a runtime node off the live graph: its
+    /// `type_id` and output port name (or `port_override` for a group's
+    /// interface output). `Color` if the node has vanished.
+    fn encoding_for_instance(
+        &self,
+        inst: NodeInstanceId,
+        port_override: Option<&str>,
+    ) -> crate::node_graph::PreviewEncoding {
+        let Some(n) = self.graph.get_node(inst) else {
+            return crate::node_graph::PreviewEncoding::Color;
+        };
+        let port = port_override
+            .or_else(|| n.node.outputs().first().map(|p| p.name))
+            .unwrap_or("out");
+        crate::node_graph::PreviewEncoding::derive(n.node.type_id().as_str(), port)
+    }
 }
 
 impl Generator for JsonGraphGenerator {
@@ -873,15 +898,31 @@ impl Generator for JsonGraphGenerator {
     /// map and preview the group's primary texture-output producer instead.
     /// Plain nodes and groups thus share one capture mechanism.
     fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
+        let mut encoding = crate::node_graph::PreviewEncoding::Color;
         let target = node_id.and_then(|nid| {
-            self.graph.instance_by_node_id(nid).or_else(|| {
-                self.group_preview_map
-                    .iter()
-                    .find(|(group, _)| group == nid)
-                    .and_then(|(_, producer)| self.graph.instance_by_node_id(producer))
-            })
+            // Direct node hit: encoding from the node itself.
+            if let Some(inst) = self.graph.instance_by_node_id(nid) {
+                encoding = self.encoding_for_instance(inst, None);
+                return Some(inst);
+            }
+            // Group container: capture its producer, but derive the encoding
+            // from the group's output port name (`forceField`) — the producer
+            // may be a generic blur whose own descriptor would mislead.
+            if let Some((_, producer, port)) =
+                self.group_preview_map.iter().find(|(group, _, _)| group == nid)
+                && let Some(inst) = self.graph.instance_by_node_id(producer)
+            {
+                encoding = self.encoding_for_instance(inst, Some(port));
+                return Some(inst);
+            }
+            None
         });
+        self.preview_encoding = encoding;
         self.executor.set_preview_target(target);
+    }
+
+    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+        self.preview_encoding
     }
 
     /// The preview target's captured output texture from the most recent
@@ -1860,16 +1901,22 @@ mod tests {
 
         // The group → producer map bridges it to `field_blur_v`, which IS a
         // real flattened node the executor's step map keys on.
-        let producer = g
+        let (producer, port) = g
             .group_preview_map
             .iter()
-            .find(|(group, _)| *group == manifold_core::NodeId::new("Flow Field"))
-            .map(|(_, producer)| producer.clone())
+            .find(|(group, _, _)| *group == manifold_core::NodeId::new("Flow Field"))
+            .map(|(_, producer, port)| (producer.clone(), port.clone()))
             .expect("Flow Field group must be in the preview map");
         assert_eq!(
             producer,
             manifold_core::NodeId::new("field_blur_v"),
             "Flow Field's forceField output is produced by field_blur_v"
+        );
+        assert_eq!(port, "forceField", "the group's primary output port name");
+        // And that port name resolves to the vector-field (flow-wheel) encoding.
+        assert_eq!(
+            crate::node_graph::PreviewEncoding::derive("node.gaussian_blur", &port),
+            crate::node_graph::PreviewEncoding::VectorField,
         );
         assert!(
             g.graph.instance_by_node_id(&producer).is_some(),

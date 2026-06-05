@@ -395,7 +395,7 @@ impl GraphEditorPanel {
                 y,
                 (viewport.x + viewport.width - PADDING - label_x).max(10.0),
                 ROW_H,
-                "Auto-gain preview",
+                "Smart preview",
                 UIStyle {
                     text_color: color::TEXT_WHITE_C32,
                     font_size: FONT_SIZE,
