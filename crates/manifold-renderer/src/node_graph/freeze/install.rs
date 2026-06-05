@@ -82,6 +82,42 @@ pub fn freeze_enabled() -> bool {
     })
 }
 
+/// Which kind of card the fusion gate is being asked about. Carries the type
+/// id so [`should_render_fused`] can consult the matching per-device perf
+/// verdict — `should_fuse` for effects, `should_fuse_generator` for generators.
+pub enum FuseTarget<'a> {
+    Effect(&'a EffectTypeId),
+    Generator(&'a GeneratorTypeId),
+}
+
+/// The single home for the "render this card through its fused kernel?"
+/// decision, shared by the effect chain build ([`crate::effect_chain_graph`])
+/// and the generator registry ([`crate::generators::registry`]). Both paths
+/// previously hand-maintained the same boolean shape; folding it here keeps the
+/// watched-target override from drifting into a third copy.
+///
+/// The decision is: fuse only when fusion is enabled this process, the instance
+/// isn't carrying a live editing override (its per-card graph is the canonical
+/// one), it isn't the *watched* target (open in the graph editor — kept unfused
+/// so per-node output preview can sample inner-node textures and edits render
+/// live), and the device's perf gate kept the fused kernel for this type.
+///
+/// What stays per-path and is deliberately *not* unified: how the fused variant
+/// is loaded (an effect `LoadedPresetView` spliced into the chain vs a generator
+/// `EffectGraphDef` through `from_def`). This function is upstream of the
+/// verdict logic — it only reads the existing verdicts, never recomputes them.
+pub fn should_render_fused(target: FuseTarget<'_>, has_override: bool, is_watched: bool) -> bool {
+    if !freeze_enabled() || has_override || is_watched {
+        return false;
+    }
+    match target {
+        FuseTarget::Effect(t) => crate::node_graph::freeze::perf_gate::should_fuse(t),
+        FuseTarget::Generator(t) => {
+            crate::node_graph::freeze::perf_gate::should_fuse_generator(t)
+        }
+    }
+}
+
 /// Look up the fused [`LoadedPresetView`] for an effect type, building the whole
 /// map on first call and caching `&'static` for the process lifetime. Returns
 /// `None` for any effect whose canonical graph has no fusable region (anything
@@ -632,6 +668,29 @@ mod tests {
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    #[test]
+    fn shared_gate_vetoes_fusion_for_override_and_watched_targets() {
+        // The single home for the fuse-or-not decision. Both vetoes (a live
+        // per-card override, and the watched open-in-editor target) must force
+        // unfused regardless of the perf verdict — they short-circuit before it.
+        // The effect and generator arms share this exact logic so the watched
+        // override can't drift between the two render paths.
+        let ty = EffectTypeId::new("ColorGrade");
+        // Neither veto: fuses (freeze is on in this test binary; untuned perf is
+        // optimistic, so the verdict is `true`).
+        assert!(should_render_fused(FuseTarget::Effect(&ty), false, false));
+        // A per-card graph override is the live editing surface → never fused.
+        assert!(!should_render_fused(FuseTarget::Effect(&ty), true, false));
+        // Watched (open in the editor) → never fused, so per-node preview can
+        // sample inner-node textures and edits render live.
+        assert!(!should_render_fused(FuseTarget::Effect(&ty), false, true));
+
+        // Same contract on the generator arm — proves it's one decision, not two.
+        let gty = GeneratorTypeId::new("DigitalPlants");
+        assert!(!should_render_fused(FuseTarget::Generator(&gty), false, true));
+        assert!(!should_render_fused(FuseTarget::Generator(&gty), true, false));
     }
 
     fn colorgrade_def() -> EffectGraphDef {

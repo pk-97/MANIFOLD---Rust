@@ -94,7 +94,9 @@ impl GeneratorRegistry {
         width: u32,
         height: u32,
     ) -> Option<Box<dyn Generator>> {
-        self.create_with_override(device, gen_type, None, width, height)
+        // No override, no watch context (perf-gate tuning / tests / non-editor
+        // call sites) — fuse normally per the device verdict.
+        self.create_with_override(device, gen_type, None, width, height, false)
     }
 
     /// Same as [`Self::create`] but routes a per-layer
@@ -119,6 +121,7 @@ impl GeneratorRegistry {
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         width: u32,
         height: u32,
+        is_watched: bool,
     ) -> Option<Box<dyn Generator>> {
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -155,16 +158,21 @@ impl GeneratorRegistry {
         }
 
         // Fused bundled path: when the freeze compiler produced a fused def for
-        // this generator AND the perf gate kept it (never-worse on this device)
-        // AND fusion is enabled, render through the fused def. It loads through the
-        // SAME `from_def` path as the unfused preset — only the def changed (fused
-        // kernels + bindings retargeted onto them), so modulation keeps flowing.
-        // The override path above is intentionally NOT fused: a per-layer graph
-        // edit renders unfused so editing stays live (mirrors the effect rule).
-        if crate::node_graph::freeze::install::freeze_enabled()
-            && crate::node_graph::freeze::perf_gate::should_fuse_generator(gen_type)
-            && let Some(fused_def) =
-                crate::node_graph::freeze::install::fused_generator_def_by_id(gen_type)
+        // this generator AND the shared gate says fuse, render through the fused
+        // def. It loads through the SAME `from_def` path as the unfused preset —
+        // only the def changed (fused kernels + bindings retargeted onto them),
+        // so modulation keeps flowing. The gate refuses to fuse when this layer
+        // carries a per-layer override (the early-return above already handled
+        // that, so `has_override = false` here) or is the watched (open in the
+        // editor) target — kept unfused so per-node preview can sample inner-node
+        // textures and edits render live. Same decision as the effect rule, via
+        // the one shared `should_render_fused`.
+        if crate::node_graph::freeze::install::should_render_fused(
+            crate::node_graph::freeze::install::FuseTarget::Generator(gen_type),
+            override_def.is_some(),
+            is_watched,
+        ) && let Some(fused_def) =
+            crate::node_graph::freeze::install::fused_generator_def_by_id(gen_type)
         {
             match JsonGraphGenerator::from_def_with_device(
                 fused_def.clone(),

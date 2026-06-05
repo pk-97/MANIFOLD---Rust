@@ -155,7 +155,7 @@ pub fn dispatch_chain<'a>(
 
     let needs_rebuild = match cache.as_ref() {
         None => true,
-        Some(cg) => !cg.is_compatible(effects, groups, ctx.width, ctx.height),
+        Some(cg) => !cg.is_compatible(effects, groups, ctx.width, ctx.height, preview_effect),
     };
     if needs_rebuild {
         if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {

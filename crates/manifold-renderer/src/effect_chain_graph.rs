@@ -553,20 +553,24 @@ impl ChainGraph {
             // straight through to the canonical view unchanged. The fused view
             // keeps the same outer-card params + skip mode, so every line below
             // (splice, outer_param_index, binding resolution) is shape-identical.
-            let view = if crate::node_graph::freeze::install::freeze_enabled()
-                && fx.graph.is_none()
-                && preview_effect != Some(&fx.id)
-            {
-                // Use the fused view only when (a) one exists and (b) the perf
-                // gate's measured verdict says fusion actually paid off on this
-                // device. The gate can only veto, never force — so if fusion
-                // measured slower (or tuning hasn't run), this falls back to the
-                // known-good unfused path and a frame can never be slower than
-                // baseline (design §12.3 step 6).
+            // The fuse-or-not decision (freeze toggle + per-card override +
+            // watched-target override + the device's perf verdict) lives in one
+            // shared place so the watched override can't drift between the
+            // effect and generator copies. `has_override = fx.graph.is_some()`
+            // (a per-instance graph edit renders unfused so drilling in stays
+            // exact); `is_watched` keeps the effect open in the editor unfused
+            // so node-output preview can sample inner-node textures and edits
+            // render live. See `install::should_render_fused`.
+            let view = if crate::node_graph::freeze::install::should_render_fused(
+                crate::node_graph::freeze::install::FuseTarget::Effect(fx.effect_type()),
+                fx.graph.is_some(),
+                preview_effect == Some(&fx.id),
+            ) {
+                // `fused_view_by_id` returns `None` for any effect that isn't a
+                // single whole-card fusable region — those fall straight through
+                // to the canonical view unchanged.
                 match crate::node_graph::freeze::install::fused_view_by_id(fx.effect_type()) {
-                    Some(fused)
-                        if crate::node_graph::freeze::perf_gate::should_fuse(fx.effect_type()) =>
-                    {
+                    Some(fused) => {
                         // Step-7 attribution (minimal): one line per chain
                         // rebuild so the operator can confirm a card is actually
                         // rendering through the fused kernel. Rebuilds are
@@ -578,7 +582,7 @@ impl ChainGraph {
                         );
                         fused
                     }
-                    _ => base_view,
+                    None => base_view,
                 }
             } else {
                 base_view
@@ -891,7 +895,7 @@ impl ChainGraph {
             return None;
         }
 
-        let topology_hash = compute_topology_hash(effects, groups, width, height);
+        let topology_hash = compute_topology_hash(effects, groups, width, height, preview_effect);
 
         Some(Self {
             graph,
@@ -925,10 +929,12 @@ impl ChainGraph {
         groups: &[EffectGroup],
         width: u32,
         height: u32,
+        preview_effect: Option<&EffectId>,
     ) -> bool {
         self.width == width
             && self.height == height
-            && self.topology_hash == compute_topology_hash(effects, groups, width, height)
+            && self.topology_hash
+                == compute_topology_hash(effects, groups, width, height, preview_effect)
     }
 
     /// Run the cached chain graph against the upstream input texture.
@@ -1339,6 +1345,7 @@ fn compute_topology_hash(
     groups: &[EffectGroup],
     width: u32,
     height: u32,
+    preview_effect: Option<&EffectId>,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
@@ -1346,6 +1353,13 @@ fn compute_topology_hash(
         fx.id.as_str().hash(&mut h);
         fx.effect_type().as_str().hash(&mut h);
         fx.enabled.hash(&mut h);
+        // Watched (open-in-editor) target: folded into the rebuild key so
+        // opening or closing the editor rebuilds exactly the chain holding this
+        // effect, flipping it fused ⇄ unfused (the gate at `should_render_fused`
+        // only re-runs on rebuild). Membership-local — `preview_effect` that
+        // isn't among these effects hashes `false` for every one, so unrelated
+        // chains are untouched and don't churn when the editor opens elsewhere.
+        (preview_effect == Some(&fx.id)).hash(&mut h);
         match fx.group_id.as_ref() {
             Some(g) => g.as_str().hash(&mut h),
             None => "".hash(&mut h),
@@ -1774,6 +1788,34 @@ mod topology_hash_tests {
     }
 
     #[test]
+    fn hash_changes_when_effect_becomes_the_watched_preview_target() {
+        // Opening the graph editor on an effect must rebuild the chain holding
+        // it so it flips fused → unfused (per-node preview + live edits). The
+        // gate at `should_render_fused` only re-runs on rebuild, so the watched
+        // flag has to move the topology hash. Membership-local: a `preview_effect`
+        // that isn't in the chain leaves the hash unchanged (no churn elsewhere).
+        let fx = make_default(EffectTypeId::COLOR_GRADE);
+        let other = make_default(EffectTypeId::VORONOI_PRISM);
+
+        let unwatched = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+        let watched = compute_topology_hash(&[fx.clone()], &[], 256, 256, Some(&fx.id));
+        assert_ne!(
+            unwatched, watched,
+            "topology hash must change when an effect becomes the watched target \
+             — otherwise opening its editor never rebuilds it unfused.",
+        );
+
+        // A watch on an effect NOT in this chain must not perturb the hash.
+        let watch_elsewhere =
+            compute_topology_hash(&[fx.clone()], &[], 256, 256, Some(&other.id));
+        assert_eq!(
+            unwatched, watch_elsewhere,
+            "watching an effect absent from this chain must leave its hash \
+             unchanged — unrelated chains must not churn when the editor opens.",
+        );
+    }
+
+    #[test]
     fn hash_changes_when_skip_predicate_flips() {
         // Dragging an effect's `amount` slider across 0 must change
         // the topology hash so the chain rebuilds — without that, the
@@ -1787,10 +1829,10 @@ mod topology_hash_tests {
         let mut fx = make_default(EffectTypeId::VORONOI_PRISM);
         fx.set_base_param(0, 0.0);
 
-        let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256);
+        let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
 
         fx.set_base_param(0, 0.5);
-        let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256);
+        let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256, None);
 
         assert_ne!(
             hash_at_zero, hash_at_half,
@@ -1814,7 +1856,7 @@ mod topology_hash_tests {
         let mut fx = make_default(EffectTypeId::MIRROR); // `amount` default = 1.0, so present in chain by default.
         assert!(fx.enabled, "EffectInstance::new defaults enabled = true");
 
-        let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256);
+        let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
         let cg_on = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
             .expect("Mirror chain builds at enabled = true");
         assert_eq!(
@@ -1824,7 +1866,7 @@ mod topology_hash_tests {
         );
 
         fx.enabled = false;
-        let hash_off = compute_topology_hash(&[fx.clone()], &[], 256, 256);
+        let hash_off = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
         assert_ne!(
             hash_on, hash_off,
             "Toggling `enabled` MUST change the topology hash — otherwise the \

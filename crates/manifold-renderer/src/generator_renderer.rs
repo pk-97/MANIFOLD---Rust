@@ -59,6 +59,11 @@ struct LayerGeneratorState {
     merged_string_params: std::collections::BTreeMap<String, String>,
     /// True when merged_string_params needs to be rebuilt.
     string_params_dirty: bool,
+    /// Whether this generator was built unfused because its layer was the
+    /// watched (open-in-editor) target. Compared against the live watch state in
+    /// the rebuild sweeps so opening/closing the editor flips the generator
+    /// fused ⇄ unfused — the registry's fuse gate only re-runs on rebuild.
+    built_watched: bool,
 }
 
 /// GPU-side clip renderer for generators.
@@ -88,6 +93,13 @@ pub struct GeneratorRenderer {
     uniform_arena: UniformArena,
     /// Cached data_version — layer_index refresh scan only runs when this changes.
     last_data_version: u64,
+    /// The layer whose generator is currently open in the graph editor (watched),
+    /// or `None`. Set each frame by [`Self::set_preview_node`] / cleared by
+    /// [`Self::clear_preview`]. A watched generator renders *unfused* so the
+    /// node-output preview can sample inner-node textures and edits land live;
+    /// the rebuild sweeps below flip the watched layer's generator fused ⇄ unfused
+    /// when this changes (mirrors the effect chain's `preview_effect` rebuild key).
+    preview_layer: Option<LayerId>,
 }
 
 // Safety: device_ptr points to GpuDevice on the content thread.
@@ -127,6 +139,7 @@ impl GeneratorRenderer {
             render_info_scratch: Vec::with_capacity(16),
             uniform_arena,
             last_data_version: u64::MAX, // force scan on first frame
+            preview_layer: None,
         }
     }
 
@@ -142,6 +155,12 @@ impl GeneratorRenderer {
         layer_id: &LayerId,
         node_id: Option<&manifold_core::NodeId>,
     ) {
+        // Record the watched layer so the next `render_all` rebuild sweep keeps
+        // its generator unfused (per-node textures only exist on the unfused
+        // path). Cheap clone; only changes when the editor opens/closes/retargets.
+        if self.preview_layer.as_ref() != Some(layer_id) {
+            self.preview_layer = Some(layer_id.clone());
+        }
         for (lid, state) in self.layer_generators.iter_mut() {
             let target = if lid == layer_id { node_id } else { None };
             state.generator.set_preview_node(target);
@@ -150,6 +169,7 @@ impl GeneratorRenderer {
 
     /// Clear preview capture on every layer's generator (no preview active).
     pub fn clear_preview(&mut self) {
+        self.preview_layer = None;
         for state in self.layer_generators.values_mut() {
             state.generator.set_preview_node(None);
         }
@@ -206,12 +226,14 @@ impl GeneratorRenderer {
         // initial bundled-preset path from a v0 override.
         let current_override_version: Option<u32> =
             override_def.map(|_| override_version);
+        let is_watched_now = self.preview_layer.as_ref() == Some(&layer_id);
         let needs_create = self
             .layer_generators
             .get(&layer_id)
             .is_none_or(|ls| {
                 ls.generator_type != gen_type
                     || ls.override_version != current_override_version
+                    || ls.built_watched != is_watched_now
             });
 
         if needs_create {
@@ -350,10 +372,13 @@ impl GeneratorRenderer {
             };
             let current_override_version: Option<u32> =
                 layer.generator_graph.as_ref().map(|_| layer.generator_graph_version);
-            let needs_rebuild = self
-                .layer_generators
-                .get(layer_id)
-                .is_some_and(|ls| ls.override_version != current_override_version);
+            // Rebuild on a graph-editor edit (override version bump) OR when the
+            // layer's watched state flipped (editor opened/closed on it) — the
+            // latter swaps the generator fused ⇄ unfused so preview/edits work.
+            let is_watched_now = self.preview_layer.as_ref() == Some(layer_id);
+            let needs_rebuild = self.layer_generators.get(layer_id).is_some_and(|ls| {
+                ls.override_version != current_override_version || ls.built_watched != is_watched_now
+            });
             if !needs_rebuild {
                 continue;
             }
@@ -639,12 +664,17 @@ impl GeneratorRenderer {
         trigger_count: u32,
         layer_string_defaults: std::collections::BTreeMap<String, String>,
     ) -> bool {
+        // A layer open in the graph editor renders unfused (per-node preview +
+        // live edits). The registry's fuse gate consults this; the rebuild
+        // sweeps consult `built_watched` to re-instantiate when it toggles.
+        let is_watched = self.preview_layer.as_ref() == Some(&layer_id);
         let Some(generator) = self.registry.create_with_override(
             self.device(),
             &gen_type,
             override_def,
             self.width,
             self.height,
+            is_watched,
         ) else {
             return false;
         };
@@ -658,6 +688,7 @@ impl GeneratorRenderer {
                 layer_string_defaults,
                 merged_string_params: std::collections::BTreeMap::new(),
                 string_params_dirty: true,
+                built_watched: is_watched,
             },
         );
         // Mark every active clip on this layer for a clear before the
