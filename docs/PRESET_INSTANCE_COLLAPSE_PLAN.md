@@ -40,6 +40,33 @@ done.
 
 ---
 
+## ⚠️ DEFERRED — Phase 4 UI + commands (DO NOT FORGET, must land before this plan is "done")
+
+Phase 4's headless-testable **core** landed (4a storage, 4b catalog-overlay
+resolution, 4c fork primitive). The **user-facing layer was deferred** so the
+collapse could flow into Phase 5 (which consumes the core and naturally pulls in
+the edit-routing). These MUST be built before Phase 4 — and the whole plan — is
+complete:
+
+- [ ] **Undoable `ForkPresetCommand`** (manifold-editing) — wraps
+      `Project::fork_preset` so a fork goes through the undo stack like every
+      other mutation. (Phase 5's auto-fork-on-edit will use it too.)
+- [ ] **Export / import a project preset** — write an `EmbeddedPreset.def` to a
+      standalone `.json` (the shareable file); import a `.json` into
+      `Project.embedded_presets`. io fns + the file-dialog wiring.
+- [ ] **UI** (needs the running app, building blind):
+  - [ ] Picker lists project-embedded presets alongside stock/user.
+  - [ ] Explicit "Duplicate / Make unique" action that forks the current preset.
+  - [ ] Export / import menu actions.
+  - [ ] Visible header label when an instance is on a project variant
+        (e.g. "Oily Fluid — Layer 2 variant").
+
+Note: the **auto-fork-on-shared-edit** behaviour is intentionally NOT here — it
+is the same edit path Phase 5 builds when it deletes `ParamMapping`, so it lands
+in Phase 5, not as separate Phase 4 UI.
+
+---
+
 ## The model (what changed from attempt #1–7)
 
 The earlier attempts modeled a preset as a *shared catalog template* plus a
