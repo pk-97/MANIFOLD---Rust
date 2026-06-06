@@ -22,7 +22,10 @@ use crate::preset_definition_registry::StringParamDef;
 /// Which kind of preset this is. The one word that carries every real
 /// effect/generator difference — skip-mode semantics, wet/dry, OSC scheme,
 /// line-based rendering — so the rest of the codebase stops forking on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum PresetKind {
     Effect,
     Generator,

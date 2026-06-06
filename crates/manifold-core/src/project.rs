@@ -1,5 +1,7 @@
+use crate::effect_graph_def::EffectGraphDef;
 use crate::midi::MidiMappingConfig;
 use crate::percussion::PercussionImportState;
+use crate::preset_def::PresetKind;
 use crate::recording::RecordingProvenance;
 use crate::settings::ProjectSettings;
 use crate::tempo::TempoMap;
@@ -9,6 +11,28 @@ use crate::units::Beats;
 use crate::video::VideoLibrary;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+/// A project-scoped preset (a "fork"): a complete, self-contained preset
+/// (graph + exposed params + ranges, carried in [`EffectGraphDef`]) that lives
+/// inside the project file rather than the global catalog. Created when the
+/// user diverges a shared preset (Phase 4 fork ergonomics) and resolvable in
+/// the same id namespace as stock/user presets via the catalog overlay. The
+/// preset's id and display name live in `def.preset_metadata`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedPreset {
+    /// Effect vs generator — directory-derived for disk presets, explicit here.
+    pub kind: PresetKind,
+    /// The complete preset definition (graph + `preset_metadata`).
+    pub def: EffectGraphDef,
+}
+
+impl EmbeddedPreset {
+    /// The preset's stable id (from its metadata), or `None` if unset.
+    pub fn id(&self) -> Option<&crate::PresetTypeId> {
+        self.def.preset_metadata.as_ref().map(|m| &m.id)
+    }
+}
 
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +60,14 @@ pub struct Project {
     pub last_saved_path: String,
     #[serde(default)]
     pub saved_playhead_time: f32,
+
+    /// Project-scoped presets ("forks") — self-contained preset defs that live
+    /// in this project rather than the global catalog. Resolved by id via the
+    /// catalog overlay when the project loads. Empty for projects that have
+    /// never forked a preset; skipped on serialize when empty so existing
+    /// fixtures round-trip byte-identically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_presets: Vec<EmbeddedPreset>,
 
     // ── Legacy top-level fields from V1.0.0 (before percussionImport nesting) ──
     #[serde(
@@ -962,6 +994,7 @@ impl Default for Project {
             percussion_import: None,
             last_saved_path: String::new(),
             saved_playhead_time: 0.0,
+            embedded_presets: Vec::new(),
             legacy_perc_audio_path: None,
             legacy_perc_audio_start_beat: None,
             legacy_perc_clip_placements: None,
@@ -982,6 +1015,56 @@ mod tests {
     use crate::PresetTypeId;
     use crate::effects::{PresetInstance, ParamSlot, ParameterDriver};
     use crate::types::{BeatDivision, DriverWaveform};
+
+    #[test]
+    fn embedded_presets_round_trip_and_skip_when_empty() {
+        // Empty by default → no `embeddedPresets` field on the wire (existing
+        // fixtures stay byte-identical).
+        let p = Project::default();
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("embeddedPresets"), "empty must be skipped: {json}");
+
+        // A forked preset round-trips inside the project JSON.
+        let mut p = Project::default();
+        let mut def = crate::effect_graph_def::EffectGraphDef {
+            version: crate::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: Some("Oily Fluid (Layer 2 variant)".to_string()),
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        };
+        def.preset_metadata = Some(crate::effect_graph_def::PresetMetadata {
+            id: PresetTypeId::from_string("OilyFluid#layer2".to_string()),
+            display_name: "Oily Fluid (Layer 2 variant)".to_string(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def,
+        });
+
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("embeddedPresets"), "non-empty must serialize: {json}");
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.embedded_presets.len(), 1);
+        assert_eq!(back.embedded_presets[0].kind, PresetKind::Generator);
+        assert_eq!(
+            back.embedded_presets[0].id().map(|i| i.as_str()),
+            Some("OilyFluid#layer2")
+        );
+    }
 
     /// Step 8 regression: a driver deserialized from the legacy
     /// `paramIndex` shape gets its `param_id` filled in by
