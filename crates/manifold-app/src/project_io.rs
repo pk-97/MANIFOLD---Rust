@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
+use manifold_core::preset_def::PresetKind;
 use manifold_core::project::Project;
 use manifold_core::video::VideoClip;
 use manifold_editing::command::{Command, CompositeCommand};
@@ -21,6 +22,28 @@ use manifold_editing::service::EditingService;
 
 use crate::dialog_path_memory::{self, DialogContext};
 use crate::user_prefs::UserPrefs;
+
+/// Install a loaded project's embedded ("forked") presets into the renderer's
+/// catalog overlay, so each resolves by id through the same path as stock/user
+/// presets. Called on every project load (with the project's list, possibly
+/// empty) so a previous project's forks are cleared/replaced — the overlay is
+/// global, but only one project is live at a time.
+fn install_project_preset_overlay(project: &Project) {
+    let mut effect = Vec::new();
+    let mut generator = Vec::new();
+    for p in &project.embedded_presets {
+        let Some(id) = p.id() else { continue };
+        let Ok(json) = serde_json::to_string(&p.def) else {
+            log::error!("[ProjectIO] failed to serialize embedded preset `{}`", id);
+            continue;
+        };
+        match p.kind {
+            PresetKind::Effect => effect.push((id.as_str().to_string(), json)),
+            PresetKind::Generator => generator.push((id.as_str().to_string(), json)),
+        }
+    }
+    manifold_renderer::preset_loader::set_project_presets(effect, generator);
+}
 
 // ── Constants — Unity ProjectIOService lines 25-28 ──────────────────
 
@@ -177,6 +200,12 @@ impl ProjectIOService {
                 manifold_renderer::node_graph::migrate_user_param_bindings_to_node_id(
                     &mut project,
                 );
+
+                // Phase 4: install this project's embedded ("forked") presets
+                // into the catalog overlay so they resolve by id through the
+                // same path as stock/user presets. Called unconditionally (even
+                // when empty) so a previous project's forks never leak in.
+                install_project_preset_overlay(&project);
 
                 let path_str = path.to_string_lossy().to_string();
                 let was_v1 = !manifold_io::archive::is_v2_archive(&path_str);

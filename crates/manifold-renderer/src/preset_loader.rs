@@ -179,6 +179,52 @@ pub static EFFECT_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
 pub static GENERATOR_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
     LazyLock::new(|| ArcSwap::from(load_catalog(&GENERATOR_DIRS)));
 
+/// Project-scoped preset overlay (Phase 4). `(type_id, json)` for the
+/// currently-loaded project's `embedded_presets`, merged on TOP of stock+user
+/// in [`build_catalog`] (override on id match). Empty when no project is loaded
+/// or the project has no forks. Set via [`set_project_presets`] (which re-merges
+/// both catalogs + rebuilds the core registry through [`apply_reload`]), so the
+/// per-frame render path is unaffected — resolution stays a catalog read.
+static PROJECT_EFFECT_PRESETS: LazyLock<ArcSwap<Vec<(Arc<str>, Arc<str>)>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+static PROJECT_GENERATOR_PRESETS: LazyLock<ArcSwap<Vec<(Arc<str>, Arc<str>)>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+
+/// Install the loaded project's embedded presets as the catalog overlay and
+/// re-derive both catalogs + the core registry. Call on project load; call
+/// with empty vecs (or [`clear_project_presets`]) on project close/switch so a
+/// stale project's forks never leak into the next one. Returns the new catalog
+/// generation. `(type_id, json)` pairs — `json` is each preset's full
+/// `EffectGraphDef` JSON (graph + `presetMetadata`).
+pub fn set_project_presets(
+    effect: Vec<(String, String)>,
+    generator: Vec<(String, String)>,
+) -> u64 {
+    fn to_entries(v: Vec<(String, String)>) -> Vec<(Arc<str>, Arc<str>)> {
+        v.into_iter()
+            .map(|(id, json)| (Arc::from(id.as_str()), Arc::from(json.as_str())))
+            .collect()
+    }
+    PROJECT_EFFECT_PRESETS.store(Arc::new(to_entries(effect)));
+    PROJECT_GENERATOR_PRESETS.store(Arc::new(to_entries(generator)));
+    apply_reload()
+}
+
+/// Clear the project overlay (project close / switch). Equivalent to
+/// [`set_project_presets`] with empty lists.
+pub fn clear_project_presets() -> u64 {
+    set_project_presets(Vec::new(), Vec::new())
+}
+
+/// The project overlay entries for a catalog kind (by `KindDirs::label`).
+fn project_overlay_for(label: &str) -> Arc<Vec<(Arc<str>, Arc<str>)>> {
+    if label == EFFECT_DIRS.label {
+        PROJECT_EFFECT_PRESETS.load_full()
+    } else {
+        PROJECT_GENERATOR_PRESETS.load_full()
+    }
+}
+
 /// Re-scan the effect preset dirs and swap in a fresh snapshot.
 ///
 /// Crash-safe: if the re-scan resolves no stock root, or scans to zero
@@ -415,6 +461,21 @@ fn build_catalog(
                     f.type_id
                 );
                 merged.push((f.type_id, f.json));
+            }
+        }
+    }
+
+    // Project overlay (Phase 4): the loaded project's embedded presets, on top
+    // of stock+user (override on id match). Lets a project-scoped "fork" resolve
+    // by id through the exact same catalog path as stock/user presets.
+    let project = project_overlay_for(label);
+    if !project.is_empty() {
+        log::info!("[presets] merging {} project {label} preset(s)", project.len());
+        for (id, json) in project.iter() {
+            if let Some(slot) = merged.iter_mut().find(|(i, _)| i == id) {
+                slot.1 = json.clone();
+            } else {
+                merged.push((id.clone(), json.clone()));
             }
         }
     }
