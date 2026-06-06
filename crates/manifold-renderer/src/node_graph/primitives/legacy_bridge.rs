@@ -1,21 +1,21 @@
-//! Bridges `EffectNodeContext` ↔ `EffectInstance` + `PresetContext`
+//! Bridges `EffectNodeContext` ↔ `PresetInstance` + `PresetContext`
 //! for the few node-graph primitives that still wrap a legacy
 //! `PostProcessEffect` instance (Infrared, QuadMirror, WireframeDepth).
 //!
 //! Each wrapper primitive rebuilds the legacy effect's positional-param
-//! `EffectInstance` and `PresetContext` per frame from its named
+//! `PresetInstance` and `PresetContext` per frame from its named
 //! `EffectNodeContext`. The two helpers here are the shared bridge
 //! code; they used to live in the AutoGain bundle's primitive file and
 //! moved here when AutoGain was atom-decomposed (Tranche 7).
 
 use manifold_core::PresetTypeId;
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 
 use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::ParamValue;
 
-/// Build a legacy `EffectInstance` from a wrapper primitive's named
+/// Build a legacy `PresetInstance` from a wrapper primitive's named
 /// params. Mirrors the positional param layout the legacy
 /// `EffectMetadata` declares — `param_order` must list names in the
 /// registered order.
@@ -23,8 +23,8 @@ pub(super) fn build_effect_instance(
     type_id: &PresetTypeId,
     ctx: &EffectNodeContext<'_, '_>,
     param_order: &[&str],
-) -> EffectInstance {
-    let mut fx = EffectInstance::new(type_id.clone());
+) -> PresetInstance {
+    let mut fx = PresetInstance::new(type_id.clone());
     fx.align_to_definition();
     fx.enabled = true;
     for (i, name) in param_order.iter().enumerate() {

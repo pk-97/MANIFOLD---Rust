@@ -337,11 +337,11 @@ pub mod effect {
         }
     }
 
-    /// Create a new EffectInstance with default parameter values from the
+    /// Create a new PresetInstance with default parameter values from the
     /// registry.
-    pub fn create_default(effect_type: &PresetTypeId) -> crate::effects::EffectInstance {
+    pub fn create_default(effect_type: &PresetTypeId) -> crate::effects::PresetInstance {
         let def = get(effect_type);
-        let mut inst = crate::effects::EffectInstance::new(effect_type.clone());
+        let mut inst = crate::effects::PresetInstance::new(effect_type.clone());
         for (i, pd) in def.param_defs.iter().enumerate() {
             inst.set_base_param(i, pd.default_value);
         }

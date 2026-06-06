@@ -56,7 +56,7 @@ pub struct ParamInfo {
     /// Stable [`ParamId`](manifold_core::effects::ParamId) for this slot — for
     /// static-tier params the `&'static str` declared in the preset's
     /// `ParamSpec`; for user-tier (graph-editor-exposed) effect params the
-    /// owned id from `EffectInstance.user_param_bindings[j].id`. Carried on
+    /// owned id from `PresetInstance.user_param_bindings[j].id`. Carried on
     /// the wire when a widget emits a [`PanelAction`](super::PanelAction) so
     /// the bridge never does a positional `pi → ParamId` lookup.
     pub param_id: manifold_core::effects::ParamId,
@@ -142,7 +142,7 @@ pub struct ParamCardConfig {
     /// Aggregate: any param has an Ableton mapping (ABL badge).
     pub has_abl: bool,
     /// The effect instance carries a per-card graph override
-    /// (`EffectInstance.graph.is_some()`) — drives the pink "MOD" badge +
+    /// (`PresetInstance.graph.is_some()`) — drives the pink "MOD" badge +
     /// header tint.
     pub has_graph_mod: bool,
 

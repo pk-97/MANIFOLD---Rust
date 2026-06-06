@@ -1,8 +1,8 @@
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 
 /// Static effect clipboard. Port of C# EffectClipboard.
 pub struct EffectClipboard {
-    clips: Vec<EffectInstance>,
+    clips: Vec<PresetInstance>,
 }
 
 impl EffectClipboard {
@@ -18,18 +18,18 @@ impl EffectClipboard {
         self.clips.len()
     }
 
-    pub fn copy_single(&mut self, effect: &EffectInstance) {
+    pub fn copy_single(&mut self, effect: &PresetInstance) {
         self.clips.clear();
         self.clips.push(effect.clone());
     }
 
-    pub fn copy_all(&mut self, effects: &[EffectInstance]) {
+    pub fn copy_all(&mut self, effects: &[PresetInstance]) {
         self.clips.clear();
         self.clips.extend(effects.iter().cloned());
     }
 
     /// Get fresh clones for paste.
-    pub fn get_paste_clones(&self) -> Vec<EffectInstance> {
+    pub fn get_paste_clones(&self) -> Vec<PresetInstance> {
         self.clips.clone()
     }
 

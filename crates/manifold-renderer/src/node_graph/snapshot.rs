@@ -76,7 +76,7 @@ pub struct OuterParamRouting {
 pub enum OuterParamSource {
     /// Declared on the effect's `ChainSpec.bindings` at compile time.
     Static,
-    /// Per-instance `EffectInstance.user_param_bindings` entry, added
+    /// Per-instance `PresetInstance.user_param_bindings` entry, added
     /// by the user via the graph editor's expose checkboxes.
     User,
 }
@@ -455,7 +455,7 @@ impl GraphSnapshot {
     }
 
     /// Build a snapshot from a serialized [`EffectGraphDef`]. Used by
-    /// the editor pipeline when an `EffectInstance` carries a
+    /// the editor pipeline when an `PresetInstance` carries a
     /// per-card graph override — we don't need to spin up GPU state
     /// just to draw the editor canvas, so route through
     /// [`EffectGraphDefExt::into_graph`] with the built-in

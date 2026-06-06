@@ -11,7 +11,7 @@
 //! 1. `ToggleEffectParamExposeCommand` appends a `UserParamBinding`
 //!    with the canonical id form `user.<short_handle>.<inner_param>.<n>`.
 //! 2. Drivers and Ableton mappings created against that user id
-//!    address the right slot via `EffectInstance.param_id_to_value_index`.
+//!    address the right slot via `PresetInstance.param_id_to_value_index`.
 //! 3. Serializing the project to JSON and reloading preserves:
 //!    - the `user_param_bindings` entry verbatim (id, label, handle,
 //!      inner_param, min/max/default, convert),

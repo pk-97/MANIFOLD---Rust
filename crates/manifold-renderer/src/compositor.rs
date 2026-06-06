@@ -3,7 +3,7 @@ use crate::layer_compositor::CompositeClipDescriptor;
 use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::{EffectId, NodeId};
 
 /// Per-layer metadata passed to the compositor.
@@ -15,7 +15,7 @@ pub struct CompositeLayerDescriptor<'a> {
     pub is_muted: bool,
     pub is_solo: bool,
     pub blit_to_led: bool,
-    pub effects: &'a [EffectInstance],
+    pub effects: &'a [PresetInstance],
     pub effect_groups: &'a [EffectGroup],
     /// Parent group layer ID (None for root layers).
     pub parent_layer_id: Option<&'a LayerId>,
@@ -32,7 +32,7 @@ pub struct CompositorFrame<'a> {
     pub compositor_dirty: bool,
     pub clips: &'a [CompositeClipDescriptor<'a>],
     pub layers: &'a [CompositeLayerDescriptor<'a>],
-    pub master_effects: &'a [EffectInstance],
+    pub master_effects: &'a [PresetInstance],
     pub master_effect_groups: &'a [EffectGroup],
     /// Tonemap settings for this frame.
     pub tonemap: TonemapSettings,

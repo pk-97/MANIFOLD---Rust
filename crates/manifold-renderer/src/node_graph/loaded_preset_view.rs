@@ -70,7 +70,7 @@ pub struct LoadedPresetView {
     /// node_id, original param) → (fused node id, fused uniform field
     /// `n{idx}_<param>`)`. Static card bindings on this view are already
     /// retargeted; this map exists so the chain builder can retarget a
-    /// *per-instance* user binding (`EffectInstance.user_param_bindings`,
+    /// *per-instance* user binding (`PresetInstance.user_param_bindings`,
     /// which lives off the def and so is invisible to content-keyed
     /// fusion) onto the fused node, exactly as the static bindings were.
     /// Without it a user-exposed slider resolves against a node the fuse

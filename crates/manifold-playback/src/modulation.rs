@@ -10,7 +10,7 @@
 //!   5. If any_dirty → mark compositor dirty
 
 use manifold_core::Beats;
-use manifold_core::effects::{EffectInstance, EnvelopeMode, ParamEnvelope, ParameterDriver};
+use manifold_core::effects::{PresetInstance, EnvelopeMode, ParamEnvelope, ParameterDriver};
 use manifold_core::preset_definition_registry;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
@@ -289,9 +289,9 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
     any_driven
 }
 
-/// Evaluate all drivers on a single EffectInstance. Returns true if any driver was active.
+/// Evaluate all drivers on a single PresetInstance. Returns true if any driver was active.
 /// Port of C# ParameterDriverManager.EvaluateEffectDrivers().
-fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool {
+fn evaluate_effect_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bool {
     if !fx.enabled {
         return false;
     }

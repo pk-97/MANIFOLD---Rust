@@ -363,9 +363,9 @@ fn load_waypoints_large_project() {
 // count below. If a future migration regresses any of these, this test
 // is the gate that catches it.
 
-/// Walk every effect chain in a project and call `f` on each EffectInstance.
+/// Walk every effect chain in a project and call `f` on each PresetInstance.
 /// Covers master effects + layer effects.
-fn for_each_effect<F: FnMut(&manifold_core::effects::EffectInstance)>(
+fn for_each_effect<F: FnMut(&manifold_core::effects::PresetInstance)>(
     project: &manifold_core::project::Project,
     mut f: F,
 ) {

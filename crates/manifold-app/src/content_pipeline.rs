@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::types::BlendMode;
 use manifold_core::{EffectId, LayerId, NodeId};
 #[cfg(target_os = "macos")]
@@ -927,7 +927,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // ── Build clip + layer descriptors (CPU only) ────────────────
         let _t0 = std::time::Instant::now();
-        let empty_effects: &[EffectInstance] = &[];
+        let empty_effects: &[PresetInstance] = &[];
         let empty_groups: &[EffectGroup] = &[];
 
         let mut clip_descs: Vec<CompositeClipDescriptor> =
@@ -1691,7 +1691,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// Snapshot of the catalog-default graph for an effect type — the
-    /// fallback path when an [`EffectInstance`] has no per-card
+    /// fallback path when an [`PresetInstance`] has no per-card
     /// override (`instance.graph` is `None`). Delegates to the
     /// compositor's `graph_snapshot_for`, which walks the live
     /// processors and returns the first matching one's

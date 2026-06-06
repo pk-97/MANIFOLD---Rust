@@ -4,7 +4,7 @@
 //!
 //! ## Why a trait, and what it deliberately does NOT unify
 //!
-//! Effects ([`EffectInstance`]) and generators ([`GeneratorParamState`],
+//! Effects ([`PresetInstance`]) and generators ([`GeneratorParamState`],
 //! reached through its owning [`Layer`]) are the same kind of thing — a
 //! node graph that exposes params, modulates them, and round-trips to
 //! disk. Everything that is *genuinely symmetric* lives behind this
@@ -18,7 +18,7 @@
 //! real, not incidental — and stays kind-specific on the call sites:
 //!
 //! - **User param bindings.** Effects keep a sibling
-//!   `EffectInstance::user_param_bindings` Vec; generators store user
+//!   `PresetInstance::user_param_bindings` Vec; generators store user
 //!   bindings inside `generator_graph.preset_metadata.bindings`.
 //!   [`GraphHost::user_param_bindings`] returns the effect Vec and an
 //!   empty slice for generators — enumeration is uniform, the storage is
@@ -51,7 +51,7 @@
 
 use crate::ableton_mapping::AbletonParamMapping;
 use crate::effect_graph_def::EffectGraphDef;
-use crate::effects::{EffectInstance, ParamMapping, ParamSlot, ParameterDriver, UserParamBinding};
+use crate::effects::{PresetInstance, ParamMapping, ParamSlot, ParameterDriver, UserParamBinding};
 use crate::generator::GeneratorParamState;
 
 /// Which kind of host a `&dyn GraphHost` is, for the few genuinely
@@ -70,7 +70,7 @@ pub trait GraphHost {
     fn host_kind(&self) -> GraphHostKind;
 
     // ── Per-instance graph override (always available) ────────────────
-    // Effect: `EffectInstance::graph` / `graph_version`.
+    // Effect: `PresetInstance::graph` / `graph_version`.
     // Generator: `Layer::generator_graph` / `generator_graph_version`.
 
     /// The per-instance graph override (`None` ⇒ use the catalog default).
@@ -153,9 +153,9 @@ pub trait GraphHost {
     fn bump_user_bindings_version(&mut self);
 }
 
-// ── EffectInstance: impl directly ─────────────────────────────────────
+// ── PresetInstance: impl directly ─────────────────────────────────────
 
-impl GraphHost for EffectInstance {
+impl GraphHost for PresetInstance {
     fn host_kind(&self) -> GraphHostKind {
         GraphHostKind::Effect
     }
@@ -216,17 +216,17 @@ impl GraphHost for EffectInstance {
     }
 
     fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
-        EffectInstance::param_mapping(self, id)
+        PresetInstance::param_mapping(self, id)
     }
     fn upsert_param_mapping(&mut self, mapping: ParamMapping) {
-        EffectInstance::upsert_param_mapping(self, mapping)
+        PresetInstance::upsert_param_mapping(self, mapping)
     }
     fn remove_param_mapping(&mut self, id: &str) {
-        EffectInstance::remove_param_mapping(self, id)
+        PresetInstance::remove_param_mapping(self, id)
     }
 
     fn user_param_bindings(&self) -> Vec<UserParamBinding> {
-        EffectInstance::user_param_bindings(self)
+        PresetInstance::user_param_bindings(self)
     }
 
     fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping> {

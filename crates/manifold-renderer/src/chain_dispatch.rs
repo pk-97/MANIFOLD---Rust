@@ -29,7 +29,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
 use manifold_core::EffectId;
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_gpu::GpuTexture;
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ pub fn take_chain_dispatch_stats() -> ChainDispatchStats {
 /// successive `[rebuild]` lines can be diffed to identify the flapping
 /// field. Only allocates when the env var is set.
 fn topology_dump(
-    effects: &[EffectInstance],
+    effects: &[PresetInstance],
     groups: &[EffectGroup],
     width: u32,
     height: u32,
@@ -139,7 +139,7 @@ pub fn dispatch_chain<'a>(
     cache: &'a mut Option<ChainGraph>,
     gpu: &mut GpuEncoder<'_>,
     input_texture: &'a GpuTexture,
-    effects: &[EffectInstance],
+    effects: &[PresetInstance],
     groups: &[EffectGroup],
     ctx: &PresetContext,
     preview_effect: Option<&EffectId>,

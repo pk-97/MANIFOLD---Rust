@@ -291,7 +291,7 @@ pub struct Application {
     pub(crate) node_preview_normalize: bool,
     /// The REAL effect/generator card rendered in the graph editor's left
     /// lane — the same `ParamCardPanel` the inspector shows, configured each
-    /// editor frame from the edited target's `EffectInstance` /
+    /// editor frame from the edited target's `PresetInstance` /
     /// `GeneratorParamState` (via `state_sync::editor_card_config`). This is
     /// the "card IS the card" surface: the editor lane is the actual
     /// instrument card, not a read-only mirror, so slider/driver/mapping

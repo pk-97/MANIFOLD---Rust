@@ -17,7 +17,7 @@ use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 use manifold_core::generator_registration::ParamSpec;
 
 inventory::submit! {
@@ -1620,7 +1620,7 @@ impl PostProcessEffect for WireframeDepthFX {
         gpu: &mut GpuEncoder,
         source: &manifold_gpu::GpuTexture,
         target: &manifold_gpu::GpuTexture,
-        fx: &EffectInstance,
+        fx: &PresetInstance,
         ctx: &PresetContext,
     ) {
         // WireframeDepthFX.cs line 281-282

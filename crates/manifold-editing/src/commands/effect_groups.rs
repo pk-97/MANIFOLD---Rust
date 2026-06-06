@@ -1,7 +1,7 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::EffectGroupId;
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::project::Project;
 
 /// Group effects into a rack group.
@@ -49,7 +49,7 @@ impl Command for GroupEffectsCommand {
             self.original_indices = indices.clone();
 
             // Collect the grouped effects (in selection order, which preserves relative order)
-            let grouped: Vec<EffectInstance> = indices
+            let grouped: Vec<PresetInstance> = indices
                 .iter()
                 .filter_map(|&i| effects.get(i).cloned())
                 .collect();
@@ -107,7 +107,7 @@ impl Command for GroupEffectsCommand {
 
         with_effects_mut(project, &self.target, |effects, groups| {
             // Find all effects in this group (they are contiguous after execute)
-            let grouped: Vec<EffectInstance> = if let Some(ref gid) = group_id {
+            let grouped: Vec<PresetInstance> = if let Some(ref gid) = group_id {
                 effects
                     .iter()
                     .filter(|e| e.group_id.as_deref() == Some(gid.as_str()))
@@ -124,7 +124,7 @@ impl Command for GroupEffectsCommand {
 
             // Restore original group IDs and re-insert at original positions
             // Sort by original index (ascending) so insertions don't shift subsequent indices
-            let mut pairs: Vec<(usize, EffectInstance)> = Vec::with_capacity(grouped.len());
+            let mut pairs: Vec<(usize, PresetInstance)> = Vec::with_capacity(grouped.len());
             for (i, mut fx) in grouped.into_iter().enumerate() {
                 // Restore old group ID
                 fx.group_id = old_group_ids.get(i).cloned().flatten();
@@ -408,7 +408,7 @@ impl Command for ReorderRackCommand {
             }
 
             // Collect members in list order
-            let members: Vec<EffectInstance> = self
+            let members: Vec<PresetInstance> = self
                 .original_indices
                 .iter()
                 .filter_map(|&i| effects.get(i).cloned())
@@ -442,7 +442,7 @@ impl Command for ReorderRackCommand {
 
         with_effects_mut(project, &self.target, |effects, _groups| {
             // Collect current members
-            let members: Vec<EffectInstance> = effects
+            let members: Vec<PresetInstance> = effects
                 .iter()
                 .filter(|e| e.group_id.as_deref() == Some(&gid))
                 .cloned()
@@ -452,7 +452,7 @@ impl Command for ReorderRackCommand {
             effects.retain(|e| e.group_id.as_deref() != Some(&gid));
 
             // Re-insert at original positions (ascending order)
-            let mut pairs: Vec<(usize, EffectInstance)> = original_indices
+            let mut pairs: Vec<(usize, PresetInstance)> = original_indices
                 .iter()
                 .zip(members)
                 .map(|(&idx, fx)| (idx, fx))

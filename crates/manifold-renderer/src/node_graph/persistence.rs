@@ -3,7 +3,7 @@
 //!
 //! The schema itself (`EffectGraphDef`, `EffectGraphNode`,
 //! `EffectGraphWire`, `SerializedParamValue`) lives in `manifold-core`
-//! so [`manifold_core::effects::EffectInstance`] can carry a
+//! so [`manifold_core::effects::PresetInstance`] can carry a
 //! per-instance graph by value. This module owns the runtime-coupled
 //! pieces: the [`PrimitiveRegistry`] that maps `type_id` strings to
 //! node constructors, the [`ParamValue`] ↔ [`SerializedParamValue`]

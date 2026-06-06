@@ -30,7 +30,7 @@
 //!   forget it.
 //!
 //! Binding *construction* still differs per side (effects build a static prefix +
-//! a user tail off `EffectInstance`; generators resolve everything from the def's
+//! a user tail off `PresetInstance`; generators resolve everything from the def's
 //! `preset_metadata.bindings`), and the note-reshape / user-tail rebuild paths
 //! still live in each runtime for now — those fold in as the storage unification
 //! (`docs/PRESET_UNIFICATION_PLAN.md` Phases 1b/4-struct) progresses. This is the

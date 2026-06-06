@@ -33,7 +33,7 @@ pub struct GeneratorParamState {
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
 
     /// Per-instance reshape notes — the generator mirror of
-    /// `EffectInstance.param_mappings`. Each [`ParamMapping`] reshapes one
+    /// `PresetInstance.param_mappings`. Each [`ParamMapping`] reshapes one
     /// generator card param (keyed by `param_id`) without touching its
     /// value slot; the renderer applies the note downstream via the
     /// generator's `apply_param_notes` (the `Generator` trait method).
@@ -227,7 +227,7 @@ impl GeneratorParamState {
     }
 
     /// The per-instance reshape note for `param_id`, if one exists.
-    /// Mirror of `EffectInstance::param_mapping`.
+    /// Mirror of `PresetInstance::param_mapping`.
     pub fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
         self.param_mappings.iter().find(|m| m.param_id == id)
     }
@@ -276,7 +276,7 @@ impl GeneratorParamState {
     /// Write to effective (modulated) param value.
     ///
     /// Auto-extends `param_values` to cover `index`, then writes. The
-    /// effect-side mirror (`EffectInstance::set_param`) uses the same
+    /// effect-side mirror (`PresetInstance::set_param`) uses the same
     /// pattern — neither path gates on a registry def existing for the
     /// host type, because JSON-only generators (Wireframe, etc.) have
     /// no static-registry entry but still need slider writes to land.
@@ -341,7 +341,7 @@ impl GeneratorParamState {
     ///
     /// Auto-extends both `param_values` and `base_param_values` to
     /// cover `index`, then writes. Matches the effect-side
-    /// `EffectInstance::set_base_param` shape: registry presence is
+    /// `PresetInstance::set_base_param` shape: registry presence is
     /// only consulted for clamping, never as a gate on the write
     /// itself. Without this, JSON-only generators (Wireframe, etc.)
     /// silently dropped every slider drag — they have no Rust-side
@@ -553,7 +553,7 @@ impl GeneratorParamState {
     }
 }
 
-/// Unified parameter interface — mirrors `impl ParamSource for EffectInstance`.
+/// Unified parameter interface — mirrors `impl ParamSource for PresetInstance`.
 impl ParamSource for GeneratorParamState {
     fn display_name(&self) -> &str {
         // Interned to `&'static str` — the registry is hot-reloadable and

@@ -2,7 +2,7 @@ use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::{EffectId, GraphTarget};
 use manifold_core::effects::{
-    EffectInstance, ParamConvert, ParamEnvelope, ParamId, ParamMapping, ParamSlot, ParameterDriver,
+    PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParamMapping, ParamSlot, ParameterDriver,
     UserParamBinding,
 };
 use manifold_core::project::Project;
@@ -26,12 +26,12 @@ use manifold_core::project::Project;
 #[derive(Debug)]
 pub struct AddEffectCommand {
     target: EffectTarget,
-    effect: EffectInstance,
+    effect: PresetInstance,
     insert_index: usize,
 }
 
 impl AddEffectCommand {
-    pub fn new(target: EffectTarget, effect: EffectInstance, insert_index: usize) -> Self {
+    pub fn new(target: EffectTarget, effect: PresetInstance, insert_index: usize) -> Self {
         Self {
             target,
             effect,
@@ -66,12 +66,12 @@ impl Command for AddEffectCommand {
 #[derive(Debug)]
 pub struct RemoveEffectCommand {
     target: EffectTarget,
-    effect: Option<EffectInstance>,
+    effect: Option<PresetInstance>,
     removed_index: usize,
 }
 
 impl RemoveEffectCommand {
-    pub fn new(target: EffectTarget, effect: EffectInstance, removed_index: usize) -> Self {
+    pub fn new(target: EffectTarget, effect: PresetInstance, removed_index: usize) -> Self {
         Self {
             target,
             effect: Some(effect),
@@ -199,17 +199,17 @@ impl Command for ToggleEffectCommand {
 pub struct ReorderEffectGroupCommand {
     target: EffectTarget,
     /// Snapshot of the entire effects vec before the reorder.
-    old_effects: Vec<EffectInstance>,
+    old_effects: Vec<PresetInstance>,
     /// Snapshot of the entire effects vec after the reorder.
-    new_effects: Vec<EffectInstance>,
+    new_effects: Vec<PresetInstance>,
 }
 
 impl ReorderEffectGroupCommand {
     /// Construct from before/after snapshots of the effects vec.
     pub fn new(
         target: EffectTarget,
-        old_effects: Vec<EffectInstance>,
-        new_effects: Vec<EffectInstance>,
+        old_effects: Vec<PresetInstance>,
+        new_effects: Vec<PresetInstance>,
     ) -> Self {
         Self {
             target,
@@ -350,7 +350,7 @@ pub fn generate_user_param_id(
 }
 
 /// Toggle whether an inner-graph parameter is user-exposed on an
-/// [`EffectInstance`]. One command for both directions (expose /
+/// [`PresetInstance`]. One command for both directions (expose /
 /// unexpose) so a single undo entry covers a single user click.
 ///
 /// On execute, [`Self::reverse`] gets populated with the inverse
@@ -420,11 +420,11 @@ enum ReverseState {
         slot_value: ParamSlot,
         slot_base_value: Option<f32>,
         position: usize,
-        /// Drivers pruned from `EffectInstance.drivers` because their
+        /// Drivers pruned from `PresetInstance.drivers` because their
         /// `param_id` matched the removed binding's id.
         removed_drivers: Vec<ParameterDriver>,
         /// Ableton mappings pruned from
-        /// `EffectInstance.ableton_mappings` for the same reason.
+        /// `PresetInstance.ableton_mappings` for the same reason.
         removed_ableton_mappings: Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
         /// Envelopes pruned from the host (Layer for layer-targeted
         /// effects; Master has no envelope storage). `target_effect_type`
@@ -1043,7 +1043,7 @@ mod tests {
     /// binding-storage list) via `append_user_binding`.
     fn project_with_one_user_binding() -> (Project, EffectId, String) {
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(PresetTypeId::new("Mirror"));
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
         let effect_id = fx.id.clone();
         let binding_id = "user.uv_transform.rotation.1".to_string();
         fx.append_user_binding(sample_user_binding(&binding_id));
@@ -1185,7 +1185,7 @@ mod tests {
     #[test]
     fn edit_stock_param_note_roundtrip() {
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(PresetTypeId::new("ColorGrade"));
+        let mut fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
         // Pre-existing identity note on stock param "amount".
         fx.upsert_param_mapping(ParamMapping {
@@ -1236,7 +1236,7 @@ mod tests {
     #[test]
     fn edit_unknown_stock_id_does_not_create_note() {
         let mut project = Project::default();
-        let fx = EffectInstance::new(PresetTypeId::new("ColorGrade"));
+        let fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
         project.settings.master_effects.push(fx);
 

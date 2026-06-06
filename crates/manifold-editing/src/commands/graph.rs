@@ -4,8 +4,8 @@
 //! Each command operates on the `EffectGraphDef` that a
 //! [`manifold_core::GraphTarget`] points at. Targets resolve to:
 //!
-//! - [`GraphTarget::Effect`] → [`EffectInstance::graph`] with
-//!   `EffectInstance::graph_version` as the version counter.
+//! - [`GraphTarget::Effect`] → [`PresetInstance::graph`] with
+//!   `PresetInstance::graph_version` as the version counter.
 //! - [`GraphTarget::Generator`] → [`crate::commands::graph::Layer::generator_graph`]
 //!   (via `Project::timeline::find_layer_by_id_mut`) with
 //!   `Layer::generator_graph_version` as the version counter.
@@ -800,7 +800,7 @@ impl Command for SetGraphNodeParamCommand {
 // Revert Graph (effect or generator)
 // ---------------------------------------------------------------------------
 
-/// Clear the per-target graph override (either an `EffectInstance::graph`
+/// Clear the per-target graph override (either an `PresetInstance::graph`
 /// or a `Layer::generator_graph`), reverting to the bundled preset.
 /// The next chain rebuild reads the catalog default instead of the
 /// saved-in-place graph.
@@ -863,9 +863,9 @@ impl Command for RevertEffectGraphCommand {
 /// (the graph node's `exposed_params` set).
 ///
 /// For Effect targets, this command also mirrors the new state into
-/// the legacy `EffectInstance.param_values[i].exposed` (for params
+/// the legacy `PresetInstance.param_values[i].exposed` (for params
 /// covered by a preset binding's static-block slot) and
-/// [`EffectInstance::user_param_bindings`] (for inner-node params with
+/// [`PresetInstance::user_param_bindings`] (for inner-node params with
 /// no preset binding). The mirror is what keeps the timeline-card
 /// state-sync path working until Step 8 of the unification cuts those
 /// fields over to the graph as the single source of truth.
@@ -968,7 +968,7 @@ enum EffectMirrorReverse {
         binding: manifold_core::effects::UserParamBinding,
         position: usize,
         slot_value: manifold_core::effects::ParamSlot,
-        /// Drivers pruned from `EffectInstance.drivers` because their
+        /// Drivers pruned from `PresetInstance.drivers` because their
         /// `param_id` matched the removed binding's id. Without this
         /// pruning the rows would survive in the project file but
         /// never resolve to a target, leaving silently-dead
@@ -1054,7 +1054,7 @@ enum GeneratorMirrorReverse {
 
 /// Captured envelope orphans from a Layer-hosted effect's unexpose.
 /// Envelopes live on the [`manifold_core::layer::Layer`] (keyed by
-/// `(target_effect_type, param_id)`), not on the [`EffectInstance`],
+/// `(target_effect_type, param_id)`), not on the [`PresetInstance`],
 /// so capturing them needs the layer borrow — separate from the rest
 /// of `EffectMirrorReverse` which only needs the effect borrow.
 #[derive(Debug)]
@@ -1271,7 +1271,7 @@ impl Command for ToggleNodeParamExposeCommand {
             return;
         };
 
-        // Per-target mirror. Effect mirror touches EffectInstance +
+        // Per-target mirror. Effect mirror touches PresetInstance +
         // host layer (envelopes); generator mirror touches the layer's
         // GeneratorParamState only.
         let mirror = match &self.target {
@@ -1306,7 +1306,7 @@ impl Command for ToggleNodeParamExposeCommand {
 
                 // Envelope orphan cleanup. Only matters when the
                 // mirror is `RemovedUserBinding` — envelopes live on
-                // the host Layer (not on `EffectInstance`, not on
+                // the host Layer (not on `PresetInstance`, not on
                 // `Master`), so capture needs a separate layer borrow.
                 if let EffectMirrorReverse::RemovedUserBinding {
                     binding,
@@ -1467,7 +1467,7 @@ impl Command for ToggleNodeParamExposeCommand {
 
 #[allow(clippy::too_many_arguments)]
 fn mirror_effect_side(
-    effect: &mut manifold_core::effects::EffectInstance,
+    effect: &mut manifold_core::effects::PresetInstance,
     node_id: &NodeId,
     node_handle: &str,
     inner_param: &str,
@@ -1603,7 +1603,7 @@ fn mirror_effect_side(
 }
 
 fn unmirror_effect_side(
-    effect: &mut manifold_core::effects::EffectInstance,
+    effect: &mut manifold_core::effects::PresetInstance,
     mirror: EffectMirrorReverse,
 ) {
     match mirror {
@@ -2312,7 +2312,7 @@ mod tests {
     use manifold_core::EffectId;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
-    use manifold_core::effects::EffectInstance;
+    use manifold_core::effects::PresetInstance;
 
     // ── node groups: group / ungroup commands ──
 
@@ -2354,7 +2354,7 @@ mod tests {
     fn project_with_graph(def: EffectGraphDef) -> (Project, EffectId) {
         let mut project = Project::default();
         let effect_id = EffectId::new("test-group-fx");
-        let mut fx = EffectInstance::new(PresetTypeId::new("test.fx"));
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.fx"));
         fx.id = effect_id.clone();
         fx.graph = Some(def);
         project.settings.master_effects.push(fx);
@@ -2718,7 +2718,7 @@ mod tests {
     /// Project with one master Mirror effect, graph: None.
     fn project_with_one_master_effect() -> (Project, EffectId) {
         let mut project = Project::default();
-        let fx = EffectInstance::new(PresetTypeId::new("Mirror"));
+        let fx = PresetInstance::new(PresetTypeId::new("Mirror"));
         let id = fx.id.clone();
         project.settings.master_effects.push(fx);
         (project, id)
@@ -3007,11 +3007,11 @@ mod tests {
         );
         cmd.execute(&mut project);
 
-        // Serialize just the EffectInstance — what the project save
+        // Serialize just the PresetInstance — what the project save
         // path emits per effect.
         let fx = project.find_effect_by_id(&id).unwrap();
         let json = serde_json::to_string(fx).unwrap();
-        let back: manifold_core::effects::EffectInstance =
+        let back: manifold_core::effects::PresetInstance =
             serde_json::from_str(&json).unwrap();
 
         assert!(back.graph.is_some(), "graph field survived round-trip");
@@ -3023,7 +3023,7 @@ mod tests {
     // ─── Generator-target parity ────────────────────────────────────
     //
     // The same commands targeting `GraphTarget::Generator(layer_id)`
-    // must mutate `Layer::generator_graph` rather than `EffectInstance::graph`.
+    // must mutate `Layer::generator_graph` rather than `PresetInstance::graph`.
     // These tests exercise the unified pipeline against the generator
     // persistence path — proves there's truly one set of commands.
 
@@ -3639,7 +3639,7 @@ mod tests {
         // + Ableton mapping that target its synthesised id.
         let mut project = Project::default();
         let effect_id = EffectId::new("orphan-cleanup-test");
-        let mut fx = EffectInstance::new(PresetTypeId::new("test.mirror"));
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.mirror"));
         fx.id = effect_id.clone();
         project.settings.master_effects.push(fx);
 
@@ -3771,7 +3771,7 @@ mod tests {
         let mut project = Project::default();
         let mut layer = Layer::new("Test".to_string(), LayerType::Generator, 0);
         let layer_id = layer.layer_id.clone();
-        let mut fx = EffectInstance::new(effect_type.clone());
+        let mut fx = PresetInstance::new(effect_type.clone());
         fx.id = effect_id.clone();
         layer.effects = Some(vec![fx]);
         project.timeline.layers.push(layer);
@@ -3992,7 +3992,7 @@ mod tests {
         // Project with one master effect using the catalog default.
         let mut project = Project::default();
         let effect_id = EffectId::new("test-mirror-instance");
-        let mut fx = EffectInstance::new(PresetTypeId::new("test.mirror"));
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.mirror"));
         fx.id = effect_id.clone();
         project.settings.master_effects.push(fx);
 

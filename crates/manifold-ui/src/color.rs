@@ -442,7 +442,7 @@ pub const ABL_TRIM_BAR_HOVER_C32: Color32 = Color32::new(165, 105, 225, 255);
 pub const ABL_TRIM_FILL_C32: Color32 = Color32::new(140, 80, 200, 38);
 pub const ABL_BADGE_C32: Color32 = Color32::new(140, 80, 200, 255);
 /// Pink badge + header tint for effect cards whose per-card graph
-/// override (`EffectInstance.graph`) is set. Visually distinct from
+/// override (`PresetInstance.graph`) is set. Visually distinct from
 /// DRV/ENV/ABL.
 pub const MOD_BADGE_C32: Color32 = Color32::new(220, 60, 140, 255);
 pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);

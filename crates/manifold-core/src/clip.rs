@@ -1,4 +1,4 @@
-use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope};
+use crate::effects::{EffectGroup, PresetInstance, ParamEnvelope};
 use crate::id::ClipId;
 use crate::units::{Beats, Seconds};
 use serde::{Deserialize, Serialize};
@@ -67,7 +67,7 @@ pub struct TimelineClip {
     // ── Legacy: per-clip effects removed (Ableton model: effects on layer/master only) ──
     // Fields kept for deserialization of old projects, never written back.
     #[serde(default, skip_serializing)]
-    pub effects: Vec<EffectInstance>,
+    pub effects: Vec<PresetInstance>,
     #[serde(default, skip_serializing)]
     pub effect_groups: Option<Vec<EffectGroup>>,
     #[serde(default, skip_serializing)]

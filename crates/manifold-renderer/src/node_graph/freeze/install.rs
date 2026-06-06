@@ -44,7 +44,7 @@
 //!   drilling into a fused effect still shows the original atoms. Only the chain
 //!   *render* path swaps in the fused view, and only for the un-edited canonical
 //!   preset — an effect with a per-instance graph override
-//!   (`EffectInstance.graph = Some`) is rendered from the user's wiring,
+//!   (`PresetInstance.graph = Some`) is rendered from the user's wiring,
 //!   unfused, so editing stays live.
 //! - This is "freeze = render-only binary, graph = source" (the §12 framing).
 
@@ -138,7 +138,7 @@ pub fn fused_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> 
 /// params + skip mode (so the chain builder's `outer_param_index` /
 /// `n_static_slots` / skip logic are byte-identical) and swaps in the fused def +
 /// retargeted bindings. Takes the def by reference (not `&'static`) so an edited
-/// `EffectInstance::graph` can be fused in place — only the freshly-built fused
+/// `PresetInstance::graph` can be fused in place — only the freshly-built fused
 /// def is leaked. Pure codegen, no device: the GPU pipeline compile happens
 /// downstream when the fused def is spliced into the chain (the executor compiles
 /// whatever it's handed, fused or not), so this is the unit that relocates to a
@@ -207,7 +207,7 @@ fn fuse_view_parts(
 /// encoding (and handles `f32` params, which aren't `Hash`).
 ///
 /// Live *exposed* params are NOT in the def — they flow through
-/// `EffectInstance.param_values` as runtime uniforms — so two instances that
+/// `PresetInstance.param_values` as runtime uniforms — so two instances that
 /// differ only in live modulation share one key, and the fused kernel keeps
 /// exposed params as uniforms (never baked). Computed on cache miss / chain
 /// rebuild, an editing-time event, never per frame.
@@ -841,7 +841,7 @@ mod tests {
 
     /// The fused view must carry the full binding-retarget map so the chain
     /// builder can repoint a per-instance USER binding (which lives off the def,
-    /// on `EffectInstance.user_param_bindings`, and so is invisible to the
+    /// on `PresetInstance.user_param_bindings`, and so is invisible to the
     /// content-keyed fuse) onto the fused node — exactly as the static card
     /// bindings are. Without this the map was discarded after retargeting the
     /// statics, and a user-exposed slider went inert the moment the effect

@@ -781,7 +781,7 @@ impl ContentThread {
 
             // Helper: build named params from values + registry
             fn build_effect_params(
-                fx: &manifold_core::effects::EffectInstance,
+                fx: &manifold_core::effects::PresetInstance,
             ) -> Vec<manifold_profiler::NamedParam> {
                 let def = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type());
                 fx.param_values
@@ -1209,7 +1209,7 @@ impl ContentThread {
     /// Build the editor canvas's graph snapshot for the currently
     /// watched effect instance. Two paths:
     ///
-    /// 1. The project's `EffectInstance` has `graph: Some(def)` → build
+    /// 1. The project's `PresetInstance` has `graph: Some(def)` → build
     ///    the snapshot directly from the def (renders what the user
     ///    saved, not what the runtime singleton is currently doing).
     /// 2. The instance has `graph: None` → fall through to the

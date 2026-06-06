@@ -35,7 +35,7 @@ use std::slice;
 use std::sync::{Arc, OnceLock};
 
 use half::f16;
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 use manifold_core::{Beats, PresetTypeId, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -148,7 +148,7 @@ impl ParityHarness {
         texture
     }
 
-    /// Run a single `EffectInstance` through the legacy `EffectChain`,
+    /// Run a single `PresetInstance` through the legacy `EffectChain`,
     /// copy the result into a stable destination texture, read it back
     /// to host memory. The returned `Vec<u8>` is the raw Rgba16Float
     /// byte stream — exactly what the parity comparator wants.
@@ -158,7 +158,7 @@ impl ParityHarness {
     /// reproducible output across runs.
     pub fn run_legacy(
         &self,
-        fx: &EffectInstance,
+        fx: &PresetInstance,
         input: &GpuTexture,
         ctx: &PresetContext,
     ) -> Vec<u8> {
@@ -195,7 +195,7 @@ impl ParityHarness {
     ///   via `Box::new(P::default())` at the call site so the test
     ///   controls the type.
     /// - `set_params` — closure that translates the legacy
-    ///   `EffectInstance::param_values` (positional, by `ParamSlot`)
+    ///   `PresetInstance::param_values` (positional, by `ParamSlot`)
     ///   into named `graph.set_param` calls on the primitive node.
     ///   This is the *only* place parity tests encode the legacy →
     ///   primitive param mapping; if the mapping is wrong, the test
@@ -661,11 +661,11 @@ pub fn default_ctx(width: u32, height: u32) -> PresetContext {
     }
 }
 
-/// Default-parameter `EffectInstance` for an effect type. Pulls the
+/// Default-parameter `PresetInstance` for an effect type. Pulls the
 /// canonical defaults from the registry so tests don't drift from
 /// effect-spec changes.
-pub fn make_default_effect(effect_type: PresetTypeId) -> EffectInstance {
-    let mut fx = EffectInstance::new(effect_type.clone());
+pub fn make_default_effect(effect_type: PresetTypeId) -> PresetInstance {
+    let mut fx = PresetInstance::new(effect_type.clone());
     fx.align_to_definition();
     fx.enabled = true;
     fx

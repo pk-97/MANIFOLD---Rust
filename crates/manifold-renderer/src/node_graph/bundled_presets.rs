@@ -16,7 +16,7 @@
 //! block via [`crate::node_graph::LoadedPresetView`].
 //!
 //! User-authored per-instance graphs are stored separately on the
-//! [`EffectInstance`](manifold_core::effects::EffectInstance). Both
+//! [`PresetInstance`](manifold_core::effects::PresetInstance). Both
 //! shapes use the same [`EffectGraphDef`] schema and the same
 //! [`PrimitiveRegistry`] loader; they differ only in storage location.
 //!
@@ -219,7 +219,7 @@ mod tests {
 
     /// Splicing a bundled preset into a chain via
     /// `splice_def_into_chain` is the path the runtime takes when
-    /// `EffectInstance.graph = Some(def)`. Verifies every shipping
+    /// `PresetInstance.graph = Some(def)`. Verifies every shipping
     /// preset survives that round-trip — the same data the drift test
     /// covers at the standalone-graph level, exercised against the
     /// chain-grafting code that the runtime actually calls.

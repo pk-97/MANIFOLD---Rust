@@ -8,7 +8,7 @@
 //!    etc.) are excluded — they're whole effects, not building blocks.
 //! 2. [`catalog_graph_def_for`] — the catalog-default
 //!    [`EffectGraphDef`] for an [`PresetTypeId`]. Editing commands
-//!    need this to lift `EffectInstance.graph` from `None` on first
+//!    need this to lift `PresetInstance.graph` from `None` on first
 //!    edit. Sourced from the bundled-preset registry (§6.6 #26), so
 //!    every shipping effect returns `Some` — per-card divergence is
 //!    available on every card, not just the original Mirror /
@@ -136,7 +136,7 @@ pub fn friendly_label_for(type_id: &str) -> Option<&'static str> {
 }
 
 /// Build the catalog-default [`EffectGraphDef`] for `effect_type`.
-/// Editing commands clone this into `EffectInstance.graph` on first
+/// Editing commands clone this into `PresetInstance.graph` on first
 /// edit so subsequent mutations have a topology to manipulate.
 ///
 /// Backed by the bundled-preset registry (`bundled_presets.rs`), so

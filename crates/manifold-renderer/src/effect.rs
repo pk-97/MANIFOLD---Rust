@@ -1,7 +1,7 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::preset_context::PresetContext;
 use manifold_core::PresetTypeId;
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 
 /// GPU-aware post-process effect processor.
 ///
@@ -28,7 +28,7 @@ pub trait PostProcessEffect: Send {
         gpu: &mut GpuEncoder,
         source: &manifold_gpu::GpuTexture,
         target: &manifold_gpu::GpuTexture,
-        fx: &EffectInstance,
+        fx: &PresetInstance,
         ctx: &PresetContext,
     );
 

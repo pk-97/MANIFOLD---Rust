@@ -19,7 +19,7 @@ use std::borrow::Cow;
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
@@ -70,7 +70,7 @@ pub enum SkipMode {
 /// `preset_definition_registry::effect::param_id_to_index` which is
 /// dual-source aware — works for both inventory-submitted
 /// `EffectMetadata` and JSON-loaded `PresetMetadata`.
-pub fn is_skipped_for(skip: SkipMode, type_id: &PresetTypeId, fx: &EffectInstance) -> bool {
+pub fn is_skipped_for(skip: SkipMode, type_id: &PresetTypeId, fx: &PresetInstance) -> bool {
     match skip {
         SkipMode::Never => false,
         SkipMode::OnZero { param_id } => {
@@ -90,7 +90,7 @@ pub fn is_skipped_for(skip: SkipMode, type_id: &PresetTypeId, fx: &EffectInstanc
 /// Splice an [`EffectGraphDef`] into the chain graph. Used by both the
 /// canonical path (with `view.canonical_def` from
 /// [`crate::node_graph::LoadedPresetView`]) and the per-card override
-/// path (with `EffectInstance.graph`). Returns the output endpoint +
+/// path (with `PresetInstance.graph`). Returns the output endpoint +
 /// effect-local handle map.
 ///
 /// The def's `Source` boundary disappears — every wire fanning out

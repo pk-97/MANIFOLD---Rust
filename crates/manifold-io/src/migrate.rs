@@ -44,7 +44,7 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
 }
 
 /// v1.3.0 → v1.4.0: binding-storage unification. User-added effect
-/// bindings used to live in a parallel `EffectInstance.userParamBindings`
+/// bindings used to live in a parallel `PresetInstance.userParamBindings`
 /// array; they now live in the per-instance graph's
 /// `preset_metadata.bindings` (with `userAdded: true`), the single
 /// binding list generators already use.
@@ -289,7 +289,7 @@ fn default_preset_metadata() -> serde_json::Map<String, Value> {
 }
 
 /// v1.2.0 → v1.3.0: per-param exposure (`ParamSlot { value, exposed }`)
-/// surfaces on `EffectInstance.paramValues`. The on-disk shape changes:
+/// surfaces on `PresetInstance.paramValues`. The on-disk shape changes:
 /// V1.2 emitted bare `f32` per slot (positional Array or keyed Map);
 /// V1.3 emits `{ value, exposed }` objects.
 ///
@@ -306,7 +306,7 @@ fn migrate_v120_to_v130(_root: &mut Value) {
 /// v1.1.0 → v1.2.0: parameter addressing migration to stable
 /// `param_id`. The bidirectional `Deserialize` impls on
 /// `ParameterDriver`, `ParamEnvelope`, `AbletonParamMapping`,
-/// `MacroMapping`, `EffectInstance`, and `GeneratorParamState`
+/// `MacroMapping`, `PresetInstance`, and `GeneratorParamState`
 /// (steps 8–13) accept both V1.1 (`paramIndex` / `Array`) and V1.2
 /// (`paramId` / `Map`) shapes natively, so this migration only needs
 /// to bump the version stamp — no JSON rewriting required.

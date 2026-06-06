@@ -10,14 +10,14 @@
 //! Source declarations are still tiered — that's a load-bearing
 //! property of the editor (registry-exposed vs user-exposed sliders),
 //! the file format (`ChainSpec.bindings` vs
-//! `EffectInstance.user_param_bindings`), and external addressing
+//! `PresetInstance.user_param_bindings`), and external addressing
 //! semantics (`ParamId` namespace shared across both). What used to be
 //! tiered at *runtime* is now collapsed:
 //!
 //! - **Source side.** [`ParamBinding`] declared in `inventory::submit!`
 //!   blocks for compile-time spec bindings;
 //!   `manifold_core::effects::UserParamBinding` lives on
-//!   `EffectInstance` for per-instance user bindings.
+//!   `PresetInstance` for per-instance user bindings.
 //! - **Runtime side.** One [`ResolvedBinding`] type — both flavours
 //!   flow through [`ResolvedBinding::from_static`] /
 //!   [`ResolvedBinding::from_user`] into the same resolved shape and
@@ -184,7 +184,7 @@ pub fn convert_param_value(convert: ParamConvert, value: f32) -> ParamValue {
 pub enum BindingSource {
     /// Compile-time spec binding from `ChainSpec.bindings`.
     Static,
-    /// Per-instance user binding from `EffectInstance.user_param_bindings`.
+    /// Per-instance user binding from `PresetInstance.user_param_bindings`.
     User,
 }
 
@@ -206,7 +206,7 @@ pub enum ResolvedTarget {
 ///
 /// Stored in `EffectSlot.bindings` as a flat vector. Today every entry
 /// in this list corresponds 1:1 with one outer slot in
-/// `EffectInstance.param_values` — static bindings in
+/// `PresetInstance.param_values` — static bindings in
 /// `bindings[0..n_static]` matching `param_values[0..n_static]`, user
 /// bindings in `bindings[n_static..]` matching `param_values[n_static..]`.
 ///
@@ -231,7 +231,7 @@ pub struct ResolvedBinding {
     pub target: ResolvedTarget,
     pub convert: ParamConvert,
     pub source: BindingSource,
-    /// Position in `EffectInstance.param_values` this binding reads
+    /// Position in `PresetInstance.param_values` this binding reads
     /// from. See struct doc for the invariant — distinct from the
     /// binding's own position in `EffectSlot.bindings` once fan-out
     /// is expressed.
@@ -328,14 +328,14 @@ impl ResolvedBinding {
     /// other variants pass through. Returns `None` when the binding's
     /// id isn't in `node_map` — caller logs and drops the orphan binding.
     ///
-    /// `source_index` is the position in `EffectInstance.param_values`
+    /// `source_index` is the position in `PresetInstance.param_values`
     /// this binding reads from. Callers building the 1:1 static prefix
     /// pass the binding's enumerate position; a future caller wiring
     /// fan-out would pass the matching outer slot's position.
     ///
     /// `note` is the host instance's per-instance reshape override for
     /// this param ([`manifold_core::effects::ParamMapping`]), looked up by
-    /// the caller via `EffectInstance::param_mapping(b.id)`. `None` (the
+    /// the caller via `PresetInstance::param_mapping(b.id)`. `None` (the
     /// common case) keeps the recipe's affine fold — byte-identical to
     /// before per-instance notes existed. `Some` replaces it with the
     /// full editable reshape (range / invert / curve / scale / offset).
@@ -413,10 +413,10 @@ impl ResolvedBinding {
     /// and skips — orphan bindings remain in the project file but render
     /// inert until they re-bind.
     ///
-    /// `source_index` is the position in `EffectInstance.param_values`
+    /// `source_index` is the position in `PresetInstance.param_values`
     /// this binding reads from — for the user tail, that's
     /// `n_static + j` where `j` is the binding's position within
-    /// `EffectInstance.user_param_bindings`.
+    /// `PresetInstance.user_param_bindings`.
     pub fn from_user(
         core: &manifold_core::effects::UserParamBinding,
         graph: &Graph,
@@ -786,7 +786,7 @@ impl LastAppliedCache {
 
     /// Truncate the cache to its static prefix so the user-tail is
     /// re-evaluated from scratch on the next apply. Called on
-    /// `EffectInstance.user_param_bindings_version` bumps — exposing
+    /// `PresetInstance.user_param_bindings_version` bumps — exposing
     /// or unexposing an inner-graph param rebuilds the user-tail of
     /// `slot.bindings`, and the old cache entries refer to a
     /// different binding list and would skip-write on stale-prev

@@ -1419,7 +1419,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
 // ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──
 
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 
 fn resolve_effects_ref<'a>(
@@ -1427,7 +1427,7 @@ fn resolve_effects_ref<'a>(
     project: &'a Project,
     active_layer: &Option<LayerId>,
     selection: &UIState,
-) -> Option<&'a [EffectInstance]> {
+) -> Option<&'a [PresetInstance]> {
     match tab {
         InspectorTab::Master => Some(&project.settings.master_effects),
         InspectorTab::Layer => active_layer

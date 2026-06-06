@@ -1,7 +1,7 @@
 use crate::clip::TimelineClip;
 use crate::color::Color;
 use crate::preset_type_id::PresetTypeId;
-use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope, ParameterDriver};
+use crate::effects::{EffectGroup, PresetInstance, ParamEnvelope, ParameterDriver};
 use crate::generator::GeneratorParamState;
 use crate::id::{ClipId, EffectGroupId, LayerId};
 use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
@@ -69,7 +69,7 @@ pub struct Layer {
     #[serde(default = "default_one")]
     pub opacity: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effects: Option<Vec<EffectInstance>>,
+    pub effects: Option<Vec<PresetInstance>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_groups: Option<Vec<EffectGroup>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,7 +80,7 @@ pub struct Layer {
     gen_params: Option<GeneratorParamState>,
 
     /// Per-layer override for the generator's internal graph
-    /// (`EffectGraphDef`). Mirrors `EffectInstance.graph` — `None`
+    /// (`EffectGraphDef`). Mirrors `PresetInstance.graph` — `None`
     /// means the runtime uses the catalog default (the bundled JSON
     /// preset for the layer's `generator_type`); `Some(def)` means
     /// the user has edited the graph through the editor and the
@@ -93,7 +93,7 @@ pub struct Layer {
     pub generator_graph: Option<crate::effect_graph_def::EffectGraphDef>,
 
     /// Bump counter the renderer watches to detect generator-graph
-    /// topology changes. Parallel to `EffectInstance.graph_version`.
+    /// topology changes. Parallel to `PresetInstance.graph_version`.
     /// Persisted to disk so saved projects load with their last-known
     /// graph version (avoids spurious "topology changed" rebuilds on
     /// first frame after load).
@@ -105,7 +105,7 @@ pub struct Layer {
     /// which still bump `generator_graph_version` for the UI snapshot. The
     /// generator registry hashes *this* into its rebuild key so value/position
     /// edits refresh in place (state preserved). Parallel to
-    /// `EffectInstance.graph_structure_version`. `#[serde(default)]` so
+    /// `PresetInstance.graph_structure_version`. `#[serde(default)]` so
     /// pre-existing projects load at 0.
     #[serde(default)]
     pub generator_graph_structure_version: u32,
@@ -651,7 +651,7 @@ impl Layer {
     }
 
     /// Get the effects list, creating it if None.
-    pub fn effects_mut(&mut self) -> &mut Vec<EffectInstance> {
+    pub fn effects_mut(&mut self) -> &mut Vec<PresetInstance> {
         if self.effects.is_none() {
             self.effects = Some(Vec::new());
         }
@@ -850,10 +850,10 @@ impl Layer {
 }
 
 impl crate::effects::EffectContainer for Layer {
-    fn effects(&self) -> &[crate::effects::EffectInstance] {
+    fn effects(&self) -> &[crate::effects::PresetInstance] {
         self.effects.as_deref().unwrap_or(&[])
     }
-    fn effects_mut(&mut self) -> &mut Vec<crate::effects::EffectInstance> {
+    fn effects_mut(&mut self) -> &mut Vec<crate::effects::PresetInstance> {
         Layer::effects_mut(self)
     }
     fn effect_groups(&self) -> &[crate::effects::EffectGroup] {
@@ -865,7 +865,7 @@ impl crate::effects::EffectContainer for Layer {
     fn has_modular_effects(&self) -> bool {
         self.effects.as_ref().is_some_and(|e| !e.is_empty())
     }
-    fn find_effect(&self, effect_type: &PresetTypeId) -> Option<&crate::effects::EffectInstance> {
+    fn find_effect(&self, effect_type: &PresetTypeId) -> Option<&crate::effects::PresetInstance> {
         self.effects
             .as_ref()?
             .iter()

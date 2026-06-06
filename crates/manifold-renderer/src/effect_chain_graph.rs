@@ -1,7 +1,7 @@
 //! [`ChainGraph`] — one cached [`Graph`] per `EffectChain`.
 //!
 //! Each chain compiles its full effect sequence (every active
-//! [`EffectInstance`], plus `Mix` sub-graphs for wet/dry groups)
+//! [`PresetInstance`], plus `Mix` sub-graphs for wet/dry groups)
 //! into a single graph runtime instance: one [`Graph`], one
 //! [`ExecutionPlan`], one [`MetalBackend`], one [`Executor`]. That's
 //! one ping/pong recycle pool for the chain, one executor step loop
@@ -51,7 +51,7 @@ use ahash::AHashMap;
 use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
@@ -314,7 +314,7 @@ struct EffectSlot {
     /// enabled-bit toggle, group enabled toggle, group crossing the
     /// 1.0 wet/dry boundary) — see [`compute_topology_hash`]. As long
     /// as the cached graph is reused, `effects[legacy_index]` is the
-    /// same `EffectInstance` whose modulated `param_values` the
+    /// same `PresetInstance` whose modulated `param_values` the
     /// renderer just updated.
     legacy_index: usize,
     /// Effect-local handles returned by `spec.splice` — names are
@@ -360,7 +360,7 @@ struct EffectSlot {
     /// [`BoundGraph`]. `bound.bindings[0..n_static]` are spec bindings hydrated
     /// via [`ResolvedBinding::from_static`]; `bound.bindings[n_static..]` are
     /// user-exposed bindings hydrated via [`ResolvedBinding::from_user`]. Same
-    /// order as `EffectInstance.param_values`, so [`apply_bindings`] walks both in
+    /// order as `PresetInstance.param_values`, so [`apply_bindings`] walks both in
     /// lockstep against one cache.
     ///
     /// The user tail is re-hydrated lazily when
@@ -376,14 +376,14 @@ struct EffectSlot {
     /// the live length of `bindings[0..n_static]`.
     n_static: usize,
     /// Count of static *outer slots* on the host's
-    /// `EffectInstance.param_values` — distinct from [`Self::n_static`]
+    /// `PresetInstance.param_values` — distinct from [`Self::n_static`]
     /// when an orphaned spec binding gets dropped at chain build.
     /// User tail bindings derive their `source_index` as
     /// `n_static_slots + j`, so that an orphaned static binding
     /// doesn't shift every subsequent user-tail slider down one slot.
     /// In the common case (no orphans) this equals `n_static`.
     n_static_slots: usize,
-    /// Last seen `EffectInstance.graph_version` for the user tail. User
+    /// Last seen `PresetInstance.graph_version` for the user tail. User
     /// bindings live in the per-instance graph now, so a binding add /
     /// remove / reshape bumps the graph version. When the live effect's
     /// version differs, the per-frame apply path re-hydrates the user tail
@@ -411,7 +411,7 @@ struct EffectSlot {
     /// deterministic against the stable `node_map`, so a rebuild
     /// reproduces the same `n_static` length.
     static_specs: Vec<(ParamBinding, usize)>,
-    /// Last seen `EffectInstance.param_mappings_version`. When the live
+    /// Last seen `PresetInstance.param_mappings_version`. When the live
     /// effect's version differs, the per-frame apply path rebuilds the
     /// static prefix of [`Self::bindings`] from [`Self::static_specs`] +
     /// the current notes before applying — the note analogue of the
@@ -438,7 +438,7 @@ impl ChainGraph {
     /// the same `EffectGroupId` so per-frame `wet_dry` refresh
     /// applies uniformly to every segment.
     pub fn try_build(
-        effects: &[EffectInstance],
+        effects: &[PresetInstance],
         groups: &[EffectGroup],
         primitives: &PrimitiveRegistry,
         device: &GpuDevice,
@@ -454,10 +454,10 @@ impl ChainGraph {
     ) -> Option<Self> {
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
-        // (replaces the previous AHashMap<EffectId, &EffectInstance>
+        // (replaces the previous AHashMap<EffectId, &PresetInstance>
         // rebuild). Topology changes rebuild this graph, so the
         // captured indices stay valid for the cache's lifetime.
-        let active_effects: Vec<(usize, &EffectInstance)> = effects
+        let active_effects: Vec<(usize, &PresetInstance)> = effects
             .iter()
             .enumerate()
             .filter(|(_, fx)| {
@@ -716,7 +716,7 @@ impl ChainGraph {
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
             // ResolvedBinding::from_user). Each binding carries its
-            // own `source_index` into `EffectInstance.param_values` —
+            // own `source_index` into `PresetInstance.param_values` —
             // resolved by matching `BindingDef::id` against the
             // outer-card param list (NOT the binding's own enumerate
             // position) so a single outer slider can fan out to
@@ -1004,7 +1004,7 @@ impl ChainGraph {
     /// Returns `true` if the same graph can be reused this frame.
     pub fn is_compatible(
         &self,
-        effects: &[EffectInstance],
+        effects: &[PresetInstance],
         groups: &[EffectGroup],
         width: u32,
         height: u32,
@@ -1024,7 +1024,7 @@ impl ChainGraph {
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         input_texture: &GpuTexture,
-        effects: &[EffectInstance],
+        effects: &[PresetInstance],
         groups: &[EffectGroup],
         ctx: &PresetContext,
     ) -> Option<&GpuTexture> {
@@ -1497,7 +1497,7 @@ impl ChainGraph {
 /// freshly-added effect would never enter the graph until the user
 /// toggled `enabled` (which IS in the hash) to force a rebuild.
 fn compute_topology_hash(
-    effects: &[EffectInstance],
+    effects: &[PresetInstance],
     groups: &[EffectGroup],
     width: u32,
     height: u32,
@@ -1738,11 +1738,11 @@ mod multi_segment_tests {
     //! `amount` param on every segment uniformly.
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::effects::{EffectGroup, EffectInstance};
+    use manifold_core::effects::{EffectGroup, PresetInstance};
     use manifold_core::id::EffectGroupId;
     
 
-    fn make_default(ty: PresetTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -1872,10 +1872,10 @@ mod binding_seed_tests {
     use super::*;
     use crate::node_graph::ParamValue;
     use manifold_core::PresetTypeId;
-    use manifold_core::effects::EffectInstance;
+    use manifold_core::effects::PresetInstance;
     
 
-    fn make_default(ty: PresetTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -1934,9 +1934,9 @@ mod topology_hash_tests {
     //! work" symptom.
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::effects::EffectInstance;
+    use manifold_core::effects::PresetInstance;
 
-    fn make_default(ty: PresetTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -2008,7 +2008,7 @@ mod topology_hash_tests {
         let primitives = PrimitiveRegistry::with_builtin();
 
         let mut fx = make_default(PresetTypeId::MIRROR); // `amount` default = 1.0, so present in chain by default.
-        assert!(fx.enabled, "EffectInstance::new defaults enabled = true");
+        assert!(fx.enabled, "PresetInstance::new defaults enabled = true");
 
         let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
         let cg_on = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
@@ -2115,11 +2115,11 @@ mod user_binding_tests {
     use crate::node_graph::ParamValue;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::{
-        EffectInstance, ParamMapping, ParamSlot, UserParamBinding, ParamConvert,
+        PresetInstance, ParamMapping, ParamSlot, UserParamBinding, ParamConvert,
     };
 
 
-    fn make_default(ty: PresetTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -2205,7 +2205,7 @@ mod user_binding_tests {
         );
     }
 
-    fn stylized_with_translate_exposed(translate_value: f32) -> EffectInstance {
+    fn stylized_with_translate_exposed(translate_value: f32) -> PresetInstance {
         let mut fx = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         // StylizedFeedback's graph registers an affine_transform under
         // the handle `"affine"`. Its static card exposes gain / scale /
@@ -2526,15 +2526,15 @@ mod generator_input_tests {
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
-    fn make_default(ty: PresetTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
-    /// A divergent EffectInstance whose graph contains a
+    /// A divergent PresetInstance whose graph contains a
     /// `system.generator_input` node. Uses Invert as the host effect
     /// type so we get a known canonical to override; the divergent def
     /// is what actually drives splicing.
-    fn invert_with_generator_input() -> EffectInstance {
+    fn invert_with_generator_input() -> PresetInstance {
         let custom_def: EffectGraphDef = serde_json::from_str(
             r#"{
                 "version": 1,
@@ -2784,9 +2784,9 @@ mod chain_error_tests {
     //! doesn't silently regress.
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::effects::{EffectInstance, ParamConvert, UserParamBinding};
+    use manifold_core::effects::{PresetInstance, ParamConvert, UserParamBinding};
 
-    fn make_default(ty: PresetTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 

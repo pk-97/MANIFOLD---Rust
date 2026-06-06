@@ -12,7 +12,7 @@
 //! an effect vs a generator — so it is decoded through the two explicit
 //! [`PresetTypeId::from_legacy_effect_discriminant`] /
 //! [`PresetTypeId::from_legacy_generator_discriminant`] functions at the one
-//! place the kind is statically known (the `EffectInstance` / generator
+//! place the kind is statically known (the `PresetInstance` / generator
 //! deserializers). The bare `Deserialize` handles the modern string form.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

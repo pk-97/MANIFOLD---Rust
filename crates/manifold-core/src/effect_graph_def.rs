@@ -1,10 +1,10 @@
 //! Per-instance effect graph schema — the on-disk shape an
-//! [`EffectInstance`](crate::effects::EffectInstance) carries when its
+//! [`PresetInstance`](crate::effects::PresetInstance) carries when its
 //! graph topology has diverged from the catalog default.
 //!
 //! These types are pure serde shapes: zero references back into the
 //! live runtime graph, zero GPU types. They live in `manifold-core`
-//! so [`EffectInstance`](crate::effects::EffectInstance) can hold one
+//! so [`PresetInstance`](crate::effects::PresetInstance) can hold one
 //! by value without dragging `manifold-renderer` into the dependency
 //! graph.
 //!
@@ -21,7 +21,7 @@
 //! - **v1** ([`EFFECT_GRAPH_VERSION`]) — graph topology only: `nodes`,
 //!   `wires`, optional `name` and `description`. The schema for the 25
 //!   shipping bundled presets and every per-instance graph override
-//!   stored on an [`EffectInstance`](crate::effects::EffectInstance).
+//!   stored on an [`PresetInstance`](crate::effects::PresetInstance).
 //! - **v2** ([`EFFECT_GRAPH_VERSION_WITH_METADATA`]) — adds
 //!   [`preset_metadata`](EffectGraphDef::preset_metadata) carrying the
 //!   picker/OSC/routing surface (display name, category, params,
@@ -76,7 +76,7 @@ pub const GROUP_TYPE_ID: &str = "group";
 ///
 /// Same schema used by bundled preset libraries
 /// (`assets/effect-presets/*.json`) and by per-instance graph
-/// overrides stored on an [`EffectInstance`](crate::effects::EffectInstance).
+/// overrides stored on an [`PresetInstance`](crate::effects::PresetInstance).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectGraphDef {

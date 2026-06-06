@@ -1,7 +1,7 @@
 //! One-time load completion for migrated effect user bindings.
 //!
 //! User-added effect bindings used to live in a parallel
-//! `EffectInstance.user_param_bindings` Vec. The binding-storage
+//! `PresetInstance.user_param_bindings` Vec. The binding-storage
 //! unification (`PRESET_UNIFICATION_PLAN.md` step 3) folds them into the
 //! per-instance graph's `preset_metadata.bindings` (`user_added`), the
 //! same single list generators already use. The on-disk JSON fold-in
@@ -29,7 +29,7 @@
 //! re-save) finds nothing to lift.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
@@ -59,7 +59,7 @@ pub fn migrate_user_param_bindings_to_node_id(project: &mut Project) {
 /// nodes), lift the effect's canonical topology underneath the migrated
 /// metadata. No-op for graphs that already carry nodes (real per-instance
 /// overrides, or already-completed stubs) and for `graph: None` effects.
-fn complete_stub_graph(fx: &mut EffectInstance) {
+fn complete_stub_graph(fx: &mut PresetInstance) {
     let needs_lift = fx
         .graph
         .as_ref()
@@ -119,7 +119,7 @@ mod tests {
     use manifold_core::effect_graph_def::{
         BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
     };
-    use manifold_core::effects::{EffectInstance, ParamConvert};
+    use manifold_core::effects::{PresetInstance, ParamConvert};
 
     /// Build a metadata-only stub graph carrying one user-added binding —
     /// the exact shape the v1.3→v1.4 JSON fold-in emits when an effect had
@@ -185,7 +185,7 @@ mod tests {
         // arrives as a metadata-only stub; the lift must restore Bloom's
         // canonical nodes while keeping the user binding.
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         fx.graph = Some(stub_with_user_binding("blur", "radius", "user.blur.radius.1"));
         project.settings.master_effects.push(fx);
 
@@ -216,7 +216,7 @@ mod tests {
         // A graph that already has nodes (real override, or a re-loaded
         // completed stub) must not be re-lifted — idempotency.
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         let canonical = bundled_preset_def(&PresetTypeId::BLOOM)
             .expect("Bloom preset present")
             .clone();
@@ -237,7 +237,7 @@ mod tests {
     fn graph_none_effect_is_left_alone() {
         // No graph, no migration — a plain effect stays `graph: None`.
         let mut project = Project::default();
-        let fx = EffectInstance::new(PresetTypeId::BLOOM);
+        let fx = PresetInstance::new(PresetTypeId::BLOOM);
         project.settings.master_effects.push(fx);
 
         migrate_user_param_bindings_to_node_id(&mut project);

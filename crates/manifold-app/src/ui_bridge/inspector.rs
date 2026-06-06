@@ -1,7 +1,7 @@
 //! Inspector-related dispatch: effect params, drivers, envelopes, generator params,
 //! master/layer/clip chrome, slider interactions.
 
-use manifold_core::effects::{EffectInstance, ParamEnvelope, ParameterDriver};
+use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{Beats, LayerId, Seconds};
@@ -1657,7 +1657,7 @@ pub(super) fn dispatch_inspector(
                 let old_effects = effects.clone();
 
                 // Remove selected effects in reverse order (preserving relative order)
-                let mut moving: Vec<(usize, EffectInstance)> = Vec::new();
+                let mut moving: Vec<(usize, PresetInstance)> = Vec::new();
                 let mut sorted_sources = source_indices.clone();
                 sorted_sources.sort_unstable();
                 for &idx in sorted_sources.iter().rev() {
@@ -2526,14 +2526,14 @@ pub(super) fn dispatch_inspector(
 
         PanelAction::AddEffect(tab, effect_type_idx) => {
             use manifold_core::effect_type_registry;
-            use manifold_core::effects::EffectInstance;
+            use manifold_core::effects::PresetInstance;
             let available = effect_type_registry::available_effects();
             let Some(reg) = available.get(*effect_type_idx) else {
                 return DispatchResult::handled();
             };
             let effect_type = reg.id.clone();
             let defaults = manifold_core::preset_definition_registry::effect::get_defaults(&effect_type);
-            let mut effect = EffectInstance::new(effect_type);
+            let mut effect = PresetInstance::new(effect_type);
             effect.param_values = defaults;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let target = match tab {

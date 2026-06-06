@@ -7,14 +7,14 @@
 //! a checkbox indicating whether that param is currently exposed on
 //! the effect card. Click a checkbox → emit
 //! [`PanelAction::EffectParamExpose`] → content thread runs
-//! `ToggleEffectParamExposeCommand` → `EffectInstance.user_param_bindings`
+//! `ToggleEffectParamExposeCommand` → `PresetInstance.user_param_bindings`
 //! gains/loses the entry.
 //!
 //! ## Selection model
 //!
 //! The graph-canvas in the editor window owns the "selected node id"
 //! state today. The panel is configured each frame with that id plus
-//! the active `EffectInstance`'s effect-index and currently-exposed
+//! the active `PresetInstance`'s effect-index and currently-exposed
 //! `(node_handle, inner_param)` pairs; the panel rebuilds its UITree
 //! subtree only when something material changed (selection,
 //! parameters, or exposed-set).
@@ -283,7 +283,7 @@ pub struct GraphEditorPanel {
     /// Card-exposure lookup: `(node_handle, inner_param)` keys for
     /// every inner-node param currently exposed on the effect card,
     /// merging:
-    /// - All `EffectInstance.user_param_bindings`.
+    /// - All `PresetInstance.user_param_bindings`.
     /// - Static-block routings whose slot has `param_values[i].exposed = true`.
     ///
     /// Drives the per-node checkbox state and lets the click handler

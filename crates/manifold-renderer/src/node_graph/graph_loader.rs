@@ -408,7 +408,7 @@ pub fn instantiate_def(
         }
 
         // (3) Exposed params — Global scope only. Splice path effects
-        // expose via `EffectInstance.user_param_bindings` at a different
+        // expose via `PresetInstance.user_param_bindings` at a different
         // layer.
         if let HandleScope::Global = handle_scope {
             for exposed_name in &node_doc.exposed_params {

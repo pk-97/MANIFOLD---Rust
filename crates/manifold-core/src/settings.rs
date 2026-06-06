@@ -1,4 +1,4 @@
-use crate::effects::{EffectGroup, EffectInstance};
+use crate::effects::{EffectGroup, PresetInstance};
 use crate::macro_bank::MacroBank;
 use crate::types::{
     ClockAuthority, OscSyncMode, QuantizeMode, ResolutionPreset, TonemapCurve,
@@ -56,7 +56,7 @@ pub struct ProjectSettings {
     #[serde(default = "default_one")]
     pub master_opacity: f32,
     #[serde(default)]
-    pub master_effects: Vec<EffectInstance>,
+    pub master_effects: Vec<PresetInstance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_effect_groups: Option<Vec<EffectGroup>>,
 
@@ -382,7 +382,7 @@ impl ProjectSettings {
     pub fn find_master_effect(
         &self,
         effect_type: &crate::preset_type_id::PresetTypeId,
-    ) -> Option<&crate::effects::EffectInstance> {
+    ) -> Option<&crate::effects::PresetInstance> {
         self.master_effects
             .iter()
             .find(|e| e.effect_type() == effect_type)
@@ -420,10 +420,10 @@ impl ProjectSettings {
 }
 
 impl crate::effects::EffectContainer for ProjectSettings {
-    fn effects(&self) -> &[crate::effects::EffectInstance] {
+    fn effects(&self) -> &[crate::effects::PresetInstance] {
         &self.master_effects
     }
-    fn effects_mut(&mut self) -> &mut Vec<crate::effects::EffectInstance> {
+    fn effects_mut(&mut self) -> &mut Vec<crate::effects::PresetInstance> {
         &mut self.master_effects
     }
     fn effect_groups(&self) -> &[crate::effects::EffectGroup] {
@@ -438,7 +438,7 @@ impl crate::effects::EffectContainer for ProjectSettings {
     fn find_effect(
         &self,
         effect_type: &crate::preset_type_id::PresetTypeId,
-    ) -> Option<&crate::effects::EffectInstance> {
+    ) -> Option<&crate::effects::PresetInstance> {
         self.master_effects
             .iter()
             .find(|e| e.effect_type() == effect_type)

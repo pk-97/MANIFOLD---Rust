@@ -10,9 +10,9 @@
 //! Resolution sites:
 //!
 //! - [`GraphTarget::Effect`] resolves to
-//!   [`crate::effects::EffectInstance::graph`] on the effect with the
+//!   [`crate::effects::PresetInstance::graph`] on the effect with the
 //!   given [`crate::id::EffectId`]. Version counter:
-//!   [`crate::effects::EffectInstance::graph_version`].
+//!   [`crate::effects::PresetInstance::graph_version`].
 //! - [`GraphTarget::Generator`] resolves to
 //!   [`crate::layer::Layer::generator_graph`] on the layer with the
 //!   given [`crate::id::LayerId`]. Version counter:
@@ -32,7 +32,7 @@ use crate::id::{EffectId, LayerId};
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GraphTarget {
     /// An effect instance's per-card graph. Resolves to
-    /// `EffectInstance::graph` via `Project::find_effect_by_id_mut`.
+    /// `PresetInstance::graph` via `Project::find_effect_by_id_mut`.
     Effect(EffectId),
     /// A layer's per-layer generator graph. Resolves to
     /// `Layer::generator_graph` via `Project::timeline::find_layer_by_id_mut`.

@@ -8,7 +8,7 @@ use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::{BlendMode, EffectId, PresetTypeId, LayerId, NodeId};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -23,7 +23,7 @@ pub struct CompositeClipDescriptor<'a> {
     pub layer_index: i32,
     pub blend_mode: BlendMode,
     pub opacity: f32,
-    pub effects: &'a [EffectInstance],
+    pub effects: &'a [PresetInstance],
     pub effect_groups: &'a [EffectGroup],
 }
 
@@ -270,7 +270,7 @@ fn count_active_layers(frame: &CompositorFrame, any_solo: bool) -> usize {
 
 /// Check if an effect slice has any enabled effects with non-zero amount.
 /// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
-fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
+fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
     for fx in effects {
         if fx.enabled
             && *fx.effect_type() != PresetTypeId::UNKNOWN
@@ -850,7 +850,7 @@ impl LayerCompositor {
         effect_chain: &'a mut Option<ChainGraph>,
         gpu: &mut GpuEncoder,
         input_texture: &'a GpuTexture,
-        effects: &[EffectInstance],
+        effects: &[PresetInstance],
         groups: &[EffectGroup],
         ctx: &PresetContext,
         preview_effect: Option<&EffectId>,

@@ -2405,7 +2405,7 @@ impl Application {
         let palette_viewport =
             manifold_ui::Rect::new(0.0, 0.0, palette_width, logical_h as f32);
 
-        // Resolve which `EffectInstance` is being edited and build the
+        // Resolve which `PresetInstance` is being edited and build the
         // panel inputs. An open editor without a resolvable
         // `watched_graph_target` is a degenerate state — show the panel's
         // empty placeholder.
@@ -2494,7 +2494,7 @@ impl Application {
 
         // The left lane renders the REAL effect/generator card for the edited
         // target — the same `ParamCardPanel` the inspector shows, configured
-        // from the same `EffectInstance` / `GeneratorParamState`, resolved by
+        // from the same `PresetInstance` / `GeneratorParamState`, resolved by
         // identity from `watched_graph_target` (effect id or generator layer).
         // Resolved once per editor frame; `None` (degenerate open state with
         // no resolvable target) leaves the lane empty.

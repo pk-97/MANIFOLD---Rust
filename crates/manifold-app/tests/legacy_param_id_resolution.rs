@@ -367,7 +367,7 @@ fn liveschool_full_registry_resolution() {
 #[test]
 fn liveschool_gen_param_values_save_as_id_keyed_map() {
     // Step 13: GeneratorParamState gets the same Map-shape wire
-    // format as EffectInstance. With the renderer registry linked,
+    // format as PresetInstance. With the renderer registry linked,
     // serializing a `gen_params` block must emit `paramValues` as a
     // Map keyed by the generator's stable param ids.
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
@@ -437,7 +437,7 @@ fn liveschool_param_values_save_as_id_keyed_map() {
     let original_values = fx.param_values.clone();
 
     // Serialize → must be Map shape (registry is loaded).
-    let json = serde_json::to_string(fx).expect("serialize EffectInstance");
+    let json = serde_json::to_string(fx).expect("serialize PresetInstance");
     assert!(
         json.contains("\"paramValues\":{"),
         "registry-aware Serialize must emit paramValues as a Map; got: {json}"
@@ -448,7 +448,7 @@ fn liveschool_param_values_save_as_id_keyed_map() {
     );
 
     // Deserialize back → values must land in identical positions.
-    let back: manifold_core::effects::EffectInstance =
+    let back: manifold_core::effects::PresetInstance =
         serde_json::from_str(&json).expect("deserialize map form");
     assert_eq!(
         back.param_values, original_values,

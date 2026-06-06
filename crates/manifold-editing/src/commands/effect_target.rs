@@ -1,4 +1,4 @@
-use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::project::Project;
 use manifold_core::{EffectId, LayerId};
 
@@ -18,18 +18,18 @@ pub enum EffectTarget {
 /// Returns None if the target doesn't exist.
 pub fn with_effects_mut<F, R>(project: &mut Project, target: &EffectTarget, f: F) -> Option<R>
 where
-    F: FnOnce(&mut Vec<EffectInstance>, &mut Vec<EffectGroup>) -> R,
+    F: FnOnce(&mut Vec<PresetInstance>, &mut Vec<EffectGroup>) -> R,
 {
     match target {
         EffectTarget::Layer { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
-            let effects = layer.effects_mut() as *mut Vec<EffectInstance>;
+            let effects = layer.effects_mut() as *mut Vec<PresetInstance>;
             let groups = layer.effect_groups_mut() as *mut Vec<EffectGroup>;
             Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
         }
         EffectTarget::Master => {
             let settings = &mut project.settings;
-            let effects = &mut settings.master_effects as *mut Vec<EffectInstance>;
+            let effects = &mut settings.master_effects as *mut Vec<PresetInstance>;
             let groups = settings.master_effect_groups_mut() as *mut Vec<EffectGroup>;
             Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
         }
@@ -39,7 +39,7 @@ where
 /// Execute a closure with read-only access to a target's effects.
 pub fn with_effects<F, R>(project: &Project, target: &EffectTarget, f: F) -> Option<R>
 where
-    F: FnOnce(&[EffectInstance], &[EffectGroup]) -> R,
+    F: FnOnce(&[PresetInstance], &[EffectGroup]) -> R,
 {
     match target {
         EffectTarget::Layer { layer_id } => {

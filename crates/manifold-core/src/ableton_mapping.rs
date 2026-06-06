@@ -56,7 +56,7 @@ pub enum AbletonMappingStatus {
 
 /// Mapping from an Ableton rack macro to a MANIFOLD parameter.
 ///
-/// Stored alongside `drivers` on `EffectInstance` and `GeneratorParamState`.
+/// Stored alongside `drivers` on `PresetInstance` and `GeneratorParamState`.
 /// Replace mode: when active, the Ableton value overrides `base_param_values`.
 ///
 /// Address shape: [`AbletonParamMapping::param_id`] is the canonical

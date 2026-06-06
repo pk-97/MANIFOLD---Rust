@@ -190,7 +190,7 @@ pub enum PanelAction {
     // `param_id` identifies the parameter by its stable id, never by
     // positional `pi`. The `ParamId` namespace is shared between
     // registry-declared static params and per-instance user-exposed
-    // bindings (`EffectInstance.user_param_bindings[].id`), so the
+    // bindings (`PresetInstance.user_param_bindings[].id`), so the
     // bridge handler walks both tiers transparently without a
     // tier-aware lookup. Pre-Phase-2 these variants carried `pi: usize`
     // and the bridge resolved via the static-tier-only

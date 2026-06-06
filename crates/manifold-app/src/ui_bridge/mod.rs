@@ -13,7 +13,7 @@ mod state_sync;
 mod transport;
 
 use manifold_core::LayerId;
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_ui::{InspectorTab, PanelAction};
@@ -548,7 +548,7 @@ pub(crate) fn resolve_effects_read<'a>(
     project: &'a Project,
     active_layer: &Option<LayerId>,
     selection: &SelectionState,
-) -> (Option<&'a [EffectInstance]>, EffectTarget) {
+) -> (Option<&'a [PresetInstance]>, EffectTarget) {
     match tab {
         InspectorTab::Master => (Some(&project.settings.master_effects), EffectTarget::Master),
         InspectorTab::Layer => {
@@ -580,7 +580,7 @@ pub(crate) fn resolve_effects_ref<'a>(
     project: &'a Project,
     active_layer: &Option<LayerId>,
     selection: &SelectionState,
-) -> Option<&'a [EffectInstance]> {
+) -> Option<&'a [PresetInstance]> {
     resolve_effects_read(tab, project, active_layer, selection).0
 }
 
@@ -590,7 +590,7 @@ pub(crate) fn resolve_effects_mut<'a>(
     project: &'a mut Project,
     active_layer: &Option<LayerId>,
     selection: &SelectionState,
-) -> (Option<&'a mut Vec<EffectInstance>>, EffectTarget) {
+) -> (Option<&'a mut Vec<PresetInstance>>, EffectTarget) {
     match tab {
         InspectorTab::Master => {
             let effects = &mut project.settings.master_effects;
@@ -718,7 +718,7 @@ pub(crate) fn editor_dispatch_context(
 /// Build the display label for the LED exit path dropdown button.
 pub(crate) fn led_exit_path_label(
     led_exit_index: i32,
-    master_effects: &[manifold_core::effects::EffectInstance],
+    master_effects: &[manifold_core::effects::PresetInstance],
 ) -> String {
     use manifold_core::effect_type_registry;
     match led_exit_index {

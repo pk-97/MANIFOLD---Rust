@@ -1,7 +1,7 @@
 //! State synchronization: push_state, sync_project_data, sync_clip_positions,
 //! sync_inspector_data, check_auto_scroll.
 use manifold_core::PresetTypeId;
-use manifold_core::effects::{EffectInstance, ParamEnvelope};
+use manifold_core::effects::{PresetInstance, ParamEnvelope};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
 use manifold_core::{Beats, Seconds};
@@ -1154,7 +1154,7 @@ pub fn sync_inspector_data(
 /// [`effect_card_config_by_id`]) or a layer generator (`Generator(LayerId)`).
 /// The editor's left lane renders the REAL card from this: the same
 /// [`ParamCardConfig`] the inspector builds, sourced from the same
-/// `EffectInstance` / `GeneratorParamState`, so the editor card is the actual
+/// `PresetInstance` / `GeneratorParamState`, so the editor card is the actual
 /// instrument card and not a separate mirror. Returns `None` when nothing is
 /// being edited or the target can't be resolved (degenerate open state → the
 /// lane shows nothing).
@@ -1260,7 +1260,7 @@ enum OscScope<'a> {
     Layer(&'a str),
 }
 
-/// Convert a slice of `EffectInstance` into [`ParamCardConfig`]s for the UI.
+/// Convert a slice of `PresetInstance` into [`ParamCardConfig`]s for the UI.
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
 ///
 /// Iterates BOTH the def-declared static block AND the per-instance
@@ -1270,7 +1270,7 @@ enum OscScope<'a> {
 /// (the latter are removed from `user_param_bindings` rather than
 /// hidden, so they never reach this loop) are filtered at build time.
 fn effects_to_configs(
-    effects: &[EffectInstance],
+    effects: &[PresetInstance],
     envelopes: &[ParamEnvelope],
     osc_scope: OscScope<'_>,
 ) -> Vec<ParamCardConfig> {
