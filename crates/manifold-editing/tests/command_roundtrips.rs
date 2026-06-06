@@ -535,8 +535,8 @@ fn change_generator_type_clears_and_restores_graph_override() {
         nodes: Vec::new(),
         wires: Vec::new(),
     };
-    project.timeline.layers[1].generator_graph = Some(stale_graph.clone());
-    project.timeline.layers[1].generator_graph_version = 7;
+    project.timeline.layers[1].gen_params_or_init().graph = Some(stale_graph.clone());
+    project.timeline.layers[1].gen_params_or_init().graph_version = 7;
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
@@ -562,12 +562,12 @@ fn change_generator_type_clears_and_restores_graph_override() {
         PresetTypeId::TESSERACT
     );
     assert!(
-        project.timeline.layers[1].generator_graph.is_none(),
+        project.timeline.layers[1].generator_graph().is_none(),
         "stale per-layer graph override must be cleared on type change \
          (otherwise the renderer keeps drawing the previous generator)",
     );
     assert_ne!(
-        project.timeline.layers[1].generator_graph_version, 7,
+        project.timeline.layers[1].generator_graph_version(), 7,
         "generator_graph_version must bump on clear so the renderer's \
          per-frame override-version sweep rebuilds the generator",
     );
@@ -583,7 +583,7 @@ fn change_generator_type_clears_and_restores_graph_override() {
         PresetTypeId::PLASMA
     );
     assert_eq!(
-        project.timeline.layers[1].generator_graph.as_ref().and_then(|g| g.name.as_deref()),
+        project.timeline.layers[1].generator_graph().and_then(|g| g.name.as_deref()),
         Some("stale-plasma"),
         "undo must restore the pre-change graph override verbatim",
     );

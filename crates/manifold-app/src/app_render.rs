@@ -150,7 +150,7 @@ impl Application {
                     .layers
                     .iter()
                     .find(|l| &l.layer_id == lid)?;
-                if let Some(def) = layer.generator_graph.as_ref()
+                if let Some(def) = layer.generator_graph()
                     && let Some(r) = full_reshape_from_def(def, param_id)
                 {
                     return Some(r);
@@ -190,7 +190,7 @@ impl Application {
                     .layers
                     .iter()
                     .find(|l| &l.layer_id == lid)?;
-                if layer.generator_graph.is_some() {
+                if layer.generator_graph().is_some() {
                     return None;
                 }
                 let gp = layer.gen_params()?;
@@ -482,7 +482,7 @@ impl Application {
                         .local_project
                         .timeline
                         .find_layer_by_id(lid)
-                        .is_some_and(|(_, l)| l.generator_graph.is_some()),
+                        .is_some_and(|(_, l)| l.generator_graph().is_some()),
                 });
             canvas.set_has_graph_mod(has_mod);
             if let Some(ed) = self.graph_editor.as_mut() {
@@ -2305,8 +2305,7 @@ impl Application {
                                 .map(|&i| (def.param_defs[i].min, def.param_defs[i].max))
                         });
                 let from_def = layer
-                    .generator_graph
-                    .as_ref()
+                    .generator_graph()
                     .and_then(|d| full_reshape_from_def(d, param_id))
                     .or_else(|| {
                         manifold_renderer::node_graph::bundled_preset_def(gp.generator_type())

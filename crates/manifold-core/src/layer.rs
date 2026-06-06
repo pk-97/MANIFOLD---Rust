@@ -87,36 +87,12 @@ pub struct Layer {
     )]
     gen_params: Option<PresetInstance>,
 
-    /// Per-layer override for the generator's internal graph
-    /// (`EffectGraphDef`). Mirrors `PresetInstance.graph` — `None`
-    /// means the runtime uses the catalog default (the bundled JSON
-    /// preset for the layer's `generator_type`); `Some(def)` means
-    /// the user has edited the graph through the editor and the
-    /// override is the new source of truth.
-    ///
-    /// Wire-compatible with V1.x project files via `#[serde(default)]`:
-    /// older files omit the field, load as `None`, and behave exactly
-    /// as before (catalog-default graph).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generator_graph: Option<crate::effect_graph_def::EffectGraphDef>,
-
-    /// Bump counter the renderer watches to detect generator-graph
-    /// topology changes. Parallel to `PresetInstance.graph_version`.
-    /// Persisted to disk so saved projects load with their last-known
-    /// graph version (avoids spurious "topology changed" rebuilds on
-    /// first frame after load).
-    #[serde(default)]
-    pub generator_graph_version: u32,
-
-    /// Bumped only on a generator-graph **structure** change (node/wire
-    /// add/remove, revert) — not on a value-only param edit or a node move,
-    /// which still bump `generator_graph_version` for the UI snapshot. The
-    /// generator registry hashes *this* into its rebuild key so value/position
-    /// edits refresh in place (state preserved). Parallel to
-    /// `PresetInstance.graph_structure_version`. `#[serde(default)]` so
-    /// pre-existing projects load at 0.
-    #[serde(default)]
-    pub generator_graph_structure_version: u32,
+    // The generator's per-instance graph override now lives on the generator
+    // `PresetInstance` itself (`gen_params.graph`), exactly like an effect's
+    // `graph` — the graph-home unification. Read it through
+    // [`Self::generator_graph`] / its version accessors; older project files
+    // carried a layer-level `generatorGraph` + version fields, which the load
+    // migration relocates into `gen_params`.
 
     // ── Video/MIDI assignment ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,8 +251,37 @@ impl Layer {
     /// Mutable access to generator params, creating a default if None.
     #[inline]
     pub fn gen_params_or_init(&mut self) -> &mut PresetInstance {
+        // Inherit the layer's generator type (from a legacy flat field when
+        // `gen_params` hasn't been built yet) so a freshly-initialized instance
+        // isn't stranded on `PresetTypeId::NONE` — which would lose the type the
+        // moment graph editing forces an init (graph-home unification).
+        let ty = self.generator_type().clone();
         self.gen_params
-            .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE))
+            .get_or_insert_with(|| PresetInstance::new_generator(ty))
+    }
+
+    /// The generator's per-instance graph override, or `None` when it renders
+    /// the catalog default. Lives on `gen_params.graph` (graph-home
+    /// unification) — the generator twin of an effect's `PresetInstance.graph`.
+    #[inline]
+    pub fn generator_graph(&self) -> Option<&crate::effect_graph_def::EffectGraphDef> {
+        self.gen_params.as_ref().and_then(|gp| gp.graph.as_ref())
+    }
+
+    /// The generator graph's snapshot version (bumped by every edit). `0` when
+    /// the layer has no generator params yet. Runtime-only — resets on load.
+    #[inline]
+    pub fn generator_graph_version(&self) -> u32 {
+        self.gen_params.as_ref().map_or(0, |gp| gp.graph_version)
+    }
+
+    /// The generator graph's structure version (bumped only on node/wire
+    /// add/remove + revert). `0` when the layer has no generator params yet.
+    #[inline]
+    pub fn generator_graph_structure_version(&self) -> u32 {
+        self.gen_params
+            .as_ref()
+            .map_or(0, |gp| gp.graph_structure_version)
     }
 
     /// Generates a distinct color for layer visualization based on index.
@@ -310,7 +315,7 @@ impl Layer {
     /// `preset_definition_registry::generator`. Returns `None` if the id
     /// isn't recognised.
     pub fn resolve_gen_param_slot(&self, param_id: &str) -> Option<usize> {
-        if let Some(graph) = &self.generator_graph
+        if let Some(graph) = self.generator_graph()
             && let Some(meta) = graph.preset_metadata.as_ref()
             && !meta.params.is_empty()
         {
@@ -320,21 +325,6 @@ impl Layer {
         crate::preset_definition_registry::generator::param_id_to_index(gen_type, param_id)
     }
 
-    /// A [`crate::graph_host::GraphHost`] view over this layer's
-    /// generator, bundling the `generator_graph` override (always present
-    /// — drives graph editing) with an *optional* `gen_params` handle (the
-    /// param surface, absent before the generator's params are set up).
-    /// Split-borrows the three disjoint fields so the host can mutate all
-    /// of them. Always returns a host: graph editing must work even before
-    /// param state exists.
-    pub fn graph_host_mut(&mut self) -> crate::graph_host::GeneratorHost<'_> {
-        crate::graph_host::GeneratorHost {
-            params: self.gen_params.as_mut(),
-            graph: &mut self.generator_graph,
-            graph_version: &mut self.generator_graph_version,
-            graph_structure_version: &mut self.generator_graph_structure_version,
-        }
-    }
 
     /// Ensure both clip ordering caches are up-to-date.
     /// From Unity Layer.cs EnsureClipOrderingCaches (lines 457-473).
@@ -728,12 +718,10 @@ impl Layer {
             .gen_params
             .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE));
         gp.change_type(new_type.clone());
-        if self.generator_graph.take().is_some() {
+        if gp.graph.take().is_some() {
             // Dropping the override swaps in a different def — structural.
-            self.generator_graph_structure_version =
-                self.generator_graph_structure_version.wrapping_add(1);
-            self.generator_graph_version =
-                self.generator_graph_version.wrapping_add(1);
+            gp.graph_structure_version = gp.graph_structure_version.wrapping_add(1);
+            gp.graph_version = gp.graph_version.wrapping_add(1);
         }
     }
 
@@ -916,9 +904,6 @@ impl Default for Layer {
             effect_groups: None,
             envelopes: None,
             gen_params: None,
-            generator_graph: None,
-            generator_graph_version: 0,
-            generator_graph_structure_version: 0,
             video_folder_path: None,
             relative_video_folder_path: None,
             midi_note: -1,

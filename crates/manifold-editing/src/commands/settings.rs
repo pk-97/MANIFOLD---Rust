@@ -403,7 +403,7 @@ impl Command for ChangeGeneratorTypeCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             if !self.captured_old_graph {
-                self.old_graph = layer.generator_graph.clone();
+                self.old_graph = layer.generator_graph().cloned();
                 self.captured_old_graph = true;
             }
             layer.change_generator_type(self.new_type.clone());
@@ -418,9 +418,12 @@ impl Command for ChangeGeneratorTypeCommand {
                 self.old_drivers.clone(),
                 self.old_envelopes.clone(),
             );
-            layer.generator_graph = self.old_graph.clone();
-            layer.generator_graph_version =
-                layer.generator_graph_version.wrapping_add(1);
+            // The generator graph lives on `gen_params` now (graph-home
+            // unification); restore the snapshot there and bump its version so
+            // the renderer re-snapshots.
+            let gp = layer.gen_params_or_init();
+            gp.graph = self.old_graph.clone();
+            gp.graph_version = gp.graph_version.wrapping_add(1);
         }
     }
 
@@ -483,7 +486,7 @@ impl Command for PasteGeneratorCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             if !self.captured_old_graph {
-                self.old_graph = layer.generator_graph.clone();
+                self.old_graph = layer.generator_graph().cloned();
                 self.captured_old_graph = true;
             }
             layer.restore_generator_state(
@@ -492,9 +495,13 @@ impl Command for PasteGeneratorCommand {
                 self.new_drivers.clone(),
                 self.new_envelopes.clone(),
             );
-            if layer.generator_graph.take().is_some() {
-                layer.generator_graph_version =
-                    layer.generator_graph_version.wrapping_add(1);
+            // Drop any pre-paste graph override (shape-specific to the old
+            // type). It lives on `gen_params` now, which `restore_generator_state`
+            // does not clear, so clear it explicitly + bump.
+            if let Some(gp) = layer.gen_params_mut()
+                && gp.graph.take().is_some()
+            {
+                gp.graph_version = gp.graph_version.wrapping_add(1);
             }
         }
     }
@@ -507,9 +514,9 @@ impl Command for PasteGeneratorCommand {
                 self.old_drivers.clone(),
                 self.old_envelopes.clone(),
             );
-            layer.generator_graph = self.old_graph.clone();
-            layer.generator_graph_version =
-                layer.generator_graph_version.wrapping_add(1);
+            let gp = layer.gen_params_or_init();
+            gp.graph = self.old_graph.clone();
+            gp.graph_version = gp.graph_version.wrapping_add(1);
         }
     }
 

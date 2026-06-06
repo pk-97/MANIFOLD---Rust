@@ -1282,7 +1282,7 @@ impl ContentThread {
         if gen_type.is_none() {
             return None;
         }
-        let current_version = layer.generator_graph_version;
+        let current_version = layer.generator_graph_version();
 
         // Cache hit: same layer + same version → return the cached
         // Arc clone, no parse / build work.
@@ -1301,7 +1301,7 @@ impl ContentThread {
         // runtime path uses, so editor canvas and live render resolve
         // to the same bindings set.
         let def: manifold_core::effect_graph_def::EffectGraphDef =
-            if let Some(override_def) = layer.generator_graph.as_ref() {
+            if let Some(override_def) = layer.generator_graph() {
                 let mut d = override_def.clone();
                 manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
                     &mut d, gen_type,

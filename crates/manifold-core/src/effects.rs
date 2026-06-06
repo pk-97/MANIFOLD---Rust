@@ -1201,6 +1201,9 @@ impl PresetInstance {
         if self.ableton_mappings.is_some() {
             field_count += 1;
         }
+        if self.graph.is_some() {
+            field_count += 1;
+        }
         if self.legacy_param_version.is_some() {
             field_count += 1;
         }
@@ -1231,6 +1234,9 @@ impl PresetInstance {
         }
         if let Some(m) = &self.ableton_mappings {
             s.serialize_field("abletonMappings", m)?;
+        }
+        if let Some(g) = &self.graph {
+            s.serialize_field("graph", g)?;
         }
         if let Some(v) = self.legacy_param_version {
             s.serialize_field("genParamVersion", &v)?;
@@ -1438,6 +1444,12 @@ struct GeneratorInstanceRaw {
     envelopes: Option<Vec<ParamEnvelope>>,
     #[serde(default)]
     ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+    /// The generator's per-instance graph override. Lives on the generator
+    /// `PresetInstance` now (graph-home unification) exactly like an effect's
+    /// `graph`; older projects carried it on the layer (`generatorGraph`) and
+    /// the load migration relocates it here.
+    #[serde(default)]
+    graph: Option<EffectGraphDef>,
     #[serde(default, rename = "genParamVersion")]
     legacy_param_version: Option<i32>,
 }
@@ -1463,7 +1475,7 @@ impl GeneratorInstanceRaw {
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
             group_id: None,
-            graph: None,
+            graph: self.graph,
             graph_version: 0,
             graph_structure_version: 0,
             legacy_param0: None,
@@ -1497,6 +1509,55 @@ where
 }
 
 impl PresetInstance {
+    /// The per-instance graph override (`None` ⇒ use the catalog default).
+    /// One home for both effects and generators after the graph-home
+    /// unification (the generator graph used to live on `Layer`).
+    #[inline]
+    pub fn graph_def(&self) -> &Option<EffectGraphDef> {
+        &self.graph
+    }
+
+    /// Mutable handle to the per-instance graph override, for the graph
+    /// editing commands.
+    #[inline]
+    pub fn graph_def_mut(&mut self) -> &mut Option<EffectGraphDef> {
+        &mut self.graph
+    }
+
+    /// Bump the graph version so the renderer re-snapshots the graph for the
+    /// UI. Bumped by *every* graph edit (value, position, structure). Does NOT
+    /// on its own force a chain rebuild — see [`Self::bump_graph_structure_version`].
+    #[inline]
+    pub fn bump_graph_version(&mut self) {
+        self.graph_version = self.graph_version.wrapping_add(1);
+    }
+
+    /// Bump the *structure* version — and the snapshot version with it — for an
+    /// edit that changes the graph's topology (node/wire add or remove, a full
+    /// revert). The renderer keys its rebuild on the structure version, so this
+    /// is the only path that forces a chain rebuild (and the state reset that
+    /// comes with it). Value/position-only edits call
+    /// [`Self::bump_graph_version`] instead, so they refresh in place.
+    #[inline]
+    pub fn bump_graph_structure_version(&mut self) {
+        self.graph_structure_version = self.graph_structure_version.wrapping_add(1);
+        self.graph_version = self.graph_version.wrapping_add(1);
+    }
+
+    /// Write the user-set base value (pre-modulation) for a `param_id`,
+    /// resolving the id through the static + user-binding tail. Returns `true`
+    /// if the id resolved. The UI clamps upstream, so no clamp here. Used by the
+    /// editing commands that drive a card param through a [`GraphTarget`].
+    pub fn set_base_param_by_id(&mut self, param_id: &str, value: f32) -> bool {
+        match self.param_id_to_value_index(param_id) {
+            Some(idx) => {
+                self.set_base_param(idx, value);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Create a new effect-kind PresetInstance with the given type.
     pub fn new(effect_type: PresetTypeId) -> Self {
         Self {

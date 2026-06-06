@@ -40,7 +40,73 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.4.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.5.0") {
+        migrate_v140_to_v150(&mut root);
+        root["projectVersion"] = Value::String("1.5.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.4.0 → v1.5.0: graph-home unification. The generator's per-instance graph
+/// override used to live at the layer level (`generatorGraph` + two version
+/// counters); it now lives on the generator `PresetInstance` itself
+/// (`genParams.graph`), exactly like an effect's `graph`. For each layer
+/// carrying a `generatorGraph`, this:
+///   1. ensures the layer has a `genParams` object (synthesizing a minimal one
+///      from the layer's `generatorType` when a graph existed without param
+///      state — the old decoupled state);
+///   2. moves `generatorGraph` into `genParams.graph`;
+///   3. drops the layer-level `generatorGraph` + the two version counters (the
+///      versions are runtime-only now and reset to 0 on load).
+///
+/// Idempotent: a v1.5 layer has no `generatorGraph` field, so a re-run finds
+/// nothing to move.
+fn migrate_v140_to_v150(root: &mut Value) {
+    let Some(layers) = root
+        .get_mut("timeline")
+        .and_then(|t| t.get_mut("layers"))
+        .and_then(|l| l.as_array_mut())
+    else {
+        return;
+    };
+    for layer in layers {
+        let Some(map) = layer.as_object_mut() else {
+            continue;
+        };
+        let Some(graph) = map.remove("generatorGraph") else {
+            // No override on this layer — just drop any stale version counters.
+            map.remove("generatorGraphVersion");
+            map.remove("generatorGraphStructureVersion");
+            continue;
+        };
+        map.remove("generatorGraphVersion");
+        map.remove("generatorGraphStructureVersion");
+
+        // Derive the generator type before borrowing `genParams` mutably, for
+        // the rare graph-without-params state where we must synthesize a host.
+        let gen_type = map
+            .get("genParams")
+            .and_then(|g| g.get("generatorType"))
+            .or_else(|| map.get("generatorType"))
+            .cloned();
+
+        // Ensure a `genParams` object exists to host the graph. A generator
+        // layer normally already has one; synthesize a minimal one otherwise.
+        let gen_params = map.entry("genParams").or_insert_with(|| {
+            let mut m = serde_json::Map::new();
+            m.insert("paramValues".into(), Value::Array(Vec::new()));
+            Value::Object(m)
+        });
+        if let Some(gp) = gen_params.as_object_mut() {
+            if !gp.contains_key("generatorType")
+                && let Some(t) = gen_type
+            {
+                gp.insert("generatorType".into(), t);
+            }
+            gp.insert("graph".into(), graph);
+        }
+    }
 }
 
 /// v1.3.0 → v1.4.0: binding-storage unification. User-added effect
@@ -423,7 +489,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.4.0")
+            Some("1.5.0")
         );
     }
 
@@ -439,7 +505,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.4.0")
+            Some("1.5.0")
         );
     }
 
@@ -453,22 +519,93 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.4.0")
+            Some("1.5.0")
         );
     }
 
     #[test]
-    fn test_v140_input_is_not_remigrated() {
+    fn test_v150_input_is_not_remigrated() {
         // Already-current projects pass through unchanged.
         let json = r#"{
-            "projectVersion": "1.4.0",
+            "projectVersion": "1.5.0",
             "projectName": "current"
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.4.0")
+            Some("1.5.0")
+        );
+    }
+
+    /// v1.4 → v1.5 graph-home: a layer-level `generatorGraph` (+ version
+    /// counters) relocates into `genParams.graph`; the layer-level fields are
+    /// dropped. The generator type is preserved on the host.
+    #[test]
+    fn v140_generator_graph_relocates_into_gen_params() {
+        let json = r#"{
+            "projectVersion": "1.4.0",
+            "projectName": "gen",
+            "timeline": { "layers": [
+                {
+                    "layerId": "L1",
+                    "layerType": "Generator",
+                    "genParams": { "generatorType": "Plasma", "paramValues": [] },
+                    "generatorGraph": { "version": 2, "name": "edited", "nodes": [], "wires": [] },
+                    "generatorGraphVersion": 5,
+                    "generatorGraphStructureVersion": 3
+                }
+            ] }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        let layer = &v["timeline"]["layers"][0];
+        assert!(
+            layer.get("generatorGraph").is_none(),
+            "layer-level generatorGraph must be removed",
+        );
+        assert!(layer.get("generatorGraphVersion").is_none());
+        assert!(layer.get("generatorGraphStructureVersion").is_none());
+        assert_eq!(
+            layer["genParams"]["graph"]["name"].as_str(),
+            Some("edited"),
+            "the override now lives on genParams.graph",
+        );
+        assert_eq!(
+            layer["genParams"]["generatorType"].as_str(),
+            Some("Plasma"),
+            "the generator type on the host is preserved",
+        );
+    }
+
+    /// The graph-without-params edge case: a v1.4 layer with a `generatorGraph`
+    /// but no `genParams` synthesizes a host carrying the flat `generatorType`.
+    #[test]
+    fn v140_generator_graph_without_params_synthesizes_host() {
+        let json = r#"{
+            "projectVersion": "1.4.0",
+            "projectName": "gen",
+            "timeline": { "layers": [
+                {
+                    "layerId": "L1",
+                    "layerType": "Generator",
+                    "generatorType": "Tesseract",
+                    "generatorGraph": { "version": 1, "nodes": [], "wires": [] }
+                }
+            ] }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        let layer = &v["timeline"]["layers"][0];
+        assert!(layer.get("generatorGraph").is_none());
+        assert!(
+            layer["genParams"]["graph"].is_object(),
+            "synthesized genParams hosts the graph",
+        );
+        assert_eq!(
+            layer["genParams"]["generatorType"].as_str(),
+            Some("Tesseract"),
+            "synthesized host inherits the flat generator type",
         );
     }
 

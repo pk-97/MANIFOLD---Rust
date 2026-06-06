@@ -227,7 +227,7 @@ impl Project {
             }
         }
         for layer in &mut self.timeline.layers {
-            if let Some(gen_graph) = layer.generator_graph.as_mut() {
+            if let Some(gen_graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
                 stamp(gen_graph);
             }
             if let Some(effects) = layer.effects.as_mut() {
@@ -887,19 +887,19 @@ impl Project {
         None
     }
 
-    /// Run `f` against the [`crate::graph_host::GraphHost`] that a
+    /// Run `f` against the [`crate::effects::PresetInstance`] that a
     /// [`crate::graph_target::GraphTarget`] resolves to, returning its
     /// result (`None` if the target doesn't resolve). The one entry point
     /// editing commands use to operate on an effect instance or a layer's
-    /// generator without forking: effect targets resolve to the
-    /// `PresetInstance` (master / layer / clip scope), generator targets to
-    /// a `GeneratorHost` bundling the layer's generator state + graph
-    /// override. A closure, not a returned `&mut dyn`, because the
-    /// generator host is a temporary borrowing two disjoint layer fields.
-    pub fn with_graph_host_mut<R>(
+    /// generator without forking — both are a `PresetInstance` now that the
+    /// generator's graph lives on `gen_params` (graph-home unification), so
+    /// there is no `GraphHost`/`GeneratorHost` abstraction. A generator target
+    /// initializes the layer's `gen_params` if absent (graph editing must work
+    /// before param state exists), inheriting the layer's generator type.
+    pub fn with_preset_graph_mut<R>(
         &mut self,
         target: &crate::graph_target::GraphTarget,
-        f: impl FnOnce(&mut dyn crate::graph_host::GraphHost) -> R,
+        f: impl FnOnce(&mut crate::effects::PresetInstance) -> R,
     ) -> Option<R> {
         match target {
             crate::graph_target::GraphTarget::Effect(eid) => {
@@ -908,8 +908,7 @@ impl Project {
             }
             crate::graph_target::GraphTarget::Generator(lid) => {
                 let (_, layer) = self.timeline.find_layer_by_id_mut(lid.as_str())?;
-                let mut host = layer.graph_host_mut();
-                Some(f(&mut host))
+                Some(f(layer.gen_params_or_init()))
             }
         }
     }
@@ -1124,7 +1123,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             project_name: String::new(),
-            project_version: "1.4.0".to_string(),
+            project_version: "1.5.0".to_string(),
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),

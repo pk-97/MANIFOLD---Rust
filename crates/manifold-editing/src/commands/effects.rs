@@ -278,7 +278,7 @@ impl Command for ChangeGraphParamCommand {
     fn execute(&mut self, project: &mut Project) {
         let id = self.param_id.clone();
         let val = self.new_value;
-        project.with_graph_host_mut(&self.target, |host| {
+        project.with_preset_graph_mut(&self.target, |host| {
             host.set_base_param_by_id(id.as_ref(), val);
         });
     }
@@ -286,7 +286,7 @@ impl Command for ChangeGraphParamCommand {
     fn undo(&mut self, project: &mut Project) {
         let id = self.param_id.clone();
         let val = self.old_value;
-        project.with_graph_host_mut(&self.target, |host| {
+        project.with_preset_graph_mut(&self.target, |host| {
             host.set_base_param_by_id(id.as_ref(), val);
         });
     }
@@ -953,7 +953,7 @@ impl Command for EditParamMappingCommand {
         // self-capture (which would snapshot the preview-mutated spec).
         let keep_snapshot = self.explicit_reverse.is_none();
         let snap = project
-            .with_graph_host_mut(&self.target, |host| {
+            .with_preset_graph_mut(&self.target, |host| {
                 // Materialize the per-instance graph override if the instance is
                 // still on the catalog default, so the reshape has a home.
                 if host.graph_def().is_none() {
@@ -980,7 +980,7 @@ impl Command for EditParamMappingCommand {
         // Drag-commit: apply the explicit pre-drag reverse edit (partial — only
         // the fields the drag moved), landing on the true pre-drag values.
         if let Some(reverse_edit) = self.explicit_reverse.clone() {
-            project.with_graph_host_mut(&self.target, |host| {
+            project.with_preset_graph_mut(&self.target, |host| {
                 let Some(graph) = host.graph_def_mut().as_mut() else {
                     return;
                 };
@@ -999,7 +999,7 @@ impl Command for EditParamMappingCommand {
         let Some(reverse) = self.reverse.clone() else {
             return;
         };
-        project.with_graph_host_mut(&self.target, |host| {
+        project.with_preset_graph_mut(&self.target, |host| {
             let Some(graph) = host.graph_def_mut().as_mut() else {
                 return;
             };
@@ -1378,7 +1378,9 @@ mod tests {
                 .iter()
                 .find(|l| l.layer_id.as_str() == lid)
                 .expect("layer present");
-            let (invert, _max, scale) = spec_reshape(&layer.generator_graph, "complexity");
+            // The generator graph lives on gen_params now (graph-home unification).
+            let gp = layer.gen_params().expect("gen params present");
+            let (invert, _max, scale) = spec_reshape(&gp.graph, "complexity");
             (invert, scale)
         };
 

@@ -401,11 +401,10 @@ impl GeneratorRenderer {
                 continue;
             };
             let current_override_version: Option<u32> = layer
-                .generator_graph
-                .as_ref()
-                .map(|_| layer.generator_graph_structure_version);
+                .generator_graph()
+                .map(|_| layer.generator_graph_structure_version());
             let current_param_version: Option<u32> =
-                layer.generator_graph.as_ref().map(|_| layer.generator_graph_version);
+                layer.generator_graph().map(|_| layer.generator_graph_version());
             // Rebuild only on a *structure* change (override structure-version
             // bump) OR when the layer's watched state flipped (editor
             // opened/closed — swaps the generator fused ⇄ unfused). A value-only
@@ -421,7 +420,7 @@ impl GeneratorRenderer {
                 if let Some(ls) = self.layer_generators.get_mut(layer_id)
                     && ls.applied_param_version != current_param_version
                 {
-                    if let Some(def) = layer.generator_graph.as_ref() {
+                    if let Some(def) = layer.generator_graph() {
                         ls.generator.apply_inner_param_overrides(def);
                     }
                     ls.applied_param_version = current_param_version;
@@ -434,7 +433,7 @@ impl GeneratorRenderer {
                 .map(|ls| ls.trigger_count)
                 .unwrap_or(0);
             let gen_type = layer.generator_type().clone();
-            let override_def = layer.generator_graph.as_ref();
+            let override_def = layer.generator_graph();
             self.install_layer_generator(
                 layer_id.clone(),
                 gen_type,
@@ -789,11 +788,11 @@ impl ClipRenderer for GeneratorRenderer {
         // Per-layer generator graph override + its version counters. The
         // generator rebuilds only on a *structure* change; a value-only edit
         // bumps the snapshot `param_version` and is applied in place.
-        let override_def = layer.and_then(|l| l.generator_graph.as_ref());
+        let override_def = layer.and_then(|l| l.generator_graph());
         let override_version = layer
-            .map(|l| l.generator_graph_structure_version)
+            .map(|l| l.generator_graph_structure_version())
             .unwrap_or(0);
-        let param_version = layer.map(|l| l.generator_graph_version).unwrap_or(0);
+        let param_version = layer.map(|l| l.generator_graph_version()).unwrap_or(0);
         let acquired = self.acquire_clip(
             &clip.id,
             gen_type,

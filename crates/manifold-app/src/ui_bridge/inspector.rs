@@ -2669,7 +2669,7 @@ pub(super) fn dispatch_inspector(
                 // bindings live only on the graph; the registry-only
                 // lookup would yield (0.0, 1.0) and silently squash
                 // the slider's true range.
-                let (min, max) = if let Some(graph) = layer.generator_graph.as_ref()
+                let (min, max) = if let Some(graph) = layer.generator_graph()
                     && let Some(meta) = graph.preset_metadata.as_ref()
                     && let Some(spec) = meta.params.iter().find(|p| p.id == *param_id)
                 {

@@ -1105,7 +1105,7 @@ pub fn sync_inspector_data(
                         gp,
                         lid,
                         clip_string_params,
-                        layer.generator_graph.as_ref(),
+                        layer.generator_graph(),
                     )
                 });
             let layer_id = layer.layer_id.clone();
@@ -1183,7 +1183,7 @@ pub(crate) fn editor_card_config(
                 gp,
                 layer.layer_id.as_str(),
                 clip_string_params,
-                layer.generator_graph.as_ref(),
+                layer.generator_graph(),
             );
             Some((config, gp.param_values.clone()))
         }

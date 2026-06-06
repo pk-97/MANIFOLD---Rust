@@ -56,7 +56,7 @@ fn with_target_graph_mut<F, R>(
 where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
-    project.with_graph_host_mut(target, |host| {
+    project.with_preset_graph_mut(target, |host| {
         let def = host
             .graph_def_mut()
             .get_or_insert_with(|| catalog_default.clone());
@@ -85,7 +85,7 @@ where
     F: FnOnce(&mut EffectGraphDef) -> R,
 {
     project
-        .with_graph_host_mut(target, |host| {
+        .with_preset_graph_mut(target, |host| {
             let def = host.graph_def_mut().as_mut()?;
             let r = f(def);
             if structural {
@@ -105,7 +105,7 @@ fn take_target_graph(
     project: &mut Project,
     target: &GraphTarget,
 ) -> Option<Option<EffectGraphDef>> {
-    project.with_graph_host_mut(target, |host| {
+    project.with_preset_graph_mut(target, |host| {
         let prev = host.graph_def_mut().take();
         host.bump_graph_structure_version();
         prev
@@ -119,7 +119,7 @@ fn install_target_graph(
     target: &GraphTarget,
     graph: Option<EffectGraphDef>,
 ) {
-    project.with_graph_host_mut(target, |host| {
+    project.with_preset_graph_mut(target, |host| {
         *host.graph_def_mut() = graph;
         host.bump_graph_structure_version();
     });
@@ -2029,45 +2029,50 @@ fn unmirror_generator_side(
 ) {
     // Restore the graph-side metadata first so the slot it points
     // at exists / doesn't exist before we touch `gp.param_values`.
-    if let Some(def) = layer.generator_graph.as_mut() {
-        match &mirror {
-            GeneratorMirrorReverse::AppendedUserBinding {
-                binding_index,
-                spec_index,
-                ..
-            } => {
-                if let Some(meta) = def.preset_metadata.as_mut() {
-                    if *binding_index < meta.bindings.len() {
-                        meta.bindings.remove(*binding_index);
-                    }
-                    if *spec_index < meta.params.len() {
-                        meta.params.remove(*spec_index);
+    // The generator graph lives on `gen_params` now (graph-home unification).
+    if let Some(gp) = layer.gen_params_mut() {
+        if let Some(def) = gp.graph.as_mut() {
+            match &mirror {
+                GeneratorMirrorReverse::AppendedUserBinding {
+                    binding_index,
+                    spec_index,
+                    ..
+                } => {
+                    if let Some(meta) = def.preset_metadata.as_mut() {
+                        if *binding_index < meta.bindings.len() {
+                            meta.bindings.remove(*binding_index);
+                        }
+                        if *spec_index < meta.params.len() {
+                            meta.params.remove(*spec_index);
+                        }
                     }
                 }
-            }
-            GeneratorMirrorReverse::RemovedUserBinding {
-                binding,
-                spec,
-                binding_index,
-                spec_index,
-                ..
-            } => {
-                if let Some(meta) = def.preset_metadata.as_mut() {
-                    let bi = (*binding_index).min(meta.bindings.len());
-                    let si = (*spec_index).min(meta.params.len());
-                    meta.bindings.insert(bi, binding.clone());
-                    meta.params.insert(si, spec.clone());
+                GeneratorMirrorReverse::RemovedUserBinding {
+                    binding,
+                    spec,
+                    binding_index,
+                    spec_index,
+                    ..
+                } => {
+                    if let Some(meta) = def.preset_metadata.as_mut() {
+                        let bi = (*binding_index).min(meta.bindings.len());
+                        let si = (*spec_index).min(meta.params.len());
+                        meta.bindings.insert(bi, binding.clone());
+                        meta.params.insert(si, spec.clone());
+                    }
                 }
+                GeneratorMirrorReverse::NoOp => {}
             }
-            GeneratorMirrorReverse::NoOp => {}
+            // Exposure bit lives on the node's `exposed_params` set —
+            // restore it inline since we already hold the graph borrow.
+            restore_graph_exposed(def, node_id, inner_param, prev_in_set);
         }
-        // Exposure bit lives on the node's `exposed_params` set —
-        // restore it inline since we already hold the graph borrow.
-        restore_graph_exposed(def, node_id, inner_param, prev_in_set);
         // Bump version so the renderer rebuilds against the
         // restored shape. `with_existing_target_graph_mut` does this
         // for the effect-side; we mirror it manually here.
-        layer.generator_graph_version = layer.generator_graph_version.wrapping_add(1);
+        if gp.graph.is_some() {
+            gp.graph_version = gp.graph_version.wrapping_add(1);
+        }
     }
 
     match mirror {
@@ -3054,13 +3059,13 @@ mod tests {
 
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
         assert!(
-            layer.generator_graph.is_some(),
+            layer.generator_graph().is_some(),
             "generator_graph must lift from None on first edit",
         );
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         assert_eq!(def.nodes.len(), 5, "catalog 4 + new node = 5");
         assert!(def.nodes.iter().any(|n| n.type_id == "node.uv_field"));
-        assert_eq!(layer.generator_graph_version, 1);
+        assert_eq!(layer.generator_graph_version(), 1);
     }
 
     #[test]
@@ -3073,7 +3078,7 @@ mod tests {
             .find_layer_by_id_mut(&lid)
             .unwrap()
             .1
-            .generator_graph = Some(mirror_catalog_default());
+            .gen_params_or_init().graph = Some(mirror_catalog_default());
 
         let mut revert = RevertEffectGraphCommand::new(GraphTarget::Generator(lid.clone()));
         revert.execute(&mut project);
@@ -3083,7 +3088,7 @@ mod tests {
                 .find_layer_by_id(&lid)
                 .unwrap()
                 .1
-                .generator_graph
+                .generator_graph()
                 .is_none(),
             "execute clears the override",
         );
@@ -3095,7 +3100,7 @@ mod tests {
                 .find_layer_by_id(&lid)
                 .unwrap()
                 .1
-                .generator_graph
+                .generator_graph()
                 .is_some(),
             "undo restores the previous override",
         );
@@ -3127,7 +3132,7 @@ mod tests {
         cmd.execute(&mut project);
 
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let node = def
             .nodes
             .iter()
@@ -3141,7 +3146,7 @@ mod tests {
         // Undo flips it back.
         cmd.undo(&mut project);
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let node = def
             .nodes
             .iter()
@@ -3270,7 +3275,7 @@ mod tests {
         let (mut project, lid) = project_with_one_generator_layer();
         {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
-            layer.generator_graph = Some(preset_def());
+            layer.gen_params_or_init().graph = Some(preset_def());
             // gen_params starts with the two bundled slot values.
             let gp = layer.gen_params_or_init();
             gp.init_defaults_for_type(PresetTypeId::from_string(
@@ -3307,7 +3312,7 @@ mod tests {
         // Assert: preset_metadata grew by one entry in both lists,
         // marked user_added=true.
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let meta = def.preset_metadata.as_ref().unwrap();
         assert_eq!(
             meta.params.len(),
@@ -3363,7 +3368,7 @@ mod tests {
         // Undo restores everything.
         expose.undo(&mut project);
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let meta = def.preset_metadata.as_ref().unwrap();
         assert_eq!(meta.params.len(), 2, "undo removes the user-added param");
         assert_eq!(
@@ -3386,7 +3391,7 @@ mod tests {
         // Re-execute → state matches post-execute.
         expose.execute(&mut project);
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let meta = def.preset_metadata.as_ref().unwrap();
         assert_eq!(meta.bindings.len(), 3);
         assert_eq!(meta.bindings.last().unwrap().id, user_param_id);
@@ -3527,7 +3532,7 @@ mod tests {
         let (mut project, lid) = project_with_one_generator_layer();
         {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
-            layer.generator_graph = Some(preset_def_with_user_added());
+            layer.gen_params_or_init().graph = Some(preset_def_with_user_added());
             let gp = layer.gen_params_or_init();
             gp.init_defaults_for_type(PresetTypeId::from_string(
                 "test.wireframe".to_string(),
@@ -3574,7 +3579,7 @@ mod tests {
         unexpose.execute(&mut project);
 
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let meta = def.preset_metadata.as_ref().unwrap();
         assert_eq!(meta.params.len(), 1, "user-added param removed");
         assert_eq!(meta.bindings.len(), 1, "user-added binding removed");
@@ -3595,7 +3600,7 @@ mod tests {
         // Undo restores everything.
         unexpose.undo(&mut project);
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let meta = def.preset_metadata.as_ref().unwrap();
         assert_eq!(meta.params.len(), 2, "undo restores user-added param");
         assert_eq!(meta.bindings.len(), 2, "undo restores user-added binding");
@@ -3935,7 +3940,7 @@ mod tests {
             .find_layer_by_id_mut(&lid)
             .unwrap()
             .1
-            .generator_graph = Some(preset_def_with_pattern_binding());
+            .gen_params_or_init().graph = Some(preset_def_with_pattern_binding());
 
         // UNCHECK Pattern.
         let mut cmd = ToggleNodeParamExposeCommand::new(
@@ -3957,7 +3962,7 @@ mod tests {
         // The def must NOT contain "pattern" in exposed_params for
         // the "gen" node.
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let node = def
             .nodes
             .iter()
@@ -4056,7 +4061,7 @@ mod tests {
         cmd.execute(&mut project);
 
         let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
-        let def = layer.generator_graph.as_ref().unwrap();
+        let def = layer.generator_graph().unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
         let v = node.params.get("rotation").unwrap();
         match v {
