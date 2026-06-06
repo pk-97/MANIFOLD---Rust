@@ -1,8 +1,7 @@
 use crate::clip::TimelineClip;
 use crate::color::Color;
 use crate::preset_type_id::PresetTypeId;
-use crate::effects::{EffectGroup, PresetInstance, ParamEnvelope, ParameterDriver};
-use crate::generator::GeneratorParamState;
+use crate::effects::{EffectGroup, ParamEnvelope, ParameterDriver, PresetInstance};
 use crate::id::{ClipId, EffectGroupId, LayerId};
 use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
 use crate::units::{Beats, Seconds};
@@ -76,8 +75,17 @@ pub struct Layer {
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // ── Generator params (V1.1.0+, nested) ──
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    gen_params: Option<GeneratorParamState>,
+    // A generator is a `PresetInstance { kind: Generator }`. It serializes
+    // through the kind-aware `Serialize` (generator JSON shape, byte-identical
+    // to the former `GeneratorParamState`), but must DESERIALIZE via the
+    // generator decoder — the default `PresetInstance` deserialize reads the
+    // effect shape (`effectType`/`id`), which a generator object lacks.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::effects::deserialize_opt_generator_instance"
+    )]
+    gen_params: Option<PresetInstance>,
 
     /// Per-layer override for the generator's internal graph
     /// (`EffectGraphDef`). Mirrors `PresetInstance.graph` — `None`
@@ -243,7 +251,7 @@ impl Layer {
     /// Create a new generator layer with fully initialized params.
     pub fn new_generator(name: String, gen_type: PresetTypeId, index: i32) -> Self {
         let mut layer = Self::new(name, LayerType::Generator, index);
-        layer.gen_params = Some(GeneratorParamState::new(gen_type));
+        layer.gen_params = Some(PresetInstance::new(gen_type));
         layer
     }
 
@@ -254,21 +262,21 @@ impl Layer {
 
     /// Read-only access to generator params.
     #[inline]
-    pub fn gen_params(&self) -> Option<&GeneratorParamState> {
+    pub fn gen_params(&self) -> Option<&PresetInstance> {
         self.gen_params.as_ref()
     }
 
     /// Mutable access to generator params.
     #[inline]
-    pub fn gen_params_mut(&mut self) -> Option<&mut GeneratorParamState> {
+    pub fn gen_params_mut(&mut self) -> Option<&mut PresetInstance> {
         self.gen_params.as_mut()
     }
 
     /// Mutable access to generator params, creating a default if None.
     #[inline]
-    pub fn gen_params_or_init(&mut self) -> &mut GeneratorParamState {
+    pub fn gen_params_or_init(&mut self) -> &mut PresetInstance {
         self.gen_params
-            .get_or_insert_with(GeneratorParamState::default)
+            .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE))
     }
 
     /// Generates a distinct color for layer visualization based on index.
@@ -718,7 +726,7 @@ impl Layer {
         }
         let gp = self
             .gen_params
-            .get_or_insert_with(GeneratorParamState::default);
+            .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE));
         gp.change_type(new_type.clone());
         if self.generator_graph.take().is_some() {
             // Dropping the override swaps in a different def — structural.
@@ -743,7 +751,7 @@ impl Layer {
         }
         let gp = self
             .gen_params
-            .get_or_insert_with(GeneratorParamState::default);
+            .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE));
         gp.restore(old_type.clone(), params, drivers, envelopes);
     }
 

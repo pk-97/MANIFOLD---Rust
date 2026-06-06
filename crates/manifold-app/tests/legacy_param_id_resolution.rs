@@ -366,7 +366,7 @@ fn liveschool_full_registry_resolution() {
 
 #[test]
 fn liveschool_gen_param_values_save_as_id_keyed_map() {
-    // Step 13: GeneratorParamState gets the same Map-shape wire
+    // Step 13: PresetInstance gets the same Map-shape wire
     // format as PresetInstance. With the renderer registry linked,
     // serializing a `gen_params` block must emit `paramValues` as a
     // Map keyed by the generator's stable param ids.
@@ -387,7 +387,7 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
         .expect("Liveschool must have at least one generator with params");
     let original_values = gp.param_values.clone();
 
-    let json = serde_json::to_string(gp).expect("serialize GeneratorParamState");
+    let json = serde_json::to_string(gp).expect("serialize PresetInstance");
     assert!(
         json.contains("\"paramValues\":{"),
         "registry-aware Serialize must emit gen paramValues as a Map; got: {json}"
@@ -397,8 +397,13 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
         "must NOT emit Array form for generator params when registry def is available; got: {json}"
     );
 
-    let back: manifold_core::generator::GeneratorParamState =
-        serde_json::from_str(&json).expect("deserialize gen map form");
+    // A generator instance decodes through the generator-shape deserializer
+    // (the same one `Layer.gen_params` uses via `deserialize_with`); the bare
+    // `PresetInstance` deserialize reads the effect shape (`effectType`/`id`).
+    let mut de = serde_json::Deserializer::from_str(&json);
+    let back: manifold_core::effects::PresetInstance =
+        manifold_core::effects::deserialize_generator_instance(&mut de)
+            .expect("deserialize gen map form");
     assert_eq!(
         back.param_values, original_values,
         "Map → positional round-trip must preserve all generator values exactly"

@@ -240,7 +240,7 @@ pub struct JsonGraphGenerator {
     /// re-running the full `from_def` resolve. The generator mirror of
     /// `EffectSlot.static_specs`. Matched to `bindings` by `id`.
     binding_specs: Vec<manifold_core::effect_graph_def::BindingDef>,
-    /// Last `GeneratorParamState.param_mappings_version` applied via
+    /// Last `PresetInstance.param_mappings_version` applied via
     /// [`Generator::apply_param_notes`]. Starts at `u32::MAX` so the first
     /// frame always applies (loaded notes take effect immediately, since
     /// the version isn't serialized and resets to 0).

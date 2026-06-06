@@ -1042,7 +1042,7 @@ enum GeneratorMirrorReverse {
         /// matched the removed binding's id.
         removed_drivers: Vec<manifold_core::effects::ParameterDriver>,
         /// Envelopes pruned from `gp.envelopes`. Generators store
-        /// envelopes directly on `GeneratorParamState` (not on the
+        /// envelopes directly on `PresetInstance` (not on the
         /// host layer like effects do), so capturing them needs only
         /// the same borrow as the rest of the gen-mirror cleanup.
         removed_envelopes: Vec<manifold_core::effects::ParamEnvelope>,
@@ -1273,7 +1273,7 @@ impl Command for ToggleNodeParamExposeCommand {
 
         // Per-target mirror. Effect mirror touches PresetInstance +
         // host layer (envelopes); generator mirror touches the layer's
-        // GeneratorParamState only.
+        // PresetInstance only.
         let mirror = match &self.target {
             GraphTarget::Effect(effect_id) => {
                 let effect = match project.find_effect_by_id_mut(effect_id) {
@@ -1350,7 +1350,7 @@ impl Command for ToggleNodeParamExposeCommand {
             }
             GraphTarget::Generator(layer_id) => {
                 // Generator side: apply gen_spec to the layer's
-                // GeneratorParamState. The spec is pre-computed
+                // PresetInstance. The spec is pre-computed
                 // against the graph borrow so we know exactly which
                 // (binding, spec) pair was just appended or which
                 // slot needs removal.
@@ -1882,7 +1882,7 @@ fn generate_unique_user_param_id_in(
 }
 
 /// Apply the precomputed `GeneratorMirrorSpec` to a layer's
-/// `GeneratorParamState`. Returns the matching
+/// `PresetInstance`. Returns the matching
 /// `GeneratorMirrorReverse` for undo capture.
 fn apply_generator_mirror(
     layer: &mut manifold_core::layer::Layer,

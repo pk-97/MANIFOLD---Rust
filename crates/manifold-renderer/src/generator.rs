@@ -39,7 +39,7 @@ pub trait Generator: Send {
     fn set_string_params(&mut self, _params: Option<&BTreeMap<String, String>>) {}
 
     /// Apply the host's per-instance reshape notes
-    /// (`GeneratorParamState.param_mappings`) to this generator's bindings.
+    /// (`PresetInstance.param_mappings`) to this generator's bindings.
     /// Called once per frame before `render()` with the layer's current
     /// notes + their version. The default is a no-op (Rust generators and
     /// note-free graphs ignore it); `JsonGraphGenerator` overrides it to

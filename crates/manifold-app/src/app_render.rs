@@ -2494,7 +2494,7 @@ impl Application {
 
         // The left lane renders the REAL effect/generator card for the edited
         // target — the same `ParamCardPanel` the inspector shows, configured
-        // from the same `PresetInstance` / `GeneratorParamState`, resolved by
+        // from the same `PresetInstance` / `PresetInstance`, resolved by
         // identity from `watched_graph_target` (effect id or generator layer).
         // Resolved once per editor frame; `None` (degenerate open state with
         // no resolvable target) leaves the lane empty.

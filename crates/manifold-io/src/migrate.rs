@@ -306,7 +306,7 @@ fn migrate_v120_to_v130(_root: &mut Value) {
 /// v1.1.0 → v1.2.0: parameter addressing migration to stable
 /// `param_id`. The bidirectional `Deserialize` impls on
 /// `ParameterDriver`, `ParamEnvelope`, `AbletonParamMapping`,
-/// `MacroMapping`, `PresetInstance`, and `GeneratorParamState`
+/// `MacroMapping`, `PresetInstance`, and `PresetInstance`
 /// (steps 8–13) accept both V1.1 (`paramIndex` / `Array`) and V1.2
 /// (`paramId` / `Map`) shapes natively, so this migration only needs
 /// to bump the version stamp — no JSON rewriting required.

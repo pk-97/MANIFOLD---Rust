@@ -1154,7 +1154,7 @@ pub fn sync_inspector_data(
 /// [`effect_card_config_by_id`]) or a layer generator (`Generator(LayerId)`).
 /// The editor's left lane renders the REAL card from this: the same
 /// [`ParamCardConfig`] the inspector builds, sourced from the same
-/// `PresetInstance` / `GeneratorParamState`, so the editor card is the actual
+/// `PresetInstance` / `PresetInstance`, so the editor card is the actual
 /// instrument card and not a separate mirror. Returns `None` when nothing is
 /// being edited or the target can't be resolved (degenerate open state → the
 /// lane shows nothing).
@@ -1560,7 +1560,7 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
     }
 }
 
-/// Convert a `GeneratorParamState` into a [`ParamCardConfig`] for the UI.
+/// Convert a `PresetInstance` into a [`ParamCardConfig`] for the UI.
 ///
 /// When the layer has a per-instance `generator_graph`, the function
 /// walks the graph's `preset_metadata.params` to source the outer-card
@@ -1569,7 +1569,7 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 /// Without a graph (legacy non-graph-backed generators), it falls
 /// back to the static `preset_definition_registry::generator` def.
 fn gen_params_to_config(
-    gp: &manifold_core::generator::GeneratorParamState,
+    gp: &manifold_core::effects::PresetInstance,
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
@@ -1700,7 +1700,7 @@ fn gen_params_to_config(
                             ableton_range,
                             // Generator params are now remappable too: the
                             // mapping drawer edits a per-instance ParamMapping
-                            // note on GeneratorParamState, so the Author-card
+                            // note on PresetInstance, so the Author-card
                             // chevron shows on every exposed generator row.
                             mappable: true,
                         }
@@ -1768,7 +1768,7 @@ fn gen_params_to_config(
                             ableton_range,
                             // Generator params are now remappable too: the
                             // mapping drawer edits a per-instance ParamMapping
-                            // note on GeneratorParamState, so the Author-card
+                            // note on PresetInstance, so the Author-card
                             // chevron shows on every exposed generator row.
                             mappable: true,
                         }

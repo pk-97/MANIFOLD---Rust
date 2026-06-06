@@ -4,7 +4,7 @@
 //!
 //! ## Why a trait, and what it deliberately does NOT unify
 //!
-//! Effects ([`PresetInstance`]) and generators ([`GeneratorParamState`],
+//! Effects ([`PresetInstance`]) and generators ([`PresetInstance`],
 //! reached through its owning [`Layer`]) are the same kind of thing — a
 //! node graph that exposes params, modulates them, and round-trips to
 //! disk. Everything that is *genuinely symmetric* lives behind this
@@ -25,7 +25,7 @@
 //!   not, and the expose/unexpose command stays effect-only.
 //! - **Envelopes.** Effect envelopes live on the owning [`Layer`], keyed
 //!   by `(effect_type, param_id)` (master effects have none); generator
-//!   envelopes live on [`GeneratorParamState`] itself, keyed by
+//!   envelopes live on [`PresetInstance`] itself, keyed by
 //!   `param_id` alone. The trait carries no envelope accessor.
 //! - **Base-param clamping.** Generators clamp writes against the
 //!   registry; effects clamp upstream in the UI. Each impl of
@@ -35,7 +35,7 @@
 //!
 //! Graph editing (Add/Remove/Connect/… nodes) only needs the
 //! `generator_graph` override, which a generator layer always has;
-//! [`GeneratorParamState`] (`gen_params`) may still be `None` on a
+//! [`PresetInstance`] (`gen_params`) may still be `None` on a
 //! freshly-created generator layer whose graph is being edited before
 //! its params are initialised. So [`GeneratorHost`] carries an *optional*
 //! params handle: the graph-def methods always work, and the param
@@ -51,8 +51,7 @@
 
 use crate::ableton_mapping::AbletonParamMapping;
 use crate::effect_graph_def::EffectGraphDef;
-use crate::effects::{PresetInstance, ParamMapping, ParamSlot, ParameterDriver, UserParamBinding};
-use crate::generator::GeneratorParamState;
+use crate::effects::{ParamMapping, ParamSlot, ParameterDriver, PresetInstance, UserParamBinding};
 
 /// Which kind of host a `&dyn GraphHost` is, for the few genuinely
 /// kind-specific decisions a caller still has to make (envelope home,
@@ -248,11 +247,11 @@ impl GraphHost for PresetInstance {
 
 /// A generator host: the layer's `generator_graph` override (always
 /// present, drives graph editing) together with an *optional*
-/// [`GeneratorParamState`] handle (the param / modulation surface, absent
+/// [`PresetInstance`] handle (the param / modulation surface, absent
 /// on a generator layer whose params aren't initialised yet). Constructed
 /// by [`crate::layer::Layer::graph_host_mut`] from disjoint layer fields.
 pub struct GeneratorHost<'a> {
-    pub params: Option<&'a mut GeneratorParamState>,
+    pub params: Option<&'a mut PresetInstance>,
     pub graph: &'a mut Option<EffectGraphDef>,
     pub graph_version: &'a mut u32,
     pub graph_structure_version: &'a mut u32,

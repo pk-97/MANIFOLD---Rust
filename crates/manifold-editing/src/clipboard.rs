@@ -47,7 +47,6 @@ impl Default for EffectClipboard {
 // ─── Generator Clipboard ───
 
 use manifold_core::effects::{ParamEnvelope, ParameterDriver};
-use manifold_core::generator::GeneratorParamState;
 use manifold_core::preset_type_id::PresetTypeId;
 
 /// Snapshot of a generator's complete state for copy/paste.
@@ -74,7 +73,7 @@ impl GeneratorClipboard {
         self.snapshot.is_some()
     }
 
-    pub fn copy_from(&mut self, state: &GeneratorParamState) {
+    pub fn copy_from(&mut self, state: &PresetInstance) {
         self.snapshot = Some(GeneratorSnapshot {
             generator_type: state.generator_type().clone(),
             // Clipboard carries effective float values; exposure is host

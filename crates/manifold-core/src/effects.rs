@@ -621,7 +621,18 @@ impl<'de> Deserialize<'de> for ParamSlot {
 /// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 12.
 #[derive(Debug, Clone)]
 pub struct PresetInstance {
-    /// Unique identifier for this effect instance.
+    /// Whether this instance is an effect (transforms an input) or a
+    /// generator (produces from nothing). The single discriminator that
+    /// carries every effect/generator behavioral difference — kind-aware
+    /// serde, the generator registry clamp on `set_param*`, and the
+    /// generator-only fields below. Effects ignore `envelopes` (their
+    /// envelopes live on the owning `Layer`) and `legacy_param_version`;
+    /// generators ignore `id`/`enabled`/`collapsed`/`group_id`/`graph`
+    /// (a generator's graph still lives on `Layer.generator_graph` in this
+    /// phase) — those are chain-membership fields with no generator meaning.
+    pub kind: crate::preset_def::PresetKind,
+    /// Unique identifier for this effect instance. Synthetic for generators
+    /// (a layer has one generator, addressed by `LayerId`).
     pub id: EffectId,
     effect_type: PresetTypeId,
     pub enabled: bool,
@@ -640,6 +651,10 @@ pub struct PresetInstance {
     pub param_values: Vec<ParamSlot>,
     pub base_param_values: Option<Vec<f32>>,
     pub drivers: Option<Vec<ParameterDriver>>,
+    /// Generator-only: per-instance ADSR/Random envelopes, keyed by
+    /// `param_id`. Effects keep their envelopes on the owning `Layer`
+    /// (keyed by `(effect_type, param_id)`); `None`/unused for effect kind.
+    pub envelopes: Option<Vec<ParamEnvelope>>,
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     pub group_id: Option<EffectGroupId>,
 
@@ -694,6 +709,10 @@ pub struct PresetInstance {
     pub legacy_param1: Option<f32>,
     pub legacy_param2: Option<f32>,
     pub legacy_param3: Option<f32>,
+
+    /// Generator-only legacy flat field from V1.0.0 (before genParams
+    /// nesting); serialized as `genParamVersion` for generator kind.
+    pub legacy_param_version: Option<i32>,
 }
 
 // ─── Wire-format helpers for paramValues ───
@@ -704,7 +723,7 @@ pub struct PresetInstance {
 /// `Map<id, {value, exposed}>` — the polymorphic [`ParamSlot`]
 /// deserializer normalizes per-element across versions.
 ///
-/// Used only by `PresetInstance`. `GeneratorParamState` and
+/// Used only by `PresetInstance`. `PresetInstance` and
 /// `PresetInstance.baseParamValues` use [`FloatValuesWire`] which
 /// stays plain `Vec<f32>` (exposure is meaningless there).
 #[derive(Deserialize)]
@@ -800,7 +819,7 @@ impl ParamValuesWire {
     }
 
     /// Generator-registry counterpart to [`Self::into_positional`].
-    /// Produces `Vec<ParamSlot>` for `GeneratorParamState.paramValues`.
+    /// Produces `Vec<ParamSlot>` for `PresetInstance.paramValues`.
     /// No user-binding tail parameter: generator user-added bindings
     /// live in the graph's `preset_metadata` and, when present, push
     /// `param_values.len()` past the registry count so the producer
@@ -851,7 +870,7 @@ impl ParamValuesWire {
 }
 
 /// Wire-format shape for plain-float param vectors:
-/// `PresetInstance.baseParamValues` and `GeneratorParamState.paramValues`.
+/// `PresetInstance.baseParamValues` and `PresetInstance.paramValues`.
 /// Exposure isn't meaningful on these surfaces — base values are a
 /// pre-modulation snapshot, generators don't (yet) participate in the
 /// host-visible exposure surface.
@@ -920,7 +939,7 @@ impl FloatValuesWire {
         }
     }
 
-    /// Generator-registry counterpart for `GeneratorParamState.paramValues`.
+    /// Generator-registry counterpart for `PresetInstance.paramValues`.
     pub(crate) fn into_positional_for_generator(
         self,
         gen_type: &crate::PresetTypeId,
@@ -1150,6 +1169,13 @@ impl Serialize for PresetInstance {
     {
         use serde::ser::SerializeStruct;
 
+        // Generator-kind serializes the legacy `PresetInstance` shape
+        // (generatorType + the generator-keyed param maps + envelopes +
+        // genParamVersion) so existing generator fixtures stay byte-identical.
+        if self.is_generator() {
+            return self.serialize_as_generator(serializer);
+        }
+
         // `param_values` always emits; `base_param_values` is optional.
         // Other optional fields use the same `skip_if_none` policy as
         // the previous derive(Serialize) impl.
@@ -1251,6 +1277,103 @@ impl Serialize for PresetInstance {
             s.serialize_field("param3", &v)?;
         }
         s.end()
+    }
+}
+
+impl PresetInstance {
+    /// Serialize a generator-kind instance in the legacy `PresetInstance`
+    /// wire shape (so generator fixtures round-trip byte-identically). Ported
+    /// from the former `impl Serialize for PresetInstance`.
+    fn serialize_as_generator<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut field_count = 2; // generatorType + paramValues
+        if self.base_param_values.is_some() {
+            field_count += 1;
+        }
+        if self.drivers.is_some() {
+            field_count += 1;
+        }
+        if self.envelopes.is_some() {
+            field_count += 1;
+        }
+        if self.ableton_mappings.is_some() {
+            field_count += 1;
+        }
+        if !self.param_mappings.is_empty() {
+            field_count += 1;
+        }
+        if self.legacy_param_version.is_some() {
+            field_count += 1;
+        }
+
+        let mut s = serializer.serialize_struct("PresetInstance", field_count)?;
+        s.serialize_field("generatorType", &self.effect_type)?;
+        s.serialize_field(
+            "paramValues",
+            &GenParamSlotValuesSer {
+                values: &self.param_values,
+                gen_type: &self.effect_type,
+            },
+        )?;
+        if let Some(base) = &self.base_param_values {
+            s.serialize_field(
+                "baseParamValues",
+                &GenParamValuesSer {
+                    values: base,
+                    gen_type: &self.effect_type,
+                },
+            )?;
+        }
+        if let Some(d) = &self.drivers {
+            s.serialize_field("drivers", d)?;
+        }
+        if let Some(e) = &self.envelopes {
+            s.serialize_field("envelopes", e)?;
+        }
+        if let Some(m) = &self.ableton_mappings {
+            s.serialize_field("abletonMappings", m)?;
+        }
+        if !self.param_mappings.is_empty() {
+            s.serialize_field("paramMappings", &self.param_mappings)?;
+        }
+        if let Some(v) = self.legacy_param_version {
+            s.serialize_field("genParamVersion", &v)?;
+        }
+        s.end()
+    }
+}
+
+/// Serialize-side wrapper for generator `baseParamValues` (plain `f32`).
+struct GenParamValuesSer<'a> {
+    values: &'a [f32],
+    gen_type: &'a PresetTypeId,
+}
+
+impl Serialize for GenParamValuesSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_param_values_for_generator(self.values, self.gen_type, serializer)
+    }
+}
+
+/// Serialize-side wrapper for generator `paramValues` (`ParamSlot`).
+struct GenParamSlotValuesSer<'a> {
+    values: &'a [ParamSlot],
+    gen_type: &'a PresetTypeId,
+}
+
+impl Serialize for GenParamSlotValuesSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_param_values_for_generator_slots(self.values, self.gen_type, serializer)
     }
 }
 
@@ -1381,6 +1504,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             .map(|w| w.into_positional_base(&raw.effect_type, &user_binding_ids, &user_defaults));
 
         Ok(PresetInstance {
+            kind: crate::preset_def::PresetKind::Effect,
             id: raw.id,
             effect_type: raw.effect_type,
             enabled: raw.enabled,
@@ -1388,6 +1512,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             param_values,
             base_param_values,
             drivers: raw.drivers,
+            envelopes: None,
             ableton_mappings: raw.ableton_mappings,
             group_id: raw.group_id,
             param_mappings: raw.param_mappings.unwrap_or_default(),
@@ -1399,15 +1524,99 @@ impl<'de> Deserialize<'de> for PresetInstance {
             legacy_param1: raw.legacy_param1,
             legacy_param2: raw.legacy_param2,
             legacy_param3: raw.legacy_param3,
+            legacy_param_version: None,
         })
     }
 }
 
+/// Wire shape for a generator-kind instance — the legacy `PresetInstance`
+/// JSON. Used by [`deserialize_generator_instance`] (and its Option wrapper) so
+/// `Layer.gen_params` decodes into a `PresetInstance { kind: Generator }`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratorInstanceRaw {
+    #[serde(
+        default,
+        deserialize_with = "crate::preset_type_id::deserialize_generator_type"
+    )]
+    generator_type: PresetTypeId,
+    #[serde(default)]
+    param_values: Option<ParamValuesWire>,
+    #[serde(default)]
+    base_param_values: Option<FloatValuesWire>,
+    #[serde(default)]
+    drivers: Option<Vec<ParameterDriver>>,
+    #[serde(default)]
+    envelopes: Option<Vec<ParamEnvelope>>,
+    #[serde(default)]
+    ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+    #[serde(default)]
+    param_mappings: Option<Vec<ParamMapping>>,
+    #[serde(default, rename = "genParamVersion")]
+    legacy_param_version: Option<i32>,
+}
+
+impl GeneratorInstanceRaw {
+    fn into_instance(self) -> PresetInstance {
+        let param_values = self
+            .param_values
+            .map(|w| w.into_positional_for_generator(&self.generator_type))
+            .unwrap_or_default();
+        let base_param_values = self
+            .base_param_values
+            .map(|w| w.into_positional_for_generator(&self.generator_type));
+        PresetInstance {
+            kind: crate::preset_def::PresetKind::Generator,
+            id: generate_effect_id(),
+            effect_type: self.generator_type,
+            enabled: true,
+            collapsed: false,
+            param_values,
+            base_param_values,
+            drivers: self.drivers,
+            envelopes: self.envelopes,
+            ableton_mappings: self.ableton_mappings,
+            group_id: None,
+            param_mappings: self.param_mappings.unwrap_or_default(),
+            param_mappings_version: 0,
+            graph: None,
+            graph_version: 0,
+            graph_structure_version: 0,
+            legacy_param0: None,
+            legacy_param1: None,
+            legacy_param2: None,
+            legacy_param3: None,
+            legacy_param_version: self.legacy_param_version,
+        }
+    }
+}
+
+/// Decode a generator-kind `PresetInstance` from the legacy
+/// `PresetInstance` JSON shape.
+pub fn deserialize_generator_instance<'de, D>(deserializer: D) -> Result<PresetInstance, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(GeneratorInstanceRaw::deserialize(deserializer)?.into_instance())
+}
+
+/// `deserialize_with` for an `Option<PresetInstance>` field that holds a
+/// generator (e.g. `Layer.gen_params`): decode the legacy generator JSON shape
+/// into a `PresetInstance { kind: Generator }`.
+pub fn deserialize_opt_generator_instance<'de, D>(
+    deserializer: D,
+) -> Result<Option<PresetInstance>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<GeneratorInstanceRaw>::deserialize(deserializer)?.map(|raw| raw.into_instance()))
+}
+
 impl PresetInstance {
-    /// Create a new PresetInstance with the given type.
-    /// Unity PresetInstance.cs lines 79-83.
+    /// Create a new effect-kind PresetInstance with the given type.
     pub fn new(effect_type: PresetTypeId) -> Self {
         Self {
+            kind: crate::preset_def::PresetKind::Effect,
             id: generate_effect_id(),
             effect_type,
             enabled: true,
@@ -1415,6 +1624,7 @@ impl PresetInstance {
             param_values: Vec::new(),
             base_param_values: None,
             drivers: None,
+            envelopes: None,
             ableton_mappings: None,
             group_id: None,
             param_mappings: Vec::new(),
@@ -1426,12 +1636,57 @@ impl PresetInstance {
             legacy_param1: None,
             legacy_param2: None,
             legacy_param3: None,
+            legacy_param_version: None,
         }
+    }
+
+    /// Create a new generator-kind PresetInstance, fully initialized to the
+    /// generator type's registry defaults. The generator mirror of [`Self::new`]
+    /// (ported from the former `PresetInstance::new`).
+    pub fn new_generator(generator_type: PresetTypeId) -> Self {
+        let mut s = Self {
+            kind: crate::preset_def::PresetKind::Generator,
+            id: generate_effect_id(),
+            effect_type: generator_type,
+            enabled: true,
+            collapsed: false,
+            param_values: Vec::new(),
+            base_param_values: None,
+            drivers: None,
+            envelopes: None,
+            ableton_mappings: None,
+            group_id: None,
+            param_mappings: Vec::new(),
+            param_mappings_version: 0,
+            graph: None,
+            graph_version: 0,
+            graph_structure_version: 0,
+            legacy_param0: None,
+            legacy_param1: None,
+            legacy_param2: None,
+            legacy_param3: None,
+            legacy_param_version: None,
+        };
+        s.init_defaults();
+        s
+    }
+
+    /// True for a generator-kind instance.
+    #[inline]
+    pub fn is_generator(&self) -> bool {
+        matches!(self.kind, crate::preset_def::PresetKind::Generator)
     }
 
     /// Read-only access to the effect type.
     #[inline]
     pub fn effect_type(&self) -> &PresetTypeId {
+        &self.effect_type
+    }
+
+    /// Read-only access to the generator type (alias of [`Self::effect_type`]
+    /// — the `effect_type` field holds the preset type for both kinds).
+    #[inline]
+    pub fn generator_type(&self) -> &PresetTypeId {
         &self.effect_type
     }
 
@@ -1477,11 +1732,21 @@ impl PresetInstance {
     }
 
     /// Write to effective (modulated) param value. Unity lines 93-101.
+    ///
+    /// Generator-kind clamps against the generator registry's declared range
+    /// (behavior preserved from the former `PresetInstance::set_param`);
+    /// effect-kind writes through unclamped. The generator clamp is the
+    /// hidden-max bug — it is removed in Phase 5 when the resolver reads the
+    /// range from the preset; this phase keeps it byte-for-byte.
     pub fn set_param(&mut self, index: usize, value: f32) {
         while self.param_values.len() <= index {
             self.param_values.push(ParamSlot::default());
         }
-        self.param_values[index].value = value;
+        self.param_values[index].value = if self.is_generator() {
+            crate::preset_definition_registry::generator::clamp_param(&self.effect_type, index, value)
+        } else {
+            value
+        };
     }
 
     /// Read the user-set base value (before modulation). Unity lines 104-110.
@@ -2187,6 +2452,222 @@ impl PresetInstance {
 
 /// Implement ParamSource for PresetInstance.
 /// Port of Unity PresetInstance : IParamSource.
+/// Generator-kind methods, ported from the former `PresetInstance`. They
+/// read the generator registry via `self.effect_type` (which holds the preset
+/// type for both kinds). Only ever called on generator-kind instances.
+impl PresetInstance {
+    /// Read the user-set base value (before modulation), generator naming.
+    pub fn get_param_base(&self, index: usize) -> f32 {
+        if let Some(base) = &self.base_param_values
+            && index < base.len()
+        {
+            return base[index];
+        }
+        self.get_param(index)
+    }
+
+    /// Set the user-intended base value (generator path): migrate-on-touch to
+    /// registry length, then clamp against the generator registry.
+    pub fn set_param_base(&mut self, index: usize, value: f32) {
+        if let Some(def) = crate::preset_definition_registry::generator::try_get(&self.effect_type)
+            && self.param_values.len() < def.param_count
+        {
+            self.migrate_to_registry_length();
+        }
+        self.ensure_base_values();
+        while self.param_values.len() <= index {
+            self.param_values.push(ParamSlot::default());
+        }
+        if let Some(base) = &mut self.base_param_values {
+            while base.len() <= index {
+                base.push(0.0);
+            }
+        }
+        let clamped = crate::preset_definition_registry::generator::clamp_param(
+            &self.effect_type,
+            index,
+            value,
+        );
+        if let Some(base) = &mut self.base_param_values {
+            base[index] = clamped;
+        }
+        self.param_values[index].value = clamped;
+    }
+
+    /// Extend-only pad of `param_values`/`base_param_values` to the generator
+    /// registry's param count, filling the tail with registry defaults.
+    pub fn migrate_to_registry_length(&mut self) {
+        let Some(def) = crate::preset_definition_registry::generator::try_get(&self.effect_type)
+        else {
+            return;
+        };
+        let min_target = def.param_count;
+        if self.param_values.len() < min_target {
+            self.param_values
+                .reserve(min_target - self.param_values.len());
+            for i in self.param_values.len()..min_target {
+                self.param_values
+                    .push(ParamSlot::exposed(def.param_defs[i].default_value));
+            }
+        }
+        if let Some(base) = &mut self.base_param_values
+            && base.len() < min_target
+        {
+            base.reserve(min_target - base.len());
+            for i in base.len()..min_target {
+                base.push(def.param_defs[i].default_value);
+            }
+        }
+    }
+
+    /// Find the envelope for a given param id, or None (generator-only home).
+    pub fn find_envelope(&self, param_id: &str) -> Option<&ParamEnvelope> {
+        self.envelopes.as_ref()?.iter().find(|e| e.param_id == param_id)
+    }
+
+    /// True if this instance has generator envelopes (no-alloc check).
+    pub fn has_envelopes(&self) -> bool {
+        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
+    }
+
+    /// Generator envelopes list, auto-created on first access.
+    pub fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
+        if self.envelopes.is_none() {
+            self.envelopes = Some(Vec::new());
+        }
+        self.envelopes.as_mut().unwrap()
+    }
+
+    /// Reset effective values to base — ONLY for params with active drivers or
+    /// envelopes (generator semantics).
+    pub fn reset_effectives(&mut self) {
+        if self.param_values.is_empty() {
+            return;
+        }
+        self.ensure_base_values();
+        let base = match &self.base_param_values {
+            Some(b) => b,
+            None => return,
+        };
+        let def = crate::preset_definition_registry::generator::try_get(&self.effect_type);
+        let id_to_index = def.as_ref().map(|d| &d.id_to_index);
+
+        if let Some(drivers) = &self.drivers {
+            for driver in drivers {
+                if !driver.enabled {
+                    continue;
+                }
+                let Some(&idx) = id_to_index.and_then(|m| m.get(driver.param_id.as_ref())) else {
+                    continue;
+                };
+                if idx < self.param_values.len() && idx < base.len() {
+                    self.param_values[idx].value = base[idx];
+                }
+            }
+        }
+        if let Some(envelopes) = &self.envelopes {
+            for env in envelopes {
+                if !env.enabled {
+                    continue;
+                }
+                let Some(&idx) = id_to_index.and_then(|m| m.get(env.param_id.as_ref())) else {
+                    continue;
+                };
+                if idx < self.param_values.len() && idx < base.len() {
+                    self.param_values[idx].value = base[idx];
+                }
+            }
+        }
+    }
+
+    /// Change generator type, re-initializing to the new type's defaults and
+    /// clearing drivers/envelopes.
+    pub fn change_type(&mut self, new_type: PresetTypeId) {
+        if new_type == PresetTypeId::NONE {
+            return;
+        }
+        self.effect_type = new_type.clone();
+        self.init_defaults_for_type(new_type);
+        if let Some(drivers) = &mut self.drivers {
+            drivers.clear();
+        }
+        if let Some(envelopes) = &mut self.envelopes {
+            envelopes.clear();
+        }
+    }
+
+    /// Initialize base + effective arrays from the generator registry defaults,
+    /// setting the type.
+    pub fn init_defaults_for_type(&mut self, gen_type: PresetTypeId) {
+        if let Some(def) = crate::preset_definition_registry::generator::try_get(&gen_type) {
+            self.effect_type = gen_type;
+            self.param_values = def
+                .param_defs
+                .iter()
+                .map(|pd| ParamSlot::exposed(pd.default_value))
+                .collect();
+            self.base_param_values =
+                Some(def.param_defs.iter().map(|pd| pd.default_value).collect());
+        }
+    }
+
+    /// Legacy init_defaults (no parameter). Uses the current generator type.
+    pub fn init_defaults(&mut self) {
+        let gt = self.effect_type.clone();
+        self.init_defaults_for_type(gt);
+    }
+
+    /// Snapshot current base param values (for undo).
+    pub fn snapshot_params(&self) -> Vec<f32> {
+        if let Some(base) = &self.base_param_values {
+            base.clone()
+        } else if !self.param_values.is_empty() {
+            self.param_values.iter().map(|s| s.value).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Snapshot current drivers (for undo).
+    pub fn snapshot_drivers(&self) -> Option<Vec<ParameterDriver>> {
+        self.drivers
+            .as_ref()
+            .and_then(|d| if d.is_empty() { None } else { Some(d.clone()) })
+    }
+
+    /// Snapshot current generator envelopes (for undo).
+    pub fn snapshot_envelopes(&self) -> Option<Vec<ParamEnvelope>> {
+        self.envelopes
+            .as_ref()
+            .and_then(|e| if e.is_empty() { None } else { Some(e.clone()) })
+    }
+
+    /// Restore from a snapshot (used by undo).
+    pub fn restore(
+        &mut self,
+        gen_type: PresetTypeId,
+        params: Vec<f32>,
+        drivers: Option<Vec<ParameterDriver>>,
+        envelopes: Option<Vec<ParamEnvelope>>,
+    ) {
+        self.effect_type = gen_type;
+        self.param_values = params.iter().map(|v| ParamSlot::exposed(*v)).collect();
+        self.base_param_values = Some(params);
+        if let Some(d) = &mut self.drivers {
+            d.clear();
+        }
+        if let Some(snapshot_drivers) = drivers {
+            self.drivers_mut().extend(snapshot_drivers);
+        }
+        if let Some(e) = &mut self.envelopes {
+            e.clear();
+        }
+        if let Some(snapshot_envelopes) = envelopes {
+            self.envelopes_mut().extend(snapshot_envelopes);
+        }
+    }
+}
+
 impl ParamSource for PresetInstance {
     fn display_name(&self) -> &str {
         // The registry hands back an owned `Arc<PresetDef>` (hot-reloadable
@@ -2194,6 +2675,11 @@ impl ParamSource for PresetInstance {
         // satisfy the trait's borrowed return without rippling `String`
         // through every `ParamSource` caller. See
         // `preset_definition_registry::intern_display_name`.
+        if self.is_generator() {
+            return crate::preset_definition_registry::generator::try_get(&self.effect_type)
+                .map(|d| crate::preset_definition_registry::intern_display_name(&d.display_name))
+                .unwrap_or("Generator");
+        }
         match crate::preset_definition_registry::effect::try_get(&self.effect_type) {
             Some(def) => crate::preset_definition_registry::intern_display_name(&def.display_name),
             None => "?",
@@ -2205,6 +2691,12 @@ impl ParamSource for PresetInstance {
     }
 
     fn get_param_def(&self, index: usize) -> ParamDef {
+        if self.is_generator() {
+            return match crate::preset_definition_registry::generator::try_get(&self.effect_type) {
+                Some(def) if index < def.param_count => def.param_defs[index].clone(),
+                _ => ParamDef::default(),
+            };
+        }
         if let Some(def) = crate::preset_definition_registry::effect::try_get(&self.effect_type) {
             if index < def.param_count {
                 return def.param_defs[index].clone();
@@ -2249,11 +2741,18 @@ impl ParamSource for PresetInstance {
     }
 
     fn get_base_param(&self, index: usize) -> f32 {
+        if self.is_generator() {
+            return PresetInstance::get_param_base(self, index);
+        }
         PresetInstance::get_base_param(self, index)
     }
 
     fn set_base_param(&mut self, index: usize, value: f32) {
-        PresetInstance::set_base_param(self, index, value);
+        if self.is_generator() {
+            PresetInstance::set_param_base(self, index, value);
+        } else {
+            PresetInstance::set_base_param(self, index, value);
+        }
     }
 
     fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
@@ -3214,6 +3713,7 @@ mod tests {
         // No registry def → Serialize must emit Array form so the
         // value survives a round-trip through manifold-core's tests.
         let fx = PresetInstance {
+            kind: crate::preset_def::PresetKind::Effect,
             id: EffectId::new("abc12345"),
             effect_type: PresetTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
@@ -3225,6 +3725,7 @@ mod tests {
             ],
             base_param_values: None,
             drivers: None,
+            envelopes: None,
             ableton_mappings: None,
             group_id: None,
             param_mappings: Vec::new(),
@@ -3236,6 +3737,7 @@ mod tests {
             legacy_param1: None,
             legacy_param2: None,
             legacy_param3: None,
+            legacy_param_version: None,
         };
         let json = serde_json::to_string(&fx).unwrap();
         // V1.3 wire emits {value, exposed} objects per element.
@@ -3269,6 +3771,7 @@ mod tests {
     fn effect_instance_serialize_emits_v13_object_form_for_hidden_params() {
         // Hidden param round-trips through positional Array{value,exposed}.
         let fx = PresetInstance {
+            kind: crate::preset_def::PresetKind::Effect,
             id: EffectId::new("abc12345"),
             effect_type: PresetTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
@@ -3285,6 +3788,7 @@ mod tests {
             ],
             base_param_values: None,
             drivers: None,
+            envelopes: None,
             ableton_mappings: None,
             group_id: None,
             param_mappings: Vec::new(),
@@ -3296,6 +3800,7 @@ mod tests {
             legacy_param1: None,
             legacy_param2: None,
             legacy_param3: None,
+            legacy_param_version: None,
         };
         let json = serde_json::to_string(&fx).unwrap();
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
