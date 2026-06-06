@@ -1,13 +1,34 @@
 # Preset Instance Collapse Plan — finish the effect/generator unification
 
-**Status:** NOT STARTED. This is attempt #8. The previous seven stalled for one
+**Status:** IN PROGRESS (attempt #8). Phases 0–2 landed (each on its own branch,
+all gates green); Phase 3 is next. The previous seven attempts stalled for one
 reason: each finished the *definition* side and deferred the *instance* and
-*runtime* side. This plan does that deferred half, and it does it on a cleaner
-model than the prior attempts assumed (see "The model" below). When it is done,
+*runtime* side. This plan does that deferred half, on a cleaner model than the
+prior attempts assumed (see "The model" below). When it is done,
 `EffectInstance` and `GeneratorParamState` are one thin type, `ChainGraph` and
 `JsonGraphGenerator` are one runtime, calibration lives in the preset file, and
 the bridge code that exists only to keep two types in sync is **deleted** — not
 abstracted, deleted.
+
+**Progress log.**
+- **Phase 0–1 (branch `preset-collapse-phase1`):** `EffectTypeId` +
+  `GeneratorTypeId` collapsed into one `PresetTypeId`; the kind-specific legacy
+  integer discriminant is decoded via two explicit `deserialize_with` helpers at
+  the (kind-known) instance deserializers. Old structs deleted, no on-disk format
+  change.
+- **Phase 2 (branch `preset-collapse-phase2`):** added `curve` + `invert` to the
+  preset param authoring surface (`ParamSpecDef` + `ParamDef`), defaulted +
+  skip-serialized so all 46 presets stay byte-identical. **Audit correction:** the
+  preset file *already* carried range/label/default/whole_numbers
+  (`presetMetadata.params`) and routing/scale/offset/convert
+  (`presetMetadata.bindings`) — so no 46-file data migration was needed; curve +
+  invert were the only gap. Runtime consumption of preset-authored curve/invert
+  lands with the resolver-unification phase, per the reorder below.
+- **Ordering correction (found during Phase 2):** deleting `ParamMapping` (the
+  per-instance reshape note) requires a *home* for per-instance recalibration —
+  and in this model that home is "fork the preset." So the **fork-infrastructure
+  phase must precede the ParamMapping-deletion / resolver-unification phase.** The
+  back half is reordered accordingly (old Phase 4 ↔ Phase 5).
 
 **The contract.** No deferred items. No stop-gaps. No "fold-in later." No
 additive-then-switch. No per-call fallbacks. No middle bridges left standing at
@@ -211,7 +232,7 @@ Every phase: branches off the current head, compiles clean, passes all gates, an
 **deletes the code it replaces** before the next begins. No fork left standing
 "for the next phase."
 
-### Phase 0 — Field reconciliation + safety net `[read-only]`
+### Phase 0 — Field reconciliation + safety net `[read-only]` ✅ DONE
 
 In the main context (no agents — read-only audit rule). Produce the exact
 field-by-field map: every reader/writer of every `EffectInstance` and
@@ -226,89 +247,125 @@ list of what must move from instance/def/notes **into the preset file**
 
 Gate: field map complete (no "TBD"); baseline recorded; golden fixture captured.
 
-### Phase 1 — One `PresetTypeId` (manifold-core)
+### Phase 1 — One `PresetTypeId` (manifold-core) ✅ DONE `[branch preset-collapse-phase1]`
 
 Introduce `PresetTypeId`, collapse the two registry keyings onto it, delete
 `EffectTypeId`/`GeneratorTypeId` (no permanent alias). Update every signature.
+The legacy integer discriminant is kind-specific (effect 10 = Feedback vs
+generator 10 = WireframeZoo) — decoded by two explicit functions used via
+`deserialize_with` at the instance deserializers where the kind is statically
+known; the bare `Deserialize` handles the modern string form. No on-disk format
+change (the id serializes as its string value).
 
-Gate: workspace test == baseline; `check-presets`; the old type-id newtypes are
-gone from the tree.
+Outcome: core 218 + 9 new tests green; io + `load_project` green; app == baseline.
 
-### Phase 2 — Preset file carries the full authoring surface (manifold-core + presets)
+### Phase 2 — Preset file carries the full authoring surface ✅ DONE `[branch preset-collapse-phase2]`
 
-Extend the preset JSON + `PresetDef` to carry exposed params with their ranges,
-labels, curves, defaults, and inner-node targets. Migrate the 26 effect + 20
-generator preset JSONs so every currently-shipped exposed knob and its range is
-expressed in the file (this is where OilyFluid Speed's *real* intended range
-lives). Add the `check-presets` validation for the new fields.
+**Audit correction (the plan's original premise was wrong here).** The preset file
+already carried the bulk of the authoring surface: `presetMetadata.params`
+(`ParamSpecDef`) holds range/label/default/whole_numbers, and
+`presetMetadata.bindings` (`BindingDef`) holds the inner-node routing +
+scale/offset + convert. The catalog is already disk-loaded with no compiled
+shadow. So there was **no 26+20-file data migration to do** — the ranges already
+live in the files. The *only* authoring fields missing were the slider response
+`curve` and `invert`, which existed solely as per-instance `ParamMapping`
+overrides (so no preset could ship a non-default knob feel).
 
-Gate: `check-presets`; `cargo test -p manifold-renderer --lib bundled_presets`
-(executes a frame); every shipped preset exposes the same knobs/ranges it does
-today, now sourced from the file.
+What landed: `curve: MacroCurve` + `invert: bool` added to `ParamSpecDef` (wire)
+and `ParamDef` (registry), defaulted to Linear/false and skip-serialized when
+default → all 46 presets byte-identical, no migration. The user-binding →
+spec/def synthesis paths preserve `binding.curve`/`binding.invert`.
 
-### Phase 3 — `PresetInstance` thin struct; both kinds adopt it (manifold-core)
+Runtime *consumption* of preset-authored curve/invert is **not** in this phase —
+it lands with the resolver unification (Phase 5 below), where `ParamMapping` is
+deleted and the one resolver reads range/curve/invert from the preset. Wiring it
+twice (here, then again at the resolver) would be throwaway, so the field is the
+destination foundation and its consumer follows.
 
-Define `PresetInstance`. Generator layers and effect-chain items both become
-`PresetInstance`. Move envelopes inline; drop `graph`, `bindings`,
-`param_mappings`, `base_param_values` residue, legacy flat fields from the
-in-memory struct (their data is read by the Phase 6 migration). `EffectInstance`
-and `GeneratorParamState` are deleted in this phase.
+Outcome: core 221 (+3 serde tests) green; io green; app == baseline;
+`check-presets` + clippy clean. `bundled_presets`: 7/8 execute a frame — the lone
+failure is WireframeDepthGraph's **pre-existing** DNN `copy_texture` blit
+(documented; unrelated to this change).
 
-Gate: workspace test == baseline; OilyFluid Speed reaches its preset range (load
-`graphTests2.manifold`, confirm value reaches the preset max and round-trips);
-both old structs are gone.
+> **Migration discipline (applies to every phase below).** A serialized field is
+> only removed in the same phase that ships its load migration, so old projects
+> always load. There is **one** version bump (`projectVersion → "1.5.0"`),
+> introduced by the first phase that changes the on-disk shape; later phases
+> extend the same `migrate_v140_to_v150` branch. There is no standalone
+> "migration phase" — a phase where the format is half-migrated would be the very
+> half-state this plan forbids. Every format-touching phase is gated on the golden
+> `Liveschool` round-trip plus the pre-1.5 fixture corpus.
 
-### Phase 4 — One resolver + one modulation walk; delete `GraphHost` (core + playback)
+### Phase 3 — Unify into one `PresetInstance`; delete `GraphHost` (manifold-core)  ⟵ NEXT
 
-One `resolve_param` over `&PresetInstance` that reads exposure/range from the
-preset (reshape-note logic is gone — there is one range). The two modulation
-walks in `modulation.rs` collapse into one. Delete `GraphHost`, both impls,
-`GeneratorHost`, the closure plumbing. The clamp hidden-max and the modulation
-hidden-max both die here.
+The type merge, and *only* the type merge. `EffectInstance` and
+`GeneratorParamState` collapse into one `PresetInstance { kind: PresetKind, .. }`
+carrying the **union** of their current fields (value bus, base values, drivers,
+envelopes, ableton, `param_mappings`, the inline graph override + versions,
+enabled/collapsed, id, group_id). Both kinds construct, serialize, and modulate
+through it; the two modulation walks collapse to one over `&PresetInstance`. With
+one struct there is nothing for `GraphHost` to abstract — call sites take
+`&mut PresetInstance`; delete `GraphHost`, `GeneratorHost`, and the
+`with_graph_host_mut` closure plumbing. Reconcile the field-home differences the
+audit found: the generator's graph lives on `Layer` (`generator_graph*`) and
+effect envelopes live on `Layer.envelopes` keyed by `(effect_type, param_id)` —
+both move onto the instance (envelopes keyed by `param_id`). If that moves a
+serialized field, this phase ships the migration slice + the v1.5.0 bump.
 
-Gate: workspace test == baseline; a driver and an envelope on a generator param
-both reach the preset's max; `GraphHost` is gone.
+**Not yet thin.** `param_mappings` and the inline graph override ride along until
+their replacements land (fork infra in Phase 4, resolver + fork-routed edits in
+Phase 5). They are existing, working fields carried forward, each deleted in the
+phase whose replacement makes it removable — not stubbed or gated in the interim.
 
-### Phase 5 — Preset namespace + fork ergonomics (core + io + editing + ui)
+Gate: full workspace test == baseline; both old structs + `GraphHost` gone;
+behavior unchanged (golden `Liveschool` round-trip; parity suite, since the
+modulation/binding path is touched).
 
-Implement the three-source preset namespace (stock read-only, user folder,
-project-embedded) over one id space, with project-embedded presets stored in the
-project ZIP. Implement the fork rule: preset-level edit → edit-in-place if sole
-user, auto-fork a named project variant if shared; stock always forks; fork is
-visible in the header; "apply to all" is a separate action; retroactive fork
-available. Autosave into the project; "save as" = export standalone file.
+### Phase 4 — Preset namespace + fork ergonomics (core + io + editing + ui)
 
-Gate: full `cargo test --workspace`; new tests — editing a shared preset forks
-and leaves other instances byte-identical; editing a sole-user preset does not
-fork; editing a stock preset forks to project; export produces a self-contained
-file that re-imports and renders.
+A self-contained capability, independent of `ParamMapping`. Three-source preset
+namespace (stock read-only / user folder / project-embedded in the project ZIP)
+over one id space. Explicit duplicate/fork → project-embedded preset; export a
+project preset to a standalone `.json`; import a `.json`; the picker lists
+project presets. This builds the **home** for per-instance recalibration that
+Phase 5 routes edits into when it deletes `ParamMapping`.
 
-### Phase 6 — Load migration v1.4.0 → v1.5.0 (manifold-io)
+Gate: full `cargo test --workspace`; duplicate-into-project + export + re-import
+round-trips and renders; project-embedded presets survive project save/load
+(carries a migration slice if it changes the ZIP layout).
 
-The one permitted transitional mechanism. `migrate_v140_to_v150` rewrites old
-projects into the new split: per-instance `ParamMapping` ranges + `user_param_bindings`
-+ any diverged per-instance `graph` fold into a **project-embedded preset** (a
-real, whole preset — divergence becomes a named variant, exactly the fork model);
-the instance keeps only preset-ref + values + modulation; generator
-`genParams`/`generatorGraph`/envelopes fold the same way; legacy flat param
-fields (pre-1.1) are read and converted here. Stamp `projectVersion = "1.5.0"`.
+### Phase 5 — One resolver; delete `ParamMapping`; thin the instance; fork-route edits (core + playback + renderer + ui)
 
-Gate: golden `Liveschool` fixture loads, renders, round-trips; a corpus of
-pre-1.5 fixtures (the v1.0/1.2/1.3/1.4 cases in `migrate.rs` tests, plus a project
-with a diverged effect graph and a reshaped generator knob) each load and
-round-trip; unit test per migration branch.
+The cutover that makes the preset the single source. One `resolve_param` over
+`&PresetInstance` reads range/label/curve/invert from the preset (Phase 2's
+fields are consumed **here**) and scale/offset from the binding — no reshape-note
+branch. The per-instance reshape **drawer** now edits the preset, forking per the
+Phase 4 share-count rule (edit-in-place if sole user, auto-fork if shared, stock
+always forks, visible-not-modal). Delete `ParamMapping` and drop the now-replaced
+`param_mappings` + inline-graph-override fields from `PresetInstance` (a diverged
+graph becomes a forked project preset). Ships its migration slice: existing
+`param_mappings` + diverged `graph` in old projects fold into project-embedded
+forked presets. **The clamp hidden-max and the modulation hidden-max both die
+here** — there is one range, in the preset.
 
-### Phase 7 — One runtime `PresetRuntime` (manifold-renderer)
+Gate: full `cargo test --workspace`; OilyFluid Speed (load `graphTests2.manifold`)
+reaches its preset range from the slider *and* from a driver/envelope; editing a
+shared preset forks and leaves siblings byte-identical; `ParamMapping` gone;
+golden `Liveschool` + fixture corpus round-trip.
+
+### Phase 6 — One runtime `PresetRuntime` (manifold-renderer)
 
 Collapse `ChainGraph` and `JsonGraphGenerator` into `PresetRuntime` (optional
-input slot). The `Generator` trait collapses in. The freeze/fusion compiler reads
-exposure from the one preset (the `82a75332` class is now impossible). Delete
-`JsonGraphGenerator`, the `Generator` trait, and the `GeneratorRegistry` fork.
+input slot ⇒ generator). The `Generator` trait collapses in. The freeze/fusion
+compiler reads exposure from the one preset (the `82a75332` binding-blindness
+class is now impossible). Delete `JsonGraphGenerator`, the `Generator` trait, and
+the `GeneratorRegistry` fork.
 
 Gate: full `cargo test --workspace`; all parity tests; `bundled_presets`; every
-shipped effect and generator renders a frame.
+shipped effect and generator renders a frame (the WireframeDepthGraph DNN-blit
+fail is the documented pre-existing exception until its decomp lands).
 
-### Phase 8 — Command/UI collapse + final sweep (editing + app + ui)
+### Phase 7 — Command/UI collapse + final sweep (editing + app + ui)
 
 Mirror dances (`mirror_effect_side`, `prepare/apply/unmirror_generator_mirror`)
 collapse into one `mirror` over `&mut PresetInstance`. The two card-build blocks
@@ -326,19 +383,27 @@ range, the fork-on-shared-edit behavior, and visual parity.
 
 ## Verification gates (every phase)
 
-1. `cargo test --workspace` vs the Phase-0 baseline. Only acceptable failure:
-   the pre-existing `liveschool_ableton_mappings_resolve_to_stable_param_ids`.
+1. `cargo test --workspace` vs the Phase-0 baseline. Known pre-existing failures
+   that are NOT regressions: `liveschool_ableton_mappings_resolve_to_stable_param_ids`
+   (FluidSimulation gen Ableton mapping) and the renderer-lib in-flight fails
+   (WireframeDepthGraph one-frame DNN blit, DepthOfField prewarm, chain_pool
+   tests) carried on the `pointwise-fusion` lineage. `cargo test --workspace`
+   aborts at the first failing binary, so for a clean oracle also run the focused
+   crates: `cargo test -p manifold-core -p manifold-io -p manifold-app`
+   separately and compare each to baseline.
 2. `cargo run -p manifold-renderer --bin check-presets`.
 3. `cargo test -p manifold-renderer --lib bundled_presets` (executes a frame).
+   Acceptable failure: WireframeDepthGraph only (pre-existing DNN blit).
 4. The golden `Liveschool` round-trip.
 5. Renderer-touching phases: the parity suite.
 
 ## Rollback contract
 
 Each phase is one branch off the prior; a phase that fails a gate is reverted
-whole, not patched forward. The load migration (Phase 6) is the only
-irreversible-on-disk step; it does not run until Phases 1–5 are green and is gated
-on the fixture corpus.
+whole, not patched forward. Format-changing phases (3 / 5, and 4 if it touches
+the ZIP layout) carry their own migration slice under one `projectVersion` bump
+and do not land until the golden `Liveschool` round-trip + the pre-1.5 fixture
+corpus are green — so the format is never left half-migrated between phases.
 
 ## Definition of done
 
