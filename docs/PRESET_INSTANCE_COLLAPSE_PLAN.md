@@ -343,7 +343,29 @@ modulation/binding path is touched).
 
 </details>
 
-### Phase 4 — Preset namespace + fork ergonomics (core + io + editing + ui)  ⟵ NEXT
+### Phase 4 — Preset namespace + fork ergonomics (core + io + editing + ui)  ⟵ IN PROGRESS
+
+**Core landed (branch `preset-collapse-phase4`, tested headless):**
+- **4a** `Project.embedded_presets: Vec<EmbeddedPreset { kind, def }>` — project-
+  scoped fork presets, ride the project JSON serde (V1/V2), skip-when-empty.
+- **4b** catalog overlay: `preset_loader::set_project_presets`/`clear_project_presets`
+  merge the project's presets as a third layer in `build_catalog`
+  (stock→user→project) and re-derive both catalogs + the core registry via the
+  existing `apply_reload()` — one injection feeds renderer graph resolution AND
+  the core `PresetDef` registry; per-frame path untouched. `project_io` installs
+  the overlay on every project load (clears a previous project's forks). Test:
+  `tests/project_preset_overlay.rs` (own process; the catalog is global).
+- **4c** fork primitive on `Project`: `count_preset_uses` (sole-user vs shared),
+  `mint_embedded_preset_id` (`base#N`), `set_instance_preset_id` /
+  `PresetInstance::set_preset_id` (retarget without resetting params),
+  `fork_preset(target, kind, source_def)`. Tested.
+
+**Remaining (user-facing layer):** an undoable `ForkPresetCommand` wrapper,
+export/import of a project preset to a standalone `.json`, and the UI (picker
+lists project presets, explicit duplicate/"make unique", export/import menu
+actions). The **auto-fork-on-shared-edit** wiring belongs with Phase 5's
+edit-routing (it's the same edit path that deletes `ParamMapping`), so it lands
+there. The core above is everything Phase 5 needs to route edits through forking.
 
 A self-contained capability, independent of `ParamMapping`. Three-source preset
 namespace (stock read-only / user folder / project-embedded in the project ZIP)
