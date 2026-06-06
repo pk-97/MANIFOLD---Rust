@@ -2231,7 +2231,18 @@ impl PresetInstance {
             .map(|b| b.default_value)
             .collect();
 
-        if let Some(def) = crate::preset_definition_registry::effect::try_get(&self.effect_type) {
+        // Kind-aware registry lookup: an effect's static param block is defined
+        // by the effect registry, a generator's by the generator registry. Both
+        // produce the same `[static prefix | user-added tail]` `param_values`
+        // layout, so the alignment below is identical once `def` is resolved —
+        // this is what lets the generator mirror route through the shared
+        // `append_user_binding` / `remove_user_binding_by_id` helpers.
+        let def = if self.is_generator() {
+            crate::preset_definition_registry::generator::try_get(&self.effect_type)
+        } else {
+            crate::preset_definition_registry::effect::try_get(&self.effect_type)
+        };
+        if let Some(def) = def {
             let static_target = def.param_count;
             let n_user = user_defaults.len();
             let target = static_target + n_user;
