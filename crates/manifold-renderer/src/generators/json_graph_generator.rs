@@ -371,6 +371,21 @@ impl JsonGraphGenerator {
                     .collect()
             })
             .unwrap_or_default();
+        // Per-param slider response (Phase 5: the generator side reads the
+        // PRESET's curve/invert/range too, matching the effect path's
+        // `ResolvedBinding::from_static` no-note reshape). Identity for every
+        // shipped preset, so behavior is unchanged until a preset authors a
+        // curve. `param_id -> (min, max, curve, invert)`.
+        let param_reshape: ahash::AHashMap<String, (f32, f32, manifold_core::macro_bank::MacroCurve, bool)> =
+            doc.preset_metadata
+                .as_ref()
+                .map(|m| {
+                    m.params
+                        .iter()
+                        .map(|p| (p.id.clone(), (p.min, p.max, p.curve, p.invert)))
+                        .collect()
+                })
+                .unwrap_or_default();
         let string_binding_specs: Vec<manifold_core::effect_graph_def::StringBindingDef> = doc
             .preset_metadata
             .as_ref()
@@ -461,26 +476,24 @@ impl JsonGraphGenerator {
                             );
                             None
                         })?;
-                    // Funnel through the SAME shared constructor the effect
-                    // preset path uses (`ResolvedBinding::from_static` →
-                    // `assemble_affine`), so the binding's scale/offset folds
-                    // into the reshape identically.
-                    //
-                    // TODO(phase5/5c): the effect path now also folds the
-                    // PRESET's curve/invert (Phase 2 `ParamSpecDef`) into the
-                    // reshape via `ParamBinding`; this generator path still does
-                    // scale/offset only. No divergence today (no shipped preset
-                    // authors a non-Linear curve), but when the resolver unifies
-                    // in 5c this must read the owning param's curve/invert too
-                    // (effect/generator binding parity rule).
-                    //
-                    // The generator used to
-                    // hand-roll this literal with `reshape: None`, which
-                    // silently dropped a folded affine's deg→rad scale and
-                    // over-drove the target 57×. There is no longer a second
-                    // literal to forget. (Angle-wrap stays a future follow-up
-                    // if a looping generator knob ever needs it.)
-                    Some(ResolvedBinding::assemble_affine(
+                    // Build the reshape from the PRESET's slider response
+                    // (curve/invert/range from the owning `ParamSpecDef`) plus
+                    // the binding's scale/offset — the SAME shape the effect
+                    // path's `ResolvedBinding::from_static` no-note branch
+                    // produces, so both kinds honor a preset-authored curve.
+                    // Identity inputs (Linear/no-invert/scale 1/offset 0 — every
+                    // shipped generator today) yield `reshape = None`, byte-
+                    // identical to the prior scale/offset-only construction.
+                    // (Angle-wrap stays a future follow-up if a looping
+                    // generator knob ever needs it.)
+                    let (rmin, rmax, rcurve, rinvert) = param_reshape
+                        .get(b.id.as_str())
+                        .copied()
+                        .unwrap_or((0.0, 1.0, manifold_core::macro_bank::MacroCurve::Linear, false));
+                    let reshape = crate::node_graph::Reshape::from_preset_response(
+                        rmin, rmax, rcurve, rinvert, b.scale, b.offset,
+                    );
+                    Some(ResolvedBinding::assemble(
                         std::borrow::Cow::Owned(b.id.clone()),
                         std::borrow::Cow::Owned(b.label.clone()),
                         b.default_value,
@@ -495,8 +508,8 @@ impl JsonGraphGenerator {
                             BindingSource::Static
                         },
                         source_index,
-                        b.scale,
-                        b.offset,
+                        reshape,
+                        false,
                     ))
                 }
                 BindingTarget::Composite { .. } => None,

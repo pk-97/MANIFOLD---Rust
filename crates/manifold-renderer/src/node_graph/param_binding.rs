@@ -286,6 +286,34 @@ pub(crate) struct Reshape {
 }
 
 impl Reshape {
+    /// Build a reshape from a preset param's slider response (range + curve +
+    /// invert) plus the binding's card→consumer affine (scale/offset). Returns
+    /// `None` when every stage is identity (Linear, no invert, scale 1, offset
+    /// 0) so the binding pays nothing and stays byte-identical. The single
+    /// builder shared by the effect path ([`ResolvedBinding::from_static`]) and
+    /// the generator path, so both honor a preset-authored curve identically.
+    pub(crate) fn from_preset_response(
+        min: f32,
+        max: f32,
+        curve: manifold_core::macro_bank::MacroCurve,
+        invert: bool,
+        scale: f32,
+        offset: f32,
+    ) -> Option<Self> {
+        (invert
+            || curve != manifold_core::macro_bank::MacroCurve::Linear
+            || scale != 1.0
+            || offset != 0.0)
+        .then_some(Self {
+            min,
+            max,
+            invert,
+            curve,
+            scale,
+            offset,
+        })
+    }
+
     /// Apply the slider response (clamped, only when invert/curve is set) then
     /// the card→consumer affine remap (unclamped). Delegates to
     /// [`manifold_core::effects::apply_card_reshape`] — the single definition of
@@ -407,18 +435,9 @@ impl ResolvedBinding {
             // today) yield `None`, so this stays byte-identical; a
             // preset-authored curve now takes effect with no per-instance note.
             None => {
-                let reshape = (b.invert
-                    || b.curve != manifold_core::macro_bank::MacroCurve::Linear
-                    || b.scale != 1.0
-                    || b.offset != 0.0)
-                    .then_some(Reshape {
-                        min: b.min,
-                        max: b.max,
-                        invert: b.invert,
-                        curve: b.curve,
-                        scale: b.scale,
-                        offset: b.offset,
-                    });
+                let reshape = Reshape::from_preset_response(
+                    b.min, b.max, b.curve, b.invert, b.scale, b.offset,
+                );
                 Some(Self::assemble(
                     b.id.clone(),
                     Cow::Borrowed(b.label),
@@ -537,37 +556,6 @@ impl ResolvedBinding {
             reshape,
             wraps_angle,
         }
-    }
-
-    /// Assemble a static / affine binding: the card→consumer remap is a pure
-    /// `value * scale + offset` (or identity when scale=1, offset=0). Shared
-    /// by the effect preset path ([`Self::from_static`]) and the generator
-    /// path so a folded `affine_scalar` behaves identically whichever rides
-    /// it. Angle-wrap is never set here — affine folds don't loop, and
-    /// `from_user` is the only path that tags Angle knobs.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn assemble_affine(
-        id: ParamId,
-        label: Cow<'static, str>,
-        default_value: f32,
-        target: ResolvedTarget,
-        convert: ParamConvert,
-        source: BindingSource,
-        source_index: usize,
-        scale: f32,
-        offset: f32,
-    ) -> Self {
-        Self::assemble(
-            id,
-            label,
-            default_value,
-            target,
-            convert,
-            source,
-            source_index,
-            scale_offset_reshape(scale, offset),
-            false,
-        )
     }
 
     /// Recompute this binding's downstream reshape in place from a

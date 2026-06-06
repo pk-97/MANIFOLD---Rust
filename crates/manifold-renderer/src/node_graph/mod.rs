@@ -81,6 +81,7 @@ pub use loaded_preset_view::{
 };
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
+pub(crate) use param_binding::Reshape;
 pub use param_binding::{
     BindingCacheEntry, BindingSource, LastAppliedCache, ParamBinding, ParamConvert, ParamId,
     ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,
