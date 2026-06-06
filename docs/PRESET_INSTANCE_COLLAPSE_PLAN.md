@@ -1,7 +1,7 @@
 # Preset Instance Collapse Plan — finish the effect/generator unification
 
-**Status:** IN PROGRESS (attempt #8). Phases 0–2 landed (each on its own branch,
-all gates green); Phase 3 is next. The previous seven attempts stalled for one
+**Status:** IN PROGRESS (attempt #8). Phases 0–3 landed (each on its own branch,
+all gates green); Phase 4 (preset namespace + fork ergonomics) is next. The previous seven attempts stalled for one
 reason: each finished the *definition* side and deferred the *instance* and
 *runtime* side. This plan does that deferred half, on a cleaner model than the
 prior attempts assumed (see "The model" below). When it is done,
@@ -296,7 +296,27 @@ failure is WireframeDepthGraph's **pre-existing** DNN `copy_texture` blit
 > half-state this plan forbids. Every format-touching phase is gated on the golden
 > `Liveschool` round-trip plus the pre-1.5 fixture corpus.
 
-### Phase 3 — Unify into one `PresetInstance`; delete `GraphHost` (manifold-core)  ⟵ NEXT
+### Phase 3 — Unify into one `PresetInstance` (manifold-core) ✅ DONE `[branch preset-collapse-phase3]`
+
+**Landed in two steps:** (1) workspace-wide rename `EffectInstance → PresetInstance`;
+(2) fold `GeneratorParamState` into it (deleted) behind a `PresetKind` discriminator.
+Kind-aware serde keeps BOTH on-disk shapes byte-identical (effect shape / legacy
+generator shape) so **no migration was needed this phase**; `Layer.gen_params`
+decodes via `deserialize_with`. Generator methods ported onto `PresetInstance`;
+`set_param*` clamps against the generator registry only for `kind == Generator`
+(behavior-preserving — that clamp is the hidden-max bug, removed in Phase 5).
+
+**Refinement vs the spec below:** `GraphHost` was **kept**, not deleted. Deleting
+it requires unifying the graph home (generator graph still on `Layer`), but the
+graph ultimately moves *into the preset file* in Phase 5 — so moving it onto the
+instance now, then out again, would be throwaway. `GraphHost` deletion + graph-home
+unification therefore moves to Phase 5. Everything else in the spec landed.
+
+Outcome: core 222 (+ generator round-trip tests); io 19 incl 12 `load_project`
+(Liveschool round-trips through the merged type); app == baseline; bundled_presets
+7/8 (pre-existing WireframeDepth); json_graph_generator 16; clippy clean.
+
+<details><summary>Original Phase 3 spec (graph-home/GraphHost parts deferred to Phase 5)</summary>
 
 The type merge, and *only* the type merge. `EffectInstance` and
 `GeneratorParamState` collapse into one `PresetInstance { kind: PresetKind, .. }`
@@ -321,7 +341,9 @@ Gate: full workspace test == baseline; both old structs + `GraphHost` gone;
 behavior unchanged (golden `Liveschool` round-trip; parity suite, since the
 modulation/binding path is touched).
 
-### Phase 4 — Preset namespace + fork ergonomics (core + io + editing + ui)
+</details>
+
+### Phase 4 — Preset namespace + fork ergonomics (core + io + editing + ui)  ⟵ NEXT
 
 A self-contained capability, independent of `ParamMapping`. Three-source preset
 namespace (stock read-only / user folder / project-embedded in the project ZIP)
