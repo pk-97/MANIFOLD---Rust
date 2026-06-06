@@ -220,7 +220,6 @@ mod tests {
     /// down the run; all failures are collected and reported at once.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
-        use crate::generator::Generator;
         use crate::generators::json_graph_generator::JsonGraphGenerator;
         use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use crate::node_graph::PrimitiveRegistry;

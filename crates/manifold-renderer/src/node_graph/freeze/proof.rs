@@ -1019,7 +1019,6 @@ fn grouped_presets_fuse_through_entry_points() {
 #[test]
 fn every_fused_generator_executes_one_frame() {
     use super::install::fused_generator_def_by_id;
-    use crate::generator::Generator;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::bundled_generator_presets::bundled_generator_preset_type_ids;
     use crate::generators::json_graph_generator::JsonGraphGenerator;
@@ -1100,7 +1099,6 @@ fn every_fused_generator_executes_one_frame() {
 #[test]
 fn fused_generator_renders_like_unfused() {
     use super::install::fuse_generator_def;
-    use crate::generator::Generator;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::json_graph_generator::JsonGraphGenerator;
 
@@ -1196,7 +1194,6 @@ fn fused_generator_renders_like_unfused() {
 #[test]
 fn digitalplants_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
-    use crate::generator::Generator;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
     use crate::generators::json_graph_generator::JsonGraphGenerator;

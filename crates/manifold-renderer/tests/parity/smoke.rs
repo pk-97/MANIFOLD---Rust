@@ -22,25 +22,41 @@
 //!   message names the generator so you can grep its WGSL.
 
 use half::f16;
-use manifold_renderer::generators::registration::GeneratorFactory;
+use manifold_renderer::generators::bundled_generator_presets::{
+    bundled_generator_preset_json, bundled_generator_preset_type_ids,
+};
+use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
 use crate::harness;
 
-/// Every registered `GeneratorFactory` instantiates and renders one
-/// frame into a fresh target with default parameters; output must be
-/// finite. Generators have no parity-test layer, so this is their
-/// primary integration check.
+/// Every bundled generator preset instantiates and renders one frame
+/// into a fresh target with default parameters; output must be finite.
+/// Generators have no parity-test layer, so this — the JSON-graph twin
+/// of the old `GeneratorFactory` smoke loop (deleted with the Rust
+/// generator factories) — is their primary integration check.
 #[test]
 fn every_registered_generator_runs_without_panicking_or_nans() {
     let h = harness::shared();
     let ctx = default_generator_ctx(h.width, h.height);
+    let registry = PrimitiveRegistry::with_builtin();
 
     let mut count = 0_usize;
-    for factory in inventory::iter::<GeneratorFactory> {
-        let id = factory.id.clone();
-        let mut generator = (factory.create)(&h.device);
+    for id in bundled_generator_preset_type_ids() {
+        let Some(json) = bundled_generator_preset_json(&id) else {
+            continue;
+        };
+        let mut generator = JsonGraphGenerator::from_json_str_with_device(
+            &json,
+            &registry,
+            &h.device,
+            h.width,
+            h.height,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+        )
+        .unwrap_or_else(|e| panic!("generator preset {} failed to build: {e}", id.as_str()));
 
         let target = h.make_target(&format!("smoke-gen-{}", id.as_str()));
         let mut enc = h.device.create_encoder(&format!("smoke-gen-{}-enc", id.as_str()));
@@ -54,7 +70,7 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
         assert_finite_rgba16f(&format!("generator/{}", id.as_str()), &bytes);
         count += 1;
     }
-    assert!(count > 0, "expected inventory::iter to yield ≥1 GeneratorFactory");
+    assert!(count > 0, "expected ≥1 bundled generator preset");
     eprintln!("smoke-tested {count} generators");
 }
 

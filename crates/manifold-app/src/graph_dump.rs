@@ -371,7 +371,6 @@ mod tests {
     #[ignore = "headless GPU dump; run manually with --ignored"]
     fn dump_blackhole_headless() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_renderer::generator::Generator;
         use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
         use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
@@ -465,7 +464,6 @@ mod tests {
     #[ignore = "headless GPU sweep; run manually with --ignored"]
     fn sweep_blackhole_cloud() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_renderer::generator::Generator;
         use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
         use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};

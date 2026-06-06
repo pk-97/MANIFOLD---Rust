@@ -1,6 +1,7 @@
 //! Loader shim that turns a JSON-defined generator graph into a
-//! runtime-executable bundle implementing the standard [`Generator`]
-//! trait.
+//! runtime-executable bundle — the one concrete generator runtime
+//! (every generator is a JSON atom graph now, so there is no trait to
+//! abstract over).
 //!
 //! A generator preset JSON sits at
 //! `crates/manifold-renderer/assets/generator-presets/*.json` and uses
@@ -23,7 +24,6 @@ use manifold_core::{
 };
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 
-use crate::generator::Generator;
 use crate::gpu_encoder::GpuEncoder;
 use crate::preset_context::PresetContext;
 use crate::node_graph::{
@@ -905,8 +905,8 @@ impl JsonGraphGenerator {
     }
 }
 
-impl Generator for JsonGraphGenerator {
-    fn generator_type(&self) -> &PresetTypeId {
+impl JsonGraphGenerator {
+    pub fn generator_type(&self) -> &PresetTypeId {
         &self.type_id
     }
 
@@ -919,7 +919,7 @@ impl Generator for JsonGraphGenerator {
     /// its body), so a direct lookup misses; fall back to the group → producer
     /// map and preview the group's primary texture-output producer instead.
     /// Plain nodes and groups thus share one capture mechanism.
-    fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
+    pub fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
         use crate::node_graph::PreviewEncoding;
         let mut encoding = PreviewEncoding::Color;
         let target = node_id.and_then(|nid| {
@@ -951,18 +951,18 @@ impl Generator for JsonGraphGenerator {
         self.executor.set_preview_target(target);
     }
 
-    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+    pub fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
         self.preview_encoding
     }
 
-    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+    pub fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
         (
             self.executor.preview_scalar_inputs().to_vec(),
             self.executor.preview_scalar_outputs().to_vec(),
         )
     }
 
-    fn apply_inner_param_overrides(
+    pub fn apply_inner_param_overrides(
         &mut self,
         def: &manifold_core::effect_graph_def::EffectGraphDef,
     ) {
@@ -981,13 +981,13 @@ impl Generator for JsonGraphGenerator {
     /// The preview target's captured output texture from the most recent
     /// `render`. `None` if no target, the node was pruned, or it has no
     /// texture output.
-    fn preview_texture(&self) -> Option<&GpuTexture> {
+    pub fn preview_texture(&self) -> Option<&GpuTexture> {
         let res = self.executor.preview_resource()?;
         let slot = self.executor.backend().slot_for(res)?;
         self.executor.backend().texture_2d(slot)
     }
 
-    fn render(
+    pub fn render(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         target: &GpuTexture,
@@ -1045,14 +1045,14 @@ impl Generator for JsonGraphGenerator {
         ctx.anim_progress
     }
 
-    fn set_string_params(
+    pub fn set_string_params(
         &mut self,
         params: Option<&std::collections::BTreeMap<String, String>>,
     ) {
         self.apply_string_params(params);
     }
 
-    fn reset_state(&mut self, _device: &GpuDevice) {
+    pub fn reset_state(&mut self, _device: &GpuDevice) {
         // Two parallel state stores need clearing:
         // 1. Per-primitive `extra_fields` state — ArrayFeedback's prev
         //    buffer, RenderLines' anim_progress, ClipTriggerCycle's
@@ -1074,11 +1074,7 @@ impl Generator for JsonGraphGenerator {
         self.state_store.cleanup_all();
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
+    pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         // Push the new dims into the MetalBackend so future lazy-alloc
         // acquires get textures at the host's render resolution. Without
         // this, every intermediate texture stays frozen at the
@@ -1724,7 +1720,7 @@ mod tests {
         // Simulate the host's first resize_gpu call (project's actual
         // render resolution diverges from the 1920x1080 construction
         // default).
-        Generator::resize(&mut g, &device, 1280, 720);
+        g.resize(&device, 1280, 720);
 
         // Same bindings must survive.
         let metal = g

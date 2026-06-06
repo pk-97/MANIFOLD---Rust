@@ -1,4 +1,3 @@
-use crate::generator::Generator;
 use crate::generators::bundled_generator_presets::{
     bundled_generator_preset_json, bundled_generator_preset_type_ids,
 };
@@ -6,23 +5,15 @@ use crate::generators::json_graph_generator::JsonGraphGenerator;
 use crate::node_graph::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-/// Factory that maps PresetTypeId to concrete Generator instances.
-/// Pipeline compilation happens at creation time (expensive — do at startup or first use).
+/// Factory that maps PresetTypeId to concrete [`JsonGraphGenerator`]
+/// instances. Pipeline compilation happens at creation time (expensive — do at
+/// startup or first use).
 ///
-/// Two registration sources, consulted in this order:
-/// 1. **Bundled JSON presets** at `assets/generator-presets/*.json`,
-///    embedded by `build.rs`. Each becomes a [`JsonGraphGenerator`]
-///    instance.
-/// 2. **Rust factories** registered via `inventory::submit!` in each
-///    generator's implementation file (the legacy path; gradually being
-///    replaced by JSON presets as Tier 1 / Tier 2 / Tier 3 migrations
-///    land).
-///
-/// JSON takes priority — if a `<TypeId>.json` ships in
-/// `assets/generator-presets/`, the registry uses that even if a Rust
-/// factory for the same id is also present (so a JSON preset can
-/// supersede a legacy Rust implementation without removing the Rust
-/// code first).
+/// Every generator is a **bundled JSON preset** at
+/// `assets/generator-presets/*.json`, embedded by `build.rs`; each becomes a
+/// [`JsonGraphGenerator`]. The legacy Rust-factory path (one `Generator` trait
+/// impl per generator, registered via `inventory::submit!`) is gone — the
+/// migration to JSON atom graphs is complete, so there is one concrete runtime.
 pub struct GeneratorRegistry {
     target_format: GpuTextureFormat,
 }
@@ -36,19 +27,9 @@ impl GeneratorRegistry {
     /// Creates and immediately drops each generator — the compiled Metal pipeline
     /// binaries persist in the archive. Call at startup before `save_pipeline_archive()`.
     pub fn prewarm_all(&self, device: &GpuDevice) {
-        let rust_factories: Vec<_> = inventory::iter::<super::registration::GeneratorFactory>
-            .into_iter()
-            .collect();
         let json_count = bundled_generator_preset_type_ids().count();
-        log::info!(
-            "Pre-warming {} Rust + {} JSON generator pipelines...",
-            rust_factories.len(),
-            json_count,
-        );
-        for factory in &rust_factories {
-            let _ = (factory.create)(device);
-        }
-        // Pre-warm JSON-defined generators too. We need a default
+        log::info!("Pre-warming {json_count} JSON generator pipelines...");
+        // Pre-warm JSON-defined generators. We need a default
         // render resolution here — use a small placeholder; real sizes
         // come through on the first frame's `resize`. The pipelines
         // baked into each primitive cache at first dispatch regardless.
@@ -93,7 +74,7 @@ impl GeneratorRegistry {
         gen_type: &manifold_core::PresetTypeId,
         width: u32,
         height: u32,
-    ) -> Option<Box<dyn Generator>> {
+    ) -> Option<Box<JsonGraphGenerator>> {
         // No override, no watch context (perf-gate tuning / tests / non-editor
         // call sites) — fuse normally per the device verdict.
         self.create_with_override(device, gen_type, None, width, height, false)
@@ -105,15 +86,7 @@ impl GeneratorRegistry {
     /// `override_def = None` falls back to the bundled JSON preset.
     ///
     /// Returns `None` if neither the override nor the bundled preset
-    /// can be loaded AND no Rust factory matches.
-    ///
-    /// **Important**: the override path is JSON-graph-only. Rust
-    /// generators (the legacy `inventory::submit!` factories) can't
-    /// be overridden — the override field on the layer is silently
-    /// ignored in that case, the Rust factory's `create` runs as
-    /// usual. Rust-only generators don't surface in the graph editor,
-    /// so the layer's override field can't have been populated
-    /// against them via the normal UI flow.
+    /// can be loaded.
     pub fn create_with_override(
         &self,
         device: &GpuDevice,
@@ -122,7 +95,7 @@ impl GeneratorRegistry {
         width: u32,
         height: u32,
         is_watched: bool,
-    ) -> Option<Box<dyn Generator>> {
+    ) -> Option<Box<JsonGraphGenerator>> {
         let registry = PrimitiveRegistry::with_builtin();
 
         // The "effective def" this layer renders: the per-layer graph override
@@ -174,7 +147,7 @@ impl GeneratorRegistry {
                 height,
                 self.target_format,
             ) {
-                Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
+                Ok(g) => return Some(Box::new(g)),
                 Err(e) => {
                     log::warn!(
                         "Generator {} failed to load from def: {e}",
@@ -198,7 +171,7 @@ impl GeneratorRegistry {
                     height,
                     self.target_format,
                 ) {
-                    Ok(g) => return Some(Box::new(g) as Box<dyn Generator>),
+                    Ok(g) => return Some(Box::new(g)),
                     Err(e) => {
                         log::warn!(
                             "Bundled fallback for generator {} also failed: {e}",
@@ -209,33 +182,16 @@ impl GeneratorRegistry {
             }
         }
 
-        // Rust factory fallback. Rust generators allocate their
-        // internal resources lazily on first `resize()` (called by
-        // `GeneratorRenderer::resize_gpu`), so the canvas dims aren't
-        // needed at construction here — they only matter for the
-        // JSON chain-build's canvas-sized array pre-allocation
-        // handled above.
-        for factory in inventory::iter::<super::registration::GeneratorFactory> {
-            if factory.id == *gen_type {
-                return Some((factory.create)(device));
-            }
-        }
-        log::warn!("Generator type {:?} not yet implemented", gen_type);
+        log::warn!("Generator type {:?} not found in the preset catalog", gen_type);
         None
     }
 
-    /// Every `PresetTypeId` known to this registry — both JSON
-    /// presets and Rust factories. Used by the picker UI to populate
-    /// the "Add Generator" menu.
+    /// Every `PresetTypeId` known to this registry (the bundled JSON
+    /// generator presets). Used by the picker UI to populate the
+    /// "Add Generator" menu.
     pub fn known_type_ids(&self) -> Vec<manifold_core::PresetTypeId> {
         let mut out: Vec<manifold_core::PresetTypeId> =
             bundled_generator_preset_type_ids().collect();
-        for factory in inventory::iter::<super::registration::GeneratorFactory> {
-            // Avoid duplicating ids that ship in both sources.
-            if !out.contains(&factory.id) {
-                out.push(factory.id.clone());
-            }
-        }
         out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         out
     }

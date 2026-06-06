@@ -5,7 +5,6 @@ pub mod effect;
 pub mod effect_chain_graph;
 pub mod effects;
 pub mod fsr1;
-pub mod generator;
 pub mod generator_renderer;
 pub mod generators;
 pub mod gpu;

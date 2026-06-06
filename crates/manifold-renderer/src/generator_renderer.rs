@@ -1,4 +1,4 @@
-use crate::generator::Generator;
+use crate::generators::json_graph_generator::JsonGraphGenerator;
 use crate::generators::registry::GeneratorRegistry;
 use crate::gpu_encoder::GpuEncoder;
 use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
@@ -37,7 +37,7 @@ impl ActiveClip {
 /// Per-layer generator state. Persists across clips to maintain
 /// temporal state (particle positions, attractors, etc.).
 struct LayerGeneratorState {
-    generator: Box<dyn Generator>,
+    generator: Box<JsonGraphGenerator>,
     generator_type: PresetTypeId,
     trigger_count: u32,
     /// `Layer::generator_graph_structure_version` at the time this generator
@@ -923,7 +923,6 @@ impl ClipRenderer for GeneratorRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generators::json_graph_generator::JsonGraphGenerator;
     use crate::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
@@ -1060,14 +1059,7 @@ mod tests {
                 layer_state.generator_type, strange,
                 "swap must install the new generator type",
             );
-            let json_gen = layer_state
-                .generator
-                .as_any()
-                .downcast_ref::<JsonGraphGenerator>()
-                .expect(
-                    "ComputeStrangeAttractor must be a JSON-backed generator for this regression \
-                     — if it has moved back to a Rust factory, update this assertion",
-                );
+            let json_gen = layer_state.generator.as_ref();
             assert_eq!(
                 json_gen.backend_for_test().canvas_dims(),
                 (host_w, host_h),

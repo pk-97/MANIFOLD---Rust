@@ -23,7 +23,6 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::generator::Generator;
 use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;

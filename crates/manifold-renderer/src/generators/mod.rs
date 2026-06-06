@@ -6,6 +6,5 @@ pub mod json_graph_generator;
 pub mod line_pipeline;
 pub mod mesh_common;
 pub mod mesh_pipeline;
-pub mod registration;
 pub mod registry;
 pub mod stateful_base;
