@@ -20,6 +20,10 @@ ahash = { workspace = true }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }
+# Synthetic preset fixtures for the modulation characterization tests register
+# via inventory (manifold-renderer, which submits the shipping presets, isn't
+# linked into this test binary).
+inventory = "0.3"
 
 [lints]
 workspace = true

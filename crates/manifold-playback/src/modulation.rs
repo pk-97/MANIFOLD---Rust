@@ -823,3 +823,298 @@ fn compute_active_clip_timing(
         timing.push((elapsed, duration));
     }
 }
+
+// =====================================================================
+// Characterization tests for the per-frame envelope evaluators.
+//
+// These pin the *current* behavior of `evaluate_all_envelopes` (effect
+// targets) and `evaluate_gen_param_envelopes` (generator params) before the
+// envelope-home unification moves effect envelopes off `layer.envelopes`
+// (keyed by `target_effect_type`) and onto each effect's own
+// `PresetInstance.envelopes`. The arithmetic (ADSR offset, random walk) is
+// invariant across that refactor; the effect-target *resolution* is the part
+// that changes, and `effect_envelope_resolves_target_by_type_first_match`
+// documents the leak the move fixes.
+//
+// manifold-renderer (which submits the real shipping presets) isn't linked
+// into the manifold-playback test binary, so the evaluators would resolve
+// nothing. We register one synthetic effect and one synthetic generator here
+// via `inventory` so `resolve_param_in` / the generator registry have a
+// target — the same fixture pattern manifold-core's own registry tests use.
+// =====================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::effect_registration::EffectMetadata;
+    use manifold_core::effects::{EnvelopeMode, ParamEnvelope};
+    use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+    use manifold_core::layer::Layer;
+    use manifold_core::preset_definition_registry::effect;
+    use manifold_core::project::Project;
+    use manifold_core::PresetTypeId;
+
+    const TEST_FX: PresetTypeId = PresetTypeId::new("TestEnvFx");
+    const TEST_GEN: PresetTypeId = PresetTypeId::new("TestEnvGen");
+
+    inventory::submit! {
+        EffectMetadata {
+            id: PresetTypeId::new("TestEnvFx"),
+            display_name: "Test Env Fx",
+            category: "Test",
+            available: true,
+            osc_prefix: "testEnvFx",
+            legacy_discriminant: None,
+            params: &[
+                ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+                ParamSpec::whole("segs", "Segs", 0.0, 8.0, 0.0, ""),
+            ],
+        }
+    }
+    inventory::submit! {
+        GeneratorMetadata {
+            id: PresetTypeId::new("TestEnvGen"),
+            display_name: "Test Env Gen",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "testEnvGen",
+            legacy_discriminant: None,
+            params: &[
+                ParamSpec::continuous("speed", "Speed", 0.0, 10.0, 0.0, "F2", ""),
+                ParamSpec::whole("count", "Count", 0.0, 8.0, 0.0, ""),
+            ],
+            string_params: &[],
+        }
+    }
+
+    /// A video layer carrying one default `TestEnvFx` effect instance.
+    fn layer_with_one_effect() -> Layer {
+        let mut layer = Layer::new_video("FxLayer".into(), 0);
+        layer.effects = Some(vec![effect::create_default(&TEST_FX)]);
+        layer
+    }
+
+    /// A generator layer whose `gen_params` is initialized to `TestEnvGen`
+    /// registry defaults (populated `param_values`, kind = Generator).
+    fn generator_layer() -> Layer {
+        let mut layer = Layer::new_generator("GenLayer".into(), TEST_GEN.clone(), 0);
+        layer.gen_params_or_init().init_defaults_for_type(TEST_GEN.clone());
+        layer
+    }
+
+    /// ADSR sustain=1, attack=decay=release=0 → calculate_adsr returns 1.0 for
+    /// any in-clip position, so this is a pure "full offset" envelope.
+    fn adsr_full(effect_type: PresetTypeId, param: &'static str) -> ParamEnvelope {
+        let mut env = ParamEnvelope::new_for_effect(effect_type, param);
+        env.sustain_level = 1.0;
+        env.target_normalized = 1.0;
+        env
+    }
+
+    fn project_with(layer: Layer) -> Project {
+        let mut project = Project::default();
+        project.timeline.layers = vec![layer];
+        project
+    }
+
+    // ── effect ADSR ──────────────────────────────────────────────────────
+
+    #[test]
+    fn effect_adsr_envelope_applies_full_offset_to_targeted_param() {
+        let mut layer = layer_with_one_effect();
+        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let mut project = project_with(layer);
+
+        // Active clip: elapsed 2 beats within an 8-beat clip.
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        let modulated = evaluate_all_envelopes(&mut project, &timing);
+
+        assert!(modulated, "an in-clip full-offset envelope reports modulation");
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert!(
+            (fx.param_values[0].value - 1.0).abs() < 1e-6,
+            "amount driven from base 0.0 to max 1.0, got {}",
+            fx.param_values[0].value
+        );
+    }
+
+    #[test]
+    fn effect_adsr_partial_target_normalized() {
+        let mut layer = layer_with_one_effect();
+        let mut env = adsr_full(TEST_FX.clone(), "amount");
+        env.target_normalized = 0.5; // target = min + (max-min)*0.5 = 0.5
+        layer.envelopes = Some(vec![env]);
+        let mut project = project_with(layer);
+
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        assert!(evaluate_all_envelopes(&mut project, &timing));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert!(
+            (fx.param_values[0].value - 0.5).abs() < 1e-6,
+            "amount driven to half-range 0.5, got {}",
+            fx.param_values[0].value
+        );
+    }
+
+    #[test]
+    fn effect_adsr_no_change_when_clip_inactive() {
+        let mut layer = layer_with_one_effect();
+        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let mut project = project_with(layer);
+
+        // No active clip on this layer (sentinel elapsed -1).
+        let timing = vec![(Beats(-1.0), Beats::ZERO)];
+        let modulated = evaluate_all_envelopes(&mut project, &timing);
+
+        assert!(!modulated, "no active clip => no modulation");
+        let layer = &project.timeline.layers[0];
+        let fx = &layer.effects.as_ref().unwrap()[0];
+        assert_eq!(fx.param_values[0].value, 0.0, "param untouched");
+        assert!(
+            !layer.envelopes.as_ref().unwrap()[0].was_clip_active,
+            "rising-edge bookkeeping cleared when clip inactive"
+        );
+    }
+
+    #[test]
+    fn effect_disabled_envelope_is_noop() {
+        let mut layer = layer_with_one_effect();
+        let mut env = adsr_full(TEST_FX.clone(), "amount");
+        env.enabled = false;
+        layer.envelopes = Some(vec![env]);
+        let mut project = project_with(layer);
+
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        assert!(!evaluate_all_envelopes(&mut project, &timing));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert_eq!(fx.param_values[0].value, 0.0);
+    }
+
+    #[test]
+    fn effect_envelope_targeting_disabled_effect_is_noop() {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].enabled = false; // target not found among *enabled*
+        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let mut project = project_with(layer);
+
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        assert!(!evaluate_all_envelopes(&mut project, &timing));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert_eq!(fx.param_values[0].value, 0.0);
+    }
+
+    /// CURRENT behavior: effect envelopes resolve their target by
+    /// `effect_type`, taking the FIRST enabled match. With two effects of the
+    /// same type, only the first is modulated — the leak the envelope-home
+    /// unification (STEP 2) removes by binding the envelope to one instance.
+    /// This test will be rewritten when that lands.
+    #[test]
+    fn effect_envelope_resolves_target_by_type_first_match() {
+        let mut layer = Layer::new_video("FxLayer".into(), 0);
+        layer.effects = Some(vec![
+            effect::create_default(&TEST_FX),
+            effect::create_default(&TEST_FX),
+        ]);
+        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let mut project = project_with(layer);
+
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        assert!(evaluate_all_envelopes(&mut project, &timing));
+        let effects = project.timeline.layers[0].effects.as_ref().unwrap();
+        assert!(
+            (effects[0].param_values[0].value - 1.0).abs() < 1e-6,
+            "first same-type effect is modulated"
+        );
+        assert_eq!(
+            effects[1].param_values[0].value, 0.0,
+            "second same-type effect is NOT reached (by-type first-match leak)"
+        );
+    }
+
+    // ── effect Random ────────────────────────────────────────────────────
+
+    #[test]
+    fn effect_random_envelope_jumps_within_normalized_range() {
+        let mut layer = layer_with_one_effect();
+        let mut env = ParamEnvelope::new_for_effect(TEST_FX.clone(), "amount");
+        env.mode = EnvelopeMode::Random;
+        env.random_jump = true;
+        env.range_min = 0.25;
+        env.range_max = 0.75;
+        layer.envelopes = Some(vec![env]);
+        let mut project = project_with(layer);
+
+        // Clip just became active (was_clip_active false, last_elapsed -1) → trigger.
+        let timing = vec![(Beats(0.0), Beats(8.0))];
+        let modulated = evaluate_all_envelopes(&mut project, &timing);
+
+        assert!(modulated, "random trigger reports modulation");
+        let layer = &project.timeline.layers[0];
+        let fx = &layer.effects.as_ref().unwrap()[0];
+        // min + (max-min)*range, with min=0,max=1 → held in [0.25, 0.75].
+        assert!(
+            (0.25..=0.75).contains(&fx.param_values[0].value),
+            "random jump held within range, got {}",
+            fx.param_values[0].value
+        );
+        let env = &layer.envelopes.as_ref().unwrap()[0];
+        assert!(
+            (0.25..=0.75).contains(&env.walk_value),
+            "walk_value initialized within range, got {}",
+            env.walk_value
+        );
+    }
+
+    // ── generator ADSR ───────────────────────────────────────────────────
+
+    #[test]
+    fn generator_adsr_envelope_applies_full_offset() {
+        let mut layer = generator_layer();
+        {
+            let gp = layer.gen_params_or_init();
+            let mut env = ParamEnvelope::new_for_gen("speed");
+            env.sustain_level = 1.0;
+            env.target_normalized = 1.0;
+            gp.envelopes = Some(vec![env]);
+        }
+        let mut project = project_with(layer);
+
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        let modulated = evaluate_gen_param_envelopes(&mut project, &timing);
+
+        assert!(modulated);
+        let gp = project.timeline.layers[0].gen_params().unwrap();
+        assert!(
+            (gp.param_values[0].value - 10.0).abs() < 1e-6,
+            "speed driven from 0 to max 10, got {}",
+            gp.param_values[0].value
+        );
+    }
+
+    #[test]
+    fn generator_disabled_envelope_is_noop() {
+        let mut layer = generator_layer();
+        {
+            let gp = layer.gen_params_or_init();
+            let mut env = ParamEnvelope::new_for_gen("speed");
+            env.enabled = false;
+            env.sustain_level = 1.0;
+            gp.envelopes = Some(vec![env]);
+        }
+        let mut project = project_with(layer);
+
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        assert!(!evaluate_gen_param_envelopes(&mut project, &timing));
+        let gp = project.timeline.layers[0].gen_params().unwrap();
+        assert_eq!(gp.param_values[0].value, 0.0);
+    }
+
+    #[test]
+    fn generator_envelope_only_runs_on_generator_layers() {
+        // An effect layer carrying a gen-style envelope on its (absent)
+        // gen_params is never reached by the generator evaluator.
+        let layer = layer_with_one_effect();
+        let mut project = project_with(layer);
+        let timing = vec![(Beats(2.0), Beats(8.0))];
+        assert!(!evaluate_gen_param_envelopes(&mut project, &timing));
+    }
+}
