@@ -1,12 +1,13 @@
 # Preset Instance Collapse Plan — finish the effect/generator unification
 
 **Status:** NOT STARTED. This is attempt #8. The previous seven stalled for one
-reason: each finished the *definition* side and then deferred the *instance* and
-*runtime* side. This plan does only the deferred half, and it carries a hard
-no-deferral contract (see below). When this plan is done, `EffectInstance` and
-`GeneratorParamState` are one type, `ChainGraph` and `JsonGraphGenerator` are one
-runtime, and the bridge code that exists only to keep two types in sync is
-deleted — not abstracted, deleted.
+reason: each finished the *definition* side and deferred the *instance* and
+*runtime* side. This plan does that deferred half, and it does it on a cleaner
+model than the prior attempts assumed (see "The model" below). When it is done,
+`EffectInstance` and `GeneratorParamState` are one thin type, `ChainGraph` and
+`JsonGraphGenerator` are one runtime, calibration lives in the preset file, and
+the bridge code that exists only to keep two types in sync is **deleted** — not
+abstracted, deleted.
 
 **The contract.** No deferred items. No stop-gaps. No "fold-in later." No
 additive-then-switch. No per-call fallbacks. No middle bridges left standing at
@@ -16,30 +17,81 @@ old shape never exists in memory. Every phase ends with the old code path
 **deleted**, not gated. If a phase can't delete what it replaces, the phase isn't
 done.
 
-**Why it's critical.** Effects and generators are one concept — a parameterized
-node graph that renders, modulates, and round-trips to disk. They are stored as
-two types. Every feature is therefore implemented twice and every bug fixed
-twice, months apart, with drift in between. The drift is not hypothetical; it is
-the live-show bug surface. The currently-known instances:
+---
 
-- **Generator card "hidden maximum."** A widened reshape range (e.g. OilyFluid
-  Speed 0.1–10) is silently clamped back to the static JSON range (0.1–4) on
-  write, because generators clamp in core against the def while effects clamp in
-  the UI against the reshape note. `GeneratorParamState::set_param_base` →
-  `clamp_param`.
-- **Generator modulation hidden-max.** The generator driver/envelope walk in
+## The model (what changed from attempt #1–7)
+
+The earlier attempts modeled a preset as a *shared catalog template* plus a
+*hidden per-instance override* (copy-on-write graph diff + per-instance reshape
+notes). That model is what made the fold-in scary and is the source of the bug
+class. We are not finishing that model — we are replacing it.
+
+**A preset is a self-contained file.** One JSON carries the whole thing: the node
+graph, which params are exposed as sliders, their ranges, labels, curves,
+defaults. This is the unit of sharing — drag-and-drop, someone else uses it, no
+dependency on anything it was derived from. The Resolume/TouchDesigner model, not
+the Ableton per-device-override model.
+
+**An instance on a layer is thin.** It references a preset and holds only live
+performance state: the current value of each exposed param and the modulation
+routings that write those values every frame (drivers, envelopes, Ableton, OSC).
+Nothing else. No graph, no bindings, no reshape notes, no ranges.
+
+**There is no per-instance override layer.** Ranges and exposure are preset data,
+not instance data. The per-instance `ParamMapping` reshape note is **deleted** —
+which deletes the original Speed bug by construction, because there is exactly one
+range (the preset's), so nothing can clamp a widened range back to a stale one.
+
+**Preset namespace.** Three sources, one id space: stock presets (ship in the app
+bundle, read-only), user presets (`~/Library/Application Support/MANIFOLD/presets/`),
+and project-embedded presets (inside the project ZIP, scoped to that project).
+An instance references a preset by id; the id resolves across all three.
+
+**Editing + fork ergonomics.**
+- Values and modulation are instance-local and instant. They never fork.
+- A *preset-level* edit (a range, which knobs are exposed, the graph topology)
+  edits the preset in place **if this instance is the only user of it**, and
+  **auto-forks a named project-embedded variant for this instance if the preset
+  is shared by 2+ instances.** So an edit can change other layers only when
+  shared — which is exactly when it forks instead. You can never silently change
+  another instance.
+- Stock presets are read-only and shared by definition, so editing one always
+  forks into the project. Falls out of the rule, no special case.
+- The fork is **visible, not modal** — the editor header flips to
+  "Oily Fluid — Layer 2 variant". Silent-local is fine; silent-global is banned.
+- "Change it for everyone using this preset" stays a deliberate, separate action.
+- A fresh fork is used by exactly one instance, so subsequent edits to it don't
+  fork again. Forking happens only at the moment of divergence — no sprawl.
+
+**Persistence vs sharing.** Edits autosave into the project (into whichever preset
+is being edited), undoable. "Save as" means **export to a standalone file** for
+sharing — forgetting it loses nothing, it just means you haven't shared yet.
+Manual-save-to-not-lose-work is not a thing here.
+
+---
+
+## Why it's critical
+
+Effects and generators are one concept stored as two types, so every feature
+ships twice and every fix lands twice, months apart, with drift between. The
+drift is the live-show bug surface. Known instances, all the same root cause
+(range/binding resolution centralized for effects, re-derived informally for
+generators):
+
+- **Generator card "hidden maximum"** — a widened range clamps back to the static
+  JSON range on write (`GeneratorParamState::set_param_base` → `clamp_param`). The
+  reported `graphTests2.manifold` Speed-capped-at-4 bug.
+- **Generator modulation hidden-max** — the generator driver/envelope walk in
   `manifold-playback/src/modulation.rs` scales into the static def range and
-  ignores reshape notes entirely, so the same cap bites any automated generator
-  param. Effects route through `resolve_param_in`, which honours the note.
-- **Freeze/fusion binding blindness** (commit `82a75332`) and the **Speed
-  snap-back** (commit `903deaa8`) — both written up in
-  `docs/PRESET_UNIFICATION_PLAN.md` as symptoms that "die" only at the instance +
-  runtime collapse this plan performs.
+  ignores reshape notes, so automation hits the same cap. Effects route through
+  `resolve_param_in`, which honours the range.
+- **Freeze/fusion binding blindness** (`82a75332`) and the **Speed snap-back**
+  (`903deaa8`) — both written up in `docs/PRESET_UNIFICATION_PLAN.md` as symptoms
+  that die only at the instance + runtime collapse this plan performs.
 
-All four are the same root cause wearing different clothes: range/binding
-resolution centralized for effects (`resolve_param_in`, `LoadedPresetView`) and
-re-derived informally for generators in three or four places, each a chance to
-drift. They cannot recur once there is one type, one resolver, one runtime.
+Under the new model the first two die by deletion (one range, in the preset; one
+resolver). The last two die at the runtime collapse (one runtime reading one
+binding source).
 
 ---
 
@@ -47,272 +99,260 @@ drift. They cannot recur once there is one type, one resolver, one runtime.
 
 Per `docs/PRESET_UNIFICATION_PLAN.md` (its 10 steps genuinely landed):
 
-- **One `PresetDef` / `PresetKind`** — the definition side is collapsed. The
-  registry value type is unified; the behavioral fork (skip-mode, wet/dry, OSC
-  scheme, line-based) rides `PresetKind`. `crates/manifold-core/src/preset_def.rs`.
+- **One `PresetDef` / `PresetKind`** — the *definition* side is collapsed
+  (`crates/manifold-core/src/preset_def.rs`); the behavioral fork (skip-mode,
+  wet/dry, OSC scheme, line-based) rides `PresetKind`.
 - **One disk-loaded catalog** with hot-reload; no compiled shadow.
-- **The runtime *apply loop*** (`pre_allocate_resources`, the graph executor) is
-  already shared by both the effect chain and the generator path.
+- **The runtime apply loop** (`pre_allocate_resources`, the graph executor) is
+  shared by the effect chain and the generator path.
 - **UI card panels** merged into one `ParamCardConfig` / `param_card.rs`.
 - **OSC scheme** unified; **v1.4.0** binding-storage save migration shipped.
-- A `GraphHost` trait already abstracts the *write* surface over both structs.
 
-The definition side and the shared plumbing are done. This plan is strictly the
-**instance type** and the **renderer runtime type** — the part that was deferred.
+The definition side and the shared plumbing are done. This plan is the **instance
+type**, the **renderer runtime type**, and the **preset-file model** for
+calibration — the deferred half.
 
 ---
 
-## What is still forked (the entire scope of this plan)
+## What is still forked (the scope of this plan)
 
-Audited 2026-06-06. The two instance structs are ~80% identical fields already.
+Audited 2026-06-06.
 
 | Concern | Effect | Generator | Resolution |
 |---|---|---|---|
-| Instance struct | `EffectInstance` (`effects.rs:599`) | `GeneratorParamState` (`generator.rs:21`) | One `PresetInstance` |
+| Instance struct | `EffectInstance` (`effects.rs:599`) | `GeneratorParamState` (`generator.rs:21`) | One thin `PresetInstance` |
 | Type id | `EffectTypeId` | `GeneratorTypeId` | One `PresetTypeId` |
-| Graph home | inline `EffectInstance.graph` + 2 versions | `Layer.generator_graph` + 2 versions | inline on instance |
-| Binding storage | sibling `EffectInstance.user_param_bindings` Vec | inside `graph.preset_metadata.bindings` | one inline list on instance, decoupled from graph materialization |
-| Envelope home | `Layer.envelopes` keyed `(effect_type, param_id)` | inline `GeneratorParamState.envelopes` keyed `param_id` | inline on instance, keyed `param_id` |
-| base values | `Option<Vec<f32>>` | `Option<Vec<f32>>` (residue: not `ParamSlot`) | `Vec<ParamSlot>` on instance |
-| Clamp policy | UI clamps to note range | core clamps to def range | one resolver, reshape-aware |
-| Modulation | `resolve_param_in` (note-aware) | hand-rolled walk (def-only) | one walk via `resolve_param_in` |
+| Graph home | inline `EffectInstance.graph` | `Layer.generator_graph` | in the **preset file**, not the instance |
+| Exposed params + ranges | static def + per-instance `ParamMapping` notes + `user_param_bindings` | def + `ParamMapping` + `preset_metadata.bindings` | in the **preset file** |
+| Envelope home | `Layer.envelopes` keyed `(effect_type, param_id)` | inline on `GeneratorParamState` | inline on the instance, keyed `param_id` |
+| base/effective values | `Vec<ParamSlot>` + `Option<Vec<f32>>` | `Vec<ParamSlot>` + `Option<Vec<f32>>` | one value bus on the instance |
+| Clamp policy | UI clamps to note range | core clamps to def range | one resolver; range comes from the preset |
+| Modulation | `resolve_param_in` | hand-rolled def-only walk | one walk via one resolver |
 | Runtime type | `ChainGraph` | `JsonGraphGenerator` | one `PresetRuntime` |
-| Addressing | `GraphTarget::Effect(EffectId)` | `GraphTarget::Generator(LayerId)` | **stays** — a real difference |
+| Addressing | `GraphTarget::Effect(EffectId)` | `GraphTarget::Generator(LayerId)` | **stays** a two-variant enum |
 
-**The one genuine difference that must NOT collapse:** addressing. An effect is
-one item in a layer's ordered, groupable chain, addressed by `EffectId`. A
-generator is the layer's single source, addressed by `LayerId`. `GraphTarget`
-stays a two-variant enum. Everything else above is duplication and collapses.
+**The one genuine difference that does NOT collapse:** addressing. An effect is
+one item in a layer's ordered, groupable chain (`EffectId`); a generator is the
+layer's single source (`LayerId`). `GraphTarget` stays. Everything else collapses.
 
 ---
 
 ## Architectural target
 
-### One instance type: `PresetInstance` (manifold-core)
+### The preset file (manifold-core / on disk)
 
-A single struct replaces both. The union of the two structs' fields, with the
-real chain-membership fields made honest (a generator is not in a chain, so it
-has no group and no chain id):
+The authored, shareable unit. `PresetDef` already exists for the definition; this
+extends the *file* to carry the full authoring surface so a preset is
+self-contained:
+
+- node graph (topology),
+- exposed params: id, target inner node (stable `NodeId`), inner param, label,
+  range (min/max), curve, default, convert,
+- preset metadata (kind, osc prefix, etc.).
+
+This is the home for everything that used to be split across the static def, the
+per-instance `ParamMapping` notes, and `user_param_bindings`. One place.
+
+### The thin instance: `PresetInstance` (manifold-core)
+
+Replaces both `EffectInstance` and `GeneratorParamState`:
 
 ```rust
 pub struct PresetInstance {
-    pub kind: PresetKind,            // Effect | Generator — the only fork carrier
-    pub type_id: PresetTypeId,       // replaces EffectTypeId / GeneratorTypeId
+    pub kind: PresetKind,            // Effect | Generator
+    pub preset_id: PresetTypeId,     // which preset (catalog/user/project)
     pub enabled: bool,
     pub collapsed: bool,
 
-    pub param_values: Vec<ParamSlot>,
-    pub base_param_values: Vec<ParamSlot>,   // residue fixed: ParamSlot both buses
+    pub param_values: Vec<ParamSlot>,        // live value per exposed param
     pub drivers: Option<Vec<ParameterDriver>>,
-    pub envelopes: Option<Vec<ParamEnvelope>>,   // inline for BOTH kinds now
+    pub envelopes: Option<Vec<ParamEnvelope>>,   // inline, both kinds
     pub ableton_mappings: Option<Vec<AbletonParamMapping>>,
 
-    pub bindings: Vec<UserParamBinding>,     // ALWAYS inline, ALWAYS present
-    pub param_mappings: Vec<ParamMapping>,
-    pub param_mappings_version: u32,
-
-    pub graph: Option<EffectGraphDef>,       // None = use catalog default
-    pub graph_version: u32,
-    pub graph_structure_version: u32,
-
-    // Effect-chain membership. None/synthetic for a generator. These are the
-    // real differences GraphTarget already encodes; they live here only so the
-    // chain can carry one element type.
-    pub id: PresetInstanceId,                // EffectId-shaped; generator = layer-derived
+    // Chain membership — real differences GraphTarget already encodes; here only
+    // so the chain can carry one element type. Generator: id is layer-derived,
+    // group_id is None.
+    pub id: PresetInstanceId,
     pub group_id: Option<EffectGroupId>,
 }
 ```
 
-Legacy flat fields (`legacy_param0..3`, `legacy_param_version`) do **not** move
-to the new struct. They exist only to read pre-1.1 JSON; that reading moves into
-the load migration (Phase 5) and the fields are deleted.
+No `graph`, no `bindings`, no `param_mappings`, no `base_param_values` residue, no
+legacy flat fields. Graph + exposure + ranges are in the preset; live state is
+here. When you "modify" an instance's calibration or topology, you are editing
+its preset (forking first if shared) — never mutating the instance with a hidden
+override.
 
-### The decoupling decision (this is the crux the last attempts dodged)
+> Note: with calibration in the preset, "base vs effective" value is just the
+> pre/post-modulation value of an exposed param — one `Vec<ParamSlot>` bus plus
+> the modulation evaluator, same as effects already do.
 
-Binding storage is **decoupled from graph materialization.** `bindings` is an
-inline list that is always present and tiny; `graph: None` still means "pristine,
-use the catalog, perform-path unchanged." A binding does **not** force
-`graph = Some(...)`.
+### One runtime: `PresetRuntime` (manifold-renderer)
 
-This is the call that unblocks everything. The previous plan assumed the effect
-fold-in required lifting the canonical graph into every effect (lighting the
-MODIFIED badge on every effect, switching every effect to the divergent-rebuild
-path on the live rig). That assumption is why Phase 1b was deferred seven times.
-It is wrong. Bindings are data about *which inner params are exposed and how they
-reshape*; they do not require a topology copy. Store them on the instance, resolve
-their inner-node targets against the catalog graph when `graph` is `None` and
-against the override when it is `Some` — exactly how static params already resolve
-against `LoadedPresetView` today. Generators currently store bindings in
-`preset_metadata` only because they always have a materialized graph; the new
-home removes that accident.
+`ChainGraph` and `JsonGraphGenerator` both own a compiled `Graph` + `ExecutionPlan`
++ executor and both build through the shared `pre_allocate_resources`/`graph_loader`
+pipeline. They differ only in input handling (effect transforms an input texture;
+generator produces from nothing) and the binding-apply source. `PresetRuntime`
+carries an optional input slot (None ⇒ generator) and reads exposure from the one
+preset. The `Generator` trait and the effect-chain runtime surface collapse in.
 
-### One runtime type: `PresetRuntime` (manifold-renderer)
+### `GraphHost` is deleted
 
-`ChainGraph` and `JsonGraphGenerator` both already own a compiled `Graph` +
-`ExecutionPlan` + executor and both already build through the shared
-`pre_allocate_resources` / `graph_loader` pipeline. They differ in: input
-handling (effect transforms an input texture; generator produces from nothing),
-and the binding-apply source. `PresetRuntime` carries an optional input slot
-(None ⇒ generator) and reads bindings from the one inline list. The `Generator`
-trait and the `EffectChain` runtime surface collapse into it. `PresetKind` /
-"has input" carries the two real behavioral differences.
-
-### The `GraphHost` trait is deleted
-
-`GraphHost` exists only to let call sites operate over two different structs
-without knowing which. With one struct, there is nothing to abstract — call sites
-take `&mut PresetInstance`. The trait, its two impls, `GeneratorHost`, and
-`with_graph_host_mut`'s closure dance all delete. This deletion is the proof the
-collapse is real; if `GraphHost` survives, the collapse didn't happen.
+`GraphHost` exists only to operate over two structs without knowing which. With
+one thin instance, call sites take `&mut PresetInstance`. The trait, both impls,
+`GeneratorHost`, and the `with_graph_host_mut` closure dance delete. If
+`GraphHost` survives, the collapse didn't happen.
 
 ---
 
 ## Phased plan — dependency ordered, each phase atomic
 
-Every phase: lands on its own branch off the current head, compiles clean, passes
-all gates (below), and **deletes the code it replaces** before the next phase
-begins. No phase leaves a fork standing "for the next phase to clean up."
+Every phase: branches off the current head, compiles clean, passes all gates, and
+**deletes the code it replaces** before the next begins. No fork left standing
+"for the next phase."
 
-### Phase 0 — Exact field reconciliation + safety net `[read-only]`
+### Phase 0 — Field reconciliation + safety net `[read-only]`
 
-In the main context (no agents — read-only audit rule). Produce the precise
-field-by-field map: every reader and writer of every `EffectInstance` and
-`GeneratorParamState` field, the exact set of `Layer` fields that move onto the
-instance (`generator_graph*`, the generator slice of `Layer.envelopes`), and the
-list of every `EffectId`/`GeneratorTypeId`/`GraphHost` call site. Record the
-Phase-0 `cargo test --workspace` baseline (the only expected failure is the known
-`liveschool_ableton_mappings_resolve_to_stable_param_ids`). Capture the
-canonical `Liveschool Live Show V6 LEDS.manifold` load as a golden round-trip
-fixture: load → save → diff must be stable before any code changes.
+In the main context (no agents — read-only audit rule). Produce the exact
+field-by-field map: every reader/writer of every `EffectInstance` and
+`GeneratorParamState` field; which `Layer` fields move (the generator
+`generator_graph*` and the effect slice of `Layer.envelopes`); every
+`EffectId`/`GeneratorTypeId`/`GraphHost` call site; and — critically — the full
+list of what must move from instance/def/notes **into the preset file**
+(exposure, ranges, curves, the `ParamMapping` semantics). Record the Phase-0
+`cargo test --workspace` baseline (only expected failure:
+`liveschool_ableton_mappings_resolve_to_stable_param_ids`). Capture the canonical
+`Liveschool Live Show V6 LEDS.manifold` as a golden load→save→diff fixture.
 
-Gate: the field map is complete (no "TBD"), baseline recorded, golden fixture
-captured.
+Gate: field map complete (no "TBD"); baseline recorded; golden fixture captured.
 
 ### Phase 1 — One `PresetTypeId` (manifold-core)
 
-Introduce `PresetTypeId` and collapse the two registry keyings onto it. The
-registry value type is already `PresetDef`; this unifies the key. Delete
-`EffectTypeId` / `GeneratorTypeId` (or make one a transparent alias that is then
-removed within the phase — no permanent alias). Update every signature.
+Introduce `PresetTypeId`, collapse the two registry keyings onto it, delete
+`EffectTypeId`/`GeneratorTypeId` (no permanent alias). Update every signature.
 
-Gate: workspace test == baseline; `check-presets`; the type-id newtypes are gone
-from the tree (`rg` shows zero non-alias references).
+Gate: workspace test == baseline; `check-presets`; the old type-id newtypes are
+gone from the tree.
 
-### Phase 2 — `PresetInstance` struct, generator adopts it (manifold-core)
+### Phase 2 — Preset file carries the full authoring surface (manifold-core + presets)
 
-Define `PresetInstance` as above. Make a generator layer hold a
-`PresetInstance { kind: Generator, .. }` — moving `Layer.generator_graph*` and
-the generator's envelopes onto the instance, and `base_param_values` to
-`Vec<ParamSlot>`. `GeneratorParamState` is deleted in this phase. The
-generator-side modulation walk is repointed at `resolve_param_in` (which becomes
-kind-generic in Phase 4; until then, a generator-kind branch inside the one
-resolver — not a second function). The clamp bug dies here: generators stop
-calling `clamp_param`; the reshape-aware resolver governs.
+Extend the preset JSON + `PresetDef` to carry exposed params with their ranges,
+labels, curves, defaults, and inner-node targets. Migrate the 26 effect + 20
+generator preset JSONs so every currently-shipped exposed knob and its range is
+expressed in the file (this is where OilyFluid Speed's *real* intended range
+lives). Add the `check-presets` validation for the new fields.
 
-Gate: workspace test == baseline; the OilyFluid Speed range (load
-`graphTests2.manifold`, widen to 10, confirm value reaches 10 and round-trips);
-`GeneratorParamState` is gone.
+Gate: `check-presets`; `cargo test -p manifold-renderer --lib bundled_presets`
+(executes a frame); every shipped preset exposes the same knobs/ranges it does
+today, now sourced from the file.
 
-### Phase 3 — Effects adopt `PresetInstance`, bindings inline (manifold-core)
+### Phase 3 — `PresetInstance` thin struct; both kinds adopt it (manifold-core)
 
-Make the effect chain a `Vec<PresetInstance>` (`kind: Effect`). Move
-`EffectInstance.user_param_bindings` into the inline `bindings` list and resolve
-inner-node targets against the catalog graph when `graph` is `None` (the
-decoupling decision). Effect envelopes move from `Layer.envelopes` onto the
-instance, keyed by `param_id`. `EffectInstance` is deleted in this phase.
+Define `PresetInstance`. Generator layers and effect-chain items both become
+`PresetInstance`. Move envelopes inline; drop `graph`, `bindings`,
+`param_mappings`, `base_param_values` residue, legacy flat fields from the
+in-memory struct (their data is read by the Phase 6 migration). `EffectInstance`
+and `GeneratorParamState` are deleted in this phase.
 
-Gate: workspace test == baseline; an effect user-exposed binding survives a
-re-fuse (the `82a75332` regression test); expose/unexpose round-trips; the MOD
-badge stays off for a pristine effect with an exposed binding (proves decoupling).
+Gate: workspace test == baseline; OilyFluid Speed reaches its preset range (load
+`graphTests2.manifold`, confirm value reaches the preset max and round-trips);
+both old structs are gone.
 
-### Phase 4 — One resolver, one modulation walk, delete `GraphHost` (core + playback)
+### Phase 4 — One resolver + one modulation walk; delete `GraphHost` (core + playback)
 
-`resolve_param_in` becomes `resolve_param` over `&PresetInstance` (kind-generic,
-reshape-note-aware for both). The two modulation walks in
-`manifold-playback/src/modulation.rs` collapse into one. Delete the `GraphHost`
-trait, both impls, `GeneratorHost`, and the closure plumbing — call sites now
-take `&mut PresetInstance` directly. The generator modulation hidden-max dies
-here.
+One `resolve_param` over `&PresetInstance` that reads exposure/range from the
+preset (reshape-note logic is gone — there is one range). The two modulation
+walks in `modulation.rs` collapse into one. Delete `GraphHost`, both impls,
+`GeneratorHost`, the closure plumbing. The clamp hidden-max and the modulation
+hidden-max both die here.
 
 Gate: workspace test == baseline; a driver and an envelope on a generator param
-both reach a widened reshape max; `GraphHost` is gone from the tree.
+both reach the preset's max; `GraphHost` is gone.
 
-### Phase 5 — Load migration v1.4.0 → v1.5.0 (manifold-io)
+### Phase 5 — Preset namespace + fork ergonomics (core + io + editing + ui)
 
-The one permitted transitional mechanism. Add `migrate_v140_to_v150` to the
-existing chain in `migrate.rs`. It rewrites old project JSON into the
-`PresetInstance` shape: generator layers' `genParams` + `generatorGraph` +
-generator-keyed envelopes fold into one instance object; effects' separate
-`userParamBindings` fold into the inline `bindings`; legacy flat param fields
-(`legacy_param0..3`, pre-1.1) are read and converted here, then the in-memory
-fields that backed them are gone. Stamp `projectVersion = "1.5.0"`. This is a
-one-way load conversion — after it, the old shape exists nowhere in memory.
+Implement the three-source preset namespace (stock read-only, user folder,
+project-embedded) over one id space, with project-embedded presets stored in the
+project ZIP. Implement the fork rule: preset-level edit → edit-in-place if sole
+user, auto-fork a named project variant if shared; stock always forks; fork is
+visible in the header; "apply to all" is a separate action; retroactive fork
+available. Autosave into the project; "save as" = export standalone file.
 
-Gate: the golden `Liveschool` fixture loads, renders, and round-trips; a corpus
-of pre-1.5 fixtures (≥ the v1.0/1.2/1.3/1.4 cases already in
-`migrate.rs` tests) each load and round-trip; unit tests per migration branch.
+Gate: full `cargo test --workspace`; new tests — editing a shared preset forks
+and leaves other instances byte-identical; editing a sole-user preset does not
+fork; editing a stock preset forks to project; export produces a self-contained
+file that re-imports and renders.
 
-### Phase 6 — One runtime `PresetRuntime`, delete the second (manifold-renderer)
+### Phase 6 — Load migration v1.4.0 → v1.5.0 (manifold-io)
 
-Collapse `ChainGraph` and `JsonGraphGenerator` into `PresetRuntime` with an
-optional input slot. The `Generator` trait collapses into it. Both already share
-`pre_allocate_resources`/`graph_loader`, so this is a boundary merge, not an
-executor rewrite. The freeze/fusion compiler reads bindings from the one inline
-list (the `82a75332` class is now structurally impossible). Delete
+The one permitted transitional mechanism. `migrate_v140_to_v150` rewrites old
+projects into the new split: per-instance `ParamMapping` ranges + `user_param_bindings`
++ any diverged per-instance `graph` fold into a **project-embedded preset** (a
+real, whole preset — divergence becomes a named variant, exactly the fork model);
+the instance keeps only preset-ref + values + modulation; generator
+`genParams`/`generatorGraph`/envelopes fold the same way; legacy flat param
+fields (pre-1.1) are read and converted here. Stamp `projectVersion = "1.5.0"`.
+
+Gate: golden `Liveschool` fixture loads, renders, round-trips; a corpus of
+pre-1.5 fixtures (the v1.0/1.2/1.3/1.4 cases in `migrate.rs` tests, plus a project
+with a diverged effect graph and a reshaped generator knob) each load and
+round-trip; unit test per migration branch.
+
+### Phase 7 — One runtime `PresetRuntime` (manifold-renderer)
+
+Collapse `ChainGraph` and `JsonGraphGenerator` into `PresetRuntime` (optional
+input slot). The `Generator` trait collapses in. The freeze/fusion compiler reads
+exposure from the one preset (the `82a75332` class is now impossible). Delete
 `JsonGraphGenerator`, the `Generator` trait, and the `GeneratorRegistry` fork.
 
-Gate: full `cargo test --workspace`; all parity tests; `bundled_presets`
-lib test (catches WGSL/binding errors check-presets misses); every shipped
-effect and generator renders a frame.
+Gate: full `cargo test --workspace`; all parity tests; `bundled_presets`; every
+shipped effect and generator renders a frame.
 
-### Phase 7 — Editing/UI command collapse + final sweep (editing + app + ui)
+### Phase 8 — Command/UI collapse + final sweep (editing + app + ui)
 
-The mirror dances (`mirror_effect_side`, `prepare_generator_mirror`,
-`apply_generator_mirror`, `unmirror_generator_side`) collapse into one `mirror`
-over `&mut PresetInstance`. The two card-build blocks in
-`state_sync.rs` collapse into one. Final `rg` sweep proving deletion: zero
+Mirror dances (`mirror_effect_side`, `prepare/apply/unmirror_generator_mirror`)
+collapse into one `mirror` over `&mut PresetInstance`. The two card-build blocks
+in `state_sync.rs` collapse into one. Final `rg` deletion sweep: zero
 `EffectInstance`, `GeneratorParamState`, `EffectTypeId`, `GeneratorTypeId`,
-`GraphHost`, `GeneratorHost`, `JsonGraphGenerator`, `Generator` (trait) outside
-their own historical mentions in docs.
+`GraphHost`, `GeneratorHost`, `JsonGraphGenerator`, `Generator` (trait),
+`ParamMapping` outside historical doc mentions.
 
-Gate: full `cargo test --workspace`; `clippy --workspace -D warnings`; the
-deletion sweep returns clean; real-app smoke test on Peter's machine (this
-environment can't launch the GUI) — load `graphTests2.manifold` and the
-`Liveschool` show, confirm the Speed range and visual parity.
+Gate: full `cargo test --workspace`; `clippy --workspace -D warnings`; deletion
+sweep clean; real-app smoke test on Peter's machine (this env can't launch the
+GUI) — load `graphTests2.manifold` + the `Liveschool` show, confirm the Speed
+range, the fork-on-shared-edit behavior, and visual parity.
 
 ---
 
 ## Verification gates (every phase)
 
-1. `cargo test --workspace` — compared against the Phase-0 baseline. The ONLY
-   acceptable failure is the pre-existing `liveschool_ableton_mappings_resolve_to_stable_param_ids`.
-   Any other failure is a regression and blocks the phase.
-2. `cargo run -p manifold-renderer --bin check-presets` — structural preset load.
-3. `cargo test -p manifold-renderer --lib bundled_presets` — executes a frame;
-   catches WGSL/binding errors check-presets cannot.
-4. The golden `Liveschool` round-trip (load → save → stable diff).
-5. For phases touching the renderer: the parity suite.
+1. `cargo test --workspace` vs the Phase-0 baseline. Only acceptable failure:
+   the pre-existing `liveschool_ableton_mappings_resolve_to_stable_param_ids`.
+2. `cargo run -p manifold-renderer --bin check-presets`.
+3. `cargo test -p manifold-renderer --lib bundled_presets` (executes a frame).
+4. The golden `Liveschool` round-trip.
+5. Renderer-touching phases: the parity suite.
 
 ## Rollback contract
 
-Each phase is one branch off the prior. A phase that fails a gate is reverted
-whole, not patched forward. The load migration (Phase 5) is the only
-irreversible-on-disk step; it does not run until Phases 1–4 are green, and it is
-gated on the fixture corpus. Saving a v1.5 project and needing v1.4 again is a
-git checkout of the binary, not a data problem (the migration is additive in the
-version chain; old binaries refuse the newer `projectVersion`, they do not
-corrupt it).
+Each phase is one branch off the prior; a phase that fails a gate is reverted
+whole, not patched forward. The load migration (Phase 6) is the only
+irreversible-on-disk step; it does not run until Phases 1–5 are green and is gated
+on the fixture corpus.
 
 ## Definition of done
 
-- One instance type (`PresetInstance`), one type id (`PresetTypeId`), one runtime
-  (`PresetRuntime`), one param resolver, one modulation walk, one card-build path,
-  one mirror operation.
+- One thin instance (`PresetInstance`), one type id (`PresetTypeId`), one runtime
+  (`PresetRuntime`), one resolver, one modulation walk, one card-build path, one
+  mirror.
+- A preset is a self-contained file carrying graph + exposure + ranges;
+  instances hold only preset-ref + values + modulation.
+- The fork model works: sole-user edits in place, shared edits fork a visible
+  named project variant, stock always forks, export shares a standalone file.
 - `EffectInstance`, `GeneratorParamState`, `EffectTypeId`, `GeneratorTypeId`,
-  `GraphHost`, `GeneratorHost`, `JsonGraphGenerator`, and the `Generator` trait
-  are deleted from the tree.
+  `GraphHost`, `GeneratorHost`, `JsonGraphGenerator`, the `Generator` trait, and
+  `ParamMapping` are deleted from the tree.
 - `GraphTarget` remains a two-variant enum (the one real difference).
-- The four named bugs are covered by regression tests that would have failed
-  before this plan.
-- `docs/PRESET_UNIFICATION_PLAN.md` is updated to point here for the instance/
-  runtime half, so its "COMPLETE" status stops being misleading.
+- The four named bugs have regression tests that would have failed before.
+- `docs/PRESET_UNIFICATION_PLAN.md` points here for the instance/runtime/preset-file
+  half, so its "COMPLETE" status stops being misleading.
