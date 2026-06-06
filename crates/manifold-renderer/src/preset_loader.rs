@@ -185,9 +185,11 @@ pub static GENERATOR_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
 /// or the project has no forks. Set via [`set_project_presets`] (which re-merges
 /// both catalogs + rebuilds the core registry through [`apply_reload`]), so the
 /// per-frame render path is unaffected — resolution stays a catalog read.
-static PROJECT_EFFECT_PRESETS: LazyLock<ArcSwap<Vec<(Arc<str>, Arc<str>)>>> =
+/// `(type_id, json)` overlay entries for one preset kind.
+type OverlayEntries = Vec<(Arc<str>, Arc<str>)>;
+static PROJECT_EFFECT_PRESETS: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
-static PROJECT_GENERATOR_PRESETS: LazyLock<ArcSwap<Vec<(Arc<str>, Arc<str>)>>> =
+static PROJECT_GENERATOR_PRESETS: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
 /// Install the loaded project's embedded presets as the catalog overlay and
@@ -217,7 +219,7 @@ pub fn clear_project_presets() -> u64 {
 }
 
 /// The project overlay entries for a catalog kind (by `KindDirs::label`).
-fn project_overlay_for(label: &str) -> Arc<Vec<(Arc<str>, Arc<str>)>> {
+fn project_overlay_for(label: &str) -> Arc<OverlayEntries> {
     if label == EFFECT_DIRS.label {
         PROJECT_EFFECT_PRESETS.load_full()
     } else {

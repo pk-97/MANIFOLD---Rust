@@ -143,12 +143,25 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
 }
 
 fn leak_bindings(meta: &PresetMetadata) -> &'static [ParamBinding] {
-    let owned: Vec<ParamBinding> = meta.bindings.iter().map(binding_def_to_runtime).collect();
+    let owned: Vec<ParamBinding> = meta
+        .bindings
+        .iter()
+        .map(|b| binding_def_to_runtime(b, meta.params.iter().find(|p| p.id == b.id)))
+        .collect();
     Box::leak(owned.into_boxed_slice())
 }
 
-fn binding_def_to_runtime(def: &BindingDef) -> ParamBinding {
+fn binding_def_to_runtime(
+    def: &BindingDef,
+    param: Option<&manifold_core::effect_graph_def::ParamSpecDef>,
+) -> ParamBinding {
     let label: &'static str = Box::leak(def.label.clone().into_boxed_str());
+    // Slider response + range come from the owning card param (Phase 2's
+    // `ParamSpecDef.curve`/`.invert` + min/max). Composite/fan-out bindings with
+    // no matching param fall back to identity (0..1, Linear, no invert).
+    let (min, max, curve, invert) = param
+        .map(|p| (p.min, p.max, p.curve, p.invert))
+        .unwrap_or((0.0, 1.0, Default::default(), false));
     ParamBinding {
         id: ParamId::Owned(def.id.clone()),
         label,
@@ -157,6 +170,10 @@ fn binding_def_to_runtime(def: &BindingDef) -> ParamBinding {
         convert: def.convert,
         scale: def.scale,
         offset: def.offset,
+        min,
+        max,
+        curve,
+        invert,
     }
 }
 

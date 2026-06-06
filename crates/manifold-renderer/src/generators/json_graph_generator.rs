@@ -464,7 +464,17 @@ impl JsonGraphGenerator {
                     // Funnel through the SAME shared constructor the effect
                     // preset path uses (`ResolvedBinding::from_static` →
                     // `assemble_affine`), so the binding's scale/offset folds
-                    // into the reshape identically. The generator used to
+                    // into the reshape identically.
+                    //
+                    // TODO(phase5/5c): the effect path now also folds the
+                    // PRESET's curve/invert (Phase 2 `ParamSpecDef`) into the
+                    // reshape via `ParamBinding`; this generator path still does
+                    // scale/offset only. No divergence today (no shipped preset
+                    // authors a non-Linear curve), but when the resolver unifies
+                    // in 5c this must read the owning param's curve/invert too
+                    // (effect/generator binding parity rule).
+                    //
+                    // The generator used to
                     // hand-roll this literal with `reshape: None`, which
                     // silently dropped a folded affine's deg→rad scale and
                     // over-drove the target 57×. There is no longer a second

@@ -102,6 +102,18 @@ pub struct ParamBinding {
     /// a folded preset `affine_scalar` lives so the node can be deleted.
     pub scale: f32,
     pub offset: f32,
+    /// The card param's value range — the normalize span for the slider
+    /// response (curve/invert). Sourced from the owning `ParamSpecDef` when the
+    /// binding is built from a preset; `0.0`/`1.0` for hand-built bindings.
+    pub min: f32,
+    pub max: f32,
+    /// The card param's slider response, sourced from the preset
+    /// (Phase 2's `ParamSpecDef.curve`/`.invert`). Applied in
+    /// [`ResolvedBinding::from_static`]'s no-note path; the per-instance
+    /// `ParamMapping` note still overrides while it exists (removed in 5c).
+    /// `Linear`/`false` is identity, so existing presets stay byte-identical.
+    pub curve: manifold_core::macro_bank::MacroCurve,
+    pub invert: bool,
 }
 
 /// Routing destination declared on a spec [`ParamBinding`].
@@ -388,20 +400,37 @@ impl ResolvedBinding {
                     false,
                 ))
             }
-            // No note: funnel through the shared affine constructor — the
-            // same one the generator path uses — so the recipe's
-            // scale/offset → reshape derivation has exactly one definition.
-            None => Some(Self::assemble_affine(
-                b.id.clone(),
-                Cow::Borrowed(b.label),
-                b.default_value,
-                target,
-                b.convert,
-                BindingSource::Static,
-                source_index,
-                b.scale,
-                b.offset,
-            )),
+            // No note: build the reshape from the PRESET's own slider response
+            // (Phase 2's `ParamSpecDef.curve`/`.invert` + range, carried on
+            // `ParamBinding`) plus the recipe's scale/offset. Identity inputs
+            // (Linear, no invert, scale 1, offset 0 — every shipped preset
+            // today) yield `None`, so this stays byte-identical; a
+            // preset-authored curve now takes effect with no per-instance note.
+            None => {
+                let reshape = (b.invert
+                    || b.curve != manifold_core::macro_bank::MacroCurve::Linear
+                    || b.scale != 1.0
+                    || b.offset != 0.0)
+                    .then_some(Reshape {
+                        min: b.min,
+                        max: b.max,
+                        invert: b.invert,
+                        curve: b.curve,
+                        scale: b.scale,
+                        offset: b.offset,
+                    });
+                Some(Self::assemble(
+                    b.id.clone(),
+                    Cow::Borrowed(b.label),
+                    b.default_value,
+                    target,
+                    b.convert,
+                    BindingSource::Static,
+                    source_index,
+                    reshape,
+                    false,
+                ))
+            }
         }
     }
 
@@ -1070,6 +1099,10 @@ mod tests {
             convert: ParamConvert::Float,
             scale: 1.0,
             offset: 0.0,
+            min: 0.0,
+            max: 1.0,
+            curve: manifold_core::macro_bank::MacroCurve::Linear,
+            invert: false,
         }
     }
 
