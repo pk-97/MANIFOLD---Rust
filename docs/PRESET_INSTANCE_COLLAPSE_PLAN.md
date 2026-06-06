@@ -504,19 +504,49 @@ the ZIP layout) carry their own migration slice under one `projectVersion` bump
 and do not land until the golden `Liveschool` round-trip + the pre-1.5 fixture
 corpus are green — so the format is never left half-migrated between phases.
 
-## Definition of done
+## Status (2026-06-06) — type/abstraction unification COMPLETE; runtime merge + UI remain
 
-- One thin instance (`PresetInstance`), one type id (`PresetTypeId`), one runtime
-  (`PresetRuntime`), one resolver, one modulation walk, one card-build path, one
-  mirror.
-- A preset is a self-contained file carrying graph + exposure + ranges;
-  instances hold only preset-ref + values + modulation.
-- The fork model works: sole-user edits in place, shared edits fork a visible
-  named project variant, stock always forks, export shares a standalone file.
+**Done and shipped (branch `preset-collapse-phase5`, each gated green):**
+- One thin instance (`PresetInstance`), one type id (`PresetTypeId`), one reshape
+  resolver (`Reshape::from_preset_response`), one binding/modulation walk.
 - `EffectInstance`, `GeneratorParamState`, `EffectTypeId`, `GeneratorTypeId`,
-  `GraphHost`, `GeneratorHost`, `JsonGraphGenerator`, the `Generator` trait, and
-  `ParamMapping` are deleted from the tree.
-- `GraphTarget` remains a two-variant enum (the one real difference).
-- The four named bugs have regression tests that would have failed before.
-- `docs/PRESET_UNIFICATION_PLAN.md` points here for the instance/runtime/preset-file
-  half, so its "COMPLETE" status stops being misleading.
+  `ParamMapping`, the `Generator` trait, `GraphHost`, `GeneratorHost`, and the
+  `GeneratorFactory` Rust-factory fork are **deleted from the tree.**
+- Graph-home unified: the generator graph lives on `gen_params.graph`, so both
+  effects and generators address their graph through `PresetInstance` (the
+  v1.4→v1.5 migration relocates old layer-level `generatorGraph`; golden
+  Liveschool round-trip green).
+- The fork model + reshape-in-preset works; the OilyFluid Speed hidden-max bug is
+  dead with a regression test.
+- Standalone preset export/import io (`manifold_io::preset_file`) shipped; the UI
+  dialogs are the remaining Phase-4 UI item.
+
+**Remaining — larger unfinished unifications (NOT essential differences).** Three
+Definition-of-done items remain. Each is a genuine unification still to do, each
+carrying its own storage/serialization change — none is a fundamental
+effect-vs-generator split:
+- **Envelope-home unification (foundation for the two collapses).** Effects store
+  envelopes on `layer.envelopes` keyed by `effect_type + param_id`; generators
+  store them on the instance (`gp.envelopes`). `PresetInstance` already has the
+  `envelopes` field — effects just *ignore* it (a Unity-port convention, also
+  leaky for master effects, which have no layer). Move effect envelopes onto the
+  instance: collapses the two parallel envelope blocks in `modulation.rs`,
+  unifies the mirror's automation cleanup. Carries a load migration.
+- **one mirror + one card-build path.** Today's split is two *storage* mechanisms,
+  not two concepts: exposure is a per-slot `exposed` bool (effect) vs a graph
+  `exposed_params` set (generator); envelope cleanup hits two homes (above). Once
+  envelope-home + exposure storage are unified, the mirror and card-build collapse
+  to one path over `&mut PresetInstance`.
+- **one runtime (`PresetRuntime`).** `ChainGraph` (chain of N effects + source
+  input + wet/dry + fusion) and `JsonGraphGenerator` (single preset, no input, +
+  sim-state / string-params / clip lifecycle) are sibling wrappers over the
+  already-shared `Graph`/`BoundGraph`/`Executor` substrate. Fold both into one
+  `PresetRuntime` with an optional input slot; the distinct lifecycles stay in the
+  callers (`GeneratorRenderer` vs compositor). Large live-render-path rewrite —
+  gate on `bundled_presets` + the parity suite + a smoke test of live chains.
+
+- `GraphTarget` remains a two-variant enum (the one genuinely essential
+  difference: effect addressed by stable id across master/layer/clip; generator
+  *is* the layer's `gen_params`). ✓
+- `docs/PRESET_UNIFICATION_PLAN.md` should point here for the
+  instance/runtime/preset-file half.
