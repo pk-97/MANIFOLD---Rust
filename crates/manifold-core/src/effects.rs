@@ -1683,6 +1683,14 @@ impl PresetInstance {
         &self.effect_type
     }
 
+    /// Retarget this instance at a different preset id WITHOUT resetting params
+    /// (unlike `change_type`). Used by the fork flow: a fork is a copy of the
+    /// same preset under a new id, so the existing param values stay valid.
+    #[inline]
+    pub fn set_preset_id(&mut self, id: PresetTypeId) {
+        self.effect_type = id;
+    }
+
     /// Read-only access to the generator type (alias of [`Self::effect_type`]
     /// — the `effect_type` field holds the preset type for both kinds).
     #[inline]
