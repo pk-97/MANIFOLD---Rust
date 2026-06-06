@@ -140,27 +140,46 @@ fn liveschool_envelopes_resolve_to_stable_param_ids() {
 
     let project = loader::load_project(&path).expect("load Liveschool");
 
-    // 35 envelopes total: 15 layer (effect-targeted) + 20 gen_params
-    // (generator-targeted). Every one of them should resolve cleanly
-    // — envelopes are simpler than drivers because they don't drift
-    // (envelopes can only be created via the inspector against current
-    // params, while drivers can be inherited from older saves with
-    // out-of-range paramIndexes).
+    // 33 envelopes total: 13 effect-targeted + 20 gen_params
+    // (generator-targeted). Envelope-home unification (v1.5→v1.6) moved
+    // effect envelopes off the layer onto each effect instance; 2 of the
+    // original 15 layer envelopes targeted a `WireframeDepth` effect absent
+    // from their layer and were dropped (inert before). Every surviving one
+    // should resolve cleanly.
+    fn tally_effect_envs(
+        scope: &str,
+        fx: &manifold_core::effects::PresetInstance,
+        total: &mut i32,
+        effect_envs: &mut i32,
+        empty: &mut Vec<String>,
+    ) {
+        if let Some(ref envs) = fx.envelopes {
+            for (ei, env) in envs.iter().enumerate() {
+                *total += 1;
+                *effect_envs += 1;
+                if env.param_id.is_empty() {
+                    empty.push(format!("{scope}.fx[{}].env[{ei}]", fx.id.as_str()));
+                }
+            }
+        }
+    }
+
     let mut total = 0;
-    let mut layer_envs = 0;
+    let mut effect_envs = 0;
     let mut gen_envs = 0;
     let mut empty: Vec<String> = Vec::new();
+    for fx in &project.settings.master_effects {
+        tally_effect_envs("master", fx, &mut total, &mut effect_envs, &mut empty);
+    }
     for (li, layer) in project.timeline.layers.iter().enumerate() {
-        if let Some(ref envs) = layer.envelopes {
-            for (ei, env) in envs.iter().enumerate() {
-                total += 1;
-                layer_envs += 1;
-                if env.param_id.is_empty() {
-                    empty.push(format!(
-                        "layer[{li}].env[{ei}] (target={})",
-                        env.target_effect_type.as_str()
-                    ));
-                }
+        if let Some(ref effects) = layer.effects {
+            for fx in effects {
+                tally_effect_envs(&format!("layer[{li}]"), fx, &mut total, &mut effect_envs, &mut empty);
+            }
+        }
+        for clip in &layer.clips {
+            for fx in &clip.effects {
+                tally_effect_envs(&format!("layer[{li}].clip"), fx, &mut total, &mut effect_envs, &mut empty);
             }
         }
         if let Some(gp) = layer.gen_params()
@@ -179,8 +198,8 @@ fn liveschool_envelopes_resolve_to_stable_param_ids() {
         }
     }
 
-    assert_eq!(total, 35, "Liveschool must have exactly 35 envelopes");
-    assert_eq!(layer_envs, 15, "expected 15 layer-effect envelopes");
+    assert_eq!(total, 33, "Liveschool must have exactly 33 envelopes post-unification");
+    assert_eq!(effect_envs, 13, "expected 13 effect-instance envelopes (15 - 2 orphans)");
     assert_eq!(gen_envs, 20, "expected 20 gen_params envelopes");
     assert!(
         empty.is_empty(),

@@ -1181,28 +1181,38 @@ fn change_trim_undo_roundtrip() {
 // ─── Envelope Commands ───
 
 #[test]
-fn add_layer_envelope_undo_roundtrip() {
+fn add_envelope_undo_roundtrip() {
+    // Envelope-home unification: envelopes live on the instance and are
+    // addressed by GraphTarget. Layer 1 is a generator, so target it.
     let mut project = make_test_project();
 
     let envelope = ParamEnvelope {
-        target_effect_type: PresetTypeId::TRANSFORM,
         param_id: std::borrow::Cow::Borrowed("x"),
         enabled: true,
         ..make_envelope()
     };
 
-    let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd = AddLayerEnvelopeCommand::new(layer_id, envelope);
+    let layer_id = project.timeline.layers[1].layer_id.clone();
+    let target = manifold_core::GraphTarget::Generator(layer_id);
+    let mut cmd = AddEnvelopeCommand::new(target, envelope);
 
     cmd.execute(&mut project);
     assert_eq!(
-        project.timeline.layers[0].envelopes.as_ref().unwrap().len(),
+        project.timeline.layers[1]
+            .gen_params()
+            .unwrap()
+            .envelopes
+            .as_ref()
+            .unwrap()
+            .len(),
         1
     );
 
     cmd.undo(&mut project);
     assert!(
-        project.timeline.layers[0]
+        project.timeline.layers[1]
+            .gen_params()
+            .unwrap()
             .envelopes
             .as_ref()
             .unwrap()
@@ -1284,7 +1294,7 @@ fn make_driver() -> ParameterDriver {
 }
 
 fn make_envelope() -> ParamEnvelope {
-    let mut env = ParamEnvelope::new_for_gen("x");
+    let mut env = ParamEnvelope::new("x");
     env.attack_beats = 0.25;
     env.decay_beats = 0.25;
     env.sustain_level = 1.0;
@@ -1902,7 +1912,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
 }
 
 #[test]
-fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
+fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
@@ -1921,18 +1931,14 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
         scale: 1.0,
         offset: 0.0,
     });
-    // Layer envelopes are keyed by (target_effect_type, param_id).
-    // Plant one targeting our binding and one targeting an unrelated
-    // param on a different effect type so the second survives.
-    let envs = project.timeline.layers[0].envelopes_mut();
-    envs.push(ParamEnvelope::new_for_effect(
-        PresetTypeId::BLOOM,
-        std::borrow::Cow::Owned("user.uv_transform.translate.1".to_string()),
-    ));
-    envs.push(ParamEnvelope::new_for_effect(
-        PresetTypeId::MIRROR,
-        std::borrow::Cow::Borrowed("amount"),
-    ));
+    // Envelope-home unification: envelopes ride on the instance, keyed by
+    // param_id. Plant one on the unexposed binding (pruned) and one on an
+    // unrelated param (kept).
+    fx.envelopes_mut().push(ParamEnvelope::new(std::borrow::Cow::Owned(
+        "user.uv_transform.translate.1".to_string(),
+    )));
+    fx.envelopes_mut()
+        .push(ParamEnvelope::new(std::borrow::Cow::Borrowed("amount")));
     project.timeline.layers[0].effects = Some(vec![fx]);
 
     let effect_id = project.timeline.layers[0].effects.as_ref().unwrap()[0]
@@ -1947,10 +1953,8 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
         meta_default(),
     );
     cmd.execute(&mut project);
-    let envs = project.timeline.layers[0]
-        .envelopes
-        .as_ref()
-        .expect("layer envelopes vec retained");
+    let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+    let envs = fx.envelopes.as_ref().expect("instance envelopes vec retained");
     assert_eq!(
         envs.len(),
         1,
@@ -1959,14 +1963,11 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
     assert_eq!(envs[0].param_id, "amount");
 
     cmd.undo(&mut project);
-    let envs = project.timeline.layers[0]
-        .envelopes
-        .as_ref()
-        .expect("layer envelopes vec restored");
+    let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+    let envs = fx.envelopes.as_ref().expect("instance envelopes vec restored");
     assert_eq!(envs.len(), 2);
     assert!(
-        envs.iter().any(|e| e.target_effect_type == PresetTypeId::BLOOM
-            && e.param_id == "user.uv_transform.translate.1"),
+        envs.iter().any(|e| e.param_id == "user.uv_transform.translate.1"),
         "undo must reinstate the pruned envelope",
     );
 }

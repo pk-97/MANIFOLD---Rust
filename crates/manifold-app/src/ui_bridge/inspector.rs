@@ -16,8 +16,7 @@ use manifold_editing::commands::effects::{
     ToggleEffectCommand,
 };
 use manifold_editing::commands::envelopes::{
-    ChangeLayerEnvelopeADSRCommand, ChangeLayerEnvelopeRangeCommand,
-    ChangeLayerEnvelopeTargetCommand,
+    ChangeEnvelopeADSRCommand, ChangeEnvelopeRangeCommand, ChangeEnvelopeTargetCommand,
 };
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
@@ -29,6 +28,86 @@ use super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read, resolve_effects_ref};
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
+
+/// The stable `EffectId` for an effect-targeted envelope action, or `None`
+/// for non-Layer tabs. Envelope-home unification: an effect's envelopes ride
+/// on its `PresetInstance` (addressed by id), keyed by `param_id`. Master and
+/// clip effect envelopes have no clip-timing source and stay inert, so the
+/// inspector only creates/edits envelopes on **layer** effects — matching the
+/// pre-unification behavior where envelopes were layer-scoped.
+fn effect_env_id(
+    tab: InspectorTab,
+    project: &Project,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    ei: usize,
+) -> Option<manifold_core::EffectId> {
+    if !matches!(tab, InspectorTab::Layer) {
+        return None;
+    }
+    resolve_effects_ref(tab, project, active_layer, selection)
+        .and_then(|e| e.get(ei))
+        .map(|fx| fx.id.clone())
+}
+
+/// Apply `edit` to the envelope matched by `param_id` on effect `id`, in both
+/// the local UI project and the content thread (the next snapshot must not
+/// stomp the live tweak). Edits the existing envelope only — no create. Used by
+/// the non-undoable live-drag envelope arms.
+fn effect_env_dual_edit<F>(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    id: manifold_core::EffectId,
+    param_id: manifold_core::effects::ParamId,
+    edit: F,
+) where
+    F: Fn(&mut ParamEnvelope) + Clone + Send + 'static,
+{
+    use crate::content_command::ContentCommand;
+    if let Some(fx) = project.find_effect_by_id_mut(&id)
+        && let Some(env) = fx
+            .envelopes
+            .as_mut()
+            .and_then(|es| es.iter_mut().find(|e| e.param_id == param_id))
+    {
+        edit(env);
+    }
+    let edit2 = edit.clone();
+    let pid = param_id.clone();
+    ContentCommand::send(
+        content_tx,
+        ContentCommand::MutateProject(Box::new(move |p| {
+            if let Some(fx) = p.find_effect_by_id_mut(&id)
+                && let Some(env) = fx
+                    .envelopes
+                    .as_mut()
+                    .and_then(|es| es.iter_mut().find(|e| e.param_id == pid))
+            {
+                edit2(env);
+            }
+        })),
+    );
+}
+
+/// `(EffectId, env_index)` for an effect-targeted envelope addressed by
+/// `param_id` — the addressing the undoable `ChangeEnvelope*` commands need.
+fn effect_env_index(
+    tab: InspectorTab,
+    project: &Project,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    ei: usize,
+    param_id: &manifold_core::effects::ParamId,
+) -> Option<(manifold_core::EffectId, usize)> {
+    let id = effect_env_id(tab, project, active_layer, selection, ei)?;
+    let idx = project
+        .find_effect_by_id(&id)?
+        .envelopes
+        .as_ref()?
+        .iter()
+        .position(|e| e.param_id == *param_id)?;
+    Some((id, idx))
+}
 
 pub(super) fn dispatch_inspector(
     action: &PanelAction,
@@ -815,67 +894,25 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EnvelopeToggle(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(et) = effect_type {
-                let layer_idx = super::resolve_active_layer_index(active_layer, project);
-                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get_mut(idx)
-                            .map(|l| l.envelopes_mut())
-                    }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs {
-                    let env_idx = envs.iter().position(|e| {
-                        e.target_effect_type == et && e.param_id == *param_id
-                    });
-                    if let Some(idx) = env_idx {
-                        envs[idx].enabled = !envs[idx].enabled;
-                    } else {
-                        envs.push(ParamEnvelope::new_for_effect(et.clone(), param_id.clone()));
+            // Envelope-home unification: the envelope lives on the effect
+            // instance (keyed by param_id). Toggle the existing one's
+            // `enabled`, or create a fresh enabled envelope. Layer-only.
+            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
+                let pid = param_id.clone();
+                let toggle = move |p: &mut Project| {
+                    if let Some(fx) = p.find_effect_by_id_mut(&id) {
+                        let envs = fx.envelopes_mut();
+                        if let Some(idx) = envs.iter().position(|e| e.param_id == pid) {
+                            envs[idx].enabled = !envs[idx].enabled;
+                        } else {
+                            envs.push(ParamEnvelope::new(pid.clone()));
+                        }
                     }
-                }
-                // Sync to content thread so the next snapshot doesn't overwrite.
-                // Tab-gated to match the LOCAL write above (and every other
-                // envelope arm): layer-stored envelopes are keyed by
-                // (effect_type, param_id) and only apply to layer-scoped
-                // effects, so Clip / Master must no-op. Without this gate a
-                // clip-watched editor (which `editor_dispatch_context` maps to
-                // Clip) would push a (clip_effect_type, param) envelope onto the
-                // active layer and collide with a same-type layer effect.
-                let et2 = et;
-                let pid_for_content = param_id.clone();
-                let layer_id = active_layer.clone().unwrap_or_default();
+                };
+                toggle(project);
                 ContentCommand::send(
                     content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                            InspectorTab::Layer => p
-                                .timeline
-                                .find_layer_by_id_mut(&layer_id)
-                                .map(|(_, l)| l.envelopes_mut()),
-                            InspectorTab::Clip | InspectorTab::Master => None,
-                        };
-                        if let Some(envs) = envs {
-                            let env_idx = envs.iter().position(|e| {
-                                e.target_effect_type == et2 && e.param_id == pid_for_content
-                            });
-                            if let Some(idx) = env_idx {
-                                envs[idx].enabled = !envs[idx].enabled;
-                            } else {
-                                envs.push(ParamEnvelope::new_for_effect(et2, pid_for_content));
-                            }
-                        }
-                    })),
+                    ContentCommand::MutateProject(Box::new(toggle)),
                 );
             }
             DispatchResult::structural()
@@ -981,68 +1018,17 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EnvParamChanged(GraphParamTarget::Effect(ei), param_id, param, val) => {
-            let tab = effective_tab;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(ref et) = effect_type {
-                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get_mut(idx)
-                            .map(|l| l.envelopes_mut())
-                    }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
-                {
-                    match param {
-                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
-                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
-                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
-                        manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
-                    }
-                }
-            }
-            // Sync to content thread
-            if let Some(et) = effect_type {
-                let pid_for_content = param_id.clone();
+            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
                 let p = *param;
                 let v = *val;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |proj| {
-                        let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                            InspectorTab::Layer => proj
-                                .timeline
-                                .find_layer_by_id_mut(&layer_id)
-                                .map(|(_, l)| l.envelopes_mut()),
-                            InspectorTab::Clip | InspectorTab::Master => None,
-                        };
-                        if let Some(envs) = envs
-                            && let Some(env) = envs.iter_mut().find(|e| {
-                                e.target_effect_type == et && e.param_id == pid_for_content
-                            })
-                        {
-                            match p {
-                                manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
-                                manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
-                                manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
-                                manifold_ui::EnvelopeParam::Release => env.release_beats = v,
-                            }
-                        }
-                    })),
-                );
+                effect_env_dual_edit(project, content_tx, id, param_id.clone(), move |env| {
+                    match p {
+                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
+                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
+                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
+                        manifold_ui::EnvelopeParam::Release => env.release_beats = v,
+                    }
+                });
             }
             DispatchResult::handled()
         }
@@ -1080,56 +1066,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::TargetChanged(GraphParamTarget::Effect(ei), param_id, norm) => {
-            let tab = effective_tab;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(ref et) = effect_type {
-                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get_mut(idx)
-                            .map(|l| l.envelopes_mut())
-                    }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
-                {
-                    env.target_normalized = *norm;
-                }
-            }
-            if let Some(et) = effect_type {
-                let pid_for_content = param_id.clone();
+            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
                 let n = *norm;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                            InspectorTab::Layer => p
-                                .timeline
-                                .find_layer_by_id_mut(&layer_id)
-                                .map(|(_, l)| l.envelopes_mut()),
-                            InspectorTab::Clip | InspectorTab::Master => None,
-                        };
-                        if let Some(envs) = envs
-                            && let Some(env) = envs.iter_mut().find(|e| {
-                                e.target_effect_type == et && e.param_id == pid_for_content
-                            })
-                        {
-                            env.target_normalized = n;
-                        }
-                    })),
-                );
+                effect_env_dual_edit(project, content_tx, id, param_id.clone(), move |env| {
+                    env.target_normalized = n;
+                });
             }
             DispatchResult::handled()
         }
@@ -1186,259 +1127,90 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), param_id) => {
             let tab = effective_tab;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(et) = effect_type {
-                let envs: Option<&[ParamEnvelope]> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get(idx)
-                            .and_then(|l| l.envelopes.as_deref())
-                    }),
-                    InspectorTab::Clip => {
-                        selection.primary_selected_clip_id.as_ref().and_then(|cid| {
-                            project
-                                .timeline
-                                .layers
-                                .iter()
-                                .flat_map(|l| l.clips.iter())
-                                .find(|c| c.id == *cid)
-                                .and_then(|c| c.envelopes.as_deref())
-                        })
-                    }
-                    InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter()
-                        .find(|e| e.target_effect_type == et && e.param_id == *param_id)
-                {
+            let env_owner =
+                effect_env_id(tab, project, active_layer, selection, *ei)
+                    .and_then(|id| project.find_effect_by_id(&id));
+            if let Some(fx) = env_owner {
+                let envs: &[ParamEnvelope] = fx.envelopes.as_deref().unwrap_or(&[]);
+                if let Some(env) = envs.iter().find(|e| e.param_id == *param_id) {
                     *target_snapshot = Some(env.target_normalized);
                 }
             }
             DispatchResult::handled()
         }
         PanelAction::TargetCommit(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some(old_target) = target_snapshot.take() {
-                let tab = effective_tab;
-                let layer_idx = super::resolve_active_layer_index(active_layer, project);
-                let effect_type = {
-                    let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects
-                        .and_then(|e| e.get(*ei))
-                        .map(|fx| fx.effect_type().clone())
-                };
-                if let Some(et) = effect_type {
-                    match tab {
-                        InspectorTab::Layer => {
-                            if let Some(idx) = layer_idx
-                                && let Some(layer) = project.timeline.layers.get(idx)
-                            {
-                                let layer_id = layer.layer_id.clone();
-                                let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                                if let Some((env_idx, env)) = envs.iter().enumerate().find(
-                                    |(_, e)| {
-                                        e.target_effect_type == et && e.param_id == *param_id
-                                    },
-                                ) && (old_target - env.target_normalized).abs() > f32::EPSILON
-                                {
-                                    let cmd = ChangeLayerEnvelopeTargetCommand::new(
-                                        layer_id,
-                                        env_idx,
-                                        old_target,
-                                        env.target_normalized,
-                                    );
-                                    ContentCommand::send(
-                                        content_tx,
-                                        ContentCommand::Execute(Box::new(cmd)),
-                                    );
-                                }
-                            }
-                        }
-                        InspectorTab::Clip | InspectorTab::Master => {}
-                    }
-                }
+            if let Some(old_target) = target_snapshot.take()
+                && let Some((effect_id, env_idx)) =
+                    effect_env_index(effective_tab, project, active_layer, selection, *ei, param_id)
+                && let Some(env) = project
+                    .find_effect_by_id(&effect_id)
+                    .and_then(|fx| fx.envelopes.as_ref())
+                    .and_then(|es| es.get(env_idx))
+                && (old_target - env.target_normalized).abs() > f32::EPSILON
+            {
+                let cmd = ChangeEnvelopeTargetCommand::new(
+                    manifold_core::GraphTarget::Effect(effect_id),
+                    env_idx,
+                    old_target,
+                    env.target_normalized,
+                );
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::EnvRangeChanged(GraphParamTarget::Effect(ei), param_id, rmin, rmax) => {
-            let tab = effective_tab;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(ref et) = effect_type {
-                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get_mut(idx)
-                            .map(|l| l.envelopes_mut())
-                    }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
-                {
-                    env.range_min = *rmin;
-                    env.range_max = *rmax;
-                }
-            }
-            if let Some(et) = effect_type {
-                let pid_for_content = param_id.clone();
+            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
                 let rm = *rmin;
                 let rx = *rmax;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                            InspectorTab::Layer => p
-                                .timeline
-                                .find_layer_by_id_mut(&layer_id)
-                                .map(|(_, l)| l.envelopes_mut()),
-                            InspectorTab::Clip | InspectorTab::Master => None,
-                        };
-                        if let Some(envs) = envs
-                            && let Some(env) = envs.iter_mut().find(|e| {
-                                e.target_effect_type == et && e.param_id == pid_for_content
-                            })
-                        {
-                            env.range_min = rm;
-                            env.range_max = rx;
-                        }
-                    })),
-                );
+                effect_env_dual_edit(project, content_tx, id, param_id.clone(), move |env| {
+                    env.range_min = rm;
+                    env.range_max = rx;
+                });
             }
             DispatchResult::handled()
         }
         PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(et) = effect_type {
-                let envs: Option<&[ParamEnvelope]> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get(idx)
-                            .and_then(|l| l.envelopes.as_deref())
-                    }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter()
-                        .find(|e| e.target_effect_type == et && e.param_id == *param_id)
-                {
+            let env_owner = effect_env_id(effective_tab, project, active_layer, selection, *ei)
+                .and_then(|id| project.find_effect_by_id(&id));
+            if let Some(fx) = env_owner {
+                let envs: &[ParamEnvelope] = fx.envelopes.as_deref().unwrap_or(&[]);
+                if let Some(env) = envs.iter().find(|e| e.param_id == *param_id) {
                     *range_snapshot = Some((env.range_min, env.range_max));
                 }
             }
             DispatchResult::handled()
         }
         PanelAction::EnvRangeCommit(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some((old_min, old_max)) = range_snapshot.take() {
-                let tab = effective_tab;
-                let layer_idx = super::resolve_active_layer_index(active_layer, project);
-                let effect_type = {
-                    let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects
-                        .and_then(|e| e.get(*ei))
-                        .map(|fx| fx.effect_type().clone())
-                };
-                if let Some(et) = effect_type {
-                    match tab {
-                        InspectorTab::Layer => {
-                            if let Some(idx) = layer_idx
-                                && let Some(layer) = project.timeline.layers.get(idx)
-                            {
-                                let layer_id = layer.layer_id.clone();
-                                let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                                if let Some((env_idx, env)) = envs.iter().enumerate().find(
-                                    |(_, e)| {
-                                        e.target_effect_type == et && e.param_id == *param_id
-                                    },
-                                ) && ((old_min - env.range_min).abs() > f32::EPSILON
-                                    || (old_max - env.range_max).abs() > f32::EPSILON)
-                                {
-                                    let cmd = ChangeLayerEnvelopeRangeCommand::new(
-                                        layer_id,
-                                        env_idx,
-                                        old_min,
-                                        old_max,
-                                        env.range_min,
-                                        env.range_max,
-                                    );
-                                    ContentCommand::send(
-                                        content_tx,
-                                        ContentCommand::Execute(Box::new(cmd)),
-                                    );
-                                }
-                            }
-                        }
-                        InspectorTab::Clip | InspectorTab::Master => {}
-                    }
-                }
+            if let Some((old_min, old_max)) = range_snapshot.take()
+                && let Some((effect_id, env_idx)) =
+                    effect_env_index(effective_tab, project, active_layer, selection, *ei, param_id)
+                && let Some(env) = project
+                    .find_effect_by_id(&effect_id)
+                    .and_then(|fx| fx.envelopes.as_ref())
+                    .and_then(|es| es.get(env_idx))
+                && ((old_min - env.range_min).abs() > f32::EPSILON
+                    || (old_max - env.range_max).abs() > f32::EPSILON)
+            {
+                let cmd = ChangeEnvelopeRangeCommand::new(
+                    manifold_core::GraphTarget::Effect(effect_id),
+                    env_idx,
+                    old_min,
+                    old_max,
+                    env.range_min,
+                    env.range_max,
+                );
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(et) = effect_type {
-                let envs: Option<&[ParamEnvelope]> = match tab {
-                    InspectorTab::Layer => layer_idx.and_then(|idx| {
-                        project
-                            .timeline
-                            .layers
-                            .get(idx)
-                            .and_then(|l| l.envelopes.as_deref())
-                    }),
-                    InspectorTab::Clip => {
-                        selection.primary_selected_clip_id.as_ref().and_then(|cid| {
-                            project
-                                .timeline
-                                .layers
-                                .iter()
-                                .flat_map(|l| l.clips.iter())
-                                .find(|c| c.id == *cid)
-                                .and_then(|c| c.envelopes.as_deref())
-                        })
-                    }
-                    InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter()
-                        .find(|e| e.target_effect_type == et && e.param_id == *param_id)
-                {
+            let env_owner = effect_env_id(effective_tab, project, active_layer, selection, *ei)
+                .and_then(|id| project.find_effect_by_id(&id));
+            if let Some(fx) = env_owner {
+                let envs: &[ParamEnvelope] = fx.envelopes.as_deref().unwrap_or(&[]);
+                if let Some(env) = envs.iter().find(|e| e.param_id == *param_id) {
                     *adsr_snapshot = Some((
                         env.attack_beats,
                         env.decay_beats,
@@ -1450,53 +1222,38 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EnvParamCommit(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
-                let tab = effective_tab;
-                let layer_idx = super::resolve_active_layer_index(active_layer, project);
-                let effect_type = {
-                    let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects
-                        .and_then(|e| e.get(*ei))
-                        .map(|fx| fx.effect_type().clone())
-                };
-                if let Some(et) = effect_type {
-                    match tab {
-                        InspectorTab::Layer => {
-                            if let Some(idx) = layer_idx
-                                && let Some(layer) = project.timeline.layers.get(idx)
-                            {
-                                let layer_id = layer.layer_id.clone();
-                                let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                                if let Some((env_idx, env)) = envs.iter().enumerate().find(
-                                    |(_, e)| {
-                                        e.target_effect_type == et && e.param_id == *param_id
-                                    },
-                                ) {
-                                    let (na, nd, ns, nr) = (
-                                        env.attack_beats,
-                                        env.decay_beats,
-                                        env.sustain_level,
-                                        env.release_beats,
-                                    );
-                                    if (old_a - na).abs() > f32::EPSILON
-                                        || (old_d - nd).abs() > f32::EPSILON
-                                        || (old_s - ns).abs() > f32::EPSILON
-                                        || (old_r - nr).abs() > f32::EPSILON
-                                    {
-                                        let cmd = ChangeLayerEnvelopeADSRCommand::new(
-                                            layer_id, env_idx, old_a, old_d, old_s, old_r, na, nd,
-                                            ns, nr,
-                                        );
-                                        ContentCommand::send(
-                                            content_tx,
-                                            ContentCommand::Execute(Box::new(cmd)),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        InspectorTab::Clip | InspectorTab::Master => {}
-                    }
+            if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
+                && let Some((effect_id, env_idx)) =
+                    effect_env_index(effective_tab, project, active_layer, selection, *ei, param_id)
+                && let Some(env) = project
+                    .find_effect_by_id(&effect_id)
+                    .and_then(|fx| fx.envelopes.as_ref())
+                    .and_then(|es| es.get(env_idx))
+            {
+                let (na, nd, ns, nr) = (
+                    env.attack_beats,
+                    env.decay_beats,
+                    env.sustain_level,
+                    env.release_beats,
+                );
+                if (old_a - na).abs() > f32::EPSILON
+                    || (old_d - nd).abs() > f32::EPSILON
+                    || (old_s - ns).abs() > f32::EPSILON
+                    || (old_r - nr).abs() > f32::EPSILON
+                {
+                    let cmd = ChangeEnvelopeADSRCommand::new(
+                        manifold_core::GraphTarget::Effect(effect_id),
+                        env_idx,
+                        old_a,
+                        old_d,
+                        old_s,
+                        old_r,
+                        na,
+                        nd,
+                        ns,
+                        nr,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             *active_inspector_drag = None;
@@ -1505,108 +1262,26 @@ pub(super) fn dispatch_inspector(
 
         // ── Envelope mode toggles ──────────────────────────────────
         PanelAction::EnvModeToggle(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(ref et) = effect_type {
-                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                    InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
-                        .and_then(|idx| {
-                            project
-                                .timeline
-                                .layers
-                                .get_mut(idx)
-                                .map(|l| l.envelopes_mut())
-                        }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
-                {
+            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
+                effect_env_dual_edit(project, content_tx, id, param_id.clone(), |env| {
                     use manifold_core::effects::EnvelopeMode;
                     env.mode = match env.mode {
                         EnvelopeMode::Adsr => EnvelopeMode::Random,
                         EnvelopeMode::Random => EnvelopeMode::Adsr,
                     };
-                    // Reset rising edge + walk state so Random mode triggers immediately
+                    // Reset rising edge + walk state so Random mode triggers immediately.
                     env.was_clip_active = false;
                     env.walk_value = -1.0;
                     env.last_elapsed = -1.0; // sentinel: re-seed from current param
-                    let new_mode = env.mode;
-                    // Sync to content thread
-                    let et2 = et.clone();
-                    let pid_for_content = param_id.clone();
-                    let layer_id = active_layer.clone().unwrap_or_default();
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::MutateProject(Box::new(move |p| {
-                            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                                let envs = layer.envelopes_mut();
-                                if let Some(env) = envs.iter_mut().find(|e| {
-                                    e.target_effect_type == et2 && e.param_id == pid_for_content
-                                }) {
-                                    env.mode = new_mode;
-                                    env.was_clip_active = false;
-                                    env.walk_value = -1.0;
-                                    env.last_elapsed = -1.0;
-                                }
-                            }
-                        })),
-                    );
-                }
+                });
             }
             DispatchResult::structural()
         }
         PanelAction::EnvRandomJumpToggle(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let effect_type = {
-                let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects
-                    .and_then(|e| e.get(*ei))
-                    .map(|fx| fx.effect_type().clone())
-            };
-            if let Some(ref et) = effect_type {
-                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
-                    InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
-                        .and_then(|idx| {
-                            project
-                                .timeline
-                                .layers
-                                .get_mut(idx)
-                                .map(|l| l.envelopes_mut())
-                        }),
-                    InspectorTab::Clip | InspectorTab::Master => None,
-                };
-                if let Some(envs) = envs
-                    && let Some(env) = envs
-                        .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
-                {
+            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
+                effect_env_dual_edit(project, content_tx, id, param_id.clone(), |env| {
                     env.random_jump = !env.random_jump;
-                    let new_jump = env.random_jump;
-                    let et2 = et.clone();
-                    let pid_for_content = param_id.clone();
-                    let layer_id = active_layer.clone().unwrap_or_default();
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::MutateProject(Box::new(move |p| {
-                            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                                let envs = layer.envelopes_mut();
-                                if let Some(env) = envs.iter_mut().find(|e| {
-                                    e.target_effect_type == et2 && e.param_id == pid_for_content
-                                }) {
-                                    env.random_jump = new_jump;
-                                }
-                            }
-                        })),
-                    );
-                }
+                });
             }
             DispatchResult::structural()
         }
@@ -2016,7 +1691,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(idx) = env_idx {
                     envs[idx].enabled = !envs[idx].enabled;
                 } else {
-                    envs.push(ParamEnvelope::new_for_gen(param_id.clone()));
+                    envs.push(ParamEnvelope::new(param_id.clone()));
                 }
             }
             let pid = param_id.clone();
@@ -2032,7 +1707,7 @@ pub(super) fn dispatch_inspector(
                         if let Some(idx) = env_idx {
                             envs[idx].enabled = !envs[idx].enabled;
                         } else {
-                            envs.push(ParamEnvelope::new_for_gen(pid));
+                            envs.push(ParamEnvelope::new(pid));
                         }
                     }
                 })),
@@ -2317,8 +1992,8 @@ pub(super) fn dispatch_inspector(
                 let env = &envs[env_idx];
                 if (old_target - env.target_normalized).abs() > f32::EPSILON {
                     let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeLayerEnvelopeTargetCommand::new(
-                        layer_id,
+                    let cmd = ChangeEnvelopeTargetCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
                         env_idx,
                         old_target,
                         env.target_normalized,
@@ -2386,8 +2061,8 @@ pub(super) fn dispatch_inspector(
                     || (old_max - env.range_max).abs() > f32::EPSILON
                 {
                     let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeLayerEnvelopeRangeCommand::new(
-                        layer_id,
+                    let cmd = ChangeEnvelopeRangeCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
                         env_idx,
                         old_min,
                         old_max,
@@ -2433,8 +2108,8 @@ pub(super) fn dispatch_inspector(
                     || (old_r - env.release_beats).abs() > f32::EPSILON;
                 if changed {
                     let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeLayerEnvelopeADSRCommand::new(
-                        layer_id,
+                    let cmd = ChangeEnvelopeADSRCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
                         env_idx,
                         old_a,
                         old_d,

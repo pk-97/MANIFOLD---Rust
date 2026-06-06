@@ -71,8 +71,10 @@ pub struct Layer {
     pub effects: Option<Vec<PresetInstance>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_groups: Option<Vec<EffectGroup>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub envelopes: Option<Vec<ParamEnvelope>>,
+    // Effect envelopes moved onto each effect's `PresetInstance.envelopes`
+    // (envelope-home unification, v1.6). The old layer-level `envelopes` array
+    // is relocated by the v1.5→v1.6 load migration; there is no layer-scoped
+    // envelope home anymore.
 
     // ── Generator params (V1.1.0+, nested) ──
     // A generator is a `PresetInstance { kind: Generator }`. It serializes
@@ -664,14 +666,6 @@ impl Layer {
         self.effect_groups.as_mut().unwrap()
     }
 
-    /// Get the envelopes list, creating it if None.
-    pub fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
-        if self.envelopes.is_none() {
-            self.envelopes = Some(Vec::new());
-        }
-        self.envelopes.as_mut().unwrap()
-    }
-
     /// Read a generator param value at index (returns 0.0 if out of range or no gen_params).
     pub fn get_gen_param(&self, index: usize) -> f32 {
         self.gen_params
@@ -873,15 +867,6 @@ impl crate::effects::EffectContainer for Layer {
             .iter()
             .find(|g| g.id == group_id)
     }
-    fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
-        self.envelopes.as_deref().unwrap_or(&[])
-    }
-    fn envelopes_mut(&mut self) -> &mut Vec<crate::effects::ParamEnvelope> {
-        Layer::envelopes_mut(self)
-    }
-    fn has_envelopes(&self) -> bool {
-        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
-    }
 }
 
 impl Default for Layer {
@@ -902,7 +887,6 @@ impl Default for Layer {
             opacity: 1.0,
             effects: None,
             effect_groups: None,
-            envelopes: None,
             gen_params: None,
             video_folder_path: None,
             relative_video_folder_path: None,

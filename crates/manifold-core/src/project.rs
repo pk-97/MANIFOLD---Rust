@@ -500,9 +500,11 @@ impl Project {
             );
         }
 
-        fn resolve_envelope_id_for_effect(env: &mut crate::effects::ParamEnvelope) {
-            let target = env.target_effect_type.clone();
-            let outcome = resolve_for_effect(&target, &env.param_id, env.legacy_param_index);
+        fn resolve_envelope_id_for_effect(
+            env: &mut crate::effects::ParamEnvelope,
+            effect_type: &crate::PresetTypeId,
+        ) {
+            let outcome = resolve_for_effect(effect_type, &env.param_id, env.legacy_param_index);
             apply_outcome(outcome, &mut env.param_id, &mut env.legacy_param_index);
         }
 
@@ -610,12 +612,19 @@ impl Project {
             }
         }
 
-        // Master effects.
+        // Master effects. Envelope-home unification: an effect's
+        // drivers/envelopes/ableton mappings all ride on the instance now,
+        // each resolved against the instance's own type.
         for fx in &mut self.settings.master_effects {
             let effect_type = fx.effect_type().clone();
             if let Some(drivers) = fx.drivers.as_mut() {
                 for d in drivers {
                     resolve_driver_id_for_effect(d, &effect_type);
+                }
+            }
+            if let Some(envelopes) = fx.envelopes.as_mut() {
+                for env in envelopes {
+                    resolve_envelope_id_for_effect(env, &effect_type);
                 }
             }
             if let Some(mappings) = fx.ableton_mappings.as_mut() {
@@ -624,7 +633,7 @@ impl Project {
                 }
             }
         }
-        // Layer effects + layer envelopes + generator drivers/envelopes/mappings.
+        // Layer effects + generator drivers/envelopes/mappings.
         for layer in &mut self.timeline.layers {
             if let Some(ref mut effects) = layer.effects {
                 for fx in effects.iter_mut() {
@@ -634,18 +643,16 @@ impl Project {
                             resolve_driver_id_for_effect(d, &effect_type);
                         }
                     }
+                    if let Some(envelopes) = fx.envelopes.as_mut() {
+                        for env in envelopes {
+                            resolve_envelope_id_for_effect(env, &effect_type);
+                        }
+                    }
                     if let Some(mappings) = fx.ableton_mappings.as_mut() {
                         for m in mappings {
                             resolve_ableton_id_for_effect(m, &effect_type);
                         }
                     }
-                }
-            }
-            // Layer-level envelopes target effects on this layer; each
-            // envelope carries its own `target_effect_type`.
-            if let Some(envelopes) = layer.envelopes.as_mut() {
-                for env in envelopes {
-                    resolve_envelope_id_for_effect(env);
                 }
             }
             if let Some(gp) = layer.gen_params_mut() {
@@ -953,35 +960,6 @@ impl Project {
         }
     }
 
-    /// The id of the layer that owns the effect `effect_id`, if any.
-    ///
-    /// Returns the layer for a layer-scoped effect, the layer containing the
-    /// clip for a clip-scoped effect, and `None` for a master effect (master
-    /// has no owning layer). Used by id-addressed commands that must reach
-    /// layer-only storage the effect itself doesn't hold — most notably
-    /// `ParamEnvelope`s, which live on `Layer::envelopes` keyed by
-    /// `(effect_type, param_id)`, never on the `PresetInstance`.
-    pub fn layer_id_for_effect(
-        &self,
-        effect_id: &crate::id::EffectId,
-    ) -> Option<crate::id::LayerId> {
-        for layer in &self.timeline.layers {
-            if let Some(effects) = layer.effects.as_ref()
-                && effects.iter().any(|fx| &fx.id == effect_id)
-            {
-                return Some(layer.layer_id.clone());
-            }
-            if layer
-                .clips
-                .iter()
-                .any(|clip| clip.effects.iter().any(|fx| &fx.id == effect_id))
-            {
-                return Some(layer.layer_id.clone());
-            }
-        }
-        None
-    }
-
     /// Port of Unity Project.ImportedPercussionClipPlacements property.
     /// Returns a mutable reference to the clip placements slice inside percussion_import.
     /// Initializes percussion_import if absent (matches Unity's lazy-init pattern).
@@ -1123,7 +1101,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             project_name: String::new(),
-            project_version: "1.5.0".to_string(),
+            project_version: "1.6.0".to_string(),
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),
@@ -1326,16 +1304,19 @@ mod tests {
     }
 
     #[test]
-    fn legacy_param_index_resolved_for_layer_envelopes() {
-        use crate::effects::ParamEnvelope;
+    fn legacy_param_index_resolved_for_effect_envelopes() {
+        use crate::effects::{ParamEnvelope, PresetInstance};
         use crate::layer::Layer;
         use crate::types::LayerType;
 
+        // Envelope-home unification: an effect envelope rides on the effect
+        // instance and resolves its legacy param index against the instance's
+        // own type (no `target_effect_type` on the envelope anymore).
         let mut p = Project::default();
-        let mut layer = Layer::new("test".to_string(), LayerType::Generator, 0);
-        // Legacy-shaped envelope targeting Bloom paramIndex 0.
-        layer.envelopes_mut().push(ParamEnvelope {
-            target_effect_type: PresetTypeId::BLOOM,
+        let mut layer = Layer::new("test".to_string(), LayerType::Video, 0);
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.envelopes = Some(vec![ParamEnvelope {
             param_id: std::borrow::Cow::Borrowed(""),
             enabled: true,
             attack_beats: 0.1,
@@ -1352,12 +1333,14 @@ mod tests {
             walk_value: -1.0,
             was_clip_active: false,
             last_elapsed: -1.0,
-        });
+        }]);
+        layer.effects = Some(vec![fx]);
         p.timeline.layers.push(layer);
 
         p.resolve_legacy_param_ids();
 
-        let env = &p.timeline.layers[0].envelopes.as_ref().unwrap()[0];
+        let env =
+            &p.timeline.layers[0].effects.as_ref().unwrap()[0].envelopes.as_ref().unwrap()[0];
         assert_eq!(env.param_id, "amount");
         assert_eq!(env.legacy_param_index, None);
     }

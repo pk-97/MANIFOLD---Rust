@@ -409,11 +409,13 @@ fn count_ableton_mappings(project: &manifold_core::project::Project) -> usize {
 }
 
 fn count_envelopes(project: &manifold_core::project::Project) -> usize {
-    // Envelopes live on layers (effect-targeted) and on `layer.genParams`
-    // (generator-targeted). No project-level envelopes.
+    // Envelope-home unification: envelopes live on each effect's PresetInstance
+    // (master / layer / clip) and on `layer.genParams` (generator-targeted).
     let mut n = 0;
+    for_each_effect(project, |fx| {
+        n += fx.envelopes.as_ref().map(|e| e.len()).unwrap_or(0);
+    });
     for layer in &project.timeline.layers {
-        n += layer.envelopes.as_ref().map(|e| e.len()).unwrap_or(0);
         if let Some(gp) = layer.gen_params() {
             n += gp.envelopes.as_ref().map(|e| e.len()).unwrap_or(0);
         }
@@ -470,7 +472,12 @@ fn load_liveschool_live_show_v6() {
     // generator-targeted (via `layer.genParams`).
     assert_eq!(count_effects(&project), 160, "effects total drifted");
     assert_eq!(count_drivers(&project), 130, "drivers total drifted");
-    assert_eq!(count_envelopes(&project), 35, "envelopes total drifted");
+    // Envelope-home unification (v1.5→v1.6): the 15 layer-level envelopes
+    // distribute onto their matching effect instance; 2 of them targeted a
+    // `WireframeDepth` effect absent from their layer (BLACK HOLE MAIN) — those
+    // were inert before (the evaluator found no target) and are dropped by the
+    // migration. 13 effect envelopes + 20 generator envelopes = 33.
+    assert_eq!(count_envelopes(&project), 33, "envelopes total drifted");
     assert_eq!(
         count_ableton_mappings(&project),
         29,

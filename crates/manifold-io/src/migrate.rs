@@ -45,7 +45,86 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.5.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.6.0") {
+        migrate_v150_to_v160(&mut root);
+        root["projectVersion"] = Value::String("1.6.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.5.0 → v1.6.0: envelope-home unification. Effect envelopes used to live on
+/// the container (`Layer.envelopes` / `Clip.envelopes`) keyed by
+/// `targetEffectType`; they now ride on each effect's `PresetInstance.envelopes`
+/// (keyed by `paramId` — the instance the envelope sits on is the target).
+///
+/// For every layer and clip carrying an `envelopes` array, this distributes
+/// each envelope into the **first** effect in that container whose `effectType`
+/// matches the envelope's `targetEffectType` (the same first-match the old
+/// runtime used), strips the now-redundant `targetEffectType`, and drops the
+/// container-level array. An envelope with no matching effect is dropped — it
+/// was inert before (the evaluator found no target), so this is behavior-
+/// preserving. Generator envelopes already lived on `genParams.envelopes` and
+/// are untouched.
+///
+/// Idempotent: a v1.6 container has no `envelopes` field, so a re-run is a no-op.
+fn migrate_v150_to_v160(root: &mut Value) {
+    let Some(layers) = root
+        .get_mut("timeline")
+        .and_then(|t| t.get_mut("layers"))
+        .and_then(|l| l.as_array_mut())
+    else {
+        return;
+    };
+    for layer in layers {
+        let Some(map) = layer.as_object_mut() else {
+            continue;
+        };
+        distribute_container_envelopes(map);
+        if let Some(clips) = map.get_mut("clips").and_then(|c| c.as_array_mut()) {
+            for clip in clips {
+                if let Some(cmap) = clip.as_object_mut() {
+                    distribute_container_envelopes(cmap);
+                }
+            }
+        }
+    }
+}
+
+/// Move a container's (`Layer` or `Clip`) legacy `envelopes` array onto its
+/// effects, matching `targetEffectType` → the first effect's `effectType`.
+/// Helper for [`migrate_v150_to_v160`].
+fn distribute_container_envelopes(container: &mut serde_json::Map<String, Value>) {
+    let Some(envs) = container.remove("envelopes") else {
+        return;
+    };
+    let Some(envs) = envs.as_array().cloned().filter(|a| !a.is_empty()) else {
+        return;
+    };
+    for mut env in envs {
+        let target = env
+            .get("targetEffectType")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(obj) = env.as_object_mut() {
+            obj.remove("targetEffectType");
+        }
+        let Some(effects) = container.get_mut("effects").and_then(|e| e.as_array_mut()) else {
+            continue; // no effects → orphan, drop
+        };
+        if let Some(fx) = effects.iter_mut().find(|fx| {
+            fx.get("effectType").and_then(|v| v.as_str()) == target.as_deref()
+        }) && let Some(fxobj) = fx.as_object_mut()
+        {
+            let arr = fxobj
+                .entry("envelopes")
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(arr) = arr.as_array_mut() {
+                arr.push(env);
+            }
+        }
+        // No matching effect → orphan, dropped (was inert pre-migration).
+    }
 }
 
 /// v1.4.0 → v1.5.0: graph-home unification. The generator's per-instance graph
@@ -489,7 +568,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.5.0")
+            Some("1.6.0")
         );
     }
 
@@ -505,7 +584,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.5.0")
+            Some("1.6.0")
         );
     }
 
@@ -519,22 +598,66 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.5.0")
+            Some("1.6.0")
         );
     }
 
     #[test]
-    fn test_v150_input_is_not_remigrated() {
+    fn test_v160_input_is_not_remigrated() {
         // Already-current projects pass through unchanged.
         let json = r#"{
-            "projectVersion": "1.5.0",
+            "projectVersion": "1.6.0",
             "projectName": "current"
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.5.0")
+            Some("1.6.0")
+        );
+    }
+
+    /// v1.5 → v1.6 envelope-home: a layer's `envelopes` array distributes onto
+    /// the matching effect (first by `effectType` == `targetEffectType`), the
+    /// `targetEffectType` key is stripped, and the layer-level array is dropped.
+    /// An envelope with no matching effect is dropped (it was inert before).
+    #[test]
+    fn v150_envelopes_relocate_onto_matching_effect() {
+        let json = r#"{
+            "projectVersion": "1.5.0",
+            "timeline": {"layers": [{
+                "effects": [
+                    {"effectType": "Bloom", "paramValues": []},
+                    {"effectType": "Mirror", "paramValues": []}
+                ],
+                "envelopes": [
+                    {"targetEffectType": "Mirror", "paramId": "amount", "enabled": true},
+                    {"targetEffectType": "Ghost", "paramId": "x", "enabled": true}
+                ]
+            }]}
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        let layer = &v["timeline"]["layers"][0];
+        assert!(
+            layer.get("envelopes").is_none(),
+            "layer-level envelopes array removed"
+        );
+        let effects = layer["effects"].as_array().unwrap();
+        // Bloom got nothing.
+        assert!(effects[0].get("envelopes").is_none());
+        // Mirror got the matching envelope, sans targetEffectType.
+        let mirror_envs = effects[1]["envelopes"].as_array().unwrap();
+        assert_eq!(mirror_envs.len(), 1);
+        assert_eq!(mirror_envs[0]["paramId"].as_str(), Some("amount"));
+        assert!(
+            mirror_envs[0].get("targetEffectType").is_none(),
+            "redundant targetEffectType stripped"
+        );
+        // The "Ghost" envelope had no matching effect → dropped.
+        assert_eq!(
+            v.get("projectVersion").and_then(|x| x.as_str()),
+            Some("1.6.0")
         );
     }
 

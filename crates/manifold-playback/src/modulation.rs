@@ -185,6 +185,162 @@ fn apply_adsr_offset(value: &mut f32, min: f32, max: f32, target_norm: f32, adsr
     }
 }
 
+/// Refresh an envelope's rising-edge bookkeeping without applying a value —
+/// the path taken when an envelope is disabled or its target param can't be
+/// resolved this frame.
+fn refresh_env_clip_active(inst: &mut PresetInstance, ei: usize, clip_active: bool) {
+    if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(ei)) {
+        env.was_clip_active = clip_active;
+    }
+}
+
+/// Apply every envelope (ADSR + Random) carried by one instance against the
+/// active-clip timing of the container it lives in. Returns true if any
+/// envelope wrote a value this frame.
+///
+/// Since envelope-home unification this is the single envelope walk for both
+/// kinds: an envelope lives on its owning `PresetInstance`, and
+/// `resolve_param_in` resolves a param id against either an effect or a
+/// generator definition — so the two formerly-parallel blocks
+/// (`evaluate_all_envelopes` for effects, `evaluate_gen_param_envelopes` for
+/// generators) collapse to a caller that locates the def + timing and hands
+/// off here. Byte-for-byte the prior per-envelope arithmetic — extracted, not
+/// changed.
+fn apply_instance_envelopes(
+    inst: &mut PresetInstance,
+    def: &manifold_core::preset_def::PresetDef,
+    active_elapsed: Beats,
+    active_duration: Beats,
+) -> bool {
+    let clip_active = active_elapsed >= Beats::ZERO;
+    let env_count = inst.envelopes.as_ref().map_or(0, |e| e.len());
+    let mut any_modulated = false;
+
+    // Index-based iteration to avoid cloning the envelope vec (Phase 9C fix).
+    for ei in 0..env_count {
+        let (
+            enabled,
+            param_id,
+            attack,
+            decay,
+            sustain,
+            release,
+            target_norm,
+            mode,
+            random_jump,
+            walk_value,
+            was_active,
+            last_elapsed,
+            range_min,
+            range_max,
+        ) = {
+            let env = &inst.envelopes.as_ref().unwrap()[ei];
+            (
+                env.enabled,
+                env.param_id.clone(),
+                env.attack_beats,
+                env.decay_beats,
+                env.sustain_level,
+                env.release_beats,
+                env.target_normalized,
+                env.mode,
+                env.random_jump,
+                env.walk_value,
+                env.was_clip_active,
+                env.last_elapsed,
+                env.range_min,
+                env.range_max,
+            )
+        };
+
+        if !enabled {
+            refresh_env_clip_active(inst, ei, clip_active);
+            continue;
+        }
+
+        let Some(resolved) =
+            manifold_core::effects::resolve_param_in(def, inst, param_id.as_ref())
+        else {
+            refresh_env_clip_active(inst, ei, clip_active);
+            continue;
+        };
+        if resolved.idx >= inst.param_values.len() {
+            refresh_env_clip_active(inst, ei, clip_active);
+            continue;
+        }
+        let idx = resolved.idx;
+        let (min, max) = (resolved.min, resolved.max);
+        let whole = resolved.whole_numbers;
+
+        // ── Random mode: sample & hold ─────────────────────────
+        // Trigger conditions (same events that restart an ADSR envelope):
+        //   1. Clip becomes active after being inactive (!was_active)
+        //   2. Elapsed decreases — new sequential clip or loop restart
+        //   3. First evaluation after mode switch (last_elapsed sentinel)
+        if mode == EnvelopeMode::Random {
+            let elapsed_f = active_elapsed.as_f32();
+            let trigger =
+                clip_active && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
+
+            match random_envelope_value(
+                trigger, walk_value, random_jump, whole, min, max, range_min, range_max,
+            ) {
+                None => {
+                    if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(ei)) {
+                        env.was_clip_active = clip_active;
+                        env.last_elapsed = elapsed_f;
+                    }
+                }
+                Some((new_walk, held)) => {
+                    if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(ei)) {
+                        env.walk_value = new_walk;
+                        env.current_level = new_walk;
+                        env.was_clip_active = clip_active;
+                        env.last_elapsed = elapsed_f;
+                    }
+                    inst.param_values[idx].value = held;
+                    any_modulated = true;
+                }
+            }
+            continue;
+        }
+
+        // ── ADSR mode ────────────────────────────────────────────
+        if !clip_active {
+            if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(ei)) {
+                env.was_clip_active = false;
+            }
+            continue;
+        }
+
+        let adsr_value = ParamEnvelope::calculate_adsr(
+            active_elapsed,
+            active_duration,
+            attack,
+            decay,
+            sustain,
+            release,
+        );
+
+        if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(ei)) {
+            env.current_level = adsr_value;
+            env.was_clip_active = clip_active;
+        }
+
+        if apply_adsr_offset(
+            &mut inst.param_values[idx].value,
+            min,
+            max,
+            target_norm,
+            adsr_value,
+        ) {
+            any_modulated = true;
+        }
+    }
+
+    any_modulated
+}
+
 // =====================================================================
 // Phase 1: Reset all effectives (base → effective, blank slate)
 // Port of C# DriverController.ResetAllEffectives()
@@ -336,8 +492,18 @@ fn evaluate_effect_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bool
 // Port of C# EnvelopeEvaluator.EvaluateAll()
 // =====================================================================
 
-/// Evaluate all layer envelopes (ADSR and Random modes).
+/// Evaluate every layer effect's envelopes (ADSR + Random).
 /// Returns true if any envelope was active (compositor should be marked dirty).
+///
+/// Envelope-home unification: envelopes ride on each effect's
+/// `PresetInstance.envelopes` (keyed by `param_id`), so this just walks the
+/// layer's effects and applies each instance's own envelopes against that
+/// layer's active-clip timing — no more `(effect_type, param_id)` pool match,
+/// which means two same-type effects on one layer no longer collide.
+/// Disabled effects are skipped (an envelope on a disabled effect doesn't
+/// modulate), matching the prior `find(enabled)` gate. Modulation runs even
+/// on muted layers (mute = compositor only). Master + clip effect envelopes
+/// have no clip-timing source and stay inert, exactly as before.
 pub fn evaluate_all_envelopes(
     project: &mut Project,
     active_clip_timing: &[(Beats, Beats)],
@@ -345,232 +511,22 @@ pub fn evaluate_all_envelopes(
     let mut any_modulated = false;
 
     for (li, layer) in project.timeline.layers.iter_mut().enumerate() {
-        // Envelopes run even on muted layers (mute = compositor only).
         let (active_elapsed, active_duration) = active_clip_timing
             .get(li)
             .copied()
             .unwrap_or((Beats(-1.0), Beats::ZERO));
 
-        let clip_active = active_elapsed >= Beats::ZERO;
-
-        // Evaluate layer envelopes (use timing from first active clip).
-        // Uses index-based iteration to avoid cloning (Phase 9C fix).
-        let layer_env_count = layer.envelopes.as_ref().map_or(0, |e| e.len());
-        if layer_env_count == 0 {
+        let Some(effects) = layer.effects.as_mut() else {
             continue;
-        }
-
-        if layer.effects.is_none() {
-            // Still update was_clip_active for rising edge detection
-            for ei in 0..layer_env_count {
-                if let Some(envs) = &mut layer.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = clip_active;
-                }
-            }
-            continue;
-        }
-
-        for ei in 0..layer_env_count {
-            let (
-                enabled,
-                target_effect_type,
-                param_id,
-                attack,
-                decay,
-                sustain,
-                release,
-                target_norm,
-                mode,
-                random_jump,
-                walk_value,
-                was_active,
-                last_elapsed,
-                range_min,
-                range_max,
-            ) = {
-                let env = &layer.envelopes.as_ref().unwrap()[ei];
-                (
-                    env.enabled,
-                    env.target_effect_type.clone(),
-                    env.param_id.clone(),
-                    env.attack_beats,
-                    env.decay_beats,
-                    env.sustain_level,
-                    env.release_beats,
-                    env.target_normalized,
-                    env.mode,
-                    env.random_jump,
-                    env.walk_value,
-                    env.was_clip_active,
-                    env.last_elapsed,
-                    env.range_min,
-                    env.range_max,
-                )
-            };
-
-            if !enabled {
-                if let Some(envs) = &mut layer.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = clip_active;
-                }
+        };
+        for fx in effects.iter_mut() {
+            if !fx.enabled {
                 continue;
             }
-
-            // ── Random mode: sample & hold ─────────────────────────
-            // Trigger conditions (same events that restart an ADSR envelope):
-            //   1. Clip becomes active after being inactive (!was_active)
-            //   2. Elapsed decreases — new clip started on the same layer
-            //      (sequential clips each reset elapsed to 0) or loop restart
-            //   3. First evaluation after mode switch (last_elapsed sentinel)
-            if mode == EnvelopeMode::Random {
-                let elapsed_f = active_elapsed.as_f32();
-                let trigger =
-                    clip_active && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
-
-                let layer_effects = match &mut layer.effects {
-                    Some(effects) => effects,
-                    None => {
-                        if let Some(envs) = &mut layer.envelopes
-                            && let Some(env) = envs.get_mut(ei)
-                        {
-                            env.was_clip_active = clip_active;
-                        }
-                        continue;
-                    }
-                };
-                let target_fx = layer_effects
-                    .iter_mut()
-                    .find(|f| f.effect_type() == &target_effect_type && f.enabled);
-                let fx = match target_fx {
-                    Some(f) => f,
-                    None => {
-                        if let Some(envs) = &mut layer.envelopes
-                            && let Some(env) = envs.get_mut(ei)
-                        {
-                            env.was_clip_active = clip_active;
-                        }
-                        continue;
-                    }
-                };
-                let effect_def = match preset_definition_registry::effect::try_get(fx.effect_type()) {
-                    Some(d) => d,
-                    None => continue,
-                };
-                let Some(resolved) = manifold_core::effects::resolve_param_in(
-                    &effect_def,
-                    fx,
-                    param_id.as_ref(),
-                ) else {
-                    if let Some(envs) = &mut layer.envelopes
-                        && let Some(env) = envs.get_mut(ei)
-                    {
-                        env.was_clip_active = clip_active;
-                    }
-                    continue;
-                };
-                if resolved.idx >= fx.param_values.len() {
-                    if let Some(envs) = &mut layer.envelopes
-                        && let Some(env) = envs.get_mut(ei)
-                    {
-                        env.was_clip_active = clip_active;
-                    }
-                    continue;
-                }
-                let idx = resolved.idx;
-                let (min, max) = (resolved.min, resolved.max);
-                let whole = resolved.whole_numbers;
-
-                match random_envelope_value(
-                    trigger, walk_value, random_jump, whole, min, max, range_min, range_max,
-                ) {
-                    None => {
-                        if let Some(envs) = &mut layer.envelopes
-                            && let Some(env) = envs.get_mut(ei)
-                        {
-                            env.was_clip_active = clip_active;
-                            env.last_elapsed = elapsed_f;
-                        }
-                        continue;
-                    }
-                    Some((new_walk, held)) => {
-                        if let Some(envs) = &mut layer.envelopes
-                            && let Some(env) = envs.get_mut(ei)
-                        {
-                            env.walk_value = new_walk;
-                            env.current_level = new_walk;
-                            env.was_clip_active = clip_active;
-                            env.last_elapsed = elapsed_f;
-                        }
-                        fx.param_values[idx].value = held;
-                        any_modulated = true;
-                        continue;
-                    }
-                }
-            }
-
-            // ── ADSR mode ────────────────────────────────────────────
-            if !clip_active {
-                if let Some(envs) = &mut layer.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = false;
-                }
-                continue;
-            }
-
-            let adsr_value = ParamEnvelope::calculate_adsr(
-                active_elapsed,
-                active_duration,
-                attack,
-                decay,
-                sustain,
-                release,
-            );
-
-            if let Some(envs) = &mut layer.envelopes
-                && let Some(env) = envs.get_mut(ei)
-            {
-                env.current_level = adsr_value;
-                env.was_clip_active = clip_active;
-            }
-
-            let layer_effects = match &mut layer.effects {
-                Some(effects) => effects,
-                None => continue,
-            };
-            let target_fx = layer_effects
-                .iter_mut()
-                .find(|f| f.effect_type() == &target_effect_type && f.enabled);
-            let fx = match target_fx {
-                Some(f) => f,
-                None => continue,
-            };
-            let effect_def = match preset_definition_registry::effect::try_get(fx.effect_type()) {
-                Some(d) => d,
-                None => continue,
-            };
-            let Some(resolved) = manifold_core::effects::resolve_param_in(
-                &effect_def,
-                fx,
-                param_id.as_ref(),
-            ) else {
+            let Some(def) = preset_definition_registry::effect::try_get(fx.effect_type()) else {
                 continue;
             };
-            if resolved.idx >= fx.param_values.len() {
-                continue;
-            }
-            let idx = resolved.idx;
-            let (min, max) = (resolved.min, resolved.max);
-            if apply_adsr_offset(
-                &mut fx.param_values[idx].value,
-                min,
-                max,
-                target_norm,
-                adsr_value,
-            ) {
+            if apply_instance_envelopes(fx, &def, active_elapsed, active_duration) {
                 any_modulated = true;
             }
         }
@@ -586,6 +542,9 @@ pub fn evaluate_all_envelopes(
 
 /// Evaluate envelopes (ADSR and Random) on generator layer parameters.
 /// Returns true if any envelope was active (compositor should be marked dirty).
+///
+/// Generator envelopes already lived on the instance (`gp.envelopes`); this is
+/// now the same walk the effect pass uses — see [`apply_instance_envelopes`].
 pub fn evaluate_gen_param_envelopes(
     project: &mut Project,
     active_clip_timing: &[(Beats, Beats)],
@@ -602,165 +561,14 @@ pub fn evaluate_gen_param_envelopes(
             .copied()
             .unwrap_or((Beats(-1.0), Beats::ZERO));
 
-        let clip_active = active_elapsed >= Beats::ZERO;
-
-        let gp = match layer.gen_params_mut() {
-            Some(gp) => gp,
-            None => continue,
-        };
-
-        let env_count = gp.envelopes.as_ref().map_or(0, |e| e.len());
-        if env_count == 0 {
+        let Some(gp) = layer.gen_params_mut() else {
             continue;
-        }
-
-        let gen_type = gp.generator_type();
-        let gen_def = match preset_definition_registry::generator::try_get(gen_type) {
-            Some(d) => d,
-            None => continue,
         };
-        let gen_defs = &gen_def.param_defs;
-
-        // Index-based iteration to avoid cloning (Phase 9C fix).
-        for ei in 0..env_count {
-            let (
-                enabled,
-                param_id,
-                attack,
-                decay,
-                sustain,
-                release,
-                target_norm,
-                mode,
-                random_jump,
-                walk_value,
-                was_active,
-                last_elapsed,
-                range_min,
-                range_max,
-            ) = {
-                let env = &gp.envelopes.as_ref().unwrap()[ei];
-                (
-                    env.enabled,
-                    env.param_id.clone(),
-                    env.attack_beats,
-                    env.decay_beats,
-                    env.sustain_level,
-                    env.release_beats,
-                    env.target_normalized,
-                    env.mode,
-                    env.random_jump,
-                    env.walk_value,
-                    env.was_clip_active,
-                    env.last_elapsed,
-                    env.range_min,
-                    env.range_max,
-                )
-            };
-
-            if !enabled {
-                if let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = clip_active;
-                }
-                continue;
-            }
-
-            let Some(&idx) = gen_def.id_to_index.get(param_id.as_ref()) else {
-                if let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = clip_active;
-                }
-                continue;
-            };
-            if idx >= gen_defs.len() || idx >= gp.param_values.len() {
-                if let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = clip_active;
-                }
-                continue;
-            }
-
-            let pd = &gen_defs[idx];
-            let (min, max) = (pd.min, pd.max);
-
-            // ── Random mode: sample & hold ─────────────────────────
-            // Trigger conditions (same events that restart an ADSR envelope):
-            //   1. Clip becomes active after being inactive (!was_active)
-            //   2. Elapsed decreases — new sequential clip or loop restart
-            //   3. First evaluation after mode switch (last_elapsed sentinel)
-            if mode == EnvelopeMode::Random {
-                let elapsed_f = active_elapsed.as_f32();
-                let trigger =
-                    clip_active && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
-                let whole = pd.whole_numbers || pd.value_labels.is_some();
-
-                match random_envelope_value(
-                    trigger, walk_value, random_jump, whole, min, max, range_min, range_max,
-                ) {
-                    None => {
-                        if let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.get_mut(ei)
-                        {
-                            env.was_clip_active = clip_active;
-                            env.last_elapsed = elapsed_f;
-                        }
-                        continue;
-                    }
-                    Some((new_walk, held)) => {
-                        if let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.get_mut(ei)
-                        {
-                            env.walk_value = new_walk;
-                            env.current_level = new_walk;
-                            env.was_clip_active = clip_active;
-                            env.last_elapsed = elapsed_f;
-                        }
-                        gp.param_values[idx].value = held;
-                        any_modulated = true;
-                        continue;
-                    }
-                }
-            }
-
-            // ── ADSR mode ────────────────────────────────────────────
-            if !clip_active {
-                if let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = false;
-                }
-                continue;
-            }
-
-            let adsr_level = ParamEnvelope::calculate_adsr(
-                active_elapsed,
-                active_duration,
-                attack,
-                decay,
-                sustain,
-                release,
-            );
-
-            if let Some(envs) = &mut gp.envelopes
-                && let Some(env) = envs.get_mut(ei)
-            {
-                env.current_level = adsr_level;
-                env.was_clip_active = clip_active;
-            }
-
-            if apply_adsr_offset(
-                &mut gp.param_values[idx].value,
-                min,
-                max,
-                target_norm,
-                adsr_level,
-            ) {
-                any_modulated = true;
-            }
+        let Some(def) = preset_definition_registry::generator::try_get(gp.generator_type()) else {
+            continue;
+        };
+        if apply_instance_envelopes(gp, &def, active_elapsed, active_duration) {
+            any_modulated = true;
         }
     }
 
@@ -903,11 +711,19 @@ mod tests {
 
     /// ADSR sustain=1, attack=decay=release=0 → calculate_adsr returns 1.0 for
     /// any in-clip position, so this is a pure "full offset" envelope.
-    fn adsr_full(effect_type: PresetTypeId, param: &'static str) -> ParamEnvelope {
-        let mut env = ParamEnvelope::new_for_effect(effect_type, param);
+    fn adsr_full(param: &'static str) -> ParamEnvelope {
+        let mut env = ParamEnvelope::new(param);
         env.sustain_level = 1.0;
         env.target_normalized = 1.0;
         env
+    }
+
+    /// A video layer with one `TestEnvFx` effect carrying `env` on the
+    /// instance — the post-unification home for effect envelopes.
+    fn effect_layer_with_env(env: ParamEnvelope) -> Layer {
+        let mut layer = layer_with_one_effect();
+        layer.effects.as_mut().unwrap()[0].envelopes = Some(vec![env]);
+        layer
     }
 
     fn project_with(layer: Layer) -> Project {
@@ -920,8 +736,7 @@ mod tests {
 
     #[test]
     fn effect_adsr_envelope_applies_full_offset_to_targeted_param() {
-        let mut layer = layer_with_one_effect();
-        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let layer = effect_layer_with_env(adsr_full("amount"));
         let mut project = project_with(layer);
 
         // Active clip: elapsed 2 beats within an 8-beat clip.
@@ -939,10 +754,9 @@ mod tests {
 
     #[test]
     fn effect_adsr_partial_target_normalized() {
-        let mut layer = layer_with_one_effect();
-        let mut env = adsr_full(TEST_FX.clone(), "amount");
+        let mut env = adsr_full("amount");
         env.target_normalized = 0.5; // target = min + (max-min)*0.5 = 0.5
-        layer.envelopes = Some(vec![env]);
+        let layer = effect_layer_with_env(env);
         let mut project = project_with(layer);
 
         let timing = vec![(Beats(2.0), Beats(8.0))];
@@ -957,8 +771,7 @@ mod tests {
 
     #[test]
     fn effect_adsr_no_change_when_clip_inactive() {
-        let mut layer = layer_with_one_effect();
-        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let layer = effect_layer_with_env(adsr_full("amount"));
         let mut project = project_with(layer);
 
         // No active clip on this layer (sentinel elapsed -1).
@@ -966,21 +779,19 @@ mod tests {
         let modulated = evaluate_all_envelopes(&mut project, &timing);
 
         assert!(!modulated, "no active clip => no modulation");
-        let layer = &project.timeline.layers[0];
-        let fx = &layer.effects.as_ref().unwrap()[0];
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.param_values[0].value, 0.0, "param untouched");
         assert!(
-            !layer.envelopes.as_ref().unwrap()[0].was_clip_active,
+            !fx.envelopes.as_ref().unwrap()[0].was_clip_active,
             "rising-edge bookkeeping cleared when clip inactive"
         );
     }
 
     #[test]
     fn effect_disabled_envelope_is_noop() {
-        let mut layer = layer_with_one_effect();
-        let mut env = adsr_full(TEST_FX.clone(), "amount");
+        let mut env = adsr_full("amount");
         env.enabled = false;
-        layer.envelopes = Some(vec![env]);
+        let layer = effect_layer_with_env(env);
         let mut project = project_with(layer);
 
         let timing = vec![(Beats(2.0), Beats(8.0))];
@@ -990,10 +801,11 @@ mod tests {
     }
 
     #[test]
-    fn effect_envelope_targeting_disabled_effect_is_noop() {
-        let mut layer = layer_with_one_effect();
-        layer.effects.as_mut().unwrap()[0].enabled = false; // target not found among *enabled*
-        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+    fn envelope_on_disabled_effect_is_noop() {
+        // An envelope riding on a disabled effect doesn't modulate (matches the
+        // prior find(enabled) gate, now expressed as "skip disabled effects").
+        let mut layer = effect_layer_with_env(adsr_full("amount"));
+        layer.effects.as_mut().unwrap()[0].enabled = false;
         let mut project = project_with(layer);
 
         let timing = vec![(Beats(2.0), Beats(8.0))];
@@ -1002,31 +814,30 @@ mod tests {
         assert_eq!(fx.param_values[0].value, 0.0);
     }
 
-    /// CURRENT behavior: effect envelopes resolve their target by
-    /// `effect_type`, taking the FIRST enabled match. With two effects of the
-    /// same type, only the first is modulated — the leak the envelope-home
-    /// unification (STEP 2) removes by binding the envelope to one instance.
-    /// This test will be rewritten when that lands.
+    /// Post-unification behavior (the bug fix): an envelope binds to the
+    /// instance it sits on, so two same-type effects no longer collide —
+    /// each effect's own envelope modulates only that effect.
     #[test]
-    fn effect_envelope_resolves_target_by_type_first_match() {
+    fn envelopes_are_per_instance_not_pooled_by_type() {
         let mut layer = Layer::new_video("FxLayer".into(), 0);
-        layer.effects = Some(vec![
-            effect::create_default(&TEST_FX),
-            effect::create_default(&TEST_FX),
-        ]);
-        layer.envelopes = Some(vec![adsr_full(TEST_FX.clone(), "amount")]);
+        let mut fx_a = effect::create_default(&TEST_FX);
+        let mut fx_b = effect::create_default(&TEST_FX);
+        // Only the SECOND same-type effect carries an envelope.
+        fx_a.envelopes = None;
+        fx_b.envelopes = Some(vec![adsr_full("amount")]);
+        layer.effects = Some(vec![fx_a, fx_b]);
         let mut project = project_with(layer);
 
         let timing = vec![(Beats(2.0), Beats(8.0))];
         assert!(evaluate_all_envelopes(&mut project, &timing));
         let effects = project.timeline.layers[0].effects.as_ref().unwrap();
-        assert!(
-            (effects[0].param_values[0].value - 1.0).abs() < 1e-6,
-            "first same-type effect is modulated"
-        );
         assert_eq!(
-            effects[1].param_values[0].value, 0.0,
-            "second same-type effect is NOT reached (by-type first-match leak)"
+            effects[0].param_values[0].value, 0.0,
+            "the effect WITHOUT an envelope is untouched"
+        );
+        assert!(
+            (effects[1].param_values[0].value - 1.0).abs() < 1e-6,
+            "the effect WITH the envelope is the one modulated"
         );
     }
 
@@ -1034,13 +845,12 @@ mod tests {
 
     #[test]
     fn effect_random_envelope_jumps_within_normalized_range() {
-        let mut layer = layer_with_one_effect();
-        let mut env = ParamEnvelope::new_for_effect(TEST_FX.clone(), "amount");
+        let mut env = ParamEnvelope::new("amount");
         env.mode = EnvelopeMode::Random;
         env.random_jump = true;
         env.range_min = 0.25;
         env.range_max = 0.75;
-        layer.envelopes = Some(vec![env]);
+        let layer = effect_layer_with_env(env);
         let mut project = project_with(layer);
 
         // Clip just became active (was_clip_active false, last_elapsed -1) → trigger.
@@ -1048,15 +858,14 @@ mod tests {
         let modulated = evaluate_all_envelopes(&mut project, &timing);
 
         assert!(modulated, "random trigger reports modulation");
-        let layer = &project.timeline.layers[0];
-        let fx = &layer.effects.as_ref().unwrap()[0];
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         // min + (max-min)*range, with min=0,max=1 → held in [0.25, 0.75].
         assert!(
             (0.25..=0.75).contains(&fx.param_values[0].value),
             "random jump held within range, got {}",
             fx.param_values[0].value
         );
-        let env = &layer.envelopes.as_ref().unwrap()[0];
+        let env = &fx.envelopes.as_ref().unwrap()[0];
         assert!(
             (0.25..=0.75).contains(&env.walk_value),
             "walk_value initialized within range, got {}",
@@ -1071,7 +880,7 @@ mod tests {
         let mut layer = generator_layer();
         {
             let gp = layer.gen_params_or_init();
-            let mut env = ParamEnvelope::new_for_gen("speed");
+            let mut env = ParamEnvelope::new("speed");
             env.sustain_level = 1.0;
             env.target_normalized = 1.0;
             gp.envelopes = Some(vec![env]);
@@ -1095,7 +904,7 @@ mod tests {
         let mut layer = generator_layer();
         {
             let gp = layer.gen_params_or_init();
-            let mut env = ParamEnvelope::new_for_gen("speed");
+            let mut env = ParamEnvelope::new("speed");
             env.enabled = false;
             env.sustain_level = 1.0;
             gp.envelopes = Some(vec![env]);

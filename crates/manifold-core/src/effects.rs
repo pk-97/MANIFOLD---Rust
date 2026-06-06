@@ -109,9 +109,6 @@ pub trait EffectContainer {
     fn has_modular_effects(&self) -> bool;
     fn find_effect(&self, effect_type: &PresetTypeId) -> Option<&PresetInstance>;
     fn find_effect_group(&self, group_id: &str) -> Option<&EffectGroup>;
-    fn envelopes(&self) -> &[ParamEnvelope];
-    fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope>;
-    fn has_envelopes(&self) -> bool;
 }
 
 /// Abstracts a "thing with named params, drivers, and ranges."
@@ -551,11 +548,11 @@ pub struct PresetInstance {
     /// generator (produces from nothing). The single discriminator that
     /// carries every effect/generator behavioral difference — kind-aware
     /// serde, the generator registry clamp on `set_param*`, and the
-    /// generator-only fields below. Effects ignore `envelopes` (their
-    /// envelopes live on the owning `Layer`) and `legacy_param_version`;
-    /// generators ignore `id`/`enabled`/`collapsed`/`group_id`/`graph`
-    /// (a generator's graph still lives on `Layer.generator_graph` in this
-    /// phase) — those are chain-membership fields with no generator meaning.
+    /// generator-only fields below. Effects ignore `legacy_param_version`;
+    /// generators ignore `id`/`enabled`/`collapsed`/`group_id` — those are
+    /// chain-membership fields with no generator meaning. (`envelopes` and
+    /// `graph` are now shared homes for both kinds — envelope-home + graph-home
+    /// unification.)
     pub kind: crate::preset_def::PresetKind,
     /// Unique identifier for this effect instance. Synthetic for generators
     /// (a layer has one generator, addressed by `LayerId`).
@@ -577,9 +574,9 @@ pub struct PresetInstance {
     pub param_values: Vec<ParamSlot>,
     pub base_param_values: Option<Vec<f32>>,
     pub drivers: Option<Vec<ParameterDriver>>,
-    /// Generator-only: per-instance ADSR/Random envelopes, keyed by
-    /// `param_id`. Effects keep their envelopes on the owning `Layer`
-    /// (keyed by `(effect_type, param_id)`); `None`/unused for effect kind.
+    /// Per-instance ADSR/Random envelopes, keyed by `param_id`. Envelope-home
+    /// unification: both effects and generators store their envelopes here (the
+    /// instance the envelope sits on is the target). `None` when unused.
     pub envelopes: Option<Vec<ParamEnvelope>>,
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     pub group_id: Option<EffectGroupId>,
@@ -1094,6 +1091,9 @@ impl Serialize for PresetInstance {
         if self.drivers.is_some() {
             field_count += 1;
         }
+        if self.envelopes.is_some() {
+            field_count += 1;
+        }
         if self.ableton_mappings.is_some() {
             field_count += 1;
         }
@@ -1149,6 +1149,10 @@ impl Serialize for PresetInstance {
         }
         if let Some(d) = &self.drivers {
             s.serialize_field("drivers", d)?;
+        }
+        // Envelope-home unification: effect envelopes ride on the instance.
+        if let Some(e) = &self.envelopes {
+            s.serialize_field("envelopes", e)?;
         }
         if let Some(m) = &self.ableton_mappings {
             s.serialize_field("abletonMappings", m)?;
@@ -1342,6 +1346,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             drivers: Option<Vec<ParameterDriver>>,
             #[serde(default)]
+            envelopes: Option<Vec<ParamEnvelope>>,
+            #[serde(default)]
             ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
             #[serde(default)]
             group_id: Option<EffectGroupId>,
@@ -1408,7 +1414,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             param_values,
             base_param_values,
             drivers: raw.drivers,
-            envelopes: None,
+            envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
             group_id: raw.group_id,
             graph: raw.graph,
@@ -2395,7 +2401,10 @@ impl PresetInstance {
         self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
     }
 
-    /// Generator envelopes list, auto-created on first access.
+    /// The instance's envelope list, auto-created on first access.
+    /// Envelope-home unification: effect and generator envelopes both live
+    /// here, keyed by `param_id` (no `target_effect_type` — the instance the
+    /// envelope sits on is the target).
     pub fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
         if self.envelopes.is_none() {
             self.envelopes = Some(Vec::new());
@@ -3015,9 +3024,16 @@ pub enum EnvelopeMode {
 /// the ParameterDriver round-trip recovery contract.
 #[derive(Debug, Clone)]
 pub struct ParamEnvelope {
-    pub target_effect_type: PresetTypeId,
     /// Stable mapping key. Empty after legacy V1.1 deserialization
     /// until the post-load resolver fills it in from the registry.
+    ///
+    /// Envelope-home unification (v1.6): an envelope lives **on its
+    /// owning `PresetInstance`** (effect or generator), so it no longer
+    /// carries a `target_effect_type` — the instance it sits on *is* the
+    /// target. Pre-v1.6 projects stored effect envelopes on
+    /// `Layer.envelopes` / `Clip.envelopes` keyed by `targetEffectType`;
+    /// the v1.5→v1.6 load migration distributes each into the matching
+    /// effect instance and drops the now-redundant key.
     pub param_id: ParamId,
     pub enabled: bool,
     pub attack_beats: f32,
@@ -3059,14 +3075,13 @@ impl Serialize for ParamEnvelope {
         let emit_param_id = !self.param_id.is_empty();
         let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
 
-        // 11 base fields + addressing field (paramId XOR targetParamIndex).
-        let mut field_count = 11;
+        // 10 base fields + addressing field (paramId XOR targetParamIndex).
+        let mut field_count = 10;
         if emit_param_id || emit_legacy_index {
             field_count += 1;
         }
 
         let mut s = serializer.serialize_struct("ParamEnvelope", field_count)?;
-        s.serialize_field("targetEffectType", &self.target_effect_type)?;
         if emit_param_id {
             s.serialize_field("paramId", &self.param_id)?;
         } else if emit_legacy_index {
@@ -3087,33 +3102,12 @@ impl Serialize for ParamEnvelope {
 }
 
 impl ParamEnvelope {
-    /// Gen param envelope constructor.
-    pub fn new_for_gen(param_id: impl Into<ParamId>) -> Self {
+    /// Construct an envelope targeting `param_id` on the instance it will be
+    /// attached to. Since envelope-home unification an envelope no longer
+    /// distinguishes effect from generator — the `PresetInstance` it lives on
+    /// is the target — so this is the single constructor for both kinds.
+    pub fn new(param_id: impl Into<ParamId>) -> Self {
         Self {
-            target_effect_type: PresetTypeId::TRANSFORM,
-            param_id: param_id.into(),
-            enabled: true,
-            attack_beats: 0.0,
-            decay_beats: 0.0,
-            sustain_level: 0.0,
-            release_beats: 0.0,
-            target_normalized: 1.0,
-            mode: EnvelopeMode::Adsr,
-            random_jump: false,
-            range_min: 0.0,
-            range_max: 1.0,
-            legacy_param_index: None,
-            current_level: 0.0,
-            walk_value: -1.0,
-            was_clip_active: false,
-            last_elapsed: -1.0,
-        }
-    }
-
-    /// Effect envelope constructor.
-    pub fn new_for_effect(effect_type: PresetTypeId, param_id: impl Into<ParamId>) -> Self {
-        Self {
-            target_effect_type: effect_type,
             param_id: param_id.into(),
             enabled: true,
             attack_beats: 0.0,
@@ -3204,8 +3198,9 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Raw {
-            #[serde(default)]
-            target_effect_type: PresetTypeId,
+            // `targetEffectType` from pre-v1.6 files is intentionally not read
+            // here — the v1.5→v1.6 migration consumes it to place the envelope
+            // on the right instance, and serde ignores the leftover key.
             #[serde(default)]
             param_id: Option<String>,
             #[serde(default, rename = "targetParamIndex")]
@@ -3239,7 +3234,6 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             (_, None) => (Cow::Borrowed(""), None),
         };
         Ok(ParamEnvelope {
-            target_effect_type: raw.target_effect_type,
             param_id,
             enabled: raw.enabled,
             attack_beats: raw.attack_beats,
@@ -3466,8 +3460,9 @@ mod tests {
 
     #[test]
     fn envelope_deserialize_legacy_param_index() {
-        // V1.1 shape: { targetEffectType, targetParamIndex: 1, ... }.
-        // Same parking pattern as ParameterDriver.
+        // V1.1 shape: { targetEffectType, targetParamIndex: 1, ... }. The
+        // leftover targetEffectType is ignored (the v1.5→v1.6 migration
+        // consumes it to place the envelope on the right instance).
         let json = r#"{
             "targetEffectType": "Bloom",
             "targetParamIndex": 0,
@@ -3481,13 +3476,11 @@ mod tests {
         let e: ParamEnvelope = serde_json::from_str(json).unwrap();
         assert!(e.param_id.is_empty());
         assert_eq!(e.legacy_param_index, Some(0));
-        assert_eq!(e.target_effect_type.as_str(), "Bloom");
     }
 
     #[test]
     fn envelope_deserialize_canonical_param_id() {
         let json = r#"{
-            "targetEffectType": "Bloom",
             "paramId": "amount",
             "enabled": true,
             "attackBeats": 0.5
@@ -3501,7 +3494,6 @@ mod tests {
     #[test]
     fn envelope_deserialize_param_id_wins_when_both_present() {
         let json = r#"{
-            "targetEffectType": "Bloom",
             "paramId": "threshold",
             "targetParamIndex": 99,
             "enabled": true
@@ -3513,7 +3505,7 @@ mod tests {
 
     #[test]
     fn envelope_serialize_writes_param_id_only() {
-        let env = ParamEnvelope::new_for_effect(PresetTypeId::BLOOM, "amount");
+        let env = ParamEnvelope::new("amount");
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains("\"paramId\":\"amount\""));
         assert!(
@@ -3521,15 +3513,18 @@ mod tests {
             "Serialize must not write legacy targetParamIndex; got: {json}"
         );
         assert!(!json.contains("legacyParamIndex"));
+        assert!(
+            !json.contains("targetEffectType"),
+            "Serialize must not write targetEffectType post-unification; got: {json}"
+        );
     }
 
     #[test]
     fn envelope_round_trips_through_canonical_shape() {
-        let env = ParamEnvelope::new_for_effect(PresetTypeId::BLOOM, "amount");
+        let env = ParamEnvelope::new("amount");
         let json = serde_json::to_string(&env).unwrap();
         let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.param_id, env.param_id);
-        assert_eq!(back.target_effect_type, env.target_effect_type);
         assert_eq!(back.legacy_param_index, None);
     }
 

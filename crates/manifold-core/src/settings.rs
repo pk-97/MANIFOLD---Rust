@@ -449,17 +449,6 @@ impl crate::effects::EffectContainer for ProjectSettings {
             .iter()
             .find(|g| g.id == group_id)
     }
-    fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
-        &[]
-    }
-    fn envelopes_mut(&mut self) -> &mut Vec<crate::effects::ParamEnvelope> {
-        // ProjectSettings doesn't have envelopes in Unity
-        // This is needed for trait completeness
-        panic!("ProjectSettings does not have envelopes");
-    }
-    fn has_envelopes(&self) -> bool {
-        false
-    }
 }
 
 fn default_1920() -> i32 {

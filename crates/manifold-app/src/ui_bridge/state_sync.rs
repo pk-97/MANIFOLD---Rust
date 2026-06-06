@@ -1,7 +1,7 @@
 //! State synchronization: push_state, sync_project_data, sync_clip_positions,
 //! sync_inspector_data, check_auto_scroll.
 use manifold_core::PresetTypeId;
-use manifold_core::effects::{PresetInstance, ParamEnvelope};
+use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
 use manifold_core::{Beats, Seconds};
@@ -1071,21 +1071,19 @@ pub fn sync_inspector_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
-    // Master effects → inspector (master has no envelopes)
-    let master_configs =
-        effects_to_configs(&project.settings.master_effects, &[], OscScope::Master);
+    // Master effects → inspector (envelopes ride on each instance)
+    let master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
     ui.inspector.configure_master_effects(&master_configs);
 
     // Active layer effects + gen params → inspector
     if let Some(idx) = active_layer {
         if let Some(layer) = project.timeline.layers.get(idx) {
-            // Layer effects — envelopes live on the layer
-            let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+            // Layer effects — envelopes ride on each effect instance now.
             let lid = layer.layer_id.as_str();
             let layer_effects = layer
                 .effects
                 .as_ref()
-                .map(|e| effects_to_configs(e, envs, OscScope::Layer(lid)))
+                .map(|e| effects_to_configs(e, OscScope::Layer(lid)))
                 .unwrap_or_default();
             ui.inspector.configure_layer_effects(&layer_effects);
 
@@ -1205,7 +1203,7 @@ fn effect_card_config_by_id(
     eid: &manifold_core::EffectId,
 ) -> Option<(ParamCardConfig, Vec<manifold_core::effects::ParamSlot>)> {
     if project.settings.master_effects.iter().any(|fx| &fx.id == eid) {
-        let config = effects_to_configs(&project.settings.master_effects, &[], OscScope::Master)
+        let config = effects_to_configs(&project.settings.master_effects, OscScope::Master)
             .into_iter()
             .find(|c| &c.effect_id == eid)?;
         let values = project
@@ -1218,11 +1216,10 @@ fn effect_card_config_by_id(
         return Some((config, values));
     }
     for layer in &project.timeline.layers {
-        let envs = layer.envelopes.as_deref().unwrap_or(&[]);
         if let Some(effects) = layer.effects.as_deref()
             && effects.iter().any(|fx| &fx.id == eid)
         {
-            let config = effects_to_configs(effects, envs, OscScope::Layer(layer.layer_id.as_str()))
+            let config = effects_to_configs(effects, OscScope::Layer(layer.layer_id.as_str()))
                 .into_iter()
                 .find(|c| &c.effect_id == eid)?;
             let values = effects
@@ -1235,7 +1232,7 @@ fn effect_card_config_by_id(
         for clip in &layer.clips {
             if clip.effects.iter().any(|fx| &fx.id == eid) {
                 let config =
-                    effects_to_configs(&clip.effects, envs, OscScope::Layer(layer.layer_id.as_str()))
+                    effects_to_configs(&clip.effects, OscScope::Layer(layer.layer_id.as_str()))
                         .into_iter()
                         .find(|c| &c.effect_id == eid)?;
                 let values = clip
@@ -1271,7 +1268,6 @@ enum OscScope<'a> {
 /// hidden, so they never reach this loop) are filtered at build time.
 fn effects_to_configs(
     effects: &[PresetInstance],
-    envelopes: &[ParamEnvelope],
     osc_scope: OscScope<'_>,
 ) -> Vec<ParamCardConfig> {
     effects
@@ -1476,8 +1472,8 @@ fn effects_to_configs(
             let mut env_random_jump = vec![false; n];
             let mut env_range_min = vec![0.0f32; n];
             let mut env_range_max = vec![1.0f32; n];
-            for env in envelopes {
-                if env.target_effect_type == *fx.effect_type() && env.enabled {
+            for env in fx.envelopes.as_deref().unwrap_or(&[]) {
+                if env.enabled {
                     let Some(pi) = fx.param_id_to_value_index(env.param_id.as_ref()) else {
                         continue;
                     };

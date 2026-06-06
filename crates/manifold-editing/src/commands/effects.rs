@@ -426,10 +426,10 @@ enum ReverseState {
         /// Ableton mappings pruned from
         /// `PresetInstance.ableton_mappings` for the same reason.
         removed_ableton_mappings: Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
-        /// Envelopes pruned from the host (Layer for layer-targeted
-        /// effects; Master has no envelope storage). `target_effect_type`
-        /// must also match the effect's type id, since envelopes live
-        /// on the layer and are addressed by `(effect_type, param_id)`.
+        /// Envelopes pruned from `PresetInstance.envelopes` whose
+        /// `param_id` matched the removed binding's id — envelope-home
+        /// unification put envelopes on the instance alongside drivers and
+        /// Ableton mappings, so they prune and restore in the same borrow.
         removed_envelopes: Vec<ParamEnvelope>,
     },
 }
@@ -557,6 +557,25 @@ impl Command for ToggleEffectParamExposeCommand {
                     } else {
                         Vec::new()
                     };
+                // Envelope-home unification: envelopes ride on the instance
+                // now, so they prune in the same borrow as drivers / Ableton
+                // mappings (no separate layer pass).
+                let removed_envelopes = if let Some(es) = effect.envelopes.as_mut() {
+                    let mut taken = Vec::new();
+                    es.retain(|e| {
+                        let keep = e.param_id != user_param_id;
+                        if !keep {
+                            taken.push(e.clone());
+                        }
+                        keep
+                    });
+                    if es.is_empty() {
+                        effect.envelopes = None;
+                    }
+                    taken
+                } else {
+                    Vec::new()
+                };
                 let binding = effect
                     .remove_user_binding_by_id(&user_param_id)
                     .expect("position checked above");
@@ -567,66 +586,15 @@ impl Command for ToggleEffectParamExposeCommand {
                     position,
                     removed_drivers,
                     removed_ableton_mappings,
-                    // Envelope storage lives on the layer, not the
-                    // effect — populated below outside the
-                    // `with_effects_mut` closure.
-                    removed_envelopes: Vec::new(),
+                    removed_envelopes,
                 }
             }
         });
         self.reverse = reverse_out.unwrap_or_default();
-
-        // Envelope cleanup happens outside `with_effects_mut` because
-        // envelopes are stored on the host (Layer for layer-targeted
-        // effects; Master has no envelope storage). We need the layer
-        // borrow, not the effect borrow. Only runs in the
-        // `Unexposed` branch — Exposed and None leave envelopes alone.
-        if let ReverseState::Unexposed {
-            ref binding,
-            ref mut removed_envelopes,
-            ..
-        } = self.reverse
-        {
-            let removed_id = binding.id.clone();
-            // Capture the effect type here so the envelope match below
-            // can key on `(target_effect_type, param_id)` — envelopes
-            // address an effect by its type id within the layer's
-            // chain, not by index. Envelope storage is layer-only, so the
-            // owning layer is resolved by id; a master effect resolves to
-            // `None` and this whole block no-ops (master has no envelopes).
-            let effect_type = project
-                .find_effect_by_id(&self.effect_id)
-                .map(|fx| fx.effect_type().clone());
-            let owning_layer = project.layer_id_for_effect(&self.effect_id);
-            if let (Some(effect_type), Some(layer_id)) = (effect_type, owning_layer)
-                && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&layer_id)
-            {
-                let envs = layer.envelopes_mut();
-                let mut taken = Vec::new();
-                envs.retain(|e| {
-                    let keep = !(e.target_effect_type == effect_type && e.param_id == removed_id);
-                    if !keep {
-                        taken.push(e.clone());
-                    }
-                    keep
-                });
-                *removed_envelopes = taken;
-            }
-        }
     }
 
     fn undo(&mut self, project: &mut Project) {
         let reverse = std::mem::take(&mut self.reverse);
-        // Pull the envelope tail off the reverse state up-front;
-        // restoring them happens against the layer, not the effect,
-        // and we want the value before `reverse` is moved into the
-        // match below.
-        let envelopes_to_restore: Vec<ParamEnvelope> = match &reverse {
-            ReverseState::Unexposed {
-                removed_envelopes, ..
-            } => removed_envelopes.clone(),
-            _ => Vec::new(),
-        };
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             match reverse {
                 ReverseState::None => {}
@@ -640,7 +608,7 @@ impl Command for ToggleEffectParamExposeCommand {
                     position,
                     removed_drivers,
                     removed_ableton_mappings,
-                    removed_envelopes: _,
+                    removed_envelopes,
                 } => {
                     // Re-insert at original position so the user-tail
                     // slot positions stay stable for any other addressing
@@ -673,17 +641,15 @@ impl Command for ToggleEffectParamExposeCommand {
                             .get_or_insert_with(Vec::new)
                             .extend(removed_ableton_mappings);
                     }
+                    // Envelopes restore onto the instance in the same borrow.
+                    if !removed_envelopes.is_empty() {
+                        effect
+                            .envelopes
+                            .get_or_insert_with(Vec::new)
+                            .extend(removed_envelopes);
+                    }
                 }
             }
-        }
-        // Envelope restore — the owning layer is resolved by id. Master
-        // effects had nothing to capture (no envelope storage) and resolve
-        // to `None`, so this branch no-ops uniformly there.
-        if !envelopes_to_restore.is_empty()
-            && let Some(layer_id) = project.layer_id_for_effect(&self.effect_id)
-            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&layer_id)
-        {
-            layer.envelopes_mut().extend(envelopes_to_restore);
         }
     }
 

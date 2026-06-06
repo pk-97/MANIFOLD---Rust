@@ -1,86 +1,103 @@
+//! Envelope edit commands, addressed by [`GraphTarget`].
+//!
+//! Envelope-home unification: an envelope lives on the `PresetInstance` it
+//! modulates (an effect addressed by id, or a layer's generator), so every
+//! command resolves its instance through [`Project::with_preset_graph_mut`]
+//! and edits that instance's `envelopes` by index. There is no layer-scoped
+//! envelope pool anymore.
+
 use crate::command::Command;
-use manifold_core::LayerId;
+use manifold_core::GraphTarget;
 use manifold_core::effects::ParamEnvelope;
 use manifold_core::project::Project;
 
-/// Add a layer envelope.
+/// Add an envelope to the instance addressed by `target`.
 #[derive(Debug)]
-pub struct AddLayerEnvelopeCommand {
-    layer_id: LayerId,
+pub struct AddEnvelopeCommand {
+    target: GraphTarget,
     envelope: ParamEnvelope,
 }
 
-impl AddLayerEnvelopeCommand {
-    pub fn new(layer_id: LayerId, envelope: ParamEnvelope) -> Self {
-        Self { layer_id, envelope }
+impl AddEnvelopeCommand {
+    pub fn new(target: GraphTarget, envelope: ParamEnvelope) -> Self {
+        Self { target, envelope }
     }
 }
 
-impl Command for AddLayerEnvelopeCommand {
+impl Command for AddEnvelopeCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            layer.envelopes_mut().push(self.envelope.clone());
-        }
+        let envelope = self.envelope.clone();
+        project.with_preset_graph_mut(&self.target, |inst| {
+            inst.envelopes_mut().push(envelope);
+        });
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            layer.envelopes_mut().pop();
-        }
+        project.with_preset_graph_mut(&self.target, |inst| {
+            if let Some(envs) = inst.envelopes.as_mut() {
+                envs.pop();
+            }
+        });
     }
 
     fn description(&self) -> &str {
-        "Add Layer Envelope"
+        "Add Envelope"
     }
 }
 
-/// Remove a layer envelope.
+/// Remove an envelope (by index) from the instance addressed by `target`.
 #[derive(Debug)]
-pub struct RemoveLayerEnvelopeCommand {
-    layer_id: LayerId,
+pub struct RemoveEnvelopeCommand {
+    target: GraphTarget,
     envelope: Option<ParamEnvelope>,
     removed_index: usize,
 }
 
-impl RemoveLayerEnvelopeCommand {
-    pub fn new(layer_id: LayerId, envelope: ParamEnvelope, removed_index: usize) -> Self {
+impl RemoveEnvelopeCommand {
+    pub fn new(target: GraphTarget, envelope: ParamEnvelope, removed_index: usize) -> Self {
         Self {
-            layer_id,
+            target,
             envelope: Some(envelope),
             removed_index,
         }
     }
 }
 
-impl Command for RemoveLayerEnvelopeCommand {
+impl Command for RemoveEnvelopeCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            let envs = layer.envelopes_mut();
-            if self.removed_index < envs.len() {
-                self.envelope = Some(envs.remove(self.removed_index));
-            }
+        let idx = self.removed_index;
+        let removed = project.with_preset_graph_mut(&self.target, |inst| {
+            inst.envelopes
+                .as_mut()
+                .filter(|envs| idx < envs.len())
+                .map(|envs| envs.remove(idx))
+        });
+        if let Some(Some(env)) = removed {
+            self.envelope = Some(env);
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(envelope) = &self.envelope
-            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
-        {
-            let envs = layer.envelopes_mut();
-            let idx = self.removed_index.min(envs.len());
-            envs.insert(idx, envelope.clone());
-        }
+        let Some(envelope) = self.envelope.clone() else {
+            return;
+        };
+        let idx = self.removed_index;
+        project.with_preset_graph_mut(&self.target, |inst| {
+            let envs = inst.envelopes_mut();
+            let at = idx.min(envs.len());
+            envs.insert(at, envelope);
+        });
     }
 
     fn description(&self) -> &str {
-        "Remove Layer Envelope"
+        "Remove Envelope"
     }
 }
 
-/// Change ADSR values on a layer envelope.
+/// Change ADSR values on an envelope (by index).
 #[derive(Debug)]
-pub struct ChangeLayerEnvelopeADSRCommand {
-    layer_id: LayerId,
+pub struct ChangeEnvelopeADSRCommand {
+    target: GraphTarget,
     env_index: usize,
     old_attack: f32,
     old_decay: f32,
@@ -92,10 +109,10 @@ pub struct ChangeLayerEnvelopeADSRCommand {
     new_release: f32,
 }
 
-impl ChangeLayerEnvelopeADSRCommand {
+impl ChangeEnvelopeADSRCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        layer_id: LayerId,
+        target: GraphTarget,
         env_index: usize,
         old_attack: f32,
         old_decay: f32,
@@ -107,7 +124,7 @@ impl ChangeLayerEnvelopeADSRCommand {
         new_release: f32,
     ) -> Self {
         Self {
-            layer_id,
+            target,
             env_index,
             old_attack,
             old_decay,
@@ -120,53 +137,52 @@ impl ChangeLayerEnvelopeADSRCommand {
         }
     }
 
-    fn apply(layer: &mut manifold_core::layer::Layer, idx: usize, a: f32, d: f32, s: f32, r: f32) {
-        let envs = layer.envelopes_mut();
-        if let Some(env) = envs.get_mut(idx) {
-            env.attack_beats = a;
-            env.decay_beats = d;
-            env.sustain_level = s;
-            env.release_beats = r;
-        }
+    fn apply(project: &mut Project, target: &GraphTarget, idx: usize, a: f32, d: f32, s: f32, r: f32) {
+        project.with_preset_graph_mut(target, |inst| {
+            if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(idx)) {
+                env.attack_beats = a;
+                env.decay_beats = d;
+                env.sustain_level = s;
+                env.release_beats = r;
+            }
+        });
     }
 }
 
-impl Command for ChangeLayerEnvelopeADSRCommand {
+impl Command for ChangeEnvelopeADSRCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply(
-                layer,
-                self.env_index,
-                self.new_attack,
-                self.new_decay,
-                self.new_sustain,
-                self.new_release,
-            );
-        }
+        Self::apply(
+            project,
+            &self.target,
+            self.env_index,
+            self.new_attack,
+            self.new_decay,
+            self.new_sustain,
+            self.new_release,
+        );
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply(
-                layer,
-                self.env_index,
-                self.old_attack,
-                self.old_decay,
-                self.old_sustain,
-                self.old_release,
-            );
-        }
+        Self::apply(
+            project,
+            &self.target,
+            self.env_index,
+            self.old_attack,
+            self.old_decay,
+            self.old_sustain,
+            self.old_release,
+        );
     }
 
     fn description(&self) -> &str {
-        "Change Layer Envelope ADSR"
+        "Change Envelope ADSR"
     }
 }
 
-/// Change layer envelope range_min/range_max values.
+/// Change an envelope's `range_min`/`range_max` (by index).
 #[derive(Debug)]
-pub struct ChangeLayerEnvelopeRangeCommand {
-    layer_id: LayerId,
+pub struct ChangeEnvelopeRangeCommand {
+    target: GraphTarget,
     env_index: usize,
     old_min: f32,
     old_max: f32,
@@ -174,9 +190,9 @@ pub struct ChangeLayerEnvelopeRangeCommand {
     new_max: f32,
 }
 
-impl ChangeLayerEnvelopeRangeCommand {
+impl ChangeEnvelopeRangeCommand {
     pub fn new(
-        layer_id: LayerId,
+        target: GraphTarget,
         env_index: usize,
         old_min: f32,
         old_max: f32,
@@ -184,7 +200,7 @@ impl ChangeLayerEnvelopeRangeCommand {
         new_max: f32,
     ) -> Self {
         Self {
-            layer_id,
+            target,
             env_index,
             old_min,
             old_max,
@@ -193,73 +209,68 @@ impl ChangeLayerEnvelopeRangeCommand {
         }
     }
 
-    fn apply(layer: &mut manifold_core::layer::Layer, idx: usize, rmin: f32, rmax: f32) {
-        let envs = layer.envelopes_mut();
-        if let Some(env) = envs.get_mut(idx) {
-            env.range_min = rmin;
-            env.range_max = rmax;
-        }
+    fn apply(project: &mut Project, target: &GraphTarget, idx: usize, rmin: f32, rmax: f32) {
+        project.with_preset_graph_mut(target, |inst| {
+            if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(idx)) {
+                env.range_min = rmin;
+                env.range_max = rmax;
+            }
+        });
     }
 }
 
-impl Command for ChangeLayerEnvelopeRangeCommand {
+impl Command for ChangeEnvelopeRangeCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply(layer, self.env_index, self.new_min, self.new_max);
-        }
+        Self::apply(project, &self.target, self.env_index, self.new_min, self.new_max);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply(layer, self.env_index, self.old_min, self.old_max);
-        }
+        Self::apply(project, &self.target, self.env_index, self.old_min, self.old_max);
     }
 
     fn description(&self) -> &str {
-        "Change Layer Envelope Range"
+        "Change Envelope Range"
     }
 }
 
-/// Change layer envelope target_normalized value.
+/// Change an envelope's `target_normalized` (by index).
 #[derive(Debug)]
-pub struct ChangeLayerEnvelopeTargetCommand {
-    layer_id: LayerId,
+pub struct ChangeEnvelopeTargetCommand {
+    target: GraphTarget,
     env_index: usize,
     old_target: f32,
     new_target: f32,
 }
 
-impl ChangeLayerEnvelopeTargetCommand {
-    pub fn new(layer_id: LayerId, env_index: usize, old_target: f32, new_target: f32) -> Self {
+impl ChangeEnvelopeTargetCommand {
+    pub fn new(target: GraphTarget, env_index: usize, old_target: f32, new_target: f32) -> Self {
         Self {
-            layer_id,
+            target,
             env_index,
             old_target,
             new_target,
         }
     }
+
+    fn apply(project: &mut Project, target: &GraphTarget, idx: usize, value: f32) {
+        project.with_preset_graph_mut(target, |inst| {
+            if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(idx)) {
+                env.target_normalized = value;
+            }
+        });
+    }
 }
 
-impl Command for ChangeLayerEnvelopeTargetCommand {
+impl Command for ChangeEnvelopeTargetCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            let envs = layer.envelopes_mut();
-            if let Some(env) = envs.get_mut(self.env_index) {
-                env.target_normalized = self.new_target;
-            }
-        }
+        Self::apply(project, &self.target, self.env_index, self.new_target);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            let envs = layer.envelopes_mut();
-            if let Some(env) = envs.get_mut(self.env_index) {
-                env.target_normalized = self.old_target;
-            }
-        }
+        Self::apply(project, &self.target, self.env_index, self.old_target);
     }
 
     fn description(&self) -> &str {
-        "Change Layer Envelope Target"
+        "Change Envelope Target"
     }
 }

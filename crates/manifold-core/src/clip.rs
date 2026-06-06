@@ -1,4 +1,4 @@
-use crate::effects::{EffectGroup, PresetInstance, ParamEnvelope};
+use crate::effects::{EffectGroup, PresetInstance};
 use crate::id::ClipId;
 use crate::units::{Beats, Seconds};
 use serde::{Deserialize, Serialize};
@@ -70,8 +70,10 @@ pub struct TimelineClip {
     pub effects: Vec<PresetInstance>,
     #[serde(default, skip_serializing)]
     pub effect_groups: Option<Vec<EffectGroup>>,
-    #[serde(default, skip_serializing)]
-    pub envelopes: Option<Vec<ParamEnvelope>>,
+    // Clip-level effect envelopes (legacy, never evaluated or written back)
+    // moved onto each clip effect's `PresetInstance.envelopes` in the
+    // v1.5→v1.6 migration — see envelope-home unification. No standalone
+    // clip envelope field remains.
 
     // ── Legacy flat generator params (V1.0.0 clips) ──
     #[serde(
@@ -245,7 +247,6 @@ impl Default for TimelineClip {
             has_start_absolute_tick: false,
             effects: Vec::new(),
             effect_groups: None,
-            envelopes: None,
             legacy_gen_rot_speed_xy: None,
             legacy_gen_rot_speed_zw: None,
             legacy_gen_rot_speed_xw: None,
