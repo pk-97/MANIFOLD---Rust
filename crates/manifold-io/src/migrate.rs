@@ -57,12 +57,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
 ///      graph — the renderer's load pass lifts the canonical topology
 ///      under it, since the JSON layer can't build a preset's nodes);
 ///   2. appends each legacy binding as a `BindingDef { userAdded: true }`
-///      plus its `ParamSpecDef` (routing + declared range/convert);
-///   3. moves the binding's per-instance reshape (min/max/invert/curve/
-///      scale/offset) into a `paramMappings` note keyed by the same id,
-///      but only when it's non-identity (so a plain expose stays
-///      byte-identical to the recipe);
-///   4. deletes the `userParamBindings` field.
+///      (routing + the card→consumer affine `scale`/`offset`) plus its
+///      `ParamSpecDef` carrying the reshape (declared range + invert/curve) —
+///      the single reshape home after the per-instance `paramMappings` note
+///      was deleted. Identity invert/curve are skipped so a plain expose
+///      stays byte-identical to a freshly authored spec;
+///   3. deletes the `userParamBindings` field.
 ///
 /// Idempotent: the field is gone after migration, so a re-load finds
 /// nothing to fold (and a freshly-saved v1.4 project already carries the
@@ -149,7 +149,6 @@ fn fold_user_param_bindings(fx: &mut Value) {
     }
     let mut new_params: Vec<Value> = Vec::new();
     let mut new_bindings: Vec<Value> = Vec::new();
-    let mut new_notes: Vec<Value> = Vec::new();
 
     for ub in &user_bindings {
         let Value::Object(b) = ub else { continue };
@@ -183,13 +182,28 @@ fn fold_user_param_bindings(fx: &mut Value) {
             .to_string();
         let legacy_handle = b.get("nodeHandle").and_then(|v| v.as_str()).map(String::from);
 
-        // Param spec (declared range / convert flags live here).
+        // Param spec — the single reshape home: declared range plus the
+        // slider response (invert / curve). scale/offset ride the binding
+        // below. There is no per-instance note anymore, so the curve/invert
+        // that used to fold into the deleted `paramMappings` note land here.
+        let curve_is_linear = curve
+            .as_ref()
+            .map(|c| c.as_str() == Some("Linear") || c.is_null())
+            .unwrap_or(true);
         let mut spec = serde_json::Map::new();
         spec.insert("id".into(), Value::from(id.clone()));
         spec.insert("name".into(), Value::from(label.clone()));
         spec.insert("min".into(), Value::from(min));
         spec.insert("max".into(), Value::from(max));
         spec.insert("defaultValue".into(), Value::from(default_value));
+        // Skip identity invert/curve so an un-reshaped binding stays
+        // byte-identical to a freshly authored ParamSpecDef.
+        if invert {
+            spec.insert("invert".into(), Value::Bool(true));
+        }
+        if !curve_is_linear && let Some(c) = curve.clone() {
+            spec.insert("curve".into(), c);
+        }
         new_params.push(Value::Object(spec));
 
         // Binding (routing only). `target` is `Node { nodeId, param }`
@@ -221,32 +235,6 @@ fn fold_user_param_bindings(fx: &mut Value) {
             binding.insert("offset".into(), Value::from(offset));
         }
         new_bindings.push(Value::Object(binding));
-
-        // Reshape note — only when the binding carried a non-identity
-        // reshape (range, invert, or non-linear curve). scale/offset also
-        // ride the note so the reshape pipeline matches the recipe path.
-        let curve_is_linear = curve
-            .as_ref()
-            .map(|c| c.as_str() == Some("Linear") || c.is_null())
-            .unwrap_or(true);
-        let has_reshape = min != 0.0 || max != 1.0 || invert || !curve_is_linear;
-        if has_reshape {
-            let mut note = serde_json::Map::new();
-            note.insert("paramId".into(), Value::from(id.clone()));
-            note.insert("min".into(), Value::from(min));
-            note.insert("max".into(), Value::from(max));
-            note.insert("invert".into(), Value::Bool(invert));
-            if let Some(c) = curve {
-                note.insert("curve".into(), c);
-            }
-            if scale != 1.0 {
-                note.insert("scale".into(), Value::from(scale));
-            }
-            if offset != 0.0 {
-                note.insert("offset".into(), Value::from(offset));
-            }
-            new_notes.push(Value::Object(note));
-        }
     }
 
     if let Some(arr) = meta_obj.get_mut("params").and_then(|v| v.as_array_mut()) {
@@ -259,17 +247,6 @@ fn fold_user_param_bindings(fx: &mut Value) {
         arr.extend(new_bindings);
     } else {
         *bindings = Value::Array(new_bindings);
-    }
-
-    if !new_notes.is_empty() {
-        let notes = map
-            .entry("paramMappings")
-            .or_insert_with(|| Value::Array(Vec::new()));
-        if let Some(arr) = notes.as_array_mut() {
-            arr.extend(new_notes);
-        } else {
-            *notes = Value::Array(new_notes);
-        }
     }
 }
 
@@ -566,20 +543,24 @@ mod tests {
         assert_eq!(b["scale"].as_f64(), Some(2.0));
         assert_eq!(b["offset"].as_f64(), Some(5.0));
 
-        // Spec carries the declared range.
+        // Spec is the single reshape home: declared range + invert/curve.
         let params = fx["graph"]["presetMetadata"]["params"]
             .as_array()
             .expect("params array present");
         assert_eq!(params.len(), 1);
         assert_eq!(params[0]["id"].as_str(), Some("user.uv.rotation.1"));
         assert_eq!(params[0]["max"].as_f64(), Some(360.0));
+        assert_eq!(
+            params[0]["invert"].as_bool(),
+            Some(true),
+            "invert reshape lands on the param spec, not a note",
+        );
 
-        // Reshape moved to a paramMappings note keyed by the same id.
-        let notes = fx["paramMappings"].as_array().expect("paramMappings present");
-        assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0]["paramId"].as_str(), Some("user.uv.rotation.1"));
-        assert_eq!(notes[0]["max"].as_f64(), Some(360.0));
-        assert_eq!(notes[0]["invert"].as_bool(), Some(true));
+        // No per-instance note is emitted anymore.
+        assert!(
+            fx.get("paramMappings").is_none(),
+            "the paramMappings note was deleted — reshape lives on the spec",
+        );
 
         // Idempotent: re-running finds nothing to fold (field gone).
         let again = migrate_if_needed(&migrated).unwrap();
@@ -629,10 +610,16 @@ mod tests {
         assert_eq!(b["id"].as_str(), Some("user.blur.radius.1"));
         assert_eq!(b["target"]["kind"].as_str(), Some("handleNode"));
         assert_eq!(b["target"]["handle"].as_str(), Some("blur"));
-        // Identity reshape (0..1, no invert) → no note emitted.
+        // Identity reshape (0..1, no invert) → spec carries no invert/curve
+        // keys and no note is ever emitted.
         assert!(
             v["settings"]["masterEffects"][0].get("paramMappings").is_none(),
-            "identity reshape emits no note"
+            "the paramMappings note was deleted",
+        );
+        let spec = &v["settings"]["masterEffects"][0]["graph"]["presetMetadata"]["params"][0];
+        assert!(
+            spec.get("invert").is_none() && spec.get("curve").is_none(),
+            "identity reshape skips invert/curve on the spec",
         );
     }
 }

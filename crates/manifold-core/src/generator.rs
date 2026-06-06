@@ -10,7 +10,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::effects::{ParamMapping, ParamSlot, PresetInstance, deserialize_generator_instance};
+    use crate::effects::{ParamSlot, PresetInstance, deserialize_generator_instance};
     use crate::generator_registration::{GeneratorMetadata, ParamSpec};
     use crate::preset_type_id::PresetTypeId;
 
@@ -119,42 +119,6 @@ mod tests {
         assert_eq!(state.param_values.len(), 3, "param_values auto-extended");
         assert_eq!(state.param_values[2].value, 0.42, "tail write landed");
         assert_eq!(state.base_param_values.as_ref().unwrap()[2], 0.42);
-    }
-
-    #[test]
-    fn gen_param_mappings_empty_emits_no_field_and_note_round_trips() {
-        let mut gp = PresetInstance::new_generator(PresetTypeId::BLACK_HOLE);
-        let json = serde_json::to_string(&gp).unwrap();
-        assert!(
-            !json.contains("paramMappings"),
-            "empty param_mappings must not emit a field; got: {json}"
-        );
-
-        let v0 = gp.param_mappings_version;
-        gp.upsert_param_mapping(ParamMapping {
-            param_id: "speed".to_string(),
-            label: Some("Velocity".to_string()),
-            min: 0.0,
-            max: 5.0,
-            invert: true,
-            curve: crate::macro_bank::MacroCurve::SCurve,
-            scale: 2.0,
-            offset: 0.1,
-        });
-        assert_eq!(gp.param_mappings_version, v0 + 1);
-        let json = serde_json::to_string(&gp).unwrap();
-        assert!(json.contains("paramMappings"));
-
-        let mut de = serde_json::Deserializer::from_str(&json);
-        let back = deserialize_generator_instance(&mut de).expect("generator round-trip");
-        let note = back.param_mapping("speed").expect("note survives round-trip");
-        assert_eq!(note.label.as_deref(), Some("Velocity"));
-        assert!(note.invert);
-        assert_eq!(note.scale, 2.0);
-        assert_eq!(back.param_mappings_version, 0);
-
-        gp.remove_param_mapping("speed");
-        assert!(gp.param_mapping("speed").is_none());
     }
 
     #[test]

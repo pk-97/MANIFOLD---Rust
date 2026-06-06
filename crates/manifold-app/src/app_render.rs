@@ -16,19 +16,23 @@ use manifold_editing::commands::effects::BindingMappingEdit;
 
 /// Build the reshape-edit command for the watched graph target — one
 /// [`manifold_editing::commands::effects::EditParamMappingCommand`] for
-/// both effects and generators. It picks the user-binding store vs the
-/// reshape-note store internally, by stable id, so the effect/generator
-/// fork that used to live here is gone.
+/// both effects and generators. The reshape lives in the preset's
+/// authoring surface (`ParamSpecDef` + `BindingDef`); the command edits the
+/// instance's per-instance graph override, materializing it from `seed_def`
+/// (the catalog graph, resolved renderer-side) when the instance is still on
+/// the catalog default. Addresses the param by stable id.
 fn build_mapping_command(
     target: &manifold_core::GraphTarget,
     param_id: &str,
     edit: manifold_editing::commands::effects::BindingMappingEdit,
+    seed_def: Option<manifold_core::effect_graph_def::EffectGraphDef>,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
     Box::new(
         manifold_editing::commands::effects::EditParamMappingCommand::new(
             target.clone(),
             param_id.to_string(),
             edit,
+            seed_def,
         ),
     )
 }
@@ -42,6 +46,7 @@ fn build_mapping_command_with_reverse(
     param_id: &str,
     new: manifold_editing::commands::effects::BindingMappingEdit,
     reverse: manifold_editing::commands::effects::BindingMappingEdit,
+    seed_def: Option<manifold_core::effect_graph_def::EffectGraphDef>,
 ) -> Box<dyn manifold_editing::command::Command + Send> {
     Box::new(
         manifold_editing::commands::effects::EditParamMappingCommand::new_with_reverse(
@@ -49,8 +54,45 @@ fn build_mapping_command_with_reverse(
             param_id.to_string(),
             new,
             reverse,
+            seed_def,
         ),
     )
+}
+
+/// The current reshape for `param_id` read out of a preset graph def:
+/// `(label, min, max, invert, curve, scale, offset)`. Range/curve/invert/label
+/// live on the param's [`ParamSpecDef`]; scale/offset on its [`BindingDef`]
+/// (identity `1.0`/`0.0` when the param has no binding). `None` when the def
+/// carries no metadata or the param id isn't found.
+fn full_reshape_from_def(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    param_id: &str,
+) -> Option<(
+    String,
+    f32,
+    f32,
+    bool,
+    manifold_core::macro_bank::MacroCurve,
+    f32,
+    f32,
+)> {
+    let meta = def.preset_metadata.as_ref()?;
+    let spec = meta.params.iter().find(|p| p.id == param_id)?;
+    let (scale, offset) = meta
+        .bindings
+        .iter()
+        .find(|b| b.id == param_id)
+        .map(|b| (b.scale, b.offset))
+        .unwrap_or((1.0, 0.0));
+    Some((
+        spec.name.clone(),
+        spec.min,
+        spec.max,
+        spec.invert,
+        spec.curve,
+        scale,
+        offset,
+    ))
 }
 
 impl Application {
@@ -62,43 +104,97 @@ impl Application {
     }
 
     /// Read the watched param's CURRENT reshape `(min, max, scale, offset)`
-    /// for the drawer seed + drag change-detection. Resolves the same three
-    /// sources the runtime does — user-binding inline, reshape note, or a
-    /// fresh identity seed from the registry ParamDef — for whichever kind
-    /// the editor watches. `None` if the param doesn't resolve.
+    /// for the drawer seed + drag change-detection. Reads the preset's
+    /// authoring surface (`ParamSpecDef` range + `BindingDef` scale/offset)
+    /// from whichever graph def is live: the instance's per-instance override
+    /// if it has diverged, else the catalog graph (effect) / bundled def
+    /// (generator). `None` if the param doesn't resolve. This is the single
+    /// reshape source after `ParamMapping` was deleted.
     fn watched_reshape(&self, param_id: &str) -> Option<(f32, f32, f32, f32)> {
+        let (_, min, max, _, _, scale, offset) = self.watched_full_reshape(param_id)?;
+        Some((min, max, scale, offset))
+    }
+
+    /// The watched param's full reshape `(label, min, max, invert, curve,
+    /// scale, offset)` — the drawer's complete seed. Reads the instance's
+    /// per-instance graph override first, then falls back to the catalog
+    /// (effect) / bundled (generator) graph def.
+    fn watched_full_reshape(
+        &self,
+        param_id: &str,
+    ) -> Option<(
+        String,
+        f32,
+        f32,
+        bool,
+        manifold_core::macro_bank::MacroCurve,
+        f32,
+        f32,
+    )> {
         match self.watched_graph_target.as_ref()? {
             manifold_core::GraphTarget::Effect(eid) => {
                 let fx = self.local_project.find_effect_by_id(eid)?;
-                // Reshape note wins (it carries the live edit); else the
-                // user binding's synthesized range (folds the note already,
-                // so this is the declared-range fallback for an un-noted
-                // user binding).
-                if let Some(n) = fx.param_mapping(param_id) {
-                    return Some((n.min, n.max, n.scale, n.offset));
+                if let Some(def) = fx.graph.as_ref()
+                    && let Some(r) = full_reshape_from_def(def, param_id)
+                {
+                    return Some(r);
                 }
-                if let Some(b) = fx.user_param_bindings().iter().find(|b| b.id == param_id) {
-                    return Some((b.min, b.max, b.scale, b.offset));
-                }
-                let def = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())?;
-                let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
-                Some((pd.min, pd.max, 1.0, 0.0))
+                let view =
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
+                full_reshape_from_def(view.canonical_def, param_id)
             }
             manifold_core::GraphTarget::Generator(lid) => {
-                let gp = self
+                let layer = self
                     .local_project
                     .timeline
                     .layers
                     .iter()
-                    .find(|l| &l.layer_id == lid)?
-                    .gen_params()?;
-                if let Some(n) = gp.param_mapping(param_id) {
-                    return Some((n.min, n.max, n.scale, n.offset));
+                    .find(|l| &l.layer_id == lid)?;
+                if let Some(def) = layer.generator_graph.as_ref()
+                    && let Some(r) = full_reshape_from_def(def, param_id)
+                {
+                    return Some(r);
                 }
+                let gp = layer.gen_params()?;
                 let def =
-                    manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())?;
-                let pd = &def.param_defs[*def.id_to_index.get(param_id)?];
-                Some((pd.min, pd.max, 1.0, 0.0))
+                    manifold_renderer::node_graph::bundled_preset_def(gp.generator_type())?;
+                full_reshape_from_def(def, param_id)
+            }
+        }
+    }
+
+    /// The catalog graph def to seed the instance's per-instance graph
+    /// override when a reshape edit hits an instance still on the catalog
+    /// default. Effects start on the catalog default (`graph: None`), so they
+    /// need the seed; a generator layer always carries its authoring
+    /// `generator_graph`, so the seed is only a safety net. `None` when the
+    /// instance has already diverged (no seed needed) or can't be resolved.
+    fn seed_def_for(
+        &self,
+        target: &manifold_core::GraphTarget,
+    ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+        match target {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                if fx.graph.is_some() {
+                    return None;
+                }
+                let view =
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
+                Some(view.canonical_def.clone())
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let layer = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?;
+                if layer.generator_graph.is_some() {
+                    return None;
+                }
+                let gp = layer.gen_params()?;
+                manifold_renderer::node_graph::bundled_preset_def(gp.generator_type()).cloned()
             }
         }
     }
@@ -143,11 +239,13 @@ impl Application {
         param_id: &str,
         edit: BindingMappingEdit,
     ) {
-        build_mapping_command(target, param_id, edit.clone()).execute(&mut self.local_project);
+        let seed_def = self.seed_def_for(target);
+        build_mapping_command(target, param_id, edit.clone(), seed_def.clone())
+            .execute(&mut self.local_project);
         let target = target.clone();
         let pid = param_id.to_string();
         self.send_content_cmd(ContentCommand::MutateProject(Box::new(move |p| {
-            build_mapping_command(&target, &pid, edit).execute(p);
+            build_mapping_command(&target, &pid, edit, seed_def).execute(p);
         })));
     }
 
@@ -160,8 +258,9 @@ impl Application {
         param_id: &str,
         edit: BindingMappingEdit,
     ) {
+        let seed_def = self.seed_def_for(target);
         self.send_content_cmd(ContentCommand::Execute(build_mapping_command(
-            target, param_id, edit,
+            target, param_id, edit, seed_def,
         )));
     }
 
@@ -175,8 +274,9 @@ impl Application {
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
     ) {
+        let seed_def = self.seed_def_for(target);
         self.send_content_cmd(ContentCommand::Execute(build_mapping_command_with_reverse(
-            target, param_id, new, reverse,
+            target, param_id, new, reverse, seed_def,
         )));
     }
 
@@ -594,10 +694,11 @@ impl Application {
         }
 
         // Editor-card chevron requested the sideways mapping drawer: resolve the
-        // binding's current mapping from the edited effect OR generator, anchor
-        // on the row's chevron, and open the popover. Effects resolve a user
-        // binding or stock note; generators resolve a per-instance ParamMapping
-        // note (or recipe identity). A `None` (e.g. a stale id) just no-ops.
+        // binding's current reshape from the edited effect OR generator, anchor
+        // on the row's chevron, and open the popover. The reshape is read from
+        // the instance's per-instance graph override if it has diverged, else
+        // the catalog (effect) / bundled (generator) def. A `None` (e.g. a stale
+        // id) just no-ops.
         if let Some(pid) = pending_open_card_mapping {
             self.open_editor_card_mapping(&pid);
         }
@@ -2154,72 +2255,70 @@ impl Application {
                         b.offset, range,
                     )
                 } else {
-                    let Some((pd_name, pd_min, pd_max)) =
+                    // Stock / recalibrated param: read the current reshape from
+                    // the instance's per-instance graph override if it has
+                    // diverged, else the catalog graph. The trim track spans the
+                    // preset's authored (pre-fork) range from the registry.
+                    let registry_range =
                         manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())
                             .and_then(|def| {
-                                def.id_to_index.get(param_id).map(|&i| {
-                                    let pd = &def.param_defs[i];
-                                    (pd.name.clone(), pd.min, pd.max)
-                                })
-                            })
-                    else {
+                                def.id_to_index
+                                    .get(param_id)
+                                    .map(|&i| (def.param_defs[i].min, def.param_defs[i].max))
+                            });
+                    let from_def = fx
+                        .graph
+                        .as_ref()
+                        .and_then(|d| full_reshape_from_def(d, param_id))
+                        .or_else(|| {
+                            manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
+                                .and_then(|v| full_reshape_from_def(v.canonical_def, param_id))
+                        });
+                    let Some((name, min, max, invert, curve, scale, offset)) = from_def else {
                         // Not a known stock param (and not a user binding).
                         return;
                     };
-                    match fx.param_mapping(param_id) {
-                        Some(note) => (
-                            param_id.to_string(),
-                            note.label.clone().unwrap_or(pd_name),
-                            note.min, note.max, note.invert, note.curve, note.scale, note.offset,
-                            Some((pd_min, pd_max)),
-                        ),
-                        None => (
-                            param_id.to_string(),
-                            pd_name,
-                            pd_min, pd_max, false, manifold_core::macro_bank::MacroCurve::Linear,
-                            1.0, 0.0,
-                            Some((pd_min, pd_max)),
-                        ),
-                    }
+                    (
+                        param_id.to_string(), name, min, max, invert, curve, scale, offset,
+                        registry_range,
+                    )
                 }
             }
             Some(manifold_core::GraphTarget::Generator(lid)) => {
-                let Some(gp) = self
+                let Some(layer) = self
                     .local_project
                     .timeline
                     .layers
                     .iter()
                     .find(|l| l.layer_id == lid)
-                    .and_then(|l| l.gen_params())
                 else {
                     return;
                 };
-                let Some((pd_name, pd_min, pd_max)) =
+                let Some(gp) = layer.gen_params() else {
+                    return;
+                };
+                let registry_range =
                     manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())
                         .and_then(|def| {
-                            def.id_to_index.get(param_id).map(|&i| {
-                                let pd = &def.param_defs[i];
-                                (pd.name.clone(), pd.min, pd.max)
-                            })
-                        })
-                else {
+                            def.id_to_index
+                                .get(param_id)
+                                .map(|&i| (def.param_defs[i].min, def.param_defs[i].max))
+                        });
+                let from_def = layer
+                    .generator_graph
+                    .as_ref()
+                    .and_then(|d| full_reshape_from_def(d, param_id))
+                    .or_else(|| {
+                        manifold_renderer::node_graph::bundled_preset_def(gp.generator_type())
+                            .and_then(|d| full_reshape_from_def(d, param_id))
+                    });
+                let Some((name, min, max, invert, curve, scale, offset)) = from_def else {
                     return;
                 };
-                match gp.param_mapping(param_id) {
-                    Some(note) => (
-                        param_id.to_string(),
-                        note.label.clone().unwrap_or(pd_name),
-                        note.min, note.max, note.invert, note.curve, note.scale, note.offset,
-                        Some((pd_min, pd_max)),
-                    ),
-                    None => (
-                        param_id.to_string(),
-                        pd_name,
-                        pd_min, pd_max, false, manifold_core::macro_bank::MacroCurve::Linear, 1.0,
-                        0.0,
-                        Some((pd_min, pd_max)),
-                    ),
-                }
+                (
+                    param_id.to_string(), name, min, max, invert, curve, scale, offset,
+                    registry_range,
+                )
             }
             None => return,
         };
@@ -2255,7 +2354,8 @@ impl Application {
             .unwrap_or_else(|| crate::graph_canvas::Rect::new(0.0, 0.0, 1280.0, 800.0));
 
         self.editor_mapping_popover.open(
-            binding_id, label, min, max, invert, curve, scale, offset, range, anchor, clip,
+            binding_id.to_string(), label, min, max, invert, curve, scale, offset, range, anchor,
+            clip,
         );
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.offscreen_dirty = true;

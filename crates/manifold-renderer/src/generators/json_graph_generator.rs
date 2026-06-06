@@ -234,17 +234,6 @@ pub struct JsonGraphGenerator {
     ///   - Wiped by [`Self::reset_state`] (export warmup re-seek).
     ///   - Dropped entirely on generator rebuild (`Self::from_def`).
     state_store: StateStore,
-    /// The recipe binding specs (`BindingDef`s) retained so a per-instance
-    /// reshape note can rebuild a binding's reshape in place — and revert
-    /// it to the recipe's scale/offset when the note is removed — without
-    /// re-running the full `from_def` resolve. The generator mirror of
-    /// `EffectSlot.static_specs`. Matched to `bindings` by `id`.
-    binding_specs: Vec<manifold_core::effect_graph_def::BindingDef>,
-    /// Last `PresetInstance.param_mappings_version` applied via
-    /// [`Generator::apply_param_notes`]. Starts at `u32::MAX` so the first
-    /// frame always applies (loaded notes take effect immediately, since
-    /// the version isn't serialized and resets to 0).
-    last_note_version: u32,
     /// Group container `NodeId` → concrete inner producer `NodeId`, for the
     /// node-output preview. A group is a UI container that flattens away, so
     /// its own id is never a runtime step; selecting a collapsed group in the
@@ -569,8 +558,6 @@ impl JsonGraphGenerator {
             param_slot_scratch: Vec::new(),
             string_bindings,
             state_store: StateStore::new(),
-            binding_specs,
-            last_note_version: u32::MAX,
             group_preview_map,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
             preview_kinds,
@@ -1065,36 +1052,6 @@ impl Generator for JsonGraphGenerator {
         self.apply_string_params(params);
     }
 
-    fn apply_param_notes(
-        &mut self,
-        notes: &[manifold_core::effects::ParamMapping],
-        version: u32,
-    ) {
-        // Cheap fast-path: a note-free generator's version never advances
-        // past its initial seen value, so this is one integer compare/frame.
-        if version == self.last_note_version {
-            return;
-        }
-        // Recipe scale/offset per binding id, captured before the mutable
-        // binding walk (disjoint field borrow of `binding_specs`).
-        let recipe: ahash::AHashMap<&str, (f32, f32)> = self
-            .binding_specs
-            .iter()
-            .map(|s| (s.id.as_str(), (s.scale, s.offset)))
-            .collect();
-        for binding in self.bound.bindings.iter_mut() {
-            let id = binding.id.as_ref();
-            let note = notes.iter().find(|n| n.param_id == id);
-            let (recipe_scale, recipe_offset) = recipe.get(id).copied().unwrap_or((1.0, 0.0));
-            binding.set_reshape_from_note(note, recipe_scale, recipe_offset);
-        }
-        // Force the rebuilt reshapes to re-apply on the next `apply_param_values`
-        // even though the raw param values didn't move (the cache keys on the
-        // raw value). Mirrors the effect chain's note-edit cache clear.
-        self.bound.cache.clear();
-        self.last_note_version = version;
-    }
-
     fn reset_state(&mut self, _device: &GpuDevice) {
         // Two parallel state stores need clearing:
         // 1. Per-primitive `extra_fields` state — ArrayFeedback's prev
@@ -1388,15 +1345,14 @@ mod tests {
         );
     }
 
-    /// Generator mirror of the effect proof: a per-instance reshape NOTE
-    /// on a stock generator param (`complexity` → plasma.complexity)
-    /// reshapes what the inner node sees, while the host's value slice is
-    /// untouched (it is borrowed read-only — the invariant is structural
-    /// on the generator side). Version-gated: the note only takes effect
-    /// once `apply_param_notes` is called with a fresh version.
+    /// Generator mirror of the effect proof: a per-instance reshape (now a
+    /// `scale` on the card binding's [`BindingDef`] in the preset graph,
+    /// after the `ParamMapping` note was deleted) on a stock generator param
+    /// (`complexity` → plasma.complexity) reshapes what the inner node sees,
+    /// while the host's value slice is untouched (it is borrowed read-only —
+    /// the invariant is structural on the generator side).
     #[test]
-    fn stock_generator_note_reshapes_inner_node() {
-        use manifold_core::effects::ParamMapping;
+    fn stock_generator_reshape_changes_inner_node() {
         let json = include_str!("../../assets/generator-presets/Plasma.json");
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -1410,7 +1366,7 @@ mod tests {
         // params order: pattern, complexity, contrast, speed, scale, clip_trigger
         let values = [3.0_f32, 0.75, 0.42, 2.5, 1.5, 1.0];
 
-        // Control: no note → complexity passes straight through (0.75).
+        // Control: identity binding → complexity passes straight through (0.75).
         let mut g0 = JsonGraphGenerator::from_json_str(json, &registry).expect("load");
         g0.apply_param_values(&values);
         let id0 = plasma_id(&g0);
@@ -1419,22 +1375,22 @@ mod tests {
             Some(ParamValue::Float(v)) if (*v - 0.75).abs() < 1e-5
         ));
 
-        // With a ×2 note on `complexity`: inner sees 1.5; the input slice
-        // is unchanged (read-only borrow).
-        let mut g = JsonGraphGenerator::from_json_str(json, &registry).expect("load");
-        g.apply_param_notes(
-            &[ParamMapping {
-                param_id: "complexity".to_string(),
-                label: None,
-                min: 0.0,
-                max: 1.0,
-                invert: false,
-                curve: Default::default(),
-                scale: 2.0,
-                offset: 0.0,
-            }],
-            1, // any version != the u32::MAX initial triggers the rebuild
-        );
+        // With a ×2 reshape on the `complexity` binding: inner sees 1.5; the
+        // input slice is unchanged (read-only borrow). The reshape now lives
+        // on the preset graph's BindingDef, the post-note home.
+        let mut def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_str(json).expect("parse Plasma def");
+        let meta = def
+            .preset_metadata
+            .as_mut()
+            .expect("Plasma carries presetMetadata");
+        meta.bindings
+            .iter_mut()
+            .find(|b| b.id == "complexity")
+            .expect("complexity binding exists")
+            .scale = 2.0;
+        let reshaped_json = serde_json::to_string(&def).expect("serialize reshaped def");
+        let mut g = JsonGraphGenerator::from_json_str(&reshaped_json, &registry).expect("load");
         g.apply_param_values(&values);
         let id = plasma_id(&g);
         assert!(
@@ -1442,7 +1398,7 @@ mod tests {
                 g.graph.get_node(id).unwrap().params.get("complexity"),
                 Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
             ),
-            "a ×2 note must scale plasma.complexity 0.75 -> 1.5, got {:?}",
+            "a ×2 reshape must scale plasma.complexity 0.75 -> 1.5, got {:?}",
             g.graph.get_node(id).unwrap().params.get("complexity"),
         );
         assert_eq!(values[1], 0.75, "the host value slice is never mutated");

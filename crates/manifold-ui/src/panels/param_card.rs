@@ -1383,8 +1383,8 @@ impl ParamCardPanel {
             // Author mode reserves the same right-edge mapping-drawer chevron
             // lane the effect card does, so generator slider rows shrink to
             // match and the chevron sits past the D/E buttons. Generators are
-            // remappable too (per-instance ParamMapping note), so this unifies
-            // the surface — same chevron, same drawer.
+            // remappable too (reshape on the per-instance graph), so this
+            // unifies the surface — same chevron, same drawer.
             let author = self.context == CardContext::Author;
             let chevron_lane = if author {
                 MAP_CHEVRON_W + DE_BUTTON_GAP

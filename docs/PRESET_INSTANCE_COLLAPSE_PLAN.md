@@ -1,7 +1,11 @@
 # Preset Instance Collapse Plan — finish the effect/generator unification
 
 **Status:** IN PROGRESS (attempt #8). Phases 0–3 landed (each on its own branch,
-all gates green); Phase 4 (preset namespace + fork ergonomics) is next. The previous seven attempts stalled for one
+all gates green); Phase 4 **core** + Phase 5 (`ParamMapping` deletion / single
+reshape resolver / fork-route edits / content-thread overlay refresh) landed on
+branch `pointwise-fusion` — see the Phase 5 section for the green-gate summary.
+Remaining: Phase 4 UI (deferred, tracked below), Phase 6 (one `PresetRuntime` +
+graph-home unification), Phase 7 (command/UI collapse + final sweep). The previous seven attempts stalled for one
 reason: each finished the *definition* side and deferred the *instance* and
 *runtime* side. This plan does that deferred half, on a cleaner model than the
 prior attempts assumed (see "The model" below). When it is done,
@@ -405,7 +409,31 @@ Gate: full `cargo test --workspace`; duplicate-into-project + export + re-import
 round-trips and renders; project-embedded presets survive project save/load
 (carries a migration slice if it changes the ZIP layout).
 
-### Phase 5 — One resolver; delete `ParamMapping`; thin the instance; fork-route edits (core + playback + renderer + ui)
+### Phase 5 — One resolver; delete `ParamMapping`; thin the instance; fork-route edits (core + playback + renderer + ui) — ✅ LANDED
+
+**Status (2026-06-06):** `ParamMapping` is deleted — struct, fields
+(`param_mappings`, `param_mappings_version`), serde, the GraphHost note methods,
+and the editing `upsert/remove` are all gone from the tree. The reshape now has a
+single home: each card param's `ParamSpecDef` (range/curve/invert/label) plus its
+`BindingDef` (scale/offset), read by the one `ResolvedBinding::from_static`
+(effect) / generator binding-build path and surfaced to the drawer by
+`watched_full_reshape`. The mapping-drawer edit (`EditParamMappingCommand`) now
+edits the instance's per-instance graph override, materializing it from the
+catalog `seed_def` (renderer-resolved) when the instance is still on the catalog
+default — so a stock recalibration becomes a per-instance override exactly like a
+topology edit, and a fork rewrites the registry def the same way. The generator
+clamp (the hidden-max bug) is removed; value is bounded by the slider range and
+modulation resolves against the preset range. The io v1.3→v1.4 migration folds
+legacy reshapes into the param spec (no note). Content-thread overlay refresh
+(`refresh_preset_overlay_if_changed`, fingerprint-guarded) re-derives the catalog
+on fork/edit. Gates green: core (222), editing (37), io golden + migrate (19),
+renderer `effect_chain_graph` + `json_graph_generator` modules, `bundled_presets`
+7/8 (WireframeDepthGraph DNN-blit the documented pre-existing fail), clippy
+`-D warnings` clean. **Deferred to its own phases:** the per-instance inline graph
+override (`PresetInstance.graph` / `Layer.generator_graph`) is intentionally
+*kept* as the recalibration home — collapsing it into a project-embedded preset
+fold is Phase 6's graph-home unification, not this phase; the GraphHost trait
+likewise survives until then.
 
 The cutover that makes the preset the single source. One `resolve_param` over
 `&PresetInstance` reads range/label/curve/invert from the preset (Phase 2's

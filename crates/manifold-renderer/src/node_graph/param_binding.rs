@@ -108,9 +108,8 @@ pub struct ParamBinding {
     pub min: f32,
     pub max: f32,
     /// The card param's slider response, sourced from the preset
-    /// (Phase 2's `ParamSpecDef.curve`/`.invert`). Applied in
-    /// [`ResolvedBinding::from_static`]'s no-note path; the per-instance
-    /// `ParamMapping` note still overrides while it exists (removed in 5c).
+    /// (`ParamSpecDef.curve`/`.invert`) — the single reshape source.
+    /// Applied in [`ResolvedBinding::from_static`].
     /// `Linear`/`false` is identity, so existing presets stay byte-identical.
     pub curve: manifold_core::macro_bank::MacroCurve,
     pub invert: bool,
@@ -328,24 +327,6 @@ impl Reshape {
     }
 }
 
-/// Build the card→consumer affine reshape (`out = value * scale + offset`)
-/// when scale/offset are non-identity, else `None` so the binding stays 1:1
-/// and byte-identical (every un-folded preset / identity binding pays
-/// nothing). The single definition of the affine-fold semantics: both the
-/// effect preset path and the generator path reach it through
-/// [`ResolvedBinding::assemble_affine`], so a folded `affine_scalar`
-/// reproduces the node it replaced identically on either side.
-fn scale_offset_reshape(scale: f32, offset: f32) -> Option<Reshape> {
-    (scale != 1.0 || offset != 0.0).then_some(Reshape {
-        min: 0.0,
-        max: 1.0,
-        invert: false,
-        curve: manifold_core::macro_bank::MacroCurve::Linear,
-        scale,
-        offset,
-    })
-}
-
 /// Resolve a stable [`NodeId`] to the runtime [`NodeInstanceId`] it
 /// produced at splice time, via the effect's `(NodeId, NodeInstanceId)`
 /// map. The map is built once per chain build from the spliced nodes —
@@ -373,19 +354,17 @@ impl ResolvedBinding {
     /// pass the binding's enumerate position; a future caller wiring
     /// fan-out would pass the matching outer slot's position.
     ///
-    /// `note` is the host instance's per-instance reshape override for
-    /// this param ([`manifold_core::effects::ParamMapping`]), looked up by
-    /// the caller via `PresetInstance::param_mapping(b.id)`. `None` (the
-    /// common case) keeps the recipe's affine fold — byte-identical to
-    /// before per-instance notes existed. `Some` replaces it with the
-    /// full editable reshape (range / invert / curve / scale / offset).
-    /// The note never touches the value slot; it only changes what the
-    /// inner node sees, applied downstream in [`Self::apply`].
+    /// The reshape is built from the PRESET's own slider response
+    /// (`ParamSpecDef.curve`/`.invert` + range, carried on `ParamBinding`)
+    /// plus the recipe's scale/offset — the single source after the
+    /// per-instance `ParamMapping` note was deleted. Identity inputs
+    /// (Linear, no invert, scale 1, offset 0) yield `None` and pay nothing;
+    /// a preset-authored curve / a widened range (via a per-instance graph
+    /// override or a fork) takes effect through this same path.
     pub fn from_static(
         b: &ParamBinding,
         node_map: &[(NodeId, NodeInstanceId)],
         source_index: usize,
-        note: Option<&manifold_core::effects::ParamMapping>,
     ) -> Option<Self> {
         let target = match &b.target {
             ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
@@ -397,60 +376,19 @@ impl ResolvedBinding {
             }
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
-        match note {
-            // Per-instance reshape note: build the full reshape, carried
-            // only when non-identity so a freshly-seeded (identity) note
-            // still pays nothing and stays byte-identical. Static bindings
-            // never angle-wrap (their ranges are author-set), matching the
-            // pre-note static behavior.
-            Some(n) => {
-                let reshape = (n.invert
-                    || n.curve != manifold_core::macro_bank::MacroCurve::Linear
-                    || n.scale != 1.0
-                    || n.offset != 0.0)
-                    .then_some(Reshape {
-                        min: n.min,
-                        max: n.max,
-                        invert: n.invert,
-                        curve: n.curve,
-                        scale: n.scale,
-                        offset: n.offset,
-                    });
-                Some(Self::assemble(
-                    b.id.clone(),
-                    Cow::Borrowed(b.label),
-                    b.default_value,
-                    target,
-                    b.convert,
-                    BindingSource::Static,
-                    source_index,
-                    reshape,
-                    false,
-                ))
-            }
-            // No note: build the reshape from the PRESET's own slider response
-            // (Phase 2's `ParamSpecDef.curve`/`.invert` + range, carried on
-            // `ParamBinding`) plus the recipe's scale/offset. Identity inputs
-            // (Linear, no invert, scale 1, offset 0 — every shipped preset
-            // today) yield `None`, so this stays byte-identical; a
-            // preset-authored curve now takes effect with no per-instance note.
-            None => {
-                let reshape = Reshape::from_preset_response(
-                    b.min, b.max, b.curve, b.invert, b.scale, b.offset,
-                );
-                Some(Self::assemble(
-                    b.id.clone(),
-                    Cow::Borrowed(b.label),
-                    b.default_value,
-                    target,
-                    b.convert,
-                    BindingSource::Static,
-                    source_index,
-                    reshape,
-                    false,
-                ))
-            }
-        }
+        let reshape =
+            Reshape::from_preset_response(b.min, b.max, b.curve, b.invert, b.scale, b.offset);
+        Some(Self::assemble(
+            b.id.clone(),
+            Cow::Borrowed(b.label),
+            b.default_value,
+            target,
+            b.convert,
+            BindingSource::Static,
+            source_index,
+            reshape,
+            false,
+        ))
     }
 
     /// Resolve a per-instance user binding against the splice's node-id
@@ -494,10 +432,10 @@ impl ResolvedBinding {
         };
         // Only carry a reshape when the card mapping is non-identity, so
         // every existing binding (invert=false, curve=Linear, scale=1,
-        // offset=0) stays 1:1. scale/offset carry a folded affine_scalar; the
-        // slider response (min/max/invert/curve) is the User-only extra the
-        // affine path never sets, so this reshape is built here rather than
-        // via `scale_offset_reshape`.
+        // offset=0) stays 1:1. The user binding carries its own slider
+        // response (min/max/invert/curve) plus a folded affine (scale/offset),
+        // so this reshape is assembled inline rather than through the static
+        // path's `Reshape::from_preset_response`.
         let reshape = (core.invert
             || core.curve != manifold_core::macro_bank::MacroCurve::Linear
             || core.scale != 1.0
@@ -556,38 +494,6 @@ impl ResolvedBinding {
             reshape,
             wraps_angle,
         }
-    }
-
-    /// Recompute this binding's downstream reshape in place from a
-    /// per-instance reshape note (if present) or the recipe's affine
-    /// (`recipe_scale`/`recipe_offset`). The generator render path calls
-    /// this to apply / revert reshape notes on a live binding without
-    /// rebuilding the graph — the generator mirror of the effect chain's
-    /// static-prefix rebuild. A note present → full reshape; absent →
-    /// the recipe affine (byte-identical to a note-free generator).
-    /// Never touches `source_index` / `target` / `convert`, so the slot a
-    /// modulation surface writes is unaffected.
-    pub(crate) fn set_reshape_from_note(
-        &mut self,
-        note: Option<&manifold_core::effects::ParamMapping>,
-        recipe_scale: f32,
-        recipe_offset: f32,
-    ) {
-        self.reshape = match note {
-            Some(n) => (n.invert
-                || n.curve != manifold_core::macro_bank::MacroCurve::Linear
-                || n.scale != 1.0
-                || n.offset != 0.0)
-                .then_some(Reshape {
-                    min: n.min,
-                    max: n.max,
-                    invert: n.invert,
-                    curve: n.curve,
-                    scale: n.scale,
-                    offset: n.offset,
-                }),
-            None => scale_offset_reshape(recipe_scale, recipe_offset),
-        };
     }
 
     /// Apply this binding's value to the graph.
@@ -926,7 +832,7 @@ mod tests {
         // Identity scale/offset → no reshape, so every un-folded preset
         // binding stays byte-identical.
         let plain = static_amount_binding();
-        let rb = ResolvedBinding::from_static(&plain, &node_map, 0, None).unwrap();
+        let rb = ResolvedBinding::from_static(&plain, &node_map, 0).unwrap();
         assert!(
             rb.reshape.is_none(),
             "identity scale/offset must carry no reshape"
@@ -936,7 +842,7 @@ mod tests {
         // consumer must see 85·π/180 rad, byte-identical to the old node.
         let mut folded = static_amount_binding();
         folded.scale = std::f32::consts::PI / 180.0;
-        let rb = ResolvedBinding::from_static(&folded, &node_map, 0, None).unwrap();
+        let rb = ResolvedBinding::from_static(&folded, &node_map, 0).unwrap();
         let reshape = rb.reshape.expect("non-identity scale carries a reshape");
         let expected = 85.0_f32 * std::f32::consts::PI / 180.0;
         assert!(
@@ -1131,7 +1037,7 @@ mod tests {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
         let feedback = add_feedback_node(&mut g);
-        let rb = ResolvedBinding::from_static(&static_amount_binding(), &node_map_for(feedback), 0, None)
+        let rb = ResolvedBinding::from_static(&static_amount_binding(), &node_map_for(feedback), 0)
             .expect("node id present");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
@@ -1151,7 +1057,7 @@ mod tests {
         let mut g = Graph::new();
         let _feedback = add_feedback_node(&mut g);
         let nope: Vec<(NodeId, NodeInstanceId)> = vec![];
-        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0, None).is_none());
+        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0).is_none());
     }
 
     #[test]

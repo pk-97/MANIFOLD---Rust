@@ -1326,17 +1326,13 @@ fn effects_to_configs(
                     });
                     let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                     // Stock effect params aren't special — they're just curated
-                    // JSON. A per-instance ParamMapping note retunes the card
-                    // slider's range AND relabels it, exactly like a user-exposed
-                    // binding does (the user-tail below reads `ub.min`/`ub.max`/
-                    // `ub.label`). Fall back to the recipe ParamDef when no note
-                    // exists (or the note keeps the recipe label).
-                    let note = fx.param_mapping(&pd.id);
-                    let (slider_min, slider_max) =
-                        note.map(|n| (n.min, n.max)).unwrap_or((pd.min, pd.max));
-                    let slider_name = note
-                        .and_then(|n| n.label.clone())
-                        .unwrap_or_else(|| pd.name.clone());
+                    // JSON. The card slider's range + label come straight from the
+                    // preset's `ParamSpecDef` (`pd`): a recalibration edits that
+                    // spec in the instance's per-instance graph override (so `pd`
+                    // here reflects it), and a fork rewrites the registry def the
+                    // same way. There is no per-instance note anymore.
+                    let (slider_min, slider_max) = (pd.min, pd.max);
+                    let slider_name = pd.name.clone();
                     ParamInfo {
                         // Static-tier `ParamId`. The registry's
                         // `ParamDef.id` is a runtime-owned `String`
@@ -1368,10 +1364,11 @@ fn effects_to_configs(
                         ableton_display,
                         ableton_range,
                         // Stock effect params are now remappable too: the
-                        // mapping drawer edits a per-instance `ParamMapping`
-                        // note (seeded copy-on-write from the recipe), so the
-                        // Author-card chevron shows on every exposed row, not
-                        // just user-exposed bindings.
+                        // mapping drawer edits the param's reshape on the
+                        // instance's per-instance graph override (materialized
+                        // from the catalog on first edit), so the Author-card
+                        // chevron shows on every exposed row, not just
+                        // user-exposed bindings.
                         mappable: true,
                     }
                 })
@@ -1662,17 +1659,14 @@ fn gen_params_to_config(
                             inverted: mapping.inverted,
                         });
                         let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-                        // Generator params aren't special: a per-instance
-                        // ParamMapping note retunes the card slider's range AND
-                        // relabels it, the same way a user-exposed effect binding
-                        // does. Fall back to the recipe ParamDef when no note
-                        // exists (or the note keeps the recipe label).
-                        let note = gp.param_mapping(&pd.id);
-                        let (slider_min, slider_max) =
-                            note.map(|n| (n.min, n.max)).unwrap_or((pd.min, pd.max));
-                        let slider_name = note
-                            .and_then(|n| n.label.clone())
-                            .unwrap_or_else(|| pd.name.clone());
+                        // Generator params aren't special: the card slider's
+                        // range + label come straight from the preset's
+                        // `ParamSpecDef` (`pd`). A recalibration edits that spec in
+                        // the layer's `generator_graph` override (so `pd` reflects
+                        // it), and a fork rewrites the registry def the same way.
+                        // There is no per-instance note anymore.
+                        let (slider_min, slider_max) = (pd.min, pd.max);
+                        let slider_name = pd.name.clone();
                         ParamInfo {
                             param_id: std::borrow::Cow::Owned(pd.id.clone()),
                             name: slider_name,
@@ -1699,9 +1693,10 @@ fn gen_params_to_config(
                             ableton_display,
                             ableton_range,
                             // Generator params are now remappable too: the
-                            // mapping drawer edits a per-instance ParamMapping
-                            // note on PresetInstance, so the Author-card
-                            // chevron shows on every exposed generator row.
+                            // mapping drawer edits the param's reshape on the
+                            // layer's generator_graph override, so the
+                            // Author-card chevron shows on every exposed
+                            // generator row.
                             mappable: true,
                         }
                     })
@@ -1737,17 +1732,14 @@ fn gen_params_to_config(
                             inverted: mapping.inverted,
                         });
                         let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-                        // Generator params aren't special: a per-instance
-                        // ParamMapping note retunes the card slider's range AND
-                        // relabels it, the same way a user-exposed effect binding
-                        // does. Fall back to the recipe ParamDef when no note
-                        // exists (or the note keeps the recipe label).
-                        let note = gp.param_mapping(&pd.id);
-                        let (slider_min, slider_max) =
-                            note.map(|n| (n.min, n.max)).unwrap_or((pd.min, pd.max));
-                        let slider_name = note
-                            .and_then(|n| n.label.clone())
-                            .unwrap_or_else(|| pd.name.clone());
+                        // Generator params aren't special: the card slider's
+                        // range + label come straight from the preset's
+                        // `ParamSpecDef` (`pd`). A recalibration edits that spec in
+                        // the layer's `generator_graph` override (so `pd` reflects
+                        // it), and a fork rewrites the registry def the same way.
+                        // There is no per-instance note anymore.
+                        let (slider_min, slider_max) = (pd.min, pd.max);
+                        let slider_name = pd.name.clone();
                         ParamInfo {
                             param_id: std::borrow::Cow::Owned(pd.id.clone()),
                             name: slider_name,
@@ -1767,9 +1759,10 @@ fn gen_params_to_config(
                             ableton_display,
                             ableton_range,
                             // Generator params are now remappable too: the
-                            // mapping drawer edits a per-instance ParamMapping
-                            // note on PresetInstance, so the Author-card
-                            // chevron shows on every exposed generator row.
+                            // mapping drawer edits the param's reshape on the
+                            // layer's generator_graph override, so the
+                            // Author-card chevron shows on every exposed
+                            // generator row.
                             mappable: true,
                         }
                     })

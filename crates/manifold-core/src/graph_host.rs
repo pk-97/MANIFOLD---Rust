@@ -51,7 +51,7 @@
 
 use crate::ableton_mapping::AbletonParamMapping;
 use crate::effect_graph_def::EffectGraphDef;
-use crate::effects::{ParamMapping, ParamSlot, ParameterDriver, PresetInstance, UserParamBinding};
+use crate::effects::{ParamSlot, ParameterDriver, PresetInstance, UserParamBinding};
 
 /// Which kind of host a `&dyn GraphHost` is, for the few genuinely
 /// kind-specific decisions a caller still has to make (envelope home,
@@ -123,29 +123,15 @@ pub trait GraphHost {
     fn drivers(&self) -> Option<&Vec<ParameterDriver>>;
     fn ableton_mappings(&self) -> Option<&Vec<AbletonParamMapping>>;
 
-    // ── Per-instance reshape notes (`param_mappings`) ─────────────────
-
-    fn param_mapping(&self, id: &str) -> Option<&ParamMapping>;
-    fn upsert_param_mapping(&mut self, mapping: ParamMapping);
-    fn remove_param_mapping(&mut self, id: &str);
-
     // ── User param bindings (effect-only tier) ────────────────────────
 
     /// The host's user-exposed bindings, synthesized from
     /// `graph.preset_metadata.bindings` (`user_added`) — the single
-    /// binding-storage list shared by effects and generators after the
-    /// preset-unification step-3 fold-in. Returns an owned `Vec` because
-    /// the bindings are reconstructed from the graph + reshape notes; the
-    /// boundary call sites (enumeration / card build) tolerate the
-    /// allocation. Empty when the host has no user-added bindings.
+    /// binding-storage list shared by effects and generators. The reshape
+    /// (range/curve/invert) rides on each binding's `ParamSpecDef`; there is
+    /// no per-instance note. Returns an owned `Vec`; the boundary call sites
+    /// tolerate the allocation. Empty when the host has no user-added bindings.
     fn user_param_bindings(&self) -> Vec<UserParamBinding>;
-
-    /// Mutable access to the per-instance reshape note for a binding's
-    /// stable id, for the inline reshape edit (range / invert / curve /
-    /// scale / offset). The binding itself carries routing only, so a
-    /// reshape edit writes the `ParamMapping` note. `None` when no note
-    /// has been authored yet.
-    fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping>;
 
     /// Bump the host's graph version so the renderer rebuilds the user
     /// tail (and drops its `LastAppliedCache` tail) next frame.
@@ -214,25 +200,8 @@ impl GraphHost for PresetInstance {
         self.ableton_mappings.as_ref()
     }
 
-    fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
-        PresetInstance::param_mapping(self, id)
-    }
-    fn upsert_param_mapping(&mut self, mapping: ParamMapping) {
-        PresetInstance::upsert_param_mapping(self, mapping)
-    }
-    fn remove_param_mapping(&mut self, id: &str) {
-        PresetInstance::remove_param_mapping(self, id)
-    }
-
     fn user_param_bindings(&self) -> Vec<UserParamBinding> {
         PresetInstance::user_param_bindings(self)
-    }
-
-    fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping> {
-        // User bindings carry routing only now; the reshape lives in the
-        // per-instance ParamMapping note. Seed-on-touch is the caller's
-        // job — here we only hand back an existing note.
-        self.param_mappings.iter_mut().find(|m| m.param_id == id)
     }
 
     fn bump_user_bindings_version(&mut self) {
@@ -347,32 +316,12 @@ impl GraphHost for GeneratorHost<'_> {
             .and_then(|p| p.ableton_mappings.as_ref())
     }
 
-    fn param_mapping(&self, id: &str) -> Option<&ParamMapping> {
-        self.params.as_deref().and_then(|p| p.param_mapping(id))
-    }
-    fn upsert_param_mapping(&mut self, mapping: ParamMapping) {
-        if let Some(params) = self.params.as_deref_mut() {
-            params.upsert_param_mapping(mapping)
-        }
-    }
-    fn remove_param_mapping(&mut self, id: &str) {
-        if let Some(params) = self.params.as_deref_mut() {
-            params.remove_param_mapping(id)
-        }
-    }
-
     fn user_param_bindings(&self) -> Vec<UserParamBinding> {
         // Generators already store user bindings in
         // `preset_metadata.bindings`; the host-generic enumeration call
         // sites that need them go through the layer/state path directly,
         // so this returns empty for the trait surface. See module docs.
         Vec::new()
-    }
-
-    fn user_binding_reshape(&mut self, id: &str) -> Option<&mut ParamMapping> {
-        self.params
-            .as_deref_mut()
-            .and_then(|p| p.param_mappings.iter_mut().find(|m| m.param_id == id))
     }
 
     fn bump_user_bindings_version(&mut self) {

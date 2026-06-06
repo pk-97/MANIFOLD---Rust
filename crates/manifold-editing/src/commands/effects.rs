@@ -2,7 +2,7 @@ use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::{EffectId, GraphTarget};
 use manifold_core::effects::{
-    PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParamMapping, ParamSlot, ParameterDriver,
+    PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParamSlot, ParameterDriver,
     UserParamBinding,
 };
 use manifold_core::project::Project;
@@ -790,158 +790,156 @@ pub struct BindingMappingEdit {
 }
 
 impl BindingMappingEdit {
-    /// Apply each touched field onto a reshape note
-    /// ([`ParamMapping`]). Same partial-edit semantics as
-    /// [`Self::apply_to`] but for the note shape (whose `label` is an
-    /// `Option<String>` override over the recipe label).
-    fn apply_to_mapping(&self, m: &mut ParamMapping) {
+    /// Apply each touched field onto the preset's authoring surface: range +
+    /// curve + invert + label go on the `ParamSpecDef`, scale/offset on the
+    /// matching `BindingDef`. The preset is the single reshape source now (no
+    /// per-instance note). Returns the PRE-edit values for undo.
+    fn apply_to_spec(
+        &self,
+        spec: &mut manifold_core::effect_graph_def::ParamSpecDef,
+        binding: Option<&mut manifold_core::effect_graph_def::BindingDef>,
+    ) -> SpecReshapeSnapshot {
+        let prev = SpecReshapeSnapshot {
+            name: spec.name.clone(),
+            min: spec.min,
+            max: spec.max,
+            invert: spec.invert,
+            curve: spec.curve,
+            scale: binding.as_ref().map(|b| b.scale),
+            offset: binding.as_ref().map(|b| b.offset),
+        };
         if let Some(label) = &self.label {
-            m.label = Some(label.clone());
+            spec.name = label.clone();
         }
         if let Some(min) = self.min {
-            m.min = min;
+            spec.min = min;
         }
         if let Some(max) = self.max {
-            m.max = max;
+            spec.max = max;
         }
         if let Some(invert) = self.invert {
-            m.invert = invert;
+            spec.invert = invert;
         }
         if let Some(curve) = self.curve {
-            m.curve = curve;
+            spec.curve = curve;
         }
-        if let Some(scale) = self.scale {
-            m.scale = scale;
+        if let Some(b) = binding {
+            if let Some(scale) = self.scale {
+                b.scale = scale;
+            }
+            if let Some(offset) = self.offset {
+                b.offset = offset;
+            }
         }
-        if let Some(offset) = self.offset {
-            m.offset = offset;
-        }
+        prev
     }
 }
 
-/// Seed a fresh identity-valued reshape note for a stock effect param or
-/// a generator card param, so an un-edited note is byte-identical to the
-/// recipe. Range comes from the host's registry `ParamDef` when available
-/// (production always has it); a `0..1` fallback covers registry-less
-/// unit-test contexts and only matters for invert/curve (scale/offset
-/// reshapes ignore the range).
-fn seed_note(host: &dyn manifold_core::GraphHost, param_id: &str) -> ParamMapping {
-    // Stock params take their range from the registry; user-exposed
-    // bindings (which have no static index) take it from the binding's
-    // declared range, captured at expose time in the graph metadata.
-    let (min, max) = host
-        .param_id_to_static_index(param_id)
-        .map(|i| host.param_range(i))
-        .or_else(|| {
-            host.user_param_bindings()
-                .into_iter()
-                .find(|b| b.id == param_id)
-                .map(|b| (b.min, b.max))
-        })
-        .unwrap_or((0.0, 1.0));
-    ParamMapping {
-        param_id: param_id.to_string(),
-        label: None,
-        min,
-        max,
-        invert: false,
-        curve: manifold_core::macro_bank::MacroCurve::Linear,
-        scale: 1.0,
-        offset: 0.0,
-    }
-}
-
-/// Undo state for [`EditParamMappingCommand`]. Every reshape now lives in
-/// the per-instance reshape note (`ParamMapping`), so undo only has to
-/// know whether the command created the note or edited an existing one.
-/// The shared `Note` prefix is intentional — these are all note
-/// operations now that the user-binding inline path was removed.
+/// Pre-edit snapshot of a preset param's reshape, for undo.
 #[derive(Debug, Clone)]
-#[allow(clippy::enum_variant_names)]
-enum MappingReverse {
-    /// Stock-param note that already existed: restore the whole prior
-    /// note (cheaper + simpler than field-wise, and a note is 7 fields).
-    NoteRestore(ParamMapping),
-    /// Stock-param note this command CREATED (copy-on-write): undo removes
-    /// it, returning the knob to the recipe's reshape.
-    NoteRemove(String),
-    /// Note path with an EXPLICIT pre-drag reverse (the drag-commit case):
-    /// undo applies these field values to the note. Used when a live-drag
-    /// preview already mutated the note before commit, so the command can't
-    /// self-capture the true pre-drag value — the caller supplies it from
-    /// the drag-start snapshot, mirroring `ChangeEffectParamCommand`'s
-    /// explicit `old_value`.
-    NoteApply(BindingMappingEdit),
+struct SpecReshapeSnapshot {
+    name: String,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: manifold_core::macro_bank::MacroCurve,
+    scale: Option<f32>,
+    offset: Option<f32>,
 }
 
-/// Edit one card param's reshape mapping — its display label, min/max
-/// range, invert flag, response curve, or scale/offset — on either an
-/// effect or a generator, addressed by a [`GraphTarget`].
+impl SpecReshapeSnapshot {
+    fn restore(
+        &self,
+        spec: &mut manifold_core::effect_graph_def::ParamSpecDef,
+        binding: Option<&mut manifold_core::effect_graph_def::BindingDef>,
+    ) {
+        spec.name = self.name.clone();
+        spec.min = self.min;
+        spec.max = self.max;
+        spec.invert = self.invert;
+        spec.curve = self.curve;
+        if let Some(b) = binding {
+            if let Some(scale) = self.scale {
+                b.scale = scale;
+            }
+            if let Some(offset) = self.offset {
+                b.offset = offset;
+            }
+        }
+    }
+}
+
+/// Edit one card param's reshape — its display label, min/max range, invert
+/// flag, response curve, or scale/offset — on an effect or generator addressed
+/// by a [`GraphTarget`].
 ///
-/// The reshape lives in one of two per-instance stores: an effect's
-/// user-exposed binding carries it inline, while a stock effect param or
-/// any generator card param carries it as a [`ParamMapping`] reshape NOTE.
-/// The command tries the user-binding store first (effects only —
-/// generators present an empty binding list) and falls through to the
-/// note store otherwise. The param/binding is addressed by its stable id,
-/// which is NEVER mutated: drivers, Ableton mappings, envelopes, and OSC
-/// paths reference it by string, so renaming would orphan every
-/// modulation surface the user configured.
+/// The reshape lives in the PRESET's authoring surface (its `ParamSpecDef` +
+/// `BindingDef`), the single source after `ParamMapping` was deleted. The edit
+/// targets the instance's per-instance graph override (`graph` for an effect,
+/// `generator_graph` for a generator): if the instance is still on the catalog
+/// default (`graph: None`), the caller-supplied `seed_def` (the catalog graph,
+/// resolved renderer-side) materializes it first, so a recalibration becomes a
+/// per-instance override exactly like a topology edit. The param is addressed by
+/// its stable id (never mutated — drivers/Ableton/OSC reference it).
 ///
-/// On first execute the pre-edit values of the touched fields are
-/// snapshotted into [`Self::reverse`] so undo can restore them; the
-/// version bump (`user_param_bindings_version` on the inline path,
-/// `param_mappings_version` on the note path) makes the renderer rebuild
-/// the affected bindings and drop the stale `LastAppliedCache` next frame,
-/// so the new mapping takes effect immediately rather than waiting for the
-/// slot value to change.
+/// On first execute the pre-edit spec values are snapshotted for undo; the graph
+/// version bump makes the renderer rebuild the binding (which reads its reshape
+/// from the spec) next frame.
 #[derive(Debug)]
 pub struct EditParamMappingCommand {
     target: GraphTarget,
-    /// Stable id of the param / binding being edited. NEVER mutated.
     binding_id: String,
-    /// Post-edit values for the touched fields.
     new: BindingMappingEdit,
-    /// How to undo, captured on first execute(). `None` until then (and
-    /// stays `None` if the target doesn't resolve — a no-op). Carries
-    /// which store the reshape lives in (user binding vs note) so undo
-    /// reverts the right one.
-    reverse: Option<MappingReverse>,
-    /// Explicit pre-drag reverse for the drag-commit case. When set, undo
-    /// restores THESE field values instead of whatever the command would
-    /// self-capture at execute time — necessary because a live-drag
-    /// preview already mutated the store before commit. `None` for
-    /// single-shot edits (invert / curve / label), which self-capture
-    /// correctly since nothing mutated the store first.
+    /// The catalog graph def used to materialize the instance's per-instance
+    /// graph when it's still on the catalog default. Resolved renderer-side by
+    /// the caller. `None` skips seeding (edits only an already-diverged graph).
+    seed_def: Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    /// Explicit pre-drag reverse for the drag-commit path. Captured at drag
+    /// start (before any live preview mutated the spec), so undo lands on the
+    /// true pre-drag values rather than the preview-mutated ones. When set, it
+    /// is applied on undo instead of the self-captured snapshot — mirroring
+    /// `ChangeEffectParamCommand`'s explicit `old_value`.
     explicit_reverse: Option<BindingMappingEdit>,
+    /// Pre-edit snapshot, captured on first execute for the single-shot path
+    /// (when `explicit_reverse` is `None`).
+    reverse: Option<SpecReshapeSnapshot>,
 }
 
 impl EditParamMappingCommand {
-    pub fn new(target: GraphTarget, binding_id: String, new: BindingMappingEdit) -> Self {
-        Self {
-            target,
-            binding_id,
-            new,
-            reverse: None,
-            explicit_reverse: None,
-        }
-    }
-
-    /// Drag-commit constructor: `reverse` carries the pre-drag field values
-    /// captured at drag start, so undo restores them (not the
-    /// preview-mutated values the command would otherwise self-capture).
-    pub fn new_with_reverse(
+    pub fn new(
         target: GraphTarget,
         binding_id: String,
         new: BindingMappingEdit,
-        reverse: BindingMappingEdit,
+        seed_def: Option<manifold_core::effect_graph_def::EffectGraphDef>,
     ) -> Self {
         Self {
             target,
             binding_id,
             new,
+            seed_def,
+            explicit_reverse: None,
             reverse: None,
+        }
+    }
+
+    /// Drag-commit variant: carries the EXPLICIT pre-drag reverse (a partial
+    /// [`BindingMappingEdit`] of the same fields the drag moved), so undo
+    /// restores the pre-drag values, not the values the live preview left in
+    /// the spec.
+    pub fn new_with_reverse(
+        target: GraphTarget,
+        binding_id: String,
+        new: BindingMappingEdit,
+        reverse: BindingMappingEdit,
+        seed_def: Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    ) -> Self {
+        Self {
+            target,
+            binding_id,
+            new,
+            seed_def,
             explicit_reverse: Some(reverse),
+            reverse: None,
         }
     }
 }
@@ -950,60 +948,69 @@ impl Command for EditParamMappingCommand {
     fn execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         let new = self.new.clone();
-        let explicit = self.explicit_reverse.clone();
-        self.reverse = project
+        let seed_def = self.seed_def.clone();
+        // The drag-commit path supplies its own pre-drag reverse, so skip the
+        // self-capture (which would snapshot the preview-mutated spec).
+        let keep_snapshot = self.explicit_reverse.is_none();
+        let snap = project
             .with_graph_host_mut(&self.target, |host| {
-                // Every reshape — stock effect param, generator card param,
-                // OR a user-exposed binding — lives in the per-instance
-                // reshape NOTE now (the binding carries routing only). Edit
-                // the existing note, or seed one copy-on-write (identity, so
-                // the un-edited note is byte-identical) and apply onto that.
-                match host.param_mapping(&binding_id).cloned() {
-                    Some(prior) => {
-                        let mut note = prior.clone();
-                        new.apply_to_mapping(&mut note);
-                        host.upsert_param_mapping(note); // bumps version
-                        Some(match explicit {
-                            Some(e) => MappingReverse::NoteApply(e),
-                            None => MappingReverse::NoteRestore(prior),
-                        })
-                    }
-                    None => {
-                        // Only seed a note for a REAL param (one that
-                        // resolves to a value slot). A genuinely unknown id
-                        // is a clean no-op — never mint an orphan note.
-                        host.resolve_param_slot(&binding_id)?;
-                        let mut note = seed_note(&*host, &binding_id);
-                        new.apply_to_mapping(&mut note);
-                        host.upsert_param_mapping(note); // bumps version
-                        Some(match explicit {
-                            Some(e) => MappingReverse::NoteApply(e),
-                            None => MappingReverse::NoteRemove(binding_id.clone()),
-                        })
-                    }
+                // Materialize the per-instance graph override if the instance is
+                // still on the catalog default, so the reshape has a home.
+                if host.graph_def().is_none() {
+                    let seed = seed_def?;
+                    *host.graph_def_mut() = Some(seed);
+                    host.bump_graph_structure_version();
                 }
+                let graph = host.graph_def_mut().as_mut()?;
+                let meta = graph.preset_metadata.as_mut()?;
+                let spec = meta.params.iter_mut().find(|p| p.id == binding_id)?;
+                let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
+                let snap = new.apply_to_spec(spec, binding);
+                host.bump_graph_version();
+                Some(snap)
             })
             .flatten();
+        if keep_snapshot {
+            self.reverse = snap;
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        let binding_id = self.binding_id.clone();
+        // Drag-commit: apply the explicit pre-drag reverse edit (partial — only
+        // the fields the drag moved), landing on the true pre-drag values.
+        if let Some(reverse_edit) = self.explicit_reverse.clone() {
+            project.with_graph_host_mut(&self.target, |host| {
+                let Some(graph) = host.graph_def_mut().as_mut() else {
+                    return;
+                };
+                let Some(meta) = graph.preset_metadata.as_mut() else {
+                    return;
+                };
+                if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) {
+                    let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
+                    reverse_edit.apply_to_spec(spec, binding);
+                }
+                host.bump_graph_version();
+            });
+            return;
+        }
+        // Single-shot: restore the self-captured pre-edit snapshot.
         let Some(reverse) = self.reverse.clone() else {
             return;
         };
-        let binding_id = self.binding_id.clone();
-        project.with_graph_host_mut(&self.target, |host| match reverse {
-            MappingReverse::NoteRestore(prior) => {
-                host.upsert_param_mapping(prior); // bumps version
+        project.with_graph_host_mut(&self.target, |host| {
+            let Some(graph) = host.graph_def_mut().as_mut() else {
+                return;
+            };
+            let Some(meta) = graph.preset_metadata.as_mut() else {
+                return;
+            };
+            if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) {
+                let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
+                reverse.restore(spec, binding);
             }
-            MappingReverse::NoteRemove(id) => {
-                host.remove_param_mapping(&id); // bumps version
-            }
-            MappingReverse::NoteApply(fields) => {
-                if let Some(mut note) = host.param_mapping(&binding_id).cloned() {
-                    fields.apply_to_mapping(&mut note);
-                    host.upsert_param_mapping(note); // bumps version
-                }
-            }
+            host.bump_graph_version();
         });
     }
 
@@ -1052,8 +1059,8 @@ mod tests {
     }
 
     /// The synthesized binding view for `id` — routing from the graph
-    /// binding, reshape folded from the per-instance note. Owned because
-    /// it's reconstructed.
+    /// binding, reshape read from the per-instance `ParamSpecDef` +
+    /// `BindingDef`. Owned because it's reconstructed.
     fn master_binding(project: &Project, id: &str) -> UserParamBinding {
         project.settings.master_effects[0]
             .user_param_bindings()
@@ -1062,12 +1069,91 @@ mod tests {
             .expect("binding present")
     }
 
+    /// A minimal catalog graph def carrying one stock card param (`param_id`):
+    /// a `ParamSpecDef` (range/curve/invert home) plus a `BindingDef`
+    /// (scale/offset home) pointing at a `grade.amount` inner consumer. Used to
+    /// seed the per-instance graph the reshape command materializes when an
+    /// instance is still on the catalog default — the editing crate doesn't
+    /// link the renderer, so it stands in for the renderer-resolved catalog def.
+    fn seed_def_with_param(param_id: &str) -> manifold_core::effect_graph_def::EffectGraphDef {
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+        EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::new("ColorGrade"),
+                display_name: String::new(),
+                category: String::new(),
+                osc_prefix: String::new(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![ParamSpecDef {
+                    id: param_id.to_string(),
+                    name: "Amount".to_string(),
+                    min: 0.0,
+                    max: 1.0,
+                    default_value: 0.0,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: Vec::new(),
+                    format_string: None,
+                    osc_suffix: String::new(),
+                    curve: MacroCurve::Linear,
+                    invert: false,
+                }],
+                bindings: vec![BindingDef {
+                    id: param_id.to_string(),
+                    label: "Amount".to_string(),
+                    default_value: 0.0,
+                    target: BindingTarget::Node {
+                        node_id: manifold_core::NodeId::new("grade"),
+                        param: "amount".to_string(),
+                    },
+                    convert: manifold_core::effects::ParamConvert::Float,
+                    user_added: false,
+                    scale: 1.0,
+                    offset: 0.0,
+                }],
+                skip_mode: Default::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            }),
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        }
+    }
+
+    /// Read a stock card param's `(invert, max, scale)` straight out of an
+    /// instance's per-instance graph spec — the single reshape home.
+    fn spec_reshape(graph: &Option<manifold_core::effect_graph_def::EffectGraphDef>, id: &str) -> (bool, f32, f32) {
+        let meta = graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .expect("graph carries preset metadata");
+        let spec = meta.params.iter().find(|p| p.id == id).expect("param spec present");
+        let scale = meta
+            .bindings
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| b.scale)
+            .expect("binding present");
+        (spec.invert, spec.max, scale)
+    }
+
     #[test]
     fn edit_mapping_roundtrip_execute_undo_redo() {
         let (mut project, effect_id, binding_id) = project_with_one_user_binding();
-        // Reshape now writes a per-instance ParamMapping note, which bumps
-        // `param_mappings_version` (the renderer rebuilds the binding list).
-        let v0 = project.settings.master_effects[0].param_mappings_version;
+        // The user binding already lives in the per-instance graph
+        // (`append_user_binding` creates it), so no seed is needed. A reshape
+        // edit bumps `graph_version` (the renderer rebuilds the binding list).
+        let v0 = project.settings.master_effects[0].graph_version;
 
         let edit = BindingMappingEdit {
             label: Some("Spin".to_string()),
@@ -1078,7 +1164,8 @@ mod tests {
             scale: Some(0.017453293),
             offset: Some(1.5),
         };
-        let mut cmd = EditParamMappingCommand::new(GraphTarget::Effect(effect_id),binding_id.clone(), edit);
+        let mut cmd =
+            EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), edit, None);
 
         // ── execute: every touched field changes ──
         cmd.execute(&mut project);
@@ -1096,8 +1183,8 @@ mod tests {
         assert_eq!(b.inner_param, "rotation");
         assert_eq!(b.default_value, 0.25);
         // Version bumped so the renderer rebuilds the reshaped binding.
-        let v1 = project.settings.master_effects[0].param_mappings_version;
-        assert_ne!(v1, v0, "execute must bump param_mappings_version");
+        let v1 = project.settings.master_effects[0].graph_version;
+        assert_ne!(v1, v0, "execute must bump graph_version");
 
         // ── undo: every touched field restored to its pre-edit value ──
         cmd.undo(&mut project);
@@ -1109,8 +1196,8 @@ mod tests {
         assert_eq!(b.curve, MacroCurve::Linear);
         assert_eq!(b.scale, 1.0, "scale restored to identity on undo");
         assert_eq!(b.offset, 0.0, "offset restored to identity on undo");
-        let v2 = project.settings.master_effects[0].param_mappings_version;
-        assert_ne!(v2, v1, "undo must bump param_mappings_version");
+        let v2 = project.settings.master_effects[0].graph_version;
+        assert_ne!(v2, v1, "undo must bump graph_version");
 
         // ── redo: reapplies cleanly ──
         cmd.execute(&mut project);
@@ -1134,7 +1221,8 @@ mod tests {
             curve: Some(MacroCurve::Exponential),
             ..Default::default()
         };
-        let mut cmd = EditParamMappingCommand::new(GraphTarget::Effect(effect_id),binding_id.clone(), edit);
+        let mut cmd =
+            EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), edit, None);
         cmd.execute(&mut project);
         let b = master_binding(&project, &binding_id);
         assert!(b.invert);
@@ -1157,7 +1245,7 @@ mod tests {
         // must leave the effect untouched; undo with no captured reverse
         // is a clean no-op.
         let (mut project, effect_id, _binding_id) = project_with_one_user_binding();
-        let v0 = project.settings.master_effects[0].param_mappings_version;
+        let v0 = project.settings.master_effects[0].graph_version;
         let mut cmd = EditParamMappingCommand::new(
             GraphTarget::Effect(effect_id),
             "user.does.not.exist.1".to_string(),
@@ -1165,76 +1253,76 @@ mod tests {
                 invert: Some(true),
                 ..Default::default()
             },
+            None,
         );
         cmd.execute(&mut project);
         assert!(cmd.reverse.is_none(), "no reverse captured for a no-op");
-        let v1 = project.settings.master_effects[0].param_mappings_version;
+        let v1 = project.settings.master_effects[0].graph_version;
         assert_eq!(v1, v0, "no-op must not bump the version");
         // Undo is a clean no-op.
         cmd.undo(&mut project);
-        assert_eq!(
-            project.settings.master_effects[0].param_mappings_version,
-            v0
-        );
+        assert_eq!(project.settings.master_effects[0].graph_version, v0);
     }
 
-    /// A STOCK param (no user binding) routes to a per-instance reshape
-    /// NOTE. Pre-seed a note so the path runs registry-free (the editing
-    /// crate doesn't link the renderer, so the effect registry is empty —
-    /// new-note creation is covered by the renderer/app integration gate).
+    /// A STOCK param (no user binding) on an instance still at the catalog
+    /// default (`graph: None`) materializes the per-instance graph from the
+    /// supplied `seed_def`, then edits the reshape on that graph's spec — the
+    /// post-`ParamMapping` model. Undo restores the seeded spec values.
     #[test]
-    fn edit_stock_param_note_roundtrip() {
+    fn edit_stock_param_seeds_graph_and_roundtrips() {
         let mut project = Project::default();
-        let mut fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
+        let fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
-        // Pre-existing identity note on stock param "amount".
-        fx.upsert_param_mapping(ParamMapping {
-            param_id: "amount".to_string(),
-            label: None,
-            min: 0.0,
-            max: 1.0,
-            invert: false,
-            curve: MacroCurve::Linear,
-            scale: 1.0,
-            offset: 0.0,
-        });
         project.settings.master_effects.push(fx);
+        assert!(
+            project.settings.master_effects[0].graph.is_none(),
+            "instance starts on the catalog default (no per-instance graph)",
+        );
 
         let edit = BindingMappingEdit {
             invert: Some(true),
             scale: Some(2.0),
+            max: Some(5.0),
             ..Default::default()
         };
-        let mut cmd =
-            EditParamMappingCommand::new(GraphTarget::Effect(effect_id),"amount".to_string(), edit);
-
-        // execute: edits the NOTE, not a user binding; bumps the note
-        // version (not the user-binding version).
-        let mv0 = project.settings.master_effects[0].param_mappings_version;
-        cmd.execute(&mut project);
-        let note = project.settings.master_effects[0]
-            .param_mapping("amount")
-            .expect("note still present after edit");
-        assert!(note.invert, "stock note invert applied");
-        assert_eq!(note.scale, 2.0, "stock note scale applied");
-        assert_ne!(
-            project.settings.master_effects[0].param_mappings_version, mv0,
-            "editing a stock note bumps param_mappings_version",
+        let v0 = project.settings.master_effects[0].graph_version;
+        let mut cmd = EditParamMappingCommand::new(
+            GraphTarget::Effect(effect_id),
+            "amount".to_string(),
+            edit,
+            Some(seed_def_with_param("amount")),
         );
 
-        // undo: whole prior note restored (NoteRestore).
+        // execute: materializes the graph + applies the reshape to its spec.
+        cmd.execute(&mut project);
+        assert!(
+            project.settings.master_effects[0].graph.is_some(),
+            "editing a stock param materializes the per-instance graph",
+        );
+        assert_eq!(
+            spec_reshape(&project.settings.master_effects[0].graph, "amount"),
+            (true, 5.0, 2.0),
+            "reshape lands on the materialized graph's spec + binding",
+        );
+        assert_ne!(
+            project.settings.master_effects[0].graph_version, v0,
+            "editing a stock param bumps graph_version",
+        );
+
+        // undo: the seeded spec values are restored.
         cmd.undo(&mut project);
-        let note = project.settings.master_effects[0]
-            .param_mapping("amount")
-            .expect("note restored, not removed (it pre-existed)");
-        assert!(!note.invert, "undo restores invert");
-        assert_eq!(note.scale, 1.0, "undo restores scale to identity");
+        assert_eq!(
+            spec_reshape(&project.settings.master_effects[0].graph, "amount"),
+            (false, 1.0, 1.0),
+            "undo restores the seeded spec (invert false, max 1.0, scale 1.0)",
+        );
     }
 
-    /// An id that is neither a user binding nor a resolvable param must
-    /// NOT mint an orphan note (the no-op guard).
+    /// An id that is neither a user binding nor present in the seed def, with
+    /// no seed supplied, must be a clean no-op — no graph materialized, no
+    /// reverse captured.
     #[test]
-    fn edit_unknown_stock_id_does_not_create_note() {
+    fn edit_unknown_stock_id_without_seed_is_noop() {
         let mut project = Project::default();
         let fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
@@ -1247,19 +1335,22 @@ mod tests {
                 invert: Some(true),
                 ..Default::default()
             },
+            None,
         );
         cmd.execute(&mut project);
-        assert!(cmd.reverse.is_none(), "unknown id must be a no-op");
+        assert!(cmd.reverse.is_none(), "unknown id without a seed must be a no-op");
         assert!(
-            project.settings.master_effects[0].param_mappings.is_empty(),
-            "no orphan note minted for an unknown id",
+            project.settings.master_effects[0].graph.is_none(),
+            "no per-instance graph materialized for an unknown id without a seed",
         );
     }
 
-    /// Generator command: create a note copy-on-write, edit it, undo
-    /// (NoteRemove since it was created), redo, then re-edit (NoteRestore).
+    /// Generator command: materialize the layer's `generator_graph` from the
+    /// seed def, edit the reshape on its spec, undo restores the seeded values.
+    /// The generator host edits `Layer::generator_graph`, mirroring the effect
+    /// path's per-instance `graph`.
     #[test]
-    fn edit_gen_param_mapping_roundtrip() {
+    fn edit_gen_param_seeds_graph_and_roundtrips() {
         use manifold_core::PresetTypeId;
         use manifold_core::layer::Layer;
 
@@ -1267,14 +1358,6 @@ mod tests {
         let layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
         let layer_id = layer.layer_id.clone();
         project.timeline.insert_layer(0, layer);
-        assert!(
-            project
-                .timeline
-                .find_layer_by_id_mut(layer_id.as_str())
-                .and_then(|(_, l)| l.gen_params_mut())
-                .is_some(),
-            "generator layer has gen_params",
-        );
 
         let edit = BindingMappingEdit {
             invert: Some(true),
@@ -1285,55 +1368,57 @@ mod tests {
             GraphTarget::Generator(layer_id.clone()),
             "complexity".to_string(),
             edit,
+            Some(seed_def_with_param("complexity")),
         );
 
-        let note = |p: &Project, lid: &str| -> Option<ParamMapping> {
-            p.timeline
+        let reshape = |p: &Project, lid: &str| -> (bool, f32) {
+            let layer = p
+                .timeline
                 .layers
                 .iter()
                 .find(|l| l.layer_id.as_str() == lid)
-                .and_then(|l| l.gen_params())
-                .and_then(|gp| gp.param_mapping("complexity").cloned())
+                .expect("layer present");
+            let (invert, _max, scale) = spec_reshape(&layer.generator_graph, "complexity");
+            (invert, scale)
         };
 
-        // create
+        // execute: materializes generator_graph + applies the reshape.
         cmd.execute(&mut project);
-        let n = note(&project, layer_id.as_str()).expect("note created");
-        assert!(n.invert);
-        assert_eq!(n.scale, 2.0);
+        assert_eq!(reshape(&project, layer_id.as_str()), (true, 2.0));
 
-        // undo removes the freshly-created note
+        // undo restores the seeded spec values.
         cmd.undo(&mut project);
-        assert!(note(&project, layer_id.as_str()).is_none(), "undo removes created note");
+        assert_eq!(reshape(&project, layer_id.as_str()), (false, 1.0));
 
-        // redo re-creates
+        // redo re-applies.
         cmd.execute(&mut project);
-        assert!(note(&project, layer_id.as_str()).unwrap().invert);
+        assert_eq!(reshape(&project, layer_id.as_str()), (true, 2.0));
     }
 
-    /// The drag-undo fix: a live-drag preview mutates the store to the
-    /// final value BEFORE commit, so a self-capturing command would record
-    /// the wrong "before." `new_with_reverse` carries the explicit pre-drag
-    /// value (from the drag-start snapshot), so undo restores it — not the
-    /// preview-mutated final. Proven for a user binding (the same explicit
-    /// path serves stock + generator notes).
+    /// The drag-undo fix: a live-drag preview mutates the spec to the final
+    /// value BEFORE commit, so a self-capturing command would record the wrong
+    /// "before." `new_with_reverse` carries the explicit pre-drag value (from
+    /// the drag-start snapshot), so undo restores it — not the preview-mutated
+    /// final. Proven for a user binding (the same explicit path serves stock +
+    /// generator graphs).
     #[test]
     fn drag_commit_explicit_reverse_restores_pre_drag_not_preview_final() {
         let (mut project, effect_id, binding_id) = project_with_one_user_binding();
         // Simulate the live-drag preview having already moved scale 1.0 -> 3.0.
-        // The reshape lives in a per-instance note now, so seed/mutate the note.
-        project.settings.master_effects[0].upsert_param_mapping(
-            manifold_core::effects::ParamMapping {
-                param_id: binding_id.clone(),
-                label: None,
-                min: 0.0,
-                max: 1.0,
-                invert: false,
-                curve: MacroCurve::Linear,
-                scale: 3.0,
-                offset: 0.0,
-            },
-        );
+        // The reshape lives on the per-instance graph's BindingDef now, so mutate
+        // it directly (what `preview_mapping` does via the discarded command).
+        {
+            let meta = project.settings.master_effects[0]
+                .graph
+                .as_mut()
+                .and_then(|g| g.preset_metadata.as_mut())
+                .expect("user binding created the per-instance graph");
+            meta.bindings
+                .iter_mut()
+                .find(|b| b.id == binding_id)
+                .expect("binding present")
+                .scale = 3.0;
+        }
 
         let mut cmd = EditParamMappingCommand::new_with_reverse(
             GraphTarget::Effect(effect_id),
@@ -1346,6 +1431,7 @@ mod tests {
                 scale: Some(1.0), // explicit pre-drag reverse from the snapshot
                 ..Default::default()
             },
+            None,
         );
         cmd.execute(&mut project);
         assert_eq!(master_binding(&project, &binding_id).scale, 3.0, "commit lands final");

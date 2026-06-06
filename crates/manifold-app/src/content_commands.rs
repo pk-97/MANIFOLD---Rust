@@ -56,6 +56,25 @@ fn get_existing_mapping(
 }
 
 impl ContentThread {
+    /// Re-install the renderer's project-preset catalog overlay if an editing
+    /// command changed the project's embedded ("forked") presets — a fork mint
+    /// or an in-place recalibration of an embedded preset. Guarded by a cheap
+    /// fingerprint so the catalog rebuild (and core-registry re-derive) is paid
+    /// only when the fork set actually moved, not on every unrelated edit.
+    /// Without this, a forked/edited preset wouldn't resolve in the renderer
+    /// until the next project load.
+    fn refresh_preset_overlay_if_changed(&mut self) {
+        let Some(project) = self.engine.project() else {
+            return;
+        };
+        let fingerprint = crate::project_io::embedded_presets_fingerprint(project);
+        if fingerprint == self.embedded_presets_fingerprint {
+            return;
+        }
+        crate::project_io::install_project_preset_overlay(project);
+        self.embedded_presets_fingerprint = fingerprint;
+    }
+
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
         match cmd {
@@ -190,6 +209,9 @@ impl ContentThread {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                     self.ableton_bridge.rebuild_listeners(p);
                 }
+                // A fork / embedded-preset recalibration must reach the renderer
+                // catalog before the next frame resolves the affected card.
+                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
                 if let Some(p) = self.engine.project_mut() {
@@ -199,6 +221,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                 }
+                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Undo => {
                 // Capture pre-undo settings so we can detect resolution/FPS changes.
@@ -247,6 +270,7 @@ impl ContentThread {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                     self.ableton_bridge.rebuild_listeners(p);
                 }
+                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Redo => {
                 // Same pre/post settings detection as Undo.
@@ -293,6 +317,7 @@ impl ContentThread {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                     self.ableton_bridge.rebuild_listeners(p);
                 }
+                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::SetProject => {
                 self.editing_service.set_project();
@@ -385,6 +410,14 @@ impl ContentThread {
                     ctrl.shutdown();
                     self.led_controller = None;
                 }
+                // The app installed this project's preset overlay before sending
+                // the load command; seed the fingerprint to match so the first
+                // edit doesn't trigger a redundant catalog rebuild.
+                self.embedded_presets_fingerprint = self
+                    .engine
+                    .project()
+                    .map(crate::project_io::embedded_presets_fingerprint)
+                    .unwrap_or(0);
             }
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetFrameRate(fps) => {
@@ -499,6 +532,9 @@ impl ContentThread {
                 {
                     self.ableton_bridge.rebuild_listeners(p);
                 }
+                // The mapping-drawer live preview forks/recalibrates through a
+                // MutateProject closure, so refresh the overlay here too.
+                self.refresh_preset_overlay_if_changed();
             }
 
             // ── Clipboard ─────────────────────────────────────────

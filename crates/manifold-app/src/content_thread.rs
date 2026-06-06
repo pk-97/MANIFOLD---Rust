@@ -153,6 +153,15 @@ pub struct ContentThread {
     /// Last-sent MIDI device names — only reallocated when the list changes.
     pub last_sent_midi_device_names: Arc<[String]>,
 
+    /// Fingerprint of the project's embedded ("forked") presets, so an
+    /// editing command that forks a preset or recalibrates an embedded one
+    /// re-installs the renderer catalog overlay (and re-derives the core
+    /// registry) — without paying that catalog rebuild on every unrelated
+    /// edit. `0` while the project carries no forks (the common case), so the
+    /// guard is a single integer compare on the editing path. See
+    /// [`Self::refresh_preset_overlay_if_changed`].
+    pub embedded_presets_fingerprint: u64,
+
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
