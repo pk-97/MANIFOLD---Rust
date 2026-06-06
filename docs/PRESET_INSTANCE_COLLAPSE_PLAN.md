@@ -521,22 +521,34 @@ corpus are green — so the format is never left half-migrated between phases.
 - Standalone preset export/import io (`manifold_io::preset_file`) shipped; the UI
   dialogs are the remaining Phase-4 UI item.
 
-**Remaining — larger unfinished unifications (NOT essential differences).** Three
-Definition-of-done items remain. Each is a genuine unification still to do, each
-carrying its own storage/serialization change — none is a fundamental
-effect-vs-generator split:
-- **Envelope-home unification (foundation for the two collapses).** Effects store
-  envelopes on `layer.envelopes` keyed by `effect_type + param_id`; generators
-  store them on the instance (`gp.envelopes`). `PresetInstance` already has the
-  `envelopes` field — effects just *ignore* it (a Unity-port convention, also
-  leaky for master effects, which have no layer). Move effect envelopes onto the
-  instance: collapses the two parallel envelope blocks in `modulation.rs`,
-  unifies the mirror's automation cleanup. Carries a load migration.
-- **one mirror + one card-build path.** Today's split is two *storage* mechanisms,
-  not two concepts: exposure is a per-slot `exposed` bool (effect) vs a graph
-  `exposed_params` set (generator); envelope cleanup hits two homes (above). Once
-  envelope-home + exposure storage are unified, the mirror and card-build collapse
-  to one path over `&mut PresetInstance`.
+**Envelope-home unification — DONE (2026-06-06, commit `5313d172`).** Effect
+envelopes moved off the `EffectContainer` (Layer/Clip, keyed by `effect_type +
+param_id`) onto each effect's `PresetInstance.envelopes`, keyed by `param_id`;
+`ParamEnvelope.target_effect_type` deleted (the instance the envelope sits on is
+the target); `Layer.envelopes` / `Clip.envelopes` + the trait's envelope methods
+gone; effect serde now emits/reads `envelopes` (it ignored them before). The two
+parallel `modulation.rs` blocks collapse to one `apply_instance_envelopes` walk
+(`resolve_param_in` resolves either def). Envelope commands re-keyed by
+`GraphTarget`; the expose/unexpose mirror prunes+restores instance envelopes in
+the same borrow as drivers/Ableton (no separate layer pass). v1.5→v1.6 load
+migration distributes container envelopes onto the matching effect and drops inert
+orphans; golden Liveschool round-trip green (33 = 13 effect + 20 generator).
+Master/clip effect envelopes stay inert (no clip-timing source), exactly as
+before. This kills the same-type-effect collision bug class. Gated:
+core/editing/io/playback green, clippy clean, renderer baseline unchanged.
+
+**Remaining — larger unfinished unifications (NOT essential differences):**
+- **one mirror + one card-build path.** The residual split is the **`param_values`
+  layout model**, not envelope/exposure storage (those are now shared:
+  `flip_graph_exposed` works on `node.exposed_params` for both kinds). An effect's
+  `param_values` is `[registry static prefix | user-binding tail]`; a generator's
+  is fully positional against `graph.preset_metadata.params` (no registry static
+  block). `append_user_binding`/`align_to_definition` are built around the effect
+  registry prefix, so the generator mirror (`prepare/apply/unmirror_generator_*`)
+  manages its slot manually. Collapsing the mirror + the two `state_sync`
+  card-build blocks into one path over `&mut PresetInstance` means reconciling
+  that layout — a change to the live `param_values` performance surface, so it
+  needs care + a real-app smoke test, not just headless gates.
 - **one runtime (`PresetRuntime`).** `ChainGraph` (chain of N effects + source
   input + wet/dry + fusion) and `JsonGraphGenerator` (single preset, no input, +
   sim-state / string-params / clip lifecycle) are sibling wrappers over the
