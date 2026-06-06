@@ -145,6 +145,8 @@ mod tests {
                 value_labels: Vec::new(),
                 format_string: None,
                 osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
             }],
             bindings: vec![BindingDef {
                 id: id.to_string(),

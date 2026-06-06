@@ -181,6 +181,10 @@ impl ParamSpec {
             } else {
                 Some(self.osc_suffix.to_string())
             },
+            // Inventory-submitted generator params ship identity slider
+            // response; preset-authored curve/invert live in the disk JSON.
+            curve: crate::macro_bank::MacroCurve::Linear,
+            invert: false,
         }
     }
 }

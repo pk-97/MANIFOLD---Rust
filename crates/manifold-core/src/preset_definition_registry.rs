@@ -776,6 +776,8 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         } else {
             Some(p.osc_suffix.clone())
         },
+        curve: p.curve,
+        invert: p.invert,
     }
 }
 
@@ -1163,6 +1165,8 @@ mod tests {
                 value_labels: Vec::new(),
                 format_string: Some("F2".to_string()),
                 osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -1254,6 +1258,8 @@ mod tests {
                 value_labels: Vec::new(),
                 format_string: Some("F2".to_string()),
                 osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
             }],
             bindings: Vec::new(),
             skip_mode: SkipModeDef::default(),

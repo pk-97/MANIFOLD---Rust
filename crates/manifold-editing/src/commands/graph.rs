@@ -1791,6 +1791,9 @@ fn prepare_generator_mirror(
             value_labels: Vec::new(),
             format_string: None,
             osc_suffix: String::new(),
+            // Freshly-exposed params ship identity slider response.
+            curve: manifold_core::macro_bank::MacroCurve::Linear,
+            invert: false,
         };
         let binding = BindingDef {
             id: user_param_id.clone(),
@@ -3194,6 +3197,8 @@ mod tests {
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
                     },
                     ParamSpecDef {
                         id: "scale".into(),
@@ -3207,6 +3212,8 @@ mod tests {
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
                     },
                 ],
                 bindings: vec![
@@ -3443,6 +3450,8 @@ mod tests {
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
                     },
                     ParamSpecDef {
                         id: "user.render.animate.1".into(),
@@ -3456,6 +3465,8 @@ mod tests {
                         value_labels: vec![],
                         format_string: None,
                         osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
                     },
                 ],
                 bindings: vec![
@@ -3872,6 +3883,8 @@ mod tests {
                     value_labels: vec![],
                     format_string: None,
                     osc_suffix: String::new(),
+                    curve: Default::default(),
+                    invert: false,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),

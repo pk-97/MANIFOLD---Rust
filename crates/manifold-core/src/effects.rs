@@ -52,6 +52,28 @@ pub struct ParamDef {
     pub format_string: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub osc_suffix: Option<String>,
+    /// Slider response curve applied to the normalized position before
+    /// scaling back to `[min, max]`. Part of the preset-authored slider
+    /// surface (Phase 2 of `docs/PRESET_INSTANCE_COLLAPSE_PLAN.md`): a
+    /// preset can ship a non-Linear knob feel. Defaults to `Linear` and is
+    /// skipped on serialize when Linear so existing presets stay
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "curve_is_linear")]
+    pub curve: crate::macro_bank::MacroCurve,
+    /// Slider invert: card-left drives the param max. Defaults to `false`
+    /// and is skipped on serialize when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub invert: bool,
+}
+
+/// serde `skip_serializing_if` for [`ParamDef::curve`] / [`ParamSpecDef::curve`].
+pub(crate) fn curve_is_linear(c: &crate::macro_bank::MacroCurve) -> bool {
+    matches!(c, crate::macro_bank::MacroCurve::Linear)
+}
+
+/// serde `skip_serializing_if` for a defaulted `false` bool field.
+pub(crate) fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Default for ParamDef {
@@ -68,6 +90,8 @@ impl Default for ParamDef {
             value_labels: None,
             format_string: None,
             osc_suffix: None,
+            curve: crate::macro_bank::MacroCurve::Linear,
+            invert: false,
         }
     }
 }
@@ -1791,6 +1815,8 @@ impl EffectInstance {
             value_labels: Vec::new(),
             format_string: None,
             osc_suffix: String::new(),
+            curve: binding.curve,
+            invert: binding.invert,
         });
         meta.bindings.push(BindingDef {
             id: binding.id.clone(),
@@ -1969,6 +1995,8 @@ impl EffectInstance {
             value_labels: Vec::new(),
             format_string: None,
             osc_suffix: String::new(),
+            curve: binding.curve,
+            invert: binding.invert,
         });
 
         // Reshape note, if the restored binding carried a non-identity one.
@@ -2204,6 +2232,8 @@ impl ParamSource for EffectInstance {
                     value_labels: None,
                     format_string: None,
                     osc_suffix: None,
+                    curve: ub.curve,
+                    invert: ub.invert,
                 };
             }
         }
@@ -3483,6 +3513,8 @@ mod tests {
             value_labels: Vec::new(),
             format_string: None,
             osc_suffix: String::new(),
+            curve: ub.curve,
+            invert: ub.invert,
         });
         meta.bindings.push(BindingDef {
             id: ub.id.clone(),

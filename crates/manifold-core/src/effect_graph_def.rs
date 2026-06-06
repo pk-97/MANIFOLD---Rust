@@ -431,6 +431,17 @@ pub struct ParamSpecDef {
     pub format_string: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub osc_suffix: String,
+    /// Slider response curve for this outer-card param (Linear by default).
+    /// Part of the preset-authored slider surface — the preset file is the
+    /// single home for ranges + curve + invert (Phase 2 of
+    /// `docs/PRESET_INSTANCE_COLLAPSE_PLAN.md`). Skipped on serialize when
+    /// Linear so existing presets stay byte-identical.
+    #[serde(default, skip_serializing_if = "crate::effects::curve_is_linear")]
+    pub curve: crate::macro_bank::MacroCurve,
+    /// Slider invert (card-left drives the param max). `false` by default,
+    /// skipped on serialize when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub invert: bool,
 }
 
 /// JSON-wire shape mirroring `manifold_renderer::node_graph::ParamBinding`.
@@ -611,6 +622,56 @@ pub struct ValueAliasEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_param_spec() -> ParamSpecDef {
+        ParamSpecDef {
+            id: "speed".to_string(),
+            name: "Speed".to_string(),
+            min: 0.1,
+            max: 10.0,
+            default_value: 1.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: crate::macro_bank::MacroCurve::Linear,
+            invert: false,
+        }
+    }
+
+    #[test]
+    fn param_spec_identity_curve_invert_skipped_on_serialize() {
+        // Default (Linear / false) must not appear on the wire, so every
+        // shipped preset stays byte-identical after Phase 2.
+        let json = serde_json::to_string(&sample_param_spec()).unwrap();
+        assert!(!json.contains("curve"), "Linear curve must be skipped: {json}");
+        assert!(!json.contains("invert"), "false invert must be skipped: {json}");
+    }
+
+    #[test]
+    fn param_spec_authored_curve_invert_round_trip() {
+        let mut p = sample_param_spec();
+        p.curve = crate::macro_bank::MacroCurve::Exponential;
+        p.invert = true;
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"curve\":\"exponential\""), "{json}");
+        assert!(json.contains("\"invert\":true"), "{json}");
+        let back: ParamSpecDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.curve, crate::macro_bank::MacroCurve::Exponential);
+        assert!(back.invert);
+    }
+
+    #[test]
+    fn param_spec_missing_curve_invert_defaults_to_identity() {
+        // A pre-Phase-2 preset JSON (no curve/invert keys) deserializes
+        // to the identity slider response.
+        let json = r#"{"id":"x","name":"X","min":0.0,"max":1.0,"defaultValue":0.0}"#;
+        let p: ParamSpecDef = serde_json::from_str(json).unwrap();
+        assert_eq!(p.curve, crate::macro_bank::MacroCurve::Linear);
+        assert!(!p.invert);
+    }
 
     #[test]
     fn empty_graph_round_trips() {
@@ -888,6 +949,8 @@ mod tests {
                 value_labels: Vec::new(),
                 format_string: Some("F2".to_string()),
                 osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
