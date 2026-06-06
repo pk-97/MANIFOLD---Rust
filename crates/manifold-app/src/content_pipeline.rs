@@ -1699,7 +1699,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// [`ContentThread::active_graph_snapshot`].
     pub fn graph_snapshot_for(
         &self,
-        type_id: &manifold_core::EffectTypeId,
+        type_id: &manifold_core::PresetTypeId,
     ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
         self.compositor.graph_snapshot_for(type_id)
     }
@@ -1710,7 +1710,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// through `graph_snapshot_for`.
     pub fn outer_routings_for(
         &self,
-        type_id: &manifold_core::EffectTypeId,
+        type_id: &manifold_core::PresetTypeId,
     ) -> Vec<manifold_renderer::node_graph::OuterParamRouting> {
         self.compositor.outer_routings_for(type_id)
     }

@@ -1,6 +1,6 @@
 //! State synchronization: push_state, sync_project_data, sync_clip_positions,
 //! sync_inspector_data, check_auto_scroll.
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effects::{EffectInstance, ParamEnvelope};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
@@ -703,7 +703,7 @@ pub fn push_state(
             .find(|c| c.id == *clip_id);
         if let Some(clip) = clip {
             let is_video = !clip.video_clip_id.is_empty();
-            let is_gen = clip.generator_type != GeneratorTypeId::NONE;
+            let is_gen = clip.generator_type != PresetTypeId::NONE;
             let chrome = ui.inspector.clip_chrome_mut();
             if is_video {
                 let name = clip.video_clip_id.clone();
@@ -1099,7 +1099,7 @@ pub fn sync_inspector_data(
                 .and_then(|c| c.string_params.as_ref());
             let gen_config = layer
                 .gen_params()
-                .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)
+                .filter(|gp| *gp.generator_type() != PresetTypeId::NONE)
                 .map(|gp| {
                     gen_params_to_config(
                         gp,
@@ -1132,7 +1132,7 @@ pub fn sync_inspector_data(
             // Sync clip chrome MODE before build so the tree layout is correct.
             // Value sync (name, bpm, etc.) happens in push_state after build.
             let is_video = !clip.video_clip_id.is_empty();
-            let is_gen = clip.generator_type != GeneratorTypeId::NONE;
+            let is_gen = clip.generator_type != PresetTypeId::NONE;
             ui.inspector
                 .clip_chrome_mut()
                 .set_mode(true, is_video, is_gen, clip.is_looping);
@@ -1172,7 +1172,7 @@ pub(crate) fn editor_card_config(
             let (_, layer) = project.timeline.find_layer_by_id(lid.as_str())?;
             let gp = layer
                 .gen_params()
-                .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)?;
+                .filter(|gp| *gp.generator_type() != PresetTypeId::NONE)?;
             let clip_string_params = selection
                 .primary_selected_clip_id
                 .as_ref()

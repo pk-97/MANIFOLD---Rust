@@ -995,15 +995,15 @@ fn fusion_coverage_baseline() {
 #[test]
 fn grouped_presets_fuse_through_entry_points() {
     use super::install::{fused_generator_def_by_id, fused_view_by_id};
-    use manifold_core::{EffectTypeId, GeneratorTypeId};
+    use manifold_core::PresetTypeId;
 
     assert!(
-        fused_view_by_id(&EffectTypeId::new("Glitch")).is_some(),
+        fused_view_by_id(&PresetTypeId::new("Glitch")).is_some(),
         "Glitch is a grouped effect with fusable regions once flattened — \
          fuse_canonical_def must flatten before partitioning"
     );
     assert!(
-        fused_generator_def_by_id(&GeneratorTypeId::new("FluidSimulation")).is_some(),
+        fused_generator_def_by_id(&PresetTypeId::new("FluidSimulation")).is_some(),
         "FluidSimulation is a grouped generator with a fusable region once flattened — \
          the generator fuse path must flatten too"
     );
@@ -1205,7 +1205,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
 
-    let json = bundled_generator_preset_json(&manifold_core::GeneratorTypeId::new("DigitalPlants"))
+    let json = bundled_generator_preset_json(&manifold_core::PresetTypeId::new("DigitalPlants"))
         .expect("DigitalPlants preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
     // The whole point: DigitalPlants' GPU per-instance chain must fuse into a

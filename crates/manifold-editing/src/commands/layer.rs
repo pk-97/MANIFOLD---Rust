@@ -1,5 +1,5 @@
 use crate::command::Command;
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
@@ -12,7 +12,7 @@ pub struct AddLayerCommand {
     layer: Option<Layer>,
     name: String,
     layer_type: LayerType,
-    gen_type: GeneratorTypeId,
+    gen_type: PresetTypeId,
     insert_index: usize,
     parent_group_id: Option<LayerId>,
 }
@@ -21,7 +21,7 @@ impl AddLayerCommand {
     pub fn new(
         name: String,
         layer_type: LayerType,
-        gen_type: GeneratorTypeId,
+        gen_type: PresetTypeId,
         insert_index: usize,
         parent_group_id: Option<LayerId>,
     ) -> Self {

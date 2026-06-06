@@ -8,7 +8,7 @@
 //! code; they used to live in the AutoGain bundle's primitive file and
 //! moved here when AutoGain was atom-decomposed (Tranche 7).
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effects::EffectInstance;
 
 use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
@@ -20,7 +20,7 @@ use crate::node_graph::parameters::ParamValue;
 /// `EffectMetadata` declares — `param_order` must list names in the
 /// registered order.
 pub(super) fn build_effect_instance(
-    type_id: &EffectTypeId,
+    type_id: &PresetTypeId,
     ctx: &EffectNodeContext<'_, '_>,
     param_order: &[&str],
 ) -> EffectInstance {

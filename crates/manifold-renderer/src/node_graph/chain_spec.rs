@@ -17,7 +17,7 @@
 
 use std::borrow::Cow;
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::EffectInstance;
 
@@ -70,7 +70,7 @@ pub enum SkipMode {
 /// `preset_definition_registry::effect::param_id_to_index` which is
 /// dual-source aware — works for both inventory-submitted
 /// `EffectMetadata` and JSON-loaded `PresetMetadata`.
-pub fn is_skipped_for(skip: SkipMode, type_id: &EffectTypeId, fx: &EffectInstance) -> bool {
+pub fn is_skipped_for(skip: SkipMode, type_id: &PresetTypeId, fx: &EffectInstance) -> bool {
     match skip {
         SkipMode::Never => false,
         SkipMode::OnZero { param_id } => {

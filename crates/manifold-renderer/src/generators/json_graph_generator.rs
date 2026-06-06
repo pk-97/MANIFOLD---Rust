@@ -18,7 +18,7 @@
 //! then runs the graph against the host's `GpuEncoder`.
 
 use manifold_core::{
-    Beats, GeneratorTypeId, Seconds,
+    Beats, PresetTypeId, Seconds,
     effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef},
 };
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
@@ -171,7 +171,7 @@ impl From<GraphError> for JsonGeneratorLoadError {
 /// locate the boundary nodes. Per-frame work is then minimal — set
 /// frame context, install the target texture, run the executor.
 pub struct JsonGraphGenerator {
-    type_id: GeneratorTypeId,
+    type_id: PresetTypeId,
     pub graph: Graph,
     pub plan: ExecutionPlan,
     executor: Executor,
@@ -328,7 +328,7 @@ impl JsonGraphGenerator {
                 }
             },
         };
-        let type_id = GeneratorTypeId::from_string(type_id_str);
+        let type_id = PresetTypeId::from_string(type_id_str);
 
         // Validate boundary-node presence on the JSON document BEFORE
         // building the runtime graph — `compile()` would fail with
@@ -625,7 +625,7 @@ impl JsonGraphGenerator {
     }
 
     /// Stable identity for the GeneratorRegistry.
-    pub fn type_id(&self) -> &GeneratorTypeId {
+    pub fn type_id(&self) -> &PresetTypeId {
         &self.type_id
     }
 
@@ -896,7 +896,7 @@ impl JsonGraphGenerator {
 }
 
 impl Generator for JsonGraphGenerator {
-    fn generator_type(&self) -> &GeneratorTypeId {
+    fn generator_type(&self) -> &PresetTypeId {
         &self.type_id
     }
 

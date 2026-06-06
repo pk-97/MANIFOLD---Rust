@@ -137,7 +137,7 @@ pub enum ContentCommand {
     /// Port of C# PlaybackController.NotifyGeneratorTypeChanged().
     GeneratorTypeChanged {
         layer_id: LayerId,
-        new_type: manifold_core::GeneratorTypeId,
+        new_type: manifold_core::PresetTypeId,
     },
 
     // ── Lifecycle ─────────────────────────────────────────────────

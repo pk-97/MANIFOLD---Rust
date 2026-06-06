@@ -34,7 +34,7 @@ pub struct TimelineClip {
     #[serde(default, skip_serializing)]
     pub layer_id: crate::id::LayerId,
     #[serde(default, skip_serializing)]
-    pub generator_type: crate::generator_type_id::GeneratorTypeId,
+    pub generator_type: crate::preset_type_id::PresetTypeId,
     #[serde(default, skip_serializing)]
     pub invert_colors: bool,
 
@@ -233,7 +233,7 @@ impl Default for TimelineClip {
             is_locked: false,
             is_muted: false,
             invert_colors: false,
-            generator_type: crate::generator_type_id::GeneratorTypeId::NONE,
+            generator_type: crate::preset_type_id::PresetTypeId::NONE,
             translate_x: 0.0,
             translate_y: 0.0,
             scale: 1.0,

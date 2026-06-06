@@ -7,7 +7,7 @@ use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
-use manifold_core::{Beats, ClipId, GeneratorTypeId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, PresetTypeId, LayerId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
@@ -16,7 +16,7 @@ use std::any::Any;
 struct ActiveClip {
     /// Generator renders into this texture at full output resolution.
     render_target: RenderTarget,
-    generator_type: GeneratorTypeId,
+    generator_type: PresetTypeId,
     layer_id: LayerId,
     layer_index: i32, // positional cache for param lookup in render_all
     clip_index: u32,  // positional cache for string_params lookup (avoids linear scan)
@@ -38,7 +38,7 @@ impl ActiveClip {
 /// temporal state (particle positions, attractors, etc.).
 struct LayerGeneratorState {
     generator: Box<dyn Generator>,
-    generator_type: GeneratorTypeId,
+    generator_type: PresetTypeId,
     trigger_count: u32,
     /// `Layer::generator_graph_structure_version` at the time this generator
     /// was constructed. Only a topology change (node/wire add or remove, type
@@ -92,7 +92,7 @@ pub struct GeneratorRenderer {
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
     render_scratch: Vec<ClipId>,
     /// Per-clip render info: (layer_index, clip_index, trigger_count, anim_progress).
-    /// Parallel to render_scratch — avoids LayerId/GeneratorTypeId clones in render loop.
+    /// Parallel to render_scratch — avoids LayerId/PresetTypeId clones in render loop.
     render_info_scratch: Vec<(i32, u32, u32, f32)>,
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
@@ -233,7 +233,7 @@ impl GeneratorRenderer {
     fn acquire_clip(
         &mut self,
         clip_id: &str,
-        gen_type: GeneratorTypeId,
+        gen_type: PresetTypeId,
         layer_id: LayerId,
         layer_index: i32,
         clip_index: u32,
@@ -452,7 +452,7 @@ impl GeneratorRenderer {
             .extend(self.active_clips.keys().cloned());
 
         // Pre-collect (layer_index, trigger_count, anim_progress, internal_scale)
-        // per clip during immutable borrow, avoiding per-clip LayerId/GeneratorTypeId clones.
+        // per clip during immutable borrow, avoiding per-clip LayerId/PresetTypeId clones.
         self.render_info_scratch.clear();
         for id in &self.render_scratch {
             if let Some(active) = self.active_clips.get(id.as_str()) {
@@ -634,7 +634,7 @@ impl GeneratorRenderer {
 
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
-    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: GeneratorTypeId) {
+    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: PresetTypeId) {
         // Update clip type tracking
         for active in self.active_clips.values_mut() {
             if active.layer_id == *layer_id {
@@ -709,7 +709,7 @@ impl GeneratorRenderer {
     fn install_layer_generator(
         &mut self,
         layer_id: LayerId,
-        gen_type: GeneratorTypeId,
+        gen_type: PresetTypeId,
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         override_version: Option<u32>,
         param_version: Option<u32>,
@@ -978,8 +978,8 @@ mod tests {
 
         let layer_id = LayerId::new("layer-under-test");
         let other_layer = LayerId::new("other-layer");
-        let trivial = GeneratorTypeId::new("TrivialPassthrough");
-        let strange = GeneratorTypeId::new("ComputeStrangeAttractor");
+        let trivial = PresetTypeId::new("TrivialPassthrough");
+        let strange = PresetTypeId::new("ComputeStrangeAttractor");
 
         // Seed a `LayerGeneratorState` for the starting type via the
         // same funnel any production path would use. (Any JSON preset

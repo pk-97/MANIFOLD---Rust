@@ -1404,10 +1404,10 @@ mod tests {
             BindingDef, BindingTarget, PresetMetadata,
         };
         use manifold_core::effects::ParamConvert;
-        use manifold_core::EffectTypeId;
+        use manifold_core::PresetTypeId;
 
         let preset_metadata = Some(PresetMetadata {
-            id: EffectTypeId::new("test-preset"),
+            id: PresetTypeId::new("test-preset"),
             display_name: "Test".into(),
             category: "Diagnostic".into(),
             osc_prefix: "test".into(),

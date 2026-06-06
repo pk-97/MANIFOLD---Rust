@@ -6,7 +6,7 @@ use manifold_core::{Beats, ClipId, Seconds};
 
 use std::collections::HashSet;
 
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::math::{BeatQuantizer, MathUtils};
@@ -356,10 +356,10 @@ impl PercussionImportService {
         &self,
         project: &mut Project,
         preferred_index: i32,
-        generator_type: GeneratorTypeId,
+        generator_type: PresetTypeId,
         trigger_type: PercussionTriggerType,
     ) -> i32 {
-        if generator_type == GeneratorTypeId::NONE {
+        if generator_type == PresetTypeId::NONE {
             return -1;
         }
 
@@ -421,7 +421,7 @@ impl PercussionImportService {
         let idx = project.timeline.add_layer(
             &format!("Layer {}", project.timeline.layers.len()),
             LayerType::Video,
-            GeneratorTypeId::NONE,
+            PresetTypeId::NONE,
         );
         idx as i32
     }
@@ -472,7 +472,7 @@ impl PercussionImportService {
                 } else {
                     project
                         .timeline
-                        .add_layer(&layer_name, LayerType::Video, GeneratorTypeId::NONE)
+                        .add_layer(&layer_name, LayerType::Video, PresetTypeId::NONE)
                 };
                 layout_map.insert(binding.trigger_type, idx as i32);
             }

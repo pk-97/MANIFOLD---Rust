@@ -11,7 +11,7 @@
 //! stores.
 //!
 //! **Why two stores, not one.** Effects and generators are keyed by
-//! distinct id types ([`EffectTypeId`] / [`GeneratorTypeId`]) and — more
+//! distinct id types ([`PresetTypeId`] / [`PresetTypeId`]) and — more
 //! importantly — populated from two **distinct disk sources**: the
 //! renderer submits effect presets (`assets/effect-presets/`) and
 //! generator presets (`assets/generator-presets/`) to two separate
@@ -35,9 +35,8 @@ use crate::effect_graph_def::{
     AliasEntry, BindingDef, ParamSpecDef, PresetMetadata, SkipModeDef, ValueAliasEntry,
 };
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamDef;
-use crate::generator_type_id::GeneratorTypeId;
 use crate::preset_def::{PresetDef, PresetKind};
 
 // ─── StringParamDef ───
@@ -77,8 +76,8 @@ pub struct StringParamDef {
 // At rest the stores are never swapped, so a `load_full` returns the same
 // `Arc` every time — byte-identical behaviour to the old `LazyLock`.
 
-type EffectMap = HashMap<EffectTypeId, Arc<PresetDef>>;
-type GeneratorMap = HashMap<GeneratorTypeId, Arc<PresetDef>>;
+type EffectMap = HashMap<PresetTypeId, Arc<PresetDef>>;
+type GeneratorMap = HashMap<PresetTypeId, Arc<PresetDef>>;
 
 static EFFECT_DEFINITIONS: LazyLock<ArcSwap<EffectMap>> =
     LazyLock::new(|| ArcSwap::from_pointee(build_effect_definitions(effect::loaded_preset_metadata())));
@@ -141,7 +140,7 @@ fn build_generator_definitions(json_presets: &[PresetMetadata]) -> GeneratorMap 
 
     // ── None ──
     m.insert(
-        GeneratorTypeId::NONE,
+        PresetTypeId::NONE,
         Arc::new(PresetDef {
             kind: PresetKind::Generator,
             display_name: "None".to_string(),
@@ -175,7 +174,7 @@ fn build_generator_definitions(json_presets: &[PresetMetadata]) -> GeneratorMap 
     // canonical schema. Eliminates the inventory-vs-preset positional
     // layout drift class structurally.
     for preset in json_presets {
-        let gen_id = GeneratorTypeId::from_string(preset.id.as_str().to_string());
+        let gen_id = PresetTypeId::from_string(preset.id.as_str().to_string());
         m.insert(
             gen_id,
             Arc::new(preset_metadata_to_def(preset, PresetKind::Generator)),
@@ -273,7 +272,7 @@ pub(crate) fn intern_display_name(name: &str) -> &'static str {
 
 // ─── Effect accessors ───
 //
-// Thin `EffectTypeId`-keyed view over [`EFFECT_DEFINITIONS`]. Function
+// Thin `PresetTypeId`-keyed view over [`EFFECT_DEFINITIONS`]. Function
 // names match the legacy `effect_definition_registry` surface exactly —
 // only the module path moved.
 
@@ -290,17 +289,17 @@ pub mod effect {
     /// current registry snapshot). Hot-reload (step 10): a reload swaps the
     /// snapshot, so holding the `Arc` keeps the def the caller looked up
     /// alive even across a concurrent rebuild. Not a per-frame hot path.
-    pub fn get(effect_type: &EffectTypeId) -> Arc<PresetDef> {
+    pub fn get(effect_type: &PresetTypeId) -> Arc<PresetDef> {
         try_get(effect_type).unwrap_or_else(|| {
             panic!(
-                "EffectDefinitionRegistry: unknown EffectTypeId '{}'",
+                "EffectDefinitionRegistry: unknown PresetTypeId '{}'",
                 effect_type
             )
         })
     }
 
     /// Try to get the definition for an effect type.
-    pub fn try_get(effect_type: &EffectTypeId) -> Option<Arc<PresetDef>> {
+    pub fn try_get(effect_type: &PresetTypeId) -> Option<Arc<PresetDef>> {
         EFFECT_DEFINITIONS.load().get(effect_type).cloned()
     }
 
@@ -312,7 +311,7 @@ pub mod effect {
     /// Ableton update, OSC route) goes through this. The lookup is one
     /// `&str → usize` `AHashMap::get` (~50ns); the map is built once when
     /// the registry initializes.
-    pub fn param_id_to_index(effect_type: &EffectTypeId, id: &str) -> Option<usize> {
+    pub fn param_id_to_index(effect_type: &PresetTypeId, id: &str) -> Option<usize> {
         EFFECT_DEFINITIONS
             .load()
             .get(effect_type)?
@@ -327,7 +326,7 @@ pub mod effect {
     /// hot-reloadable — a swap would dangle a borrowed reference). Returns
     /// `None` if the effect or index is out of range, or the slot has an
     /// empty id (V1 fixture / pre-step-6 entry).
-    pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<Arc<str>> {
+    pub fn param_index_to_id(effect_type: &PresetTypeId, index: usize) -> Option<Arc<str>> {
         let snapshot = EFFECT_DEFINITIONS.load();
         let def = snapshot.get(effect_type)?;
         let id = def.param_ids.get(index)?;
@@ -340,7 +339,7 @@ pub mod effect {
 
     /// Create a new EffectInstance with default parameter values from the
     /// registry.
-    pub fn create_default(effect_type: &EffectTypeId) -> crate::effects::EffectInstance {
+    pub fn create_default(effect_type: &PresetTypeId) -> crate::effects::EffectInstance {
         let def = get(effect_type);
         let mut inst = crate::effects::EffectInstance::new(effect_type.clone());
         for (i, pd) in def.param_defs.iter().enumerate() {
@@ -351,7 +350,7 @@ pub mod effect {
 
     /// Format a parameter value for display. Named labels take priority,
     /// then wholeNumbers round, then F2.
-    pub fn format_value(effect_type: &EffectTypeId, param_index: usize, value: f32) -> String {
+    pub fn format_value(effect_type: &PresetTypeId, param_index: usize, value: f32) -> String {
         let def = match try_get(effect_type) {
             Some(d) if param_index < d.param_count => d,
             _ => return format!("{:.2}", value),
@@ -375,7 +374,7 @@ pub mod effect {
     /// (minus `/master`), so external senders address effects and
     /// generators with one convention. Returns `None` if the effect has no
     /// OSC prefix or the slot has no stable id.
-    pub fn get_osc_address(effect_type: &EffectTypeId, param_index: usize) -> Option<String> {
+    pub fn get_osc_address(effect_type: &PresetTypeId, param_index: usize) -> Option<String> {
         let def = try_get(effect_type)?;
         let prefix = def.osc_prefix.as_deref()?;
         let param_id = def.param_ids.get(param_index)?;
@@ -388,7 +387,7 @@ pub mod effect {
     /// Get the OSC address for a layer effect parameter scoped to a
     /// specific layer. Unified scheme: `/layer/{layerId}/{prefix}/{param_id}`.
     pub fn get_osc_address_for_layer(
-        effect_type: &EffectTypeId,
+        effect_type: &PresetTypeId,
         layer_id: &str,
         param_index: usize,
     ) -> Option<String> {
@@ -406,7 +405,7 @@ pub mod effect {
 
     /// Get default parameter values for an effect type as freshly-allocated
     /// `ParamSlot` entries, all `exposed: true`.
-    pub fn get_defaults(effect_type: &EffectTypeId) -> Vec<crate::effects::ParamSlot> {
+    pub fn get_defaults(effect_type: &PresetTypeId) -> Vec<crate::effects::ParamSlot> {
         let def = get(effect_type);
         def.param_defs
             .iter()
@@ -415,13 +414,13 @@ pub mod effect {
     }
 
     /// Get all registered effect types (unordered).
-    pub fn get_all_effect_types() -> Vec<EffectTypeId> {
+    pub fn get_all_effect_types() -> Vec<PresetTypeId> {
         EFFECT_DEFINITIONS.load().keys().cloned().collect()
     }
 
     /// Get all registered effect types sorted by display name.
-    pub fn get_all_effect_types_sorted() -> Vec<EffectTypeId> {
-        let mut list: Vec<EffectTypeId> = EFFECT_DEFINITIONS.load().keys().cloned().collect();
+    pub fn get_all_effect_types_sorted() -> Vec<PresetTypeId> {
+        let mut list: Vec<PresetTypeId> = EFFECT_DEFINITIONS.load().keys().cloned().collect();
         list.sort_by_key(|t| t.as_str().to_string());
         list
     }
@@ -485,30 +484,30 @@ pub mod effect {
 
 // ─── Generator accessors ───
 //
-// Thin `GeneratorTypeId`-keyed view over [`GENERATOR_DEFINITIONS`].
+// Thin `PresetTypeId`-keyed view over [`GENERATOR_DEFINITIONS`].
 // Function names match the legacy `generator_definition_registry` surface
 // exactly — only the module path moved.
 
 pub mod generator {
     use super::*;
 
-    pub fn get(gen_type: &GeneratorTypeId) -> Arc<PresetDef> {
+    pub fn get(gen_type: &PresetTypeId) -> Arc<PresetDef> {
         try_get(gen_type).unwrap_or_else(|| {
             panic!(
-                "GeneratorDefinitionRegistry: unknown GeneratorTypeId '{}'",
+                "GeneratorDefinitionRegistry: unknown PresetTypeId '{}'",
                 gen_type
             )
         })
     }
 
-    pub fn try_get(gen_type: &GeneratorTypeId) -> Option<Arc<PresetDef>> {
+    pub fn try_get(gen_type: &PresetTypeId) -> Option<Arc<PresetDef>> {
         GENERATOR_DEFINITIONS.load().get(gen_type).cloned()
     }
 
     /// Translate a stable `ParamSpec::id` into the param's storage index
     /// for the given generator type. Returns `None` if the generator or id
     /// is unknown. Mirrors [`super::effect::param_id_to_index`].
-    pub fn param_id_to_index(gen_type: &GeneratorTypeId, id: &str) -> Option<usize> {
+    pub fn param_id_to_index(gen_type: &PresetTypeId, id: &str) -> Option<usize> {
         GENERATOR_DEFINITIONS
             .load()
             .get(gen_type)?
@@ -521,7 +520,7 @@ pub mod generator {
     /// from the registry snapshot (the registry is hot-reloadable, so a
     /// borrowed `&'static str` could dangle across a reload). `None` if out
     /// of range or the slot has an empty id (V1 fixture / pre-step-6 entry).
-    pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<Arc<str>> {
+    pub fn param_index_to_id(gen_type: &PresetTypeId, index: usize) -> Option<Arc<str>> {
         let snapshot = GENERATOR_DEFINITIONS.load();
         let def = snapshot.get(gen_type)?;
         let id = def.param_ids.get(index)?;
@@ -532,14 +531,14 @@ pub mod generator {
         }
     }
 
-    pub fn is_line_based(gen_type: &GeneratorTypeId) -> bool {
+    pub fn is_line_based(gen_type: &PresetTypeId) -> bool {
         GENERATOR_DEFINITIONS
             .load()
             .get(gen_type)
             .is_some_and(|d| d.is_line_based)
     }
 
-    pub fn get_param_def(gen_type: &GeneratorTypeId, index: usize) -> ParamDef {
+    pub fn get_param_def(gen_type: &PresetTypeId, index: usize) -> ParamDef {
         let snapshot = GENERATOR_DEFINITIONS.load();
         let Some(def) = snapshot.get(gen_type) else {
             return ParamDef::default();
@@ -550,7 +549,7 @@ pub mod generator {
         def.param_defs[index].clone()
     }
 
-    pub fn get_defaults(gen_type: &GeneratorTypeId) -> Vec<f32> {
+    pub fn get_defaults(gen_type: &PresetTypeId) -> Vec<f32> {
         let snapshot = GENERATOR_DEFINITIONS.load();
         let Some(def) = snapshot.get(gen_type) else {
             return Vec::new();
@@ -558,7 +557,7 @@ pub mod generator {
         def.param_defs.iter().map(|p| p.default_value).collect()
     }
 
-    pub fn format_gen_value(gen_type: &GeneratorTypeId, index: usize, value: f32) -> String {
+    pub fn format_gen_value(gen_type: &PresetTypeId, index: usize, value: f32) -> String {
         let pd = get_param_def(gen_type, index);
 
         // Labels take priority
@@ -581,7 +580,7 @@ pub mod generator {
         format!("{:.2}", value)
     }
 
-    pub fn get_osc_address(gen_type: &GeneratorTypeId, index: usize) -> Option<String> {
+    pub fn get_osc_address(gen_type: &PresetTypeId, index: usize) -> Option<String> {
         let snapshot = GENERATOR_DEFINITIONS.load();
         let def = snapshot.get(gen_type)?;
         let prefix = def.osc_prefix.as_deref()?;
@@ -598,7 +597,7 @@ pub mod generator {
     /// generator sharing a layer is a naming-convention concern (distinct
     /// osc_prefixes), not an addressing one.
     pub fn get_osc_address_for_layer(
-        gen_type: &GeneratorTypeId,
+        gen_type: &PresetTypeId,
         layer_id: &str,
         index: usize,
     ) -> Option<String> {
@@ -615,7 +614,7 @@ pub mod generator {
         Some(format!("/layer/{}/{}/{}", layer_id, prefix, param_id))
     }
 
-    pub fn try_get_gen_param_range(gen_type: &GeneratorTypeId, index: usize) -> Option<(f32, f32)> {
+    pub fn try_get_gen_param_range(gen_type: &PresetTypeId, index: usize) -> Option<(f32, f32)> {
         let snapshot = GENERATOR_DEFINITIONS.load();
         let def = snapshot.get(gen_type)?;
         if index >= def.param_count {
@@ -625,7 +624,7 @@ pub mod generator {
         Some((pd.min, pd.max))
     }
 
-    pub fn clamp_param(gen_type: &GeneratorTypeId, index: usize, value: f32) -> f32 {
+    pub fn clamp_param(gen_type: &PresetTypeId, index: usize, value: f32) -> f32 {
         let snapshot = GENERATOR_DEFINITIONS.load();
         let Some(def) = snapshot.get(gen_type) else {
             return value;
@@ -673,7 +672,7 @@ pub mod generator {
         meta: &PresetMetadata,
     ) -> crate::generator_type_registry::GeneratorTypeRegistration {
         crate::generator_type_registry::GeneratorTypeRegistration {
-            id: GeneratorTypeId::from_string(meta.id.as_str().to_string()),
+            id: PresetTypeId::from_string(meta.id.as_str().to_string()),
             display_name: leak_str(&meta.display_name),
             available: meta.available,
         }
@@ -828,7 +827,7 @@ mod tests {
     // manifold-core unit tests, so we register minimal test fixtures here.
     inventory::submit! {
         EffectMetadata {
-            id: EffectTypeId::TRANSFORM,
+            id: PresetTypeId::TRANSFORM,
             display_name: "Transform",
             category: "Spatial",
             available: true,
@@ -844,7 +843,7 @@ mod tests {
     }
     inventory::submit! {
         EffectMetadata {
-            id: EffectTypeId::BLOOM,
+            id: PresetTypeId::BLOOM,
             display_name: "Bloom",
             category: "Post-Process",
             available: true,
@@ -857,7 +856,7 @@ mod tests {
     }
     inventory::submit! {
         EffectMetadata {
-            id: EffectTypeId::DITHER,
+            id: PresetTypeId::DITHER,
             display_name: "Dither",
             category: "Post-Process",
             available: true,
@@ -871,7 +870,7 @@ mod tests {
     }
     inventory::submit! {
         EffectMetadata {
-            id: EffectTypeId::KALEIDOSCOPE,
+            id: PresetTypeId::KALEIDOSCOPE,
             display_name: "Kaleidoscope",
             category: "Post-Process",
             available: true,
@@ -885,7 +884,7 @@ mod tests {
     }
     inventory::submit! {
         EffectMetadata {
-            id: EffectTypeId::INFINITE_ZOOM,
+            id: PresetTypeId::INFINITE_ZOOM,
             display_name: "Infinite Zoom",
             category: "Post-Process",
             available: false,
@@ -915,8 +914,8 @@ mod tests {
 
     #[test]
     fn test_create_default_bloom() {
-        let inst = create_default(&EffectTypeId::BLOOM);
-        assert_eq!(*inst.effect_type(), EffectTypeId::BLOOM);
+        let inst = create_default(&PresetTypeId::BLOOM);
+        assert_eq!(*inst.effect_type(), PresetTypeId::BLOOM);
         assert!(inst.enabled);
         assert_eq!(inst.param_values.len(), 1);
         assert!((inst.param_values[0].value - 0.187).abs() < 1e-6);
@@ -924,26 +923,26 @@ mod tests {
 
     #[test]
     fn test_format_value_labels() {
-        let s = format_value(&EffectTypeId::DITHER, 1, 2.0);
+        let s = format_value(&PresetTypeId::DITHER, 1, 2.0);
         assert_eq!(s, "Lines");
     }
 
     #[test]
     fn test_format_value_whole() {
-        let s = format_value(&EffectTypeId::KALEIDOSCOPE, 1, 6.7);
+        let s = format_value(&PresetTypeId::KALEIDOSCOPE, 1, 6.7);
         assert_eq!(s, "7");
     }
 
     #[test]
     fn test_format_value_continuous() {
-        let s = format_value(&EffectTypeId::BLOOM, 0, 0.5);
+        let s = format_value(&PresetTypeId::BLOOM, 0, 0.5);
         assert_eq!(s, "0.50");
     }
 
     #[test]
     fn test_osc_address_master() {
         // Unified scheme: /master/{prefix}/{param_id}. Bloom param 0 id = "amount".
-        let addr = get_osc_address(&EffectTypeId::BLOOM, 0);
+        let addr = get_osc_address(&PresetTypeId::BLOOM, 0);
         assert_eq!(addr, Some("/master/bloom/amount".to_string()));
     }
 
@@ -951,7 +950,7 @@ mod tests {
     fn test_osc_address_master_param() {
         // InfiniteZoom param 1 id = "sharp" (slash-separated, stable id leaf —
         // not the legacy concat "/master/infiniteZoomSharpness").
-        let addr = get_osc_address(&EffectTypeId::INFINITE_ZOOM, 1);
+        let addr = get_osc_address(&PresetTypeId::INFINITE_ZOOM, 1);
         assert_eq!(addr, Some("/master/infiniteZoom/sharp".to_string()));
     }
 
@@ -960,20 +959,20 @@ mod tests {
         // Every param with a stable id gets an address now — no param-0
         // special case, no "no suffix → None". Transform ids: x, y, zoom, rot.
         assert_eq!(
-            get_osc_address(&EffectTypeId::TRANSFORM, 0),
+            get_osc_address(&PresetTypeId::TRANSFORM, 0),
             Some("/master/transform/x".to_string())
         );
         assert_eq!(
-            get_osc_address(&EffectTypeId::TRANSFORM, 1),
+            get_osc_address(&PresetTypeId::TRANSFORM, 1),
             Some("/master/transform/y".to_string())
         );
         // Out-of-range index still returns None.
-        assert_eq!(get_osc_address(&EffectTypeId::TRANSFORM, 99), None);
+        assert_eq!(get_osc_address(&PresetTypeId::TRANSFORM, 99), None);
     }
 
     #[test]
     fn test_osc_address_layer() {
-        let addr = get_osc_address_for_layer(&EffectTypeId::BLOOM, "layer_1", 0);
+        let addr = get_osc_address_for_layer(&PresetTypeId::BLOOM, "layer_1", 0);
         assert_eq!(addr, Some("/layer/layer_1/bloom/amount".to_string()));
     }
 
@@ -989,22 +988,22 @@ mod tests {
     fn param_id_to_index_resolves_known_ids() {
         // Bloom: single param with id "amount".
         assert_eq!(
-            param_id_to_index(&EffectTypeId::BLOOM, "amount"),
+            param_id_to_index(&PresetTypeId::BLOOM, "amount"),
             Some(0),
             "bloom.amount must resolve to slot 0"
         );
 
         // Transform: 4 params in registration order (x, y, zoom, rot).
-        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "x"), Some(0));
-        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "y"), Some(1));
-        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "zoom"), Some(2));
-        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "rot"), Some(3));
+        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "x"), Some(0));
+        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "y"), Some(1));
+        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "zoom"), Some(2));
+        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "rot"), Some(3));
     }
 
     #[test]
     fn param_id_to_index_unknown_id_returns_none() {
         assert_eq!(
-            param_id_to_index(&EffectTypeId::BLOOM, "nope"),
+            param_id_to_index(&PresetTypeId::BLOOM, "nope"),
             None,
             "unknown id must return None, not a stale or default index"
         );
@@ -1012,7 +1011,7 @@ mod tests {
 
     #[test]
     fn param_id_to_index_unknown_effect_returns_none() {
-        let phantom = EffectTypeId::from_string("not-a-real-effect-id".to_string());
+        let phantom = PresetTypeId::from_string("not-a-real-effect-id".to_string());
         assert_eq!(param_id_to_index(&phantom, "amount"), None);
     }
 
@@ -1021,10 +1020,10 @@ mod tests {
         // For each test-fixture effect, every (id → index) entry must
         // round-trip back through param_index_to_id.
         for effect in [
-            EffectTypeId::TRANSFORM,
-            EffectTypeId::BLOOM,
-            EffectTypeId::DITHER,
-            EffectTypeId::KALEIDOSCOPE,
+            PresetTypeId::TRANSFORM,
+            PresetTypeId::BLOOM,
+            PresetTypeId::DITHER,
+            PresetTypeId::KALEIDOSCOPE,
         ] {
             let def = get(&effect);
             for (i, pd) in def.param_defs.iter().enumerate() {
@@ -1145,7 +1144,7 @@ mod tests {
 
     fn bloom_preset_metadata() -> PresetMetadata {
         PresetMetadata {
-            id: EffectTypeId::new("BloomFromJson"),
+            id: PresetTypeId::new("BloomFromJson"),
             display_name: "Bloom (from JSON)".to_string(),
             category: "Filmic".to_string(),
             osc_prefix: "bloom_from_json".to_string(),
@@ -1225,7 +1224,7 @@ mod tests {
         static INV_PARAMS: [ParamSpec; 1] =
             [ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", "")];
         let inv_meta = EffectMetadata {
-            id: EffectTypeId::new("ParityCheck"),
+            id: PresetTypeId::new("ParityCheck"),
             display_name: "Parity Check",
             category: "Filmic",
             available: true,
@@ -1236,7 +1235,7 @@ mod tests {
         let inv_def = inv_meta.to_effect_def();
 
         let json_meta = PresetMetadata {
-            id: EffectTypeId::new("ParityCheck"),
+            id: PresetTypeId::new("ParityCheck"),
             display_name: "Parity Check".to_string(),
             category: "Filmic".to_string(),
             osc_prefix: "parity_check".to_string(),
@@ -1301,27 +1300,27 @@ mod tests {
         //   pattern (0), complexity (1), contrast (2), speed (3),
         //   scale (4), clip_trigger (5)
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "pattern"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "pattern"),
             Some(0)
         );
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "complexity"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "complexity"),
             Some(1)
         );
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "contrast"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "contrast"),
             Some(2)
         );
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "speed"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "speed"),
             Some(3)
         );
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "scale"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "scale"),
             Some(4)
         );
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "clip_trigger"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "clip_trigger"),
             Some(5)
         );
     }
@@ -1329,11 +1328,11 @@ mod tests {
     /// Backward-compat for the `snap` → `clip_trigger` rename.
     #[test]
     fn legacy_snap_id_still_resolves_via_alias() {
-        let def = generator::get(&GeneratorTypeId::PLASMA);
+        let def = generator::get(&PresetTypeId::PLASMA);
         let resolved = resolve_param_alias(def.legacy_param_aliases, "snap");
         assert_eq!(resolved, Some("clip_trigger"));
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, resolved.unwrap()),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, resolved.unwrap()),
             Some(5),
         );
     }
@@ -1341,14 +1340,14 @@ mod tests {
     #[test]
     fn gen_param_id_to_index_unknown_id_returns_none() {
         assert_eq!(
-            generator::param_id_to_index(&GeneratorTypeId::PLASMA, "nope"),
+            generator::param_id_to_index(&PresetTypeId::PLASMA, "nope"),
             None
         );
     }
 
     #[test]
     fn gen_param_id_to_index_unknown_generator_returns_none() {
-        let phantom = GeneratorTypeId::from_string("not-a-real-generator-id".to_string());
+        let phantom = PresetTypeId::from_string("not-a-real-generator-id".to_string());
         assert_eq!(generator::param_id_to_index(&phantom, "pattern"), None);
     }
 

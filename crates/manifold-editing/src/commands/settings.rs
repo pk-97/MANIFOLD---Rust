@@ -1,6 +1,6 @@
 use crate::command::Command;
 use manifold_core::Beats;
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
@@ -362,8 +362,8 @@ impl Command for ChangeLayerOpacityCommand {
 #[derive(Debug)]
 pub struct ChangeGeneratorTypeCommand {
     layer_id: LayerId,
-    old_type: GeneratorTypeId,
-    new_type: GeneratorTypeId,
+    old_type: PresetTypeId,
+    new_type: PresetTypeId,
     old_params: Vec<f32>,
     old_drivers: Option<Vec<ParameterDriver>>,
     old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
@@ -380,8 +380,8 @@ pub struct ChangeGeneratorTypeCommand {
 impl ChangeGeneratorTypeCommand {
     pub fn new(
         layer_id: LayerId,
-        old_type: GeneratorTypeId,
-        new_type: GeneratorTypeId,
+        old_type: PresetTypeId,
+        new_type: PresetTypeId,
         old_params: Vec<f32>,
         old_drivers: Option<Vec<ParameterDriver>>,
         old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
@@ -433,11 +433,11 @@ impl Command for ChangeGeneratorTypeCommand {
 #[derive(Debug)]
 pub struct PasteGeneratorCommand {
     layer_id: LayerId,
-    old_type: GeneratorTypeId,
+    old_type: PresetTypeId,
     old_params: Vec<f32>,
     old_drivers: Option<Vec<ParameterDriver>>,
     old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
-    new_type: GeneratorTypeId,
+    new_type: PresetTypeId,
     new_params: Vec<f32>,
     new_drivers: Option<Vec<ParameterDriver>>,
     new_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
@@ -454,11 +454,11 @@ pub struct PasteGeneratorCommand {
 impl PasteGeneratorCommand {
     pub fn new(
         layer_id: LayerId,
-        old_type: GeneratorTypeId,
+        old_type: PresetTypeId,
         old_params: Vec<f32>,
         old_drivers: Option<Vec<ParameterDriver>>,
         old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
-        new_type: GeneratorTypeId,
+        new_type: PresetTypeId,
         new_params: Vec<f32>,
         new_drivers: Option<Vec<ParameterDriver>>,
         new_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,

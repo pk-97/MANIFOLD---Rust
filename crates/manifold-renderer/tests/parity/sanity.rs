@@ -16,7 +16,7 @@
 //! decomposed primitive — otherwise the parity tests would flap.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use crate::harness::{self, Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// Runs `InvertColors` twice on `Fixture::Gradient` and asserts the
@@ -27,7 +27,7 @@ use crate::harness::{self, Fixture, ParityHarness, assert_bytewise_equal, defaul
 fn legacy_invert_is_deterministic_on_gradient() {
     let h = harness::shared();
     let input = Fixture::Gradient.build(h);
-    let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
+    let fx = make_default_effect(PresetTypeId::INVERT_COLORS);
     let ctx = default_ctx(h.width, h.height);
 
     let first = h.run_legacy(&fx, &input, &ctx);
@@ -43,7 +43,7 @@ fn legacy_invert_is_deterministic_on_gradient() {
 #[test]
 fn legacy_invert_is_deterministic_across_fixtures() {
     let h = harness::shared();
-    let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
+    let fx = make_default_effect(PresetTypeId::INVERT_COLORS);
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
@@ -67,7 +67,7 @@ fn legacy_invert_is_deterministic_across_fixtures() {
 /// `harness::shared()`.
 #[test]
 fn legacy_invert_is_deterministic_across_harness_instances() {
-    let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
+    let fx = make_default_effect(PresetTypeId::INVERT_COLORS);
 
     let bytes_a = {
         let h = ParityHarness::new();

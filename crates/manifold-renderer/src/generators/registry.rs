@@ -6,7 +6,7 @@ use crate::generators::json_graph_generator::JsonGraphGenerator;
 use crate::node_graph::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-/// Factory that maps GeneratorTypeId to concrete Generator instances.
+/// Factory that maps PresetTypeId to concrete Generator instances.
 /// Pipeline compilation happens at creation time (expensive — do at startup or first use).
 ///
 /// Two registration sources, consulted in this order:
@@ -90,7 +90,7 @@ impl GeneratorRegistry {
     pub fn create(
         &self,
         device: &GpuDevice,
-        gen_type: &manifold_core::GeneratorTypeId,
+        gen_type: &manifold_core::PresetTypeId,
         width: u32,
         height: u32,
     ) -> Option<Box<dyn Generator>> {
@@ -117,7 +117,7 @@ impl GeneratorRegistry {
     pub fn create_with_override(
         &self,
         device: &GpuDevice,
-        gen_type: &manifold_core::GeneratorTypeId,
+        gen_type: &manifold_core::PresetTypeId,
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         width: u32,
         height: u32,
@@ -224,11 +224,11 @@ impl GeneratorRegistry {
         None
     }
 
-    /// Every `GeneratorTypeId` known to this registry — both JSON
+    /// Every `PresetTypeId` known to this registry — both JSON
     /// presets and Rust factories. Used by the picker UI to populate
     /// the "Add Generator" menu.
-    pub fn known_type_ids(&self) -> Vec<manifold_core::GeneratorTypeId> {
-        let mut out: Vec<manifold_core::GeneratorTypeId> =
+    pub fn known_type_ids(&self) -> Vec<manifold_core::PresetTypeId> {
+        let mut out: Vec<manifold_core::PresetTypeId> =
             bundled_generator_preset_type_ids().collect();
         for factory in inventory::iter::<super::registration::GeneratorFactory> {
             // Avoid duplicating ids that ship in both sources.
@@ -256,7 +256,7 @@ impl GeneratorRegistry {
 /// same set of bindings.
 pub fn graft_preset_metadata_from_bundle(
     def: &mut manifold_core::effect_graph_def::EffectGraphDef,
-    gen_type: &manifold_core::GeneratorTypeId,
+    gen_type: &manifold_core::PresetTypeId,
 ) {
     if def.preset_metadata.is_some() {
         return;

@@ -1,4 +1,4 @@
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
@@ -152,7 +152,7 @@ fn trigger_live_generator_clip() {
     let clip = mgr.trigger_live_generator_clip(
         &mut project,
         &host,
-        GeneratorTypeId::PLASMA,
+        PresetTypeId::PLASMA,
         0,
         4.0,
         None,

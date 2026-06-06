@@ -19,7 +19,7 @@
 //!
 //! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -350,7 +350,7 @@ fn profile_perf_gate(device: &GpuDevice) {
     println!("  tuned: {}", perf_gate::is_tuned());
     println!(
         "  ColorGrade -> {}",
-        if perf_gate::should_fuse(&EffectTypeId::new("ColorGrade")) {
+        if perf_gate::should_fuse(&PresetTypeId::new("ColorGrade")) {
             "FUSE"
         } else {
             "keep unfused"
@@ -389,7 +389,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevic
             return;
         }
     };
-    let Some(fused_view) = fused_view_by_id(&EffectTypeId::new("ColorGrade")) else {
+    let Some(fused_view) = fused_view_by_id(&PresetTypeId::new("ColorGrade")) else {
         eprintln!("skip auto-fused-colorgrade: ColorGrade has no fused view");
         return;
     };

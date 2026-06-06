@@ -15,14 +15,14 @@ use crate::gpu_readback::ReadbackRequest;
 use crate::preset_context::PresetContext;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 
 inventory::submit! {
     EffectMetadata {
-        id: EffectTypeId::WIREFRAME_DEPTH,
+        id: PresetTypeId::WIREFRAME_DEPTH,
         display_name: "Wireframe Depth",
         category: "Diagnostic",
         available: true,
@@ -48,14 +48,14 @@ inventory::submit! {
 // §11 block 5: 3+ depth/flow/subject DNN workers prewarm.
 inventory::submit! {
     crate::plugin_prewarm::PluginPrewarm {
-        id: EffectTypeId::WIREFRAME_DEPTH,
+        id: PresetTypeId::WIREFRAME_DEPTH,
         prewarm: |device| Box::new(WireframeDepthFX::new(device)),
     }
 }
 
 inventory::submit! {
     EffectAliasMetadata {
-        id: EffectTypeId::WIREFRAME_DEPTH,
+        id: PresetTypeId::WIREFRAME_DEPTH,
         aliases: &[("wire_res", Some("wire_resolution"))],
     }
 }
@@ -1610,8 +1610,8 @@ impl WireframeDepthFX {
 }
 
 impl PostProcessEffect for WireframeDepthFX {
-    fn effect_type(&self) -> &EffectTypeId {
-        &EffectTypeId::WIREFRAME_DEPTH
+    fn effect_type(&self) -> &PresetTypeId {
+        &PresetTypeId::WIREFRAME_DEPTH
     }
 
     // WireframeDepthFX.cs line 279-361 — Apply

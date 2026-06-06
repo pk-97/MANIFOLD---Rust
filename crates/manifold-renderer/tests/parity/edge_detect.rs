@@ -3,7 +3,7 @@
 //! composite primitive.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::EdgeDetect;
 use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
@@ -26,7 +26,7 @@ fn edge_detect_is_pixel_exact_across_fixtures_and_setups() {
         let input = fixture.build(h);
 
         for &(amount, threshold, label) in SETUPS {
-            let mut fx = make_default_effect(EffectTypeId::EDGE_DETECT);
+            let mut fx = make_default_effect(PresetTypeId::EDGE_DETECT);
             fx.param_values[0].value = amount;
             fx.param_values[1].value = threshold;
             // param_values[2] (mode) is declared but unused by the

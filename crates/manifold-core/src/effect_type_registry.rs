@@ -3,13 +3,13 @@
 //! Replaces the scattered `display_name()`, `ALL` const, and category registry
 //! with one registration table. Adding/removing an effect = add/remove a row.
 
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use std::sync::LazyLock;
 
 /// Metadata for a registered effect type.
 #[derive(Debug, Clone)]
 pub struct EffectTypeRegistration {
-    pub id: EffectTypeId,
+    pub id: PresetTypeId,
     pub display_name: &'static str,
     pub category: &'static str,
     /// Whether this effect appears in the "Add Effect" browser popup.
@@ -87,7 +87,7 @@ pub fn all() -> &'static [EffectTypeRegistration] {
 }
 
 /// Get the display name for an effect type. Returns the ID string as fallback.
-pub fn display_name(id: &EffectTypeId) -> &str {
+pub fn display_name(id: &PresetTypeId) -> &str {
     REGISTRY
         .iter()
         .find(|r| r.id == *id)
@@ -96,7 +96,7 @@ pub fn display_name(id: &EffectTypeId) -> &str {
 }
 
 /// Get the category for an effect type. Returns "Post-Process" as fallback.
-pub fn category(id: &EffectTypeId) -> &str {
+pub fn category(id: &PresetTypeId) -> &str {
     REGISTRY
         .iter()
         .find(|r| r.id == *id)
@@ -115,6 +115,6 @@ pub fn effects_in_category(cat: &str) -> Vec<&'static EffectTypeRegistration> {
 }
 
 /// Check if an effect type ID is registered (known built-in).
-pub fn is_registered(id: &EffectTypeId) -> bool {
+pub fn is_registered(id: &PresetTypeId) -> bool {
     REGISTRY.iter().any(|r| r.id == *id)
 }

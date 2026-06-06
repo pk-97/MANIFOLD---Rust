@@ -1,7 +1,7 @@
 use crate::effects::{
     ParamDef, ParamEnvelope, ParamId, ParamMapping, ParamSlot, ParamSource, ParameterDriver,
 };
-use crate::generator_type_id::GeneratorTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::types::{BeatDivision, DriverWaveform};
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 13.
 #[derive(Debug, Clone, Default)]
 pub struct GeneratorParamState {
-    generator_type: GeneratorTypeId,
+    generator_type: PresetTypeId,
     /// Effective (post-modulation) param values, one slot per generator
     /// parameter. `Vec<ParamSlot>` since the storage unification — the
     /// `value` is the live float; `exposed` mirrors the effect side so
@@ -128,7 +128,7 @@ impl Serialize for GeneratorParamState {
 /// Serialize-side wrapper for generator `baseParamValues` (plain `f32`).
 struct GenParamValuesSer<'a> {
     values: &'a [f32],
-    gen_type: &'a GeneratorTypeId,
+    gen_type: &'a PresetTypeId,
 }
 
 impl Serialize for GenParamValuesSer<'_> {
@@ -143,7 +143,7 @@ impl Serialize for GenParamValuesSer<'_> {
 /// Serialize-side wrapper for generator `paramValues` (`ParamSlot`).
 struct GenParamSlotValuesSer<'a> {
     values: &'a [ParamSlot],
-    gen_type: &'a GeneratorTypeId,
+    gen_type: &'a PresetTypeId,
 }
 
 impl Serialize for GenParamSlotValuesSer<'_> {
@@ -167,8 +167,11 @@ impl<'de> Deserialize<'de> for GeneratorParamState {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Raw {
-            #[serde(default)]
-            generator_type: GeneratorTypeId,
+            #[serde(
+                default,
+                deserialize_with = "crate::preset_type_id::deserialize_generator_type"
+            )]
+            generator_type: PresetTypeId,
             #[serde(default)]
             param_values: Option<crate::effects::ParamValuesWire>,
             #[serde(default)]
@@ -211,7 +214,7 @@ impl<'de> Deserialize<'de> for GeneratorParamState {
 impl GeneratorParamState {
     /// Create a new GeneratorParamState with the given type, fully initialized
     /// from the generator definition registry.
-    pub fn new(gen_type: GeneratorTypeId) -> Self {
+    pub fn new(gen_type: PresetTypeId) -> Self {
         let mut state = Self::default();
         state.change_type(gen_type);
         state
@@ -219,7 +222,7 @@ impl GeneratorParamState {
 
     /// The generator type for this param state.
     #[inline]
-    pub fn generator_type(&self) -> &GeneratorTypeId {
+    pub fn generator_type(&self) -> &PresetTypeId {
         &self.generator_type
     }
 
@@ -459,8 +462,8 @@ impl GeneratorParamState {
     }
 
     /// Change generator type. Unity GeneratorParamState.cs ChangeType.
-    pub fn change_type(&mut self, new_type: GeneratorTypeId) {
-        if new_type == GeneratorTypeId::NONE {
+    pub fn change_type(&mut self, new_type: PresetTypeId) {
+        if new_type == PresetTypeId::NONE {
             return;
         }
         self.generator_type = new_type.clone();
@@ -476,7 +479,7 @@ impl GeneratorParamState {
     /// Initialize both base and effective arrays from registry defaults.
     /// Unity GeneratorParamState.cs InitDefaults(GeneratorType genType) lines 143-155.
     /// Takes a type parameter and sets self.generator_type = genType.
-    pub fn init_defaults_for_type(&mut self, gen_type: GeneratorTypeId) {
+    pub fn init_defaults_for_type(&mut self, gen_type: PresetTypeId) {
         if let Some(def) = crate::preset_definition_registry::generator::try_get(&gen_type) {
             self.generator_type = gen_type;
             self.param_values = def
@@ -527,7 +530,7 @@ impl GeneratorParamState {
     /// Unity GeneratorParamState.cs Restore lines 168-183.
     pub fn restore(
         &mut self,
-        gen_type: GeneratorTypeId,
+        gen_type: PresetTypeId,
         params: Vec<f32>,
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,
@@ -616,7 +619,7 @@ mod tests {
     // Test-only inventory submission — BLACK_HOLE isn't linked from manifold-renderer in unit tests.
     inventory::submit! {
         GeneratorMetadata {
-            id: GeneratorTypeId::BLACK_HOLE,
+            id: PresetTypeId::BLACK_HOLE,
             display_name: "Black Hole",
             is_line_based: false,
             available: true,
@@ -645,7 +648,7 @@ mod tests {
 
     #[test]
     fn migrate_pads_short_param_arrays_with_defaults_preserving_existing() {
-        let gt = GeneratorTypeId::BLACK_HOLE;
+        let gt = PresetTypeId::BLACK_HOLE;
         let target_count = crate::preset_definition_registry::generator::try_get(&gt)
             .expect("BLACK_HOLE registered")
             .param_count;
@@ -693,7 +696,7 @@ mod tests {
     fn set_param_after_registry_growth_does_not_wipe_existing_values() {
         // Regression test for the bug where set_param's length-mismatch branch
         // called init_defaults_for_type, wiping every saved value.
-        let gt = GeneratorTypeId::BLACK_HOLE;
+        let gt = PresetTypeId::BLACK_HOLE;
         let target_count = crate::preset_definition_registry::generator::try_get(&gt)
             .expect("BLACK_HOLE registered")
             .param_count;
@@ -731,7 +734,7 @@ mod tests {
         //
         // After the fix, registry absence stops gating the write.
         // Clamping is the only thing that depends on a def existing.
-        let unknown_type = GeneratorTypeId::from_string("DoesNotExist".to_string());
+        let unknown_type = PresetTypeId::from_string("DoesNotExist".to_string());
         assert!(
             crate::preset_definition_registry::generator::try_get(&unknown_type).is_none(),
             "fixture relies on this type NOT being in the registry"
@@ -768,7 +771,7 @@ mod tests {
     fn gen_param_mappings_empty_emits_no_field_and_note_round_trips() {
         // Byte-identical back-compat: a generator that never reshaped a
         // knob must serialize WITHOUT a `paramMappings` field.
-        let mut gp = GeneratorParamState::new(GeneratorTypeId::BLACK_HOLE);
+        let mut gp = GeneratorParamState::new(PresetTypeId::BLACK_HOLE);
         let json = serde_json::to_string(&gp).unwrap();
         assert!(
             !json.contains("paramMappings"),

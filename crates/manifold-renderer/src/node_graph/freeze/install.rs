@@ -52,8 +52,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use ahash::{AHashMap, AHashSet};
-use manifold_core::EffectTypeId;
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode,
@@ -86,8 +85,8 @@ pub fn freeze_enabled() -> bool {
 /// id so [`should_render_fused`] can consult the matching per-device perf
 /// verdict — `should_fuse` for effects, `should_fuse_generator` for generators.
 pub enum FuseTarget<'a> {
-    Effect(&'a EffectTypeId),
-    Generator(&'a GeneratorTypeId),
+    Effect(&'a PresetTypeId),
+    Generator(&'a PresetTypeId),
 }
 
 /// The single home for the "should we attempt to fuse this card?" decision,
@@ -128,7 +127,7 @@ pub fn should_render_fused(target: FuseTarget<'_>, is_watched: bool) -> bool {
 /// same door edited shapes use. `None` for any effect whose canonical graph has
 /// no fusable region. Startup `tune_all` calls this, warming the canonical
 /// entries; the live gate fills edited entries on demand.
-pub fn fused_view_by_id(id: &EffectTypeId) -> Option<&'static LoadedPresetView> {
+pub fn fused_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> {
     let base = crate::node_graph::loaded_preset_view_by_id(id)?;
     fused_view_for(base.canonical_def, base)
 }
@@ -147,7 +146,7 @@ pub fn fused_view_by_id(id: &EffectTypeId) -> Option<&'static LoadedPresetView> 
 fn fuse_view_parts(
     canonical_def: &EffectGraphDef,
     bindings: &[ParamBinding],
-    type_id: &EffectTypeId,
+    type_id: &PresetTypeId,
     skip_mode: crate::node_graph::SkipMode,
     registry: &PrimitiveRegistry,
 ) -> Option<LoadedPresetView> {
@@ -322,7 +321,7 @@ pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGr
 /// `None` for any generator whose canonical graph has no fusable region, or whose
 /// modulation bindings can't be retargeted (stranded) — either way it renders
 /// unfused, always correct. Mirrors [`fused_view_by_id`].
-pub fn fused_generator_def_by_id(id: &GeneratorTypeId) -> Option<&'static EffectGraphDef> {
+pub fn fused_generator_def_by_id(id: &PresetTypeId) -> Option<&'static EffectGraphDef> {
     use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
     let json = bundled_generator_preset_json(id)?;
     let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
@@ -791,7 +790,7 @@ mod tests {
         // arms share this exact logic so the override can't drift between paths.
         // (There is intentionally no `has_override` veto — an edited graph fuses
         // by content via `fused_view_for`; while open it's the watched target.)
-        let ty = EffectTypeId::new("ColorGrade");
+        let ty = PresetTypeId::new("ColorGrade");
         // Not watched: fuses (freeze is on in this test binary; untuned perf is
         // optimistic, so the verdict is `true`).
         assert!(should_render_fused(FuseTarget::Effect(&ty), false));
@@ -799,7 +798,7 @@ mod tests {
         assert!(!should_render_fused(FuseTarget::Effect(&ty), true));
 
         // Same contract on the generator arm — proves it's one decision, not two.
-        let gty = GeneratorTypeId::new("DigitalPlants");
+        let gty = PresetTypeId::new("DigitalPlants");
         assert!(!should_render_fused(FuseTarget::Generator(&gty), true));
     }
 
@@ -809,7 +808,7 @@ mod tests {
         // own content key and never clobber the canonical one; a non-fusable def
         // must cache `None` rather than recompile each call. Uses ColorGrade,
         // whose canonical shape fuses.
-        let base = crate::node_graph::loaded_preset_view_by_id(&EffectTypeId::new("ColorGrade"))
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
             .expect("ColorGrade canonical view");
 
         // Canonical content key fuses and is stable across calls (cache hit).
@@ -850,7 +849,7 @@ mod tests {
     /// keep bindings in the def, so they retargeted; effects didn't).
     #[test]
     fn fused_view_carries_retarget_map_for_user_bindings() {
-        let base = crate::node_graph::loaded_preset_view_by_id(&EffectTypeId::new("ColorGrade"))
+        let base = crate::node_graph::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
             .expect("ColorGrade canonical view");
         // Plain JSON-loaded view: no fusion, so nothing to retarget.
         assert!(
@@ -1044,7 +1043,7 @@ mod tests {
     /// fused node, at the matching `n{i}_{param}` field.
     #[test]
     fn fused_view_retargets_every_binding() {
-        let view = fused_view_by_id(&EffectTypeId::new("ColorGrade"))
+        let view = fused_view_by_id(&PresetTypeId::new("ColorGrade"))
             .expect("ColorGrade has a fused view");
         assert_eq!(view.bindings.len(), 9, "all outer-card sliders survive");
         for b in view.bindings {

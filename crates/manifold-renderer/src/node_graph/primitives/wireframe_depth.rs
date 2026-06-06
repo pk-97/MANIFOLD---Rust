@@ -12,7 +12,7 @@
 
 use std::sync::OnceLock;
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 
 use crate::effect::PostProcessEffect;
 use crate::effects::wireframe_depth::WireframeDepthFX;
@@ -226,7 +226,7 @@ impl EffectNode for WireframeDepth {
         };
 
         let fx = build_effect_instance(
-            &EffectTypeId::WIREFRAME_DEPTH,
+            &PresetTypeId::WIREFRAME_DEPTH,
             ctx,
             WIREFRAME_DEPTH_PARAM_ORDER,
         );

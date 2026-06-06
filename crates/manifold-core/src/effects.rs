@@ -1,5 +1,5 @@
 use crate::effect_graph_def::EffectGraphDef;
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::id::{EffectGroupId, EffectId, NodeId};
 use crate::types::{BeatDivision, DriverWaveform};
 use crate::units::Beats;
@@ -83,7 +83,7 @@ pub trait EffectContainer {
     fn effect_groups(&self) -> &[EffectGroup];
     fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup>;
     fn has_modular_effects(&self) -> bool;
-    fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&EffectInstance>;
+    fn find_effect(&self, effect_type: &PresetTypeId) -> Option<&EffectInstance>;
     fn find_effect_group(&self, group_id: &str) -> Option<&EffectGroup>;
     fn envelopes(&self) -> &[ParamEnvelope];
     fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope>;
@@ -599,7 +599,7 @@ impl<'de> Deserialize<'de> for ParamSlot {
 pub struct EffectInstance {
     /// Unique identifier for this effect instance.
     pub id: EffectId,
-    effect_type: EffectTypeId,
+    effect_type: PresetTypeId,
     pub enabled: bool,
     pub collapsed: bool,
     /// Positional parameter storage. The first
@@ -716,7 +716,7 @@ impl ParamValuesWire {
     /// caught a real bug.
     fn into_positional(
         self,
-        effect_type: &EffectTypeId,
+        effect_type: &PresetTypeId,
         user_binding_ids: &[&str],
         user_defaults: &[f32],
     ) -> Vec<ParamSlot> {
@@ -784,7 +784,7 @@ impl ParamValuesWire {
     /// `Positional` arm here unchanged.
     pub(crate) fn into_positional_for_generator(
         self,
-        gen_type: &crate::GeneratorTypeId,
+        gen_type: &crate::PresetTypeId,
     ) -> Vec<ParamSlot> {
         match self {
             ParamValuesWire::Positional(v) => v,
@@ -844,7 +844,7 @@ impl FloatValuesWire {
     /// `Vec<f32>`.
     fn into_positional_base(
         self,
-        effect_type: &EffectTypeId,
+        effect_type: &PresetTypeId,
         user_binding_ids: &[&str],
         user_defaults: &[f32],
     ) -> Vec<f32> {
@@ -899,7 +899,7 @@ impl FloatValuesWire {
     /// Generator-registry counterpart for `GeneratorParamState.paramValues`.
     pub(crate) fn into_positional_for_generator(
         self,
-        gen_type: &crate::GeneratorTypeId,
+        gen_type: &crate::PresetTypeId,
     ) -> Vec<f32> {
         match self {
             FloatValuesWire::Positional(v) => v,
@@ -945,7 +945,7 @@ impl FloatValuesWire {
 /// Routes through the generator registry's `param_ids` slice.
 pub(crate) fn serialize_param_values_for_generator<S>(
     values: &[f32],
-    gen_type: &crate::GeneratorTypeId,
+    gen_type: &crate::PresetTypeId,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -987,7 +987,7 @@ where
 /// when `values.len()` exceeds the registry's param count).
 pub(crate) fn serialize_param_values_for_generator_slots<S>(
     values: &[ParamSlot],
-    gen_type: &crate::GeneratorTypeId,
+    gen_type: &crate::PresetTypeId,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -1030,7 +1030,7 @@ where
 /// missing (test contexts) or any *static* `param_id` is empty.
 fn serialize_param_values<S>(
     values: &[ParamSlot],
-    effect_type: &EffectTypeId,
+    effect_type: &PresetTypeId,
     user_binding_ids: &[&str],
     serializer: S,
 ) -> Result<S::Ok, S::Error>
@@ -1076,7 +1076,7 @@ where
 /// floats (exposure isn't meaningful on base values).
 fn serialize_base_param_values<S>(
     values: &[f32],
-    effect_type: &EffectTypeId,
+    effect_type: &PresetTypeId,
     user_binding_ids: &[&str],
     serializer: S,
 ) -> Result<S::Ok, S::Error>
@@ -1235,7 +1235,7 @@ impl Serialize for EffectInstance {
 /// `Serialize` can route to `serialize_param_values`.
 struct ParamValuesSer<'a> {
     values: &'a [ParamSlot],
-    effect_type: &'a EffectTypeId,
+    effect_type: &'a PresetTypeId,
     user_binding_ids: &'a [&'a str],
 }
 
@@ -1256,7 +1256,7 @@ impl Serialize for ParamValuesSer<'_> {
 /// Serialize-side wrapper for `baseParamValues` (plain `Vec<f32>`).
 struct BaseParamValuesSer<'a> {
     values: &'a [f32],
-    effect_type: &'a EffectTypeId,
+    effect_type: &'a PresetTypeId,
     user_binding_ids: &'a [&'a str],
 }
 
@@ -1284,7 +1284,8 @@ impl<'de> Deserialize<'de> for EffectInstance {
         struct Raw {
             #[serde(default = "generate_effect_id")]
             id: EffectId,
-            effect_type: EffectTypeId,
+            #[serde(deserialize_with = "crate::preset_type_id::deserialize_effect_type")]
+            effect_type: PresetTypeId,
             #[serde(default = "default_true")]
             enabled: bool,
             #[serde(default)]
@@ -1381,7 +1382,7 @@ impl<'de> Deserialize<'de> for EffectInstance {
 impl EffectInstance {
     /// Create a new EffectInstance with the given type.
     /// Unity EffectInstance.cs lines 79-83.
-    pub fn new(effect_type: EffectTypeId) -> Self {
+    pub fn new(effect_type: PresetTypeId) -> Self {
         Self {
             id: generate_effect_id(),
             effect_type,
@@ -1406,7 +1407,7 @@ impl EffectInstance {
 
     /// Read-only access to the effect type.
     #[inline]
-    pub fn effect_type(&self) -> &EffectTypeId {
+    pub fn effect_type(&self) -> &PresetTypeId {
         &self.effect_type
     }
 
@@ -1759,7 +1760,7 @@ impl EffectInstance {
             wires: Vec::new(),
         });
         let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
-            id: EffectTypeId::new(""),
+            id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),
             osc_prefix: String::new(),
@@ -1906,7 +1907,7 @@ impl EffectInstance {
             wires: Vec::new(),
         });
         let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
-            id: EffectTypeId::new(""),
+            id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),
             osc_prefix: String::new(),
@@ -2024,7 +2025,7 @@ impl EffectInstance {
         //      WireRes(7) MeshRate(8) Flow(9) Lock(10) EdgeFollow(11)
         // (User bindings didn't exist in V1.0 / V1.1, so the WireframeDepth
         // legacy migration runs against the entire param_values Vec.)
-        if self.effect_type == EffectTypeId::WIREFRAME_DEPTH && self.param_values.len() == 14 {
+        if self.effect_type == PresetTypeId::WIREFRAME_DEPTH && self.param_values.len() == 14 {
             let old = &self.param_values;
             let migrated = vec![
                 old[0],                  // Amount → Amount
@@ -2620,7 +2621,7 @@ pub enum EnvelopeMode {
 /// the ParameterDriver round-trip recovery contract.
 #[derive(Debug, Clone)]
 pub struct ParamEnvelope {
-    pub target_effect_type: EffectTypeId,
+    pub target_effect_type: PresetTypeId,
     /// Stable mapping key. Empty after legacy V1.1 deserialization
     /// until the post-load resolver fills it in from the registry.
     pub param_id: ParamId,
@@ -2695,7 +2696,7 @@ impl ParamEnvelope {
     /// Gen param envelope constructor.
     pub fn new_for_gen(param_id: impl Into<ParamId>) -> Self {
         Self {
-            target_effect_type: EffectTypeId::TRANSFORM,
+            target_effect_type: PresetTypeId::TRANSFORM,
             param_id: param_id.into(),
             enabled: true,
             attack_beats: 0.0,
@@ -2716,7 +2717,7 @@ impl ParamEnvelope {
     }
 
     /// Effect envelope constructor.
-    pub fn new_for_effect(effect_type: EffectTypeId, param_id: impl Into<ParamId>) -> Self {
+    pub fn new_for_effect(effect_type: PresetTypeId, param_id: impl Into<ParamId>) -> Self {
         Self {
             target_effect_type: effect_type,
             param_id: param_id.into(),
@@ -2810,7 +2811,7 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
         #[serde(rename_all = "camelCase")]
         struct Raw {
             #[serde(default)]
-            target_effect_type: EffectTypeId,
+            target_effect_type: PresetTypeId,
             #[serde(default)]
             param_id: Option<String>,
             #[serde(default, rename = "targetParamIndex")]
@@ -3118,7 +3119,7 @@ mod tests {
 
     #[test]
     fn envelope_serialize_writes_param_id_only() {
-        let env = ParamEnvelope::new_for_effect(EffectTypeId::BLOOM, "amount");
+        let env = ParamEnvelope::new_for_effect(PresetTypeId::BLOOM, "amount");
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains("\"paramId\":\"amount\""));
         assert!(
@@ -3130,7 +3131,7 @@ mod tests {
 
     #[test]
     fn envelope_round_trips_through_canonical_shape() {
-        let env = ParamEnvelope::new_for_effect(EffectTypeId::BLOOM, "amount");
+        let env = ParamEnvelope::new_for_effect(PresetTypeId::BLOOM, "amount");
         let json = serde_json::to_string(&env).unwrap();
         let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.param_id, env.param_id);
@@ -3184,7 +3185,7 @@ mod tests {
         // value survives a round-trip through manifold-core's tests.
         let fx = EffectInstance {
             id: EffectId::new("abc12345"),
-            effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
+            effect_type: PresetTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
             collapsed: false,
             param_values: vec![
@@ -3239,7 +3240,7 @@ mod tests {
         // Hidden param round-trips through positional Array{value,exposed}.
         let fx = EffectInstance {
             id: EffectId::new("abc12345"),
-            effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
+            effect_type: PresetTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
             collapsed: false,
             param_values: vec![
@@ -3281,7 +3282,7 @@ mod tests {
         // knob must serialize WITHOUT a `paramMappings` field, so every
         // existing project's JSON is byte-identical to before this
         // feature existed.
-        let mut fx = EffectInstance::new(EffectTypeId::from_string("ColorGrade".to_string()));
+        let mut fx = EffectInstance::new(PresetTypeId::from_string("ColorGrade".to_string()));
         fx.param_values = vec![ParamSlot::exposed(0.5)];
         let json = serde_json::to_string(&fx).unwrap();
         assert!(
@@ -3319,7 +3320,7 @@ mod tests {
     }
 
     fn back_upsert_replaces_in_place() {
-        let mut fx = EffectInstance::new(EffectTypeId::from_string("ColorGrade".to_string()));
+        let mut fx = EffectInstance::new(PresetTypeId::from_string("ColorGrade".to_string()));
         fx.upsert_param_mapping(ParamMapping {
             param_id: "amount".to_string(),
             label: None,
@@ -3372,7 +3373,7 @@ mod tests {
 
     #[test]
     fn effect_instance_skip_serializing_optional_none() {
-        let fx = EffectInstance::new(EffectTypeId::from_string("TestEffect".to_string()));
+        let fx = EffectInstance::new(PresetTypeId::from_string("TestEffect".to_string()));
         let json = serde_json::to_string(&fx).unwrap();
         // Verify optional None fields aren't emitted.
         assert!(!json.contains("\"baseParamValues\""));
@@ -3455,7 +3456,7 @@ mod tests {
             wires: Vec::new(),
         });
         let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
-            id: EffectTypeId::new(""),
+            id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),
             osc_prefix: String::new(),
@@ -3541,7 +3542,7 @@ mod tests {
         // EffectInstance round-trips through JSON, including the
         // user-binding tail values landing in the right param_values
         // slots regardless of JSON key ordering.
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)]; // static prefix
         fx.append_user_binding(sample_user_binding(
             "user.uv_transform.translate.1",
@@ -3590,7 +3591,7 @@ mod tests {
 
     #[test]
     fn append_user_binding_grows_param_values_with_default() {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.ensure_base_values();
 
@@ -3606,7 +3607,7 @@ mod tests {
 
     #[test]
     fn remove_user_binding_drops_corresponding_value_slot() {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
@@ -3625,7 +3626,7 @@ mod tests {
 
     #[test]
     fn remove_user_binding_unknown_id_returns_none() {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)];
         let removed = fx.remove_user_binding_by_id("user.nope.1");
         assert!(removed.is_none());
@@ -3634,7 +3635,7 @@ mod tests {
 
     #[test]
     fn param_id_to_value_index_resolves_static_then_user() {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
@@ -3653,7 +3654,7 @@ mod tests {
         // a build that also knows those bindings (because they're
         // per-instance — same EffectInstance), and align runs. The
         // user-binding tail values must survive.
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         push_user_binding_meta_only(&mut fx, &sample_user_binding("user.a.b.1", "a", "b"));
         push_user_binding_meta_only(&mut fx, &sample_user_binding("user.c.d.1", "c", "d"));
         // Hand-build param_values to mimic what comes out of deserialize.
@@ -3679,7 +3680,7 @@ mod tests {
         // Static prefix already correct, user-binding tail missing
         // (e.g., the binding was added in memory but param_values
         // hasn't grown yet). align should pad with binding defaults.
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         push_user_binding_meta_only(&mut fx, &sample_user_binding("user.a.b.1", "a", "b"));
         fx.param_values = vec![ParamSlot::exposed(0.7)]; // missing tail
         fx.align_to_definition();
@@ -3693,7 +3694,7 @@ mod tests {
     fn align_to_definition_truncates_extra_user_tail() {
         // param_values has more user-tail slots than user bindings —
         // junk data from somewhere. align trims to the actual binding count.
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         push_user_binding_meta_only(&mut fx, &sample_user_binding("user.a.b.1", "a", "b"));
         fx.param_values = vec![
             ParamSlot::exposed(0.7),
@@ -3710,7 +3711,7 @@ mod tests {
 
     #[test]
     fn user_binding_index_lookup_by_id() {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
         assert_eq!(fx.user_binding_index("user.a.b.1"), Some(0));
@@ -3723,7 +3724,7 @@ mod tests {
         // ParamSource::get_param_def must return a ParamDef shaped from
         // the user binding for indices past the static count, so UI code
         // (slider rendering, OSC formatting) gets correct min/max/label.
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.append_user_binding(UserParamBinding {
             id: "user.uv.translate.1".to_string(),
             label: "Translate".to_string(),
@@ -3797,7 +3798,7 @@ mod tests {
 
     #[test]
     fn new_effect_instance_has_no_graph_override() {
-        let fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let fx = EffectInstance::new(PresetTypeId::new("Mirror"));
         assert!(fx.graph.is_none());
         assert_eq!(fx.graph_version, 0);
     }
@@ -3807,7 +3808,7 @@ mod tests {
         // Existing fixtures (Liveschool, Burn, WAYPOINTS) must
         // continue to round-trip byte-identically — the new field
         // must not appear in their JSON unless explicitly set.
-        let fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let fx = EffectInstance::new(PresetTypeId::new("Mirror"));
         let json = serde_json::to_string(&fx).unwrap();
         assert!(
             !json.contains("\"graph\""),
@@ -3868,7 +3869,7 @@ mod tests {
             }],
         };
 
-        let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("Mirror"));
         fx.graph = Some(def.clone());
 
         let json = serde_json::to_string(&fx).unwrap();

@@ -5,13 +5,13 @@
 //! The GPU-dependent `GeneratorFactory` submissions remain in `manifold-renderer`.
 
 use crate::generator_registration::{GeneratorAliasMetadata, GeneratorMetadata, ParamSpec};
-use crate::generator_type_id::GeneratorTypeId;
+use crate::preset_type_id::PresetTypeId;
 
 // ── Plasma ─────────────────────────────────────────────────────────────
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::PLASMA,
+        id: PresetTypeId::PLASMA,
         display_name: "Plasma",
         is_line_based: false,
         available: true,
@@ -54,7 +54,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::CONCENTRIC_TUNNEL,
+        id: PresetTypeId::CONCENTRIC_TUNNEL,
         display_name: "Concentric Tunnel",
         is_line_based: true,
         available: true,
@@ -87,7 +87,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::TESSERACT,
+        id: PresetTypeId::TESSERACT,
         display_name: "Tesseract",
         is_line_based: true,
         available: true,
@@ -119,7 +119,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::DUOCYLINDER,
+        id: PresetTypeId::DUOCYLINDER,
         display_name: "Duocylinder",
         is_line_based: true,
         available: true,
@@ -146,7 +146,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::LISSAJOUS,
+        id: PresetTypeId::LISSAJOUS,
         display_name: "Lissajous",
         is_line_based: true,
         available: true,
@@ -173,7 +173,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::WIREFRAME_ZOO,
+        id: PresetTypeId::WIREFRAME_ZOO,
         display_name: "Wireframe",
         is_line_based: true,
         available: true,
@@ -198,7 +198,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::FLUID_SIMULATION,
+        id: PresetTypeId::FLUID_SIMULATION,
         display_name: "Fluid Simulation",
         is_line_based: false,
         available: true,
@@ -228,7 +228,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::FLUID_SIMULATION_3D,
+        id: PresetTypeId::FLUID_SIMULATION_3D,
         display_name: "Fluid Simulation 3D",
         is_line_based: false,
         available: true,
@@ -264,7 +264,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::NESTED_CUBES,
+        id: PresetTypeId::NESTED_CUBES,
         display_name: "Nested Cubes",
         is_line_based: false,
         available: true,
@@ -289,7 +289,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::BLACK_HOLE,
+        id: PresetTypeId::BLACK_HOLE,
         display_name: "Black Hole",
         is_line_based: false,
         available: true,
@@ -320,7 +320,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::METALLIC_GLASS,
+        id: PresetTypeId::METALLIC_GLASS,
         display_name: "Metallic Glass",
         is_line_based: false,
         available: true,
@@ -349,7 +349,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::OILY_FLUID,
+        id: PresetTypeId::OILY_FLUID,
         display_name: "Oily Fluid",
         is_line_based: false,
         available: true,
@@ -391,7 +391,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::MRI_VOLUME,
+        id: PresetTypeId::MRI_VOLUME,
         display_name: "MRI Volume",
         is_line_based: false,
         available: true,
@@ -420,7 +420,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::STAR_FIELD,
+        id: PresetTypeId::STAR_FIELD,
         display_name: "Star Field",
         is_line_based: false,
         available: true,
@@ -447,7 +447,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::TEXT,
+        id: PresetTypeId::TEXT,
         display_name: "Text",
         is_line_based: false,
         available: true,
@@ -471,7 +471,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::PARTICLE_TEXT,
+        id: PresetTypeId::PARTICLE_TEXT,
         display_name: "Particle Text",
         is_line_based: false,
         available: true,
@@ -502,7 +502,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::DIGITAL_PLANTS,
+        id: PresetTypeId::DIGITAL_PLANTS,
         display_name: "Digital Plants",
         is_line_based: false,
         available: true,
@@ -565,32 +565,32 @@ const WIREFRAME_ZOO_ALIASES: &[crate::effect_registration::ParamAlias] = &[
 ];
 
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::PLASMA, aliases: SNAP_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::PLASMA, aliases: SNAP_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::WIREFRAME_ZOO, aliases: WIREFRAME_ZOO_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::WIREFRAME_ZOO, aliases: WIREFRAME_ZOO_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::CONCENTRIC_TUNNEL, aliases: SNAP_AND_MODE_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::CONCENTRIC_TUNNEL, aliases: SNAP_AND_MODE_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::LISSAJOUS, aliases: SNAP_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::LISSAJOUS, aliases: SNAP_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::FLUID_SIMULATION, aliases: SNAP_AND_MODE_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::FLUID_SIMULATION, aliases: SNAP_AND_MODE_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::FLUID_SIMULATION_3D, aliases: SNAP_AND_MODE_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::FLUID_SIMULATION_3D, aliases: SNAP_AND_MODE_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::NESTED_CUBES, aliases: SNAP_AND_MODE_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::NESTED_CUBES, aliases: SNAP_AND_MODE_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::MRI_VOLUME, aliases: SNAP_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::MRI_VOLUME, aliases: SNAP_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::PARTICLE_TEXT, aliases: SNAP_AND_MODE_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::PARTICLE_TEXT, aliases: SNAP_AND_MODE_ALIASES }
 }
 inventory::submit! {
-    GeneratorAliasMetadata { id: GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR, aliases: SNAP_ALIASES }
+    GeneratorAliasMetadata { id: PresetTypeId::COMPUTE_STRANGE_ATTRACTOR, aliases: SNAP_ALIASES }
 }

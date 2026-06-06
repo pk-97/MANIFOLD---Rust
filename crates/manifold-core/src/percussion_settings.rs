@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::generator_type_id::GeneratorTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::percussion_analysis::{
     PercussionClipBinding, PercussionImportOptions, PercussionTriggerType,
 };
@@ -78,7 +78,7 @@ impl Default for DemucsSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KickSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: Beats,
     pub min_confidence: f32,
@@ -89,7 +89,7 @@ pub struct KickSettings {
 impl Default for KickSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::WIREFRAME_ZOO,
+            generator: PresetTypeId::WIREFRAME_ZOO,
             layer_index: 0,
             clip_duration_beats: Beats(0.5),
             min_confidence: 0.0,
@@ -101,7 +101,7 @@ impl Default for KickSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnareSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: Beats,
     pub min_confidence: f32,
@@ -115,7 +115,7 @@ pub struct SnareSettings {
 impl Default for SnareSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::BASIC_SHAPES,
+            generator: PresetTypeId::BASIC_SHAPES,
             layer_index: 1,
             clip_duration_beats: Beats(0.75),
             min_confidence: 0.0,
@@ -130,7 +130,7 @@ impl Default for SnareSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PercSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: Beats,
     pub min_confidence: f32,
@@ -141,7 +141,7 @@ pub struct PercSettings {
 impl Default for PercSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::PLASMA,
+            generator: PresetTypeId::PLASMA,
             layer_index: 3,
             clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
@@ -153,7 +153,7 @@ impl Default for PercSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HatSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: Beats,
     pub min_confidence: f32,
@@ -164,7 +164,7 @@ pub struct HatSettings {
 impl Default for HatSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::LISSAJOUS,
+            generator: PresetTypeId::LISSAJOUS,
             layer_index: 4,
             clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
@@ -176,7 +176,7 @@ impl Default for HatSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BassSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
     pub duration_threshold_sec: Seconds,
@@ -185,7 +185,7 @@ pub struct BassSettings {
 impl Default for BassSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::PLASMA,
+            generator: PresetTypeId::PLASMA,
             layer_index: 8,
             min_confidence: 0.0,
             duration_threshold_sec: Seconds(1.7144),
@@ -195,7 +195,7 @@ impl Default for BassSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BassSustainedSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
 }
@@ -203,7 +203,7 @@ pub struct BassSustainedSettings {
 impl Default for BassSustainedSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::PLASMA,
+            generator: PresetTypeId::PLASMA,
             layer_index: 9,
             min_confidence: 0.0,
         }
@@ -212,7 +212,7 @@ impl Default for BassSustainedSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
 }
@@ -220,7 +220,7 @@ pub struct SynthSettings {
 impl Default for SynthSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::PLASMA,
+            generator: PresetTypeId::PLASMA,
             layer_index: 6,
             min_confidence: 0.0,
         }
@@ -229,7 +229,7 @@ impl Default for SynthSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VocalSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: Beats,
     pub min_confidence: f32,
@@ -244,7 +244,7 @@ pub struct VocalSettings {
 impl Default for VocalSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::LISSAJOUS,
+            generator: PresetTypeId::LISSAJOUS,
             layer_index: 5,
             clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
@@ -260,7 +260,7 @@ impl Default for VocalSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PadSettings {
-    pub generator: GeneratorTypeId,
+    pub generator: PresetTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
 }
@@ -268,7 +268,7 @@ pub struct PadSettings {
 impl Default for PadSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::DUOCYLINDER,
+            generator: PresetTypeId::DUOCYLINDER,
             layer_index: 7,
             min_confidence: 0.0,
         }
@@ -686,7 +686,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Kick,
             0,
             None,
-            GeneratorTypeId::WIREFRAME_ZOO,
+            PresetTypeId::WIREFRAME_ZOO,
             Beats(0.5),
             0.0,
         ));
@@ -695,7 +695,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Snare,
             1,
             None,
-            GeneratorTypeId::BASIC_SHAPES,
+            PresetTypeId::BASIC_SHAPES,
             Beats(0.75),
             0.0,
         ));
@@ -704,7 +704,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Perc,
             3,
             None,
-            GeneratorTypeId::PLASMA,
+            PresetTypeId::PLASMA,
             Beats(0.50),
             0.0,
         ));
@@ -713,7 +713,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Hat,
             4,
             None,
-            GeneratorTypeId::LISSAJOUS,
+            PresetTypeId::LISSAJOUS,
             Beats(0.50),
             0.0,
         ));
@@ -722,7 +722,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Vocal,
             5,
             None,
-            GeneratorTypeId::LISSAJOUS,
+            PresetTypeId::LISSAJOUS,
             Beats(0.50),
             0.0,
         ));
@@ -731,7 +731,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Synth,
             6,
             None,
-            GeneratorTypeId::PLASMA,
+            PresetTypeId::PLASMA,
             Beats::ZERO,
             0.0,
         ));
@@ -740,7 +740,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Pad,
             7,
             None,
-            GeneratorTypeId::DUOCYLINDER,
+            PresetTypeId::DUOCYLINDER,
             Beats::ZERO,
             0.0,
         ));
@@ -749,7 +749,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Bass,
             8,
             None,
-            GeneratorTypeId::PLASMA,
+            PresetTypeId::PLASMA,
             Beats::ZERO,
             0.0,
         ));

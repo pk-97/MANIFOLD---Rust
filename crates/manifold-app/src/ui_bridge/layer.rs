@@ -1,6 +1,6 @@
 //! Layer-related dispatch: mute/solo/click/chevron/blend/drag/add/delete.
 
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::{Beats, LayerId};
@@ -448,7 +448,7 @@ pub(super) fn dispatch_layer(
                 let cmd = AddLayerCommand::new(
                     name,
                     LayerType::Video,
-                    GeneratorTypeId::NONE,
+                    PresetTypeId::NONE,
                     count,
                     None,
                 );

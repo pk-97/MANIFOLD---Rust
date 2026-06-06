@@ -5,7 +5,7 @@
 //! optional response curves. Targets are identified by the same addressing scheme
 //! as `OscParamTarget` so the fan-out reuses the existing parameter write path.
 
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamId;
 use crate::id::LayerId;
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,7 @@ impl MacroCurve {
 pub enum MacroMappingTarget {
     MasterOpacity,
     MasterEffect {
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         param_id: ParamId,
     },
     LayerOpacity {
@@ -72,7 +72,7 @@ pub enum MacroMappingTarget {
     },
     LayerEffect {
         layer_id: LayerId,
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         param_id: ParamId,
     },
     GenParam {
@@ -248,7 +248,7 @@ impl<'de> Deserialize<'de> for MacroMapping {
         enum RawTarget {
             MasterOpacity,
             MasterEffect {
-                effect_type: EffectTypeId,
+                effect_type: PresetTypeId,
                 #[serde(default)]
                 param_id: Option<String>,
                 #[serde(default)]
@@ -259,7 +259,7 @@ impl<'de> Deserialize<'de> for MacroMapping {
             },
             LayerEffect {
                 layer_id: LayerId,
-                effect_type: EffectTypeId,
+                effect_type: PresetTypeId,
                 #[serde(default)]
                 param_id: Option<String>,
                 #[serde(default)]
@@ -669,7 +669,7 @@ mod tests {
     fn serialize_emits_param_id_not_param_index() {
         let mapping = MacroMapping {
             target: MacroMappingTarget::MasterEffect {
-                effect_type: EffectTypeId::from_string("Bloom".to_string()),
+                effect_type: PresetTypeId::from_string("Bloom".to_string()),
                 param_id: Cow::Borrowed("amount"),
             },
             range_min: 0.0,

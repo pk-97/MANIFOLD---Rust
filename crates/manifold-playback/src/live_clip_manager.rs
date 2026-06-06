@@ -1,4 +1,4 @@
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
@@ -550,7 +550,7 @@ impl LiveClipManager {
         &mut self,
         project: &mut Project,
         host: &dyn LiveClipHost,
-        _generator_type: GeneratorTypeId,
+        _generator_type: PresetTypeId,
         layer_index: i32,
         duration_seconds: f32,
         beat_stamp: Option<f32>,

@@ -37,7 +37,7 @@ use std::sync::OnceLock;
 
 use ahash::AHashMap;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::{Beats, EffectTypeId, GeneratorTypeId, Seconds};
+use manifold_core::{Beats, PresetTypeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use crate::gpu_encoder::GpuEncoder;
@@ -67,10 +67,10 @@ const MIN_ATOMS: usize = 3;
 const MIN_SPEEDUP: f64 = 1.3;
 
 /// `type_id → fuse?`. Set once by [`tune_all`]; read lock-free thereafter.
-static VERDICTS: OnceLock<AHashMap<EffectTypeId, bool>> = OnceLock::new();
+static VERDICTS: OnceLock<AHashMap<PresetTypeId, bool>> = OnceLock::new();
 /// Generator twin of [`VERDICTS`] — same set-once lifecycle, keyed by generator
 /// type. Separate map because generators and effects use distinct id newtypes.
-static GEN_VERDICTS: OnceLock<AHashMap<GeneratorTypeId, bool>> = OnceLock::new();
+static GEN_VERDICTS: OnceLock<AHashMap<PresetTypeId, bool>> = OnceLock::new();
 
 /// Whether to render `type_id` through its fused kernel.
 ///
@@ -80,7 +80,7 @@ static GEN_VERDICTS: OnceLock<AHashMap<GeneratorTypeId, bool>> = OnceLock::new()
 /// by the margin on this device, else `false` (fall back to unfused). In
 /// production `tune_all` completes during startup pre-warm, before any frame
 /// renders, so the optimistic window is empty.
-pub fn should_fuse(type_id: &EffectTypeId) -> bool {
+pub fn should_fuse(type_id: &PresetTypeId) -> bool {
     match VERDICTS.get() {
         Some(map) => map.get(type_id).copied().unwrap_or(true),
         None => true,
@@ -89,7 +89,7 @@ pub fn should_fuse(type_id: &EffectTypeId) -> bool {
 
 /// Generator twin of [`should_fuse`] — optimistic (`true`) until [`tune_all`]
 /// records a measured verdict, then the device's fuse/keep decision.
-pub fn should_fuse_generator(type_id: &GeneratorTypeId) -> bool {
+pub fn should_fuse_generator(type_id: &PresetTypeId) -> bool {
     match GEN_VERDICTS.get() {
         Some(map) => map.get(type_id).copied().unwrap_or(true),
         None => true,
@@ -201,7 +201,7 @@ pub fn tune_all(device: &GpuDevice) {
     }
     let registry = PrimitiveRegistry::with_builtin();
     let dev = device.device_name();
-    let mut map: AHashMap<EffectTypeId, bool> = AHashMap::default();
+    let mut map: AHashMap<PresetTypeId, bool> = AHashMap::default();
 
     for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
         // Only effects that actually produce a fused view have anything to gate.
@@ -245,7 +245,7 @@ pub fn tune_all(device: &GpuDevice) {
     use crate::generators::bundled_generator_presets::{
         bundled_generator_preset_json, bundled_generator_preset_type_ids,
     };
-    let mut gen_map: AHashMap<GeneratorTypeId, bool> = AHashMap::default();
+    let mut gen_map: AHashMap<PresetTypeId, bool> = AHashMap::default();
     for type_id in bundled_generator_preset_type_ids() {
         let Some(fused_def) = fused_generator_def_by_id(&type_id) else {
             continue; // no fusable region
@@ -337,8 +337,8 @@ mod tests {
         // the test is correct regardless of whether a sibling test triggered a
         // tune. (No test here calls tune_all, so in practice it's unset.)
         if !is_tuned() {
-            assert!(should_fuse(&EffectTypeId::new("ColorGrade")));
-            assert!(should_fuse(&EffectTypeId::new("AnythingUntuned")));
+            assert!(should_fuse(&PresetTypeId::new("ColorGrade")));
+            assert!(should_fuse(&PresetTypeId::new("AnythingUntuned")));
         }
     }
 

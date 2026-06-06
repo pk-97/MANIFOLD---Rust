@@ -3119,7 +3119,7 @@ mod tests {
     fn write_target_value_mapping() {
         let wt = WriteTarget {
             target: AbletonMappingTarget::MasterEffect {
-                effect_type: manifold_core::EffectTypeId::BLOOM,
+                effect_type: manifold_core::PresetTypeId::BLOOM,
                 param_id: std::borrow::Cow::Borrowed("amount"),
             },
             param_index: 0,

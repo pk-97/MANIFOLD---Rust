@@ -12,7 +12,7 @@
 //! that's an effect-UX concern, not a primitive concern.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::AffineTransform;
 use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
@@ -88,7 +88,7 @@ fn affine_transform_is_pixel_exact_across_fixtures_and_xforms() {
         let input = fixture.build(h);
 
         for xf in XFORMS {
-            let mut fx = make_default_effect(EffectTypeId::TRANSFORM);
+            let mut fx = make_default_effect(PresetTypeId::TRANSFORM);
             fx.param_values[0].value = xf.x;
             fx.param_values[1].value = xf.y;
             fx.param_values[2].value = xf.zoom;

@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
 
@@ -339,7 +339,7 @@ impl EffectGraphDef {
 pub struct PresetMetadata {
     /// Stable string identity. Same string as the JSON filename for
     /// bundled presets; for user-saved presets, a freshly minted id.
-    pub id: EffectTypeId,
+    pub id: PresetTypeId,
     /// Display name shown on the effect card and in the picker.
     pub display_name: String,
     /// Picker category (`Spatial`, `Color`, `Stylize`, `Filmic`,
@@ -869,7 +869,7 @@ mod tests {
     #[test]
     fn v2_document_with_preset_metadata_round_trips() {
         let meta = PresetMetadata {
-            id: EffectTypeId::new("EdgeStretchByColor"),
+            id: PresetTypeId::new("EdgeStretchByColor"),
             display_name: "Edge Stretch By Colour".to_string(),
             category: "Stylize".to_string(),
             osc_prefix: "edge_stretch_by_color".to_string(),

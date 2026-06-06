@@ -4,12 +4,12 @@
 //! The generator registry collects these to build the create() lookup map.
 
 use crate::generator::Generator;
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_gpu::GpuDevice;
 
 /// Factory entry for creating generator instances, submitted via `inventory::submit!`.
 pub struct GeneratorFactory {
-    pub id: GeneratorTypeId,
+    pub id: PresetTypeId,
     pub create: fn(&GpuDevice) -> Box<dyn Generator>,
 }
 

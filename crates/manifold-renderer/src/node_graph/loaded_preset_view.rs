@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ahash::AHashMap;
 use arc_swap::ArcSwap;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, PresetMetadata, SkipModeDef,
@@ -54,7 +54,7 @@ use crate::node_graph::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSo
 /// [`crate::node_graph::splice_def_into_chain`] with `canonical_def`
 /// to produce equivalent worker nodes.
 pub struct LoadedPresetView {
-    pub type_id: EffectTypeId,
+    pub type_id: PresetTypeId,
     /// The canonical default graph for this effect, loaded from
     /// `assets/effect-presets/<id>.json`. Identical to what the
     /// existing `ChainSpec::build_canonical_graph()` produces today —
@@ -91,7 +91,7 @@ pub struct LoadedPresetView {
 /// permits.
 struct ViewCache {
     generation: AtomicU64,
-    map: ArcSwap<AHashMap<EffectTypeId, &'static LoadedPresetView>>,
+    map: ArcSwap<AHashMap<PresetTypeId, &'static LoadedPresetView>>,
 }
 
 static VIEW_CACHE: std::sync::LazyLock<ViewCache> = std::sync::LazyLock::new(|| ViewCache {
@@ -104,7 +104,7 @@ static VIEW_CACHE: std::sync::LazyLock<ViewCache> = std::sync::LazyLock::new(|| 
 /// the process lifetime. Returns `None` for effects whose JSON file doesn't
 /// carry `presetMetadata` (i.e., v1 entries — not yet migrated by §11
 /// block 4).
-pub fn loaded_preset_view_by_id(id: &EffectTypeId) -> Option<&'static LoadedPresetView> {
+pub fn loaded_preset_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> {
     let generation = crate::preset_loader::catalog_generation();
     if VIEW_CACHE.generation.load(Ordering::Acquire) != generation {
         rebuild_view_cache(generation);
@@ -118,8 +118,8 @@ fn rebuild_view_cache(generation: u64) {
     VIEW_CACHE.generation.store(generation, Ordering::Release);
 }
 
-fn build_view_map() -> AHashMap<EffectTypeId, &'static LoadedPresetView> {
-    let mut m: AHashMap<EffectTypeId, &'static LoadedPresetView> = AHashMap::default();
+fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
+    let mut m: AHashMap<PresetTypeId, &'static LoadedPresetView> = AHashMap::default();
     for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
         if let Some(view) = build_view(&type_id) {
             m.insert(type_id, Box::leak(Box::new(view)));
@@ -128,7 +128,7 @@ fn build_view_map() -> AHashMap<EffectTypeId, &'static LoadedPresetView> {
     m
 }
 
-fn build_view(type_id: &EffectTypeId) -> Option<LoadedPresetView> {
+fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     let def = bundled_preset_def(type_id)?;
     let metadata = def.preset_metadata.as_ref()?;
     Some(LoadedPresetView {
@@ -250,7 +250,7 @@ mod tests {
     /// stale result.
     #[test]
     fn loaded_preset_view_returns_none_for_unknown_id() {
-        let unknown = EffectTypeId::from_string("NotARealEffect".to_string());
+        let unknown = PresetTypeId::from_string("NotARealEffect".to_string());
         assert!(loaded_preset_view_by_id(&unknown).is_none());
     }
 }

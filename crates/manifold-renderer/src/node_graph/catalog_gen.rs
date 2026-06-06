@@ -22,7 +22,7 @@
 
 use std::fmt::Write as _;
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::PresetMetadata;
 
 use crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled;
@@ -339,7 +339,7 @@ fn preset_row_from_meta(meta: &PresetMetadata, kind: &'static str) -> PresetRow 
 fn collect_presets() -> Vec<PresetRow> {
     let mut rows: Vec<PresetRow> = Vec::new();
 
-    let mut effect_ids: Vec<EffectTypeId> = bundled_preset_type_ids().collect();
+    let mut effect_ids: Vec<PresetTypeId> = bundled_preset_type_ids().collect();
     effect_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     for id in &effect_ids {
         if let Some(meta) = bundled_preset_def(id).and_then(|d| d.preset_metadata.as_ref()) {

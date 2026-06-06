@@ -21,7 +21,7 @@
 //!    is bit-preserving.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::ColorLut;
 use crate::harness::{self, Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
@@ -237,7 +237,7 @@ fn lut1d_is_pixel_exact_across_fixtures_palettes_setups() {
             let lut_tex = upload_lut(h, palette_idx);
 
             for &(amount, contrast, setup_label) in SETUPS {
-                let mut fx = make_default_effect(EffectTypeId::INFRARED);
+                let mut fx = make_default_effect(PresetTypeId::INFRARED);
                 fx.param_values[0].value = amount;
                 fx.param_values[1].value = palette_idx as f32;
                 fx.param_values[2].value = contrast;

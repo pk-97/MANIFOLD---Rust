@@ -3,13 +3,13 @@
 //! Replaces the scattered `display_name()`, `ALL` const, and category registry
 //! entries with one registration table. Adding/removing = add/remove a row.
 
-use crate::generator_type_id::GeneratorTypeId;
+use crate::preset_type_id::PresetTypeId;
 use std::sync::LazyLock;
 
 /// Metadata for a registered generator type.
 #[derive(Debug, Clone)]
 pub struct GeneratorTypeRegistration {
-    pub id: GeneratorTypeId,
+    pub id: PresetTypeId,
     pub display_name: &'static str,
     /// Whether this generator appears in the "Set Generator" browser popup.
     pub available: bool,
@@ -31,7 +31,7 @@ static REGISTRY: LazyLock<Vec<GeneratorTypeRegistration>> = LazyLock::new(|| {
     // — a JSON-only generator (no `inventory::submit!` block) would
     // load and render fine but never appear in the picker.
     for preset in crate::preset_definition_registry::generator::loaded_preset_metadata() {
-        let id = crate::generator_type_id::GeneratorTypeId::from_string(
+        let id = crate::preset_type_id::PresetTypeId::from_string(
             preset.id.as_str().to_string(),
         );
         if !v.iter().any(|r| r.id == id) {
@@ -57,7 +57,7 @@ pub fn all() -> &'static [GeneratorTypeRegistration] {
 }
 
 /// Get the display name for a generator type. Returns the ID string as fallback.
-pub fn display_name(id: &GeneratorTypeId) -> &str {
+pub fn display_name(id: &PresetTypeId) -> &str {
     if id.is_none() {
         return "None";
     }
@@ -74,6 +74,6 @@ pub fn available_generators() -> Vec<&'static GeneratorTypeRegistration> {
 }
 
 /// Check if a generator type ID is registered (known built-in).
-pub fn is_registered(id: &GeneratorTypeId) -> bool {
+pub fn is_registered(id: &PresetTypeId) -> bool {
     id.is_none() || REGISTRY.iter().any(|r| r.id == *id)
 }

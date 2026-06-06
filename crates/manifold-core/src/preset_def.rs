@@ -10,7 +10,7 @@
 //! both definition registries now STORE and RETURN `PresetDef`. The two
 //! legacy structs and the `from_effect_def` / `from_generator_def`
 //! bridges are gone — the registries build `PresetDef` directly. The
-//! two registry modules and their `EffectTypeId` / `GeneratorTypeId`
+//! two registry modules and their `PresetTypeId` / `PresetTypeId`
 //! keying stay separate; only the value type unified here.
 
 use ahash::AHashMap;

@@ -9,7 +9,7 @@ use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectGroup, EffectInstance};
-use manifold_core::{BlendMode, EffectId, EffectTypeId, LayerId, NodeId};
+use manifold_core::{BlendMode, EffectId, PresetTypeId, LayerId, NodeId};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -273,7 +273,7 @@ fn count_active_layers(frame: &CompositorFrame, any_solo: bool) -> usize {
 fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
     for fx in effects {
         if fx.enabled
-            && *fx.effect_type() != EffectTypeId::UNKNOWN
+            && *fx.effect_type() != PresetTypeId::UNKNOWN
             && fx.param_values.first().map(|p| p.value).unwrap_or(0.0) > 0.0
         {
             return true;
@@ -2362,7 +2362,7 @@ impl Compositor for LayerCompositor {
 
     fn graph_snapshot_for(
         &self,
-        type_id: &manifold_core::EffectTypeId,
+        type_id: &manifold_core::PresetTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
         let view = crate::node_graph::loaded_preset_view_by_id(type_id)?;
         crate::node_graph::snapshot_for_view(view)
@@ -2370,7 +2370,7 @@ impl Compositor for LayerCompositor {
 
     fn outer_routings_for(
         &self,
-        type_id: &manifold_core::EffectTypeId,
+        type_id: &manifold_core::PresetTypeId,
     ) -> Vec<crate::node_graph::OuterParamRouting> {
         let Some(view) = crate::node_graph::loaded_preset_view_by_id(type_id) else {
             return Vec::new();

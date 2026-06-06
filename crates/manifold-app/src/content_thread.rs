@@ -797,7 +797,7 @@ impl ContentThread {
             }
 
             fn build_gen_params(
-                gen_type: &manifold_core::GeneratorTypeId,
+                gen_type: &manifold_core::PresetTypeId,
                 values: &[f32],
             ) -> Vec<manifold_profiler::NamedParam> {
                 let def = manifold_core::preset_definition_registry::generator::try_get(gen_type);

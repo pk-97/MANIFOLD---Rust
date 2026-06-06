@@ -4,7 +4,7 @@
 //! generator side. Each JSON generator preset is **scanned from disk at
 //! startup** by [`crate::preset_loader`] (stock + optional user dirs),
 //! not embedded into the binary, and exposed here as a lookup by
-//! `GeneratorTypeId`.
+//! `PresetTypeId`.
 //!
 //! The [`GeneratorRegistry`](crate::generators::registry::GeneratorRegistry)
 //! consults this table when creating a generator: if an entry matches
@@ -20,7 +20,7 @@
 //!    boundary nodes (see [`crate::generators::json_graph_generator`]).
 //! 2. Relaunch — the loader scans it; no rebuild required.
 
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use crate::preset_loader::GENERATOR_CATALOG;
@@ -58,20 +58,20 @@ inventory::submit! {
 /// Raw embedded JSON for the bundled generator preset of
 /// `generator_type`, or `None` if no preset is registered for that id.
 pub fn bundled_generator_preset_json(
-    generator_type: &GeneratorTypeId,
+    generator_type: &PresetTypeId,
 ) -> Option<std::sync::Arc<str>> {
     GENERATOR_CATALOG.load().json(generator_type.as_str())
 }
 
-/// Every `GeneratorTypeId` that has a bundled JSON preset registered.
+/// Every `PresetTypeId` that has a bundled JSON preset registered.
 /// Iterated by the GeneratorRegistry at startup to discover all
 /// JSON-defined generators alongside the inventory-registered Rust
 /// generators.
-pub fn bundled_generator_preset_type_ids() -> impl Iterator<Item = GeneratorTypeId> {
+pub fn bundled_generator_preset_type_ids() -> impl Iterator<Item = PresetTypeId> {
     GENERATOR_CATALOG
         .load()
         .type_ids()
-        .map(|id| GeneratorTypeId::from_string(id.to_string()))
+        .map(|id| PresetTypeId::from_string(id.to_string()))
         .collect::<Vec<_>>()
         .into_iter()
 }
@@ -82,7 +82,7 @@ mod tests {
 
     /// The TrivialPassthrough + Plasma presets that ship today must be
     /// discoverable through this table. The `Plasma` entry binds to
-    /// `GeneratorTypeId::PLASMA` (the legacy id) so it supersedes the
+    /// `PresetTypeId::PLASMA` (the legacy id) so it supersedes the
     /// Rust factory of the same id — renaming or removing it would
     /// silently revert every existing Plasma layer to the Rust path
     /// and break the editor's cog button on those layers.

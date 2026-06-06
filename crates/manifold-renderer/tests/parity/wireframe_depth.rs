@@ -13,7 +13,7 @@
 //! BlobTracking.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::WireframeDepth;
 use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
@@ -106,7 +106,7 @@ fn wireframe_depth_is_pixel_exact_across_fixtures_and_setups() {
                 ..default_ctx(h.width, h.height)
             };
 
-            let mut fx = make_default_effect(EffectTypeId::WIREFRAME_DEPTH);
+            let mut fx = make_default_effect(PresetTypeId::WIREFRAME_DEPTH);
             fx.param_values[0].value = s.amount;
             fx.param_values[1].value = s.density;
             fx.param_values[2].value = s.width;

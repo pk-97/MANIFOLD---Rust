@@ -1,6 +1,6 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::preset_context::PresetContext;
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use std::any::Any;
 use std::collections::BTreeMap;
 
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 /// - Drop cleans up GPU resources automatically
 pub trait Generator: Send {
     /// Which generator type this handles.
-    fn generator_type(&self) -> &GeneratorTypeId;
+    fn generator_type(&self) -> &PresetTypeId;
 
     /// Render one frame into the target texture.
     /// Returns updated anim_progress for this clip.

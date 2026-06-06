@@ -48,12 +48,12 @@ impl Default for EffectClipboard {
 
 use manifold_core::effects::{ParamEnvelope, ParameterDriver};
 use manifold_core::generator::GeneratorParamState;
-use manifold_core::generator_type_id::GeneratorTypeId;
+use manifold_core::preset_type_id::PresetTypeId;
 
 /// Snapshot of a generator's complete state for copy/paste.
 #[derive(Debug, Clone)]
 pub struct GeneratorSnapshot {
-    pub generator_type: GeneratorTypeId,
+    pub generator_type: PresetTypeId,
     pub param_values: Vec<f32>,
     pub base_param_values: Option<Vec<f32>>,
     pub drivers: Option<Vec<ParameterDriver>>,

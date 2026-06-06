@@ -556,17 +556,17 @@ fn liveschool_mirror_mode_values_migrate_after_curation_drop() {
     }
     let project = loader::load_project(&path).expect("load Liveschool");
 
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     let mut mirrors = Vec::new();
     for fx in &project.settings.master_effects {
-        if *fx.effect_type() == EffectTypeId::MIRROR {
+        if *fx.effect_type() == PresetTypeId::MIRROR {
             mirrors.push(fx);
         }
     }
     for layer in &project.timeline.layers {
         if let Some(effects) = layer.effects.as_deref() {
             for fx in effects {
-                if *fx.effect_type() == EffectTypeId::MIRROR {
+                if *fx.effect_type() == PresetTypeId::MIRROR {
                     mirrors.push(fx);
                 }
             }

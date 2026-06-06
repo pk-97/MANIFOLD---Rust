@@ -115,7 +115,7 @@ fn complete_stub_graph(fx: &mut EffectInstance) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{
         BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
     };
@@ -126,7 +126,7 @@ mod tests {
     /// `userParamBindings` but no per-instance graph.
     fn stub_with_user_binding(node_handle: &str, inner: &str, id: &str) -> EffectGraphDef {
         let meta = PresetMetadata {
-            id: EffectTypeId::new(""),
+            id: PresetTypeId::new(""),
             display_name: String::new(),
             category: String::new(),
             osc_prefix: String::new(),
@@ -183,7 +183,7 @@ mod tests {
         // arrives as a metadata-only stub; the lift must restore Bloom's
         // canonical nodes while keeping the user binding.
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.graph = Some(stub_with_user_binding("blur", "radius", "user.blur.radius.1"));
         project.settings.master_effects.push(fx);
 
@@ -214,8 +214,8 @@ mod tests {
         // A graph that already has nodes (real override, or a re-loaded
         // completed stub) must not be re-lifted — idempotency.
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        let canonical = bundled_preset_def(&EffectTypeId::BLOOM)
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
+        let canonical = bundled_preset_def(&PresetTypeId::BLOOM)
             .expect("Bloom preset present")
             .clone();
         let node_count = canonical.nodes.len();
@@ -235,7 +235,7 @@ mod tests {
     fn graph_none_effect_is_left_alone() {
         // No graph, no migration — a plain effect stays `graph: None`.
         let mut project = Project::default();
-        let fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let fx = EffectInstance::new(PresetTypeId::BLOOM);
         project.settings.master_effects.push(fx);
 
         migrate_user_param_bindings_to_node_id(&mut project);

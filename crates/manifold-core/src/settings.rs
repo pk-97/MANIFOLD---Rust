@@ -381,7 +381,7 @@ impl ProjectSettings {
     /// Find master effect by type. Unity ProjectSettings.cs lines 230-239.
     pub fn find_master_effect(
         &self,
-        effect_type: &crate::effect_type_id::EffectTypeId,
+        effect_type: &crate::preset_type_id::PresetTypeId,
     ) -> Option<&crate::effects::EffectInstance> {
         self.master_effects
             .iter()
@@ -437,7 +437,7 @@ impl crate::effects::EffectContainer for ProjectSettings {
     }
     fn find_effect(
         &self,
-        effect_type: &crate::effect_type_id::EffectTypeId,
+        effect_type: &crate::preset_type_id::PresetTypeId,
     ) -> Option<&crate::effects::EffectInstance> {
         self.master_effects
             .iter()

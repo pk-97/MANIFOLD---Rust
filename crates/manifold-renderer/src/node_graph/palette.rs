@@ -7,7 +7,7 @@
 //!    monolithic-wrapper primitives (Bloom, Halation, BlobTracking,
 //!    etc.) are excluded — they're whole effects, not building blocks.
 //! 2. [`catalog_graph_def_for`] — the catalog-default
-//!    [`EffectGraphDef`] for an [`EffectTypeId`]. Editing commands
+//!    [`EffectGraphDef`] for an [`PresetTypeId`]. Editing commands
 //!    need this to lift `EffectInstance.graph` from `None` on first
 //!    edit. Sourced from the bundled-preset registry (§6.6 #26), so
 //!    every shipping effect returns `Some` — per-card divergence is
@@ -16,7 +16,7 @@
 //!
 //! Phase 4 of per-card divergence in `docs/NODE_GRAPH_SYSTEM.md`.
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
@@ -143,7 +143,7 @@ pub fn friendly_label_for(type_id: &str) -> Option<&'static str> {
 /// every shipping effect returns `Some`. Returns `None` only for
 /// effect types that aren't registered at all (unknown ids from
 /// future-version save files).
-pub fn catalog_graph_def_for(effect_type: &EffectTypeId) -> Option<EffectGraphDef> {
+pub fn catalog_graph_def_for(effect_type: &PresetTypeId) -> Option<EffectGraphDef> {
     bundled_preset_def(effect_type).cloned()
 }
 
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn catalog_default_for_mirror_has_required_handles() {
-        let def = catalog_graph_def_for(&EffectTypeId::MIRROR).expect("Mirror has catalog default");
+        let def = catalog_graph_def_for(&PresetTypeId::MIRROR).expect("Mirror has catalog default");
         let handles: std::collections::HashSet<_> = def
             .nodes
             .iter()
@@ -268,8 +268,8 @@ mod tests {
 
     #[test]
     fn catalog_default_returns_none_for_unregistered_effects() {
-        // EffectTypeId::UNKNOWN is the placeholder for forward-version
+        // PresetTypeId::UNKNOWN is the placeholder for forward-version
         // ids that didn't exist when this binary was built.
-        assert!(catalog_graph_def_for(&EffectTypeId::UNKNOWN).is_none());
+        assert!(catalog_graph_def_for(&PresetTypeId::UNKNOWN).is_none());
     }
 }

@@ -4,7 +4,7 @@
 //! effect/generator parameters. Mappings are serialized in the project file
 //! and validated at runtime via structural identity (device class names).
 
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamId;
 use crate::id::LayerId;
 use serde::{Deserialize, Serialize};
@@ -217,12 +217,12 @@ pub fn is_default_macro_name(name: &str) -> bool {
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum AbletonMappingTarget {
     MasterEffect {
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         param_id: ParamId,
     },
     LayerEffect {
         layer_id: LayerId,
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         param_id: ParamId,
     },
     GenParam {

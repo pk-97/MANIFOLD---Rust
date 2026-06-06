@@ -11,7 +11,7 @@
 //! both paths.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::Watercolor;
 use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
@@ -107,7 +107,7 @@ fn watercolor_is_pixel_exact_across_fixtures_and_setups() {
                 owner_key,
                 ..default_ctx(h.width, h.height)
             };
-            let mut fx = make_default_effect(EffectTypeId::WATERCOLOR);
+            let mut fx = make_default_effect(PresetTypeId::WATERCOLOR);
             fx.param_values[0].value = s.amount;
             fx.param_values[1].value = s.displace;
             fx.param_values[2].value = s.blur;

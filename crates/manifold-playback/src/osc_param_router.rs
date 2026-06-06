@@ -13,7 +13,7 @@
 //!   router.apply(&mut project);                    // write pending values to project
 
 use crate::osc_receiver::OscReceiver;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
 use manifold_core::project::Project;
 use parking_lot::Mutex;
@@ -26,7 +26,7 @@ use std::sync::Arc;
 enum OscParamTarget {
     MasterOpacity,
     MasterEffect {
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         param_index: usize,
     },
     LayerOpacity {
@@ -34,7 +34,7 @@ enum OscParamTarget {
     },
     LayerEffect {
         layer_id: LayerId,
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         param_index: usize,
     },
     GenParam {

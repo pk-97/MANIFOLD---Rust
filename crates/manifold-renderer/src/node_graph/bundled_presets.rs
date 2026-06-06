@@ -8,7 +8,7 @@
 //! knowledge of which effects exist. Adding a preset is just dropping a
 //! JSON file in the stock directory — no rebuild required.
 //!
-//! The bundled preset for `EffectTypeId::X` is the canonical default
+//! The bundled preset for `PresetTypeId::X` is the canonical default
 //! graph for that effect. Post-§11 the JSON file is authoritative —
 //! the chain runtime and editor snapshot both source bindings,
 //! skip-mode, and topology from the embedded
@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use ahash::AHashMap;
 use arc_swap::ArcSwap;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use crate::preset_loader::{EFFECT_CATALOG, catalog_generation};
@@ -40,7 +40,7 @@ use crate::preset_loader::{EFFECT_CATALOG, catalog_generation};
 /// `Arc<str>` cloned from the current snapshot rather than a `&'static`
 /// borrow — a concurrent reload can swap the snapshot without invalidating
 /// a value the caller already holds.
-pub fn bundled_preset_json(effect_type: &EffectTypeId) -> Option<Arc<str>> {
+pub fn bundled_preset_json(effect_type: &PresetTypeId) -> Option<Arc<str>> {
     EFFECT_CATALOG.load().json(effect_type.as_str())
 }
 
@@ -100,17 +100,17 @@ fn rebuild_def_cache(generation: u64) {
 /// Parse failures panic with the effect type id and underlying error
 /// — these come from files we author, so any failure is a developer
 /// mistake to fix, not a runtime condition to handle.
-pub fn bundled_preset_def(effect_type: &EffectTypeId) -> Option<&'static EffectGraphDef> {
+pub fn bundled_preset_def(effect_type: &PresetTypeId) -> Option<&'static EffectGraphDef> {
     parsed_def_map().get(effect_type.as_str()).copied()
 }
 
-/// Every [`EffectTypeId`] that has a bundled preset registered (current
+/// Every [`PresetTypeId`] that has a bundled preset registered (current
 /// snapshot).
-pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
+pub fn bundled_preset_type_ids() -> impl Iterator<Item = PresetTypeId> {
     EFFECT_CATALOG
         .load()
         .type_ids()
-        .map(|id| EffectTypeId::from_string(id.to_string()))
+        .map(|id| PresetTypeId::from_string(id.to_string()))
         .collect::<Vec<_>>()
         .into_iter()
 }
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn bundled_preset_json_returns_embedded_bytes() {
-        let raw = bundled_preset_json(&EffectTypeId::MIRROR).expect("Mirror preset registered");
+        let raw = bundled_preset_json(&PresetTypeId::MIRROR).expect("Mirror preset registered");
         // Sanity: the embedded JSON must parse as a valid def and name itself "Mirror".
         let def: EffectGraphDef = serde_json::from_str(&raw).expect("Mirror preset parses");
         assert_eq!(def.name.as_deref(), Some("Mirror"));
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn bundled_preset_lookup_returns_none_for_unknown_type() {
-        let unknown = EffectTypeId::new("DefinitelyNotARealEffect");
+        let unknown = PresetTypeId::new("DefinitelyNotARealEffect");
         assert!(bundled_preset_def(&unknown).is_none());
         assert!(bundled_preset_json(&unknown).is_none());
     }
@@ -399,7 +399,7 @@ mod tests {
         use crate::node_graph::graph::Graph;
 
         let registry = PrimitiveRegistry::with_builtin();
-        let id = EffectTypeId::new("ColorCompass");
+        let id = PresetTypeId::new("ColorCompass");
         let def = bundled_preset_def(&id).expect("ColorCompass preset registered");
 
         let mut chain = Graph::new();
@@ -569,7 +569,7 @@ mod tests {
         device.upload_texture(&src_target.texture, &raw_bytes);
 
         let registry = PrimitiveRegistry::with_builtin();
-        let id = EffectTypeId::new("ColorCompass");
+        let id = PresetTypeId::new("ColorCompass");
         let def = bundled_preset_def(&id).expect("ColorCompass preset");
 
         let mut chain = Graph::new();

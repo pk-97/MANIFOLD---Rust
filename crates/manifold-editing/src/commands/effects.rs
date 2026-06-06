@@ -1015,7 +1015,7 @@ impl Command for EditParamMappingCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::macro_bank::MacroCurve;
 
     fn sample_user_binding(id: &str) -> UserParamBinding {
@@ -1043,7 +1043,7 @@ mod tests {
     /// binding-storage list) via `append_user_binding`.
     fn project_with_one_user_binding() -> (Project, EffectId, String) {
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("Mirror"));
         let effect_id = fx.id.clone();
         let binding_id = "user.uv_transform.rotation.1".to_string();
         fx.append_user_binding(sample_user_binding(&binding_id));
@@ -1185,7 +1185,7 @@ mod tests {
     #[test]
     fn edit_stock_param_note_roundtrip() {
         let mut project = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::new("ColorGrade"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
         // Pre-existing identity note on stock param "amount".
         fx.upsert_param_mapping(ParamMapping {
@@ -1236,7 +1236,7 @@ mod tests {
     #[test]
     fn edit_unknown_stock_id_does_not_create_note() {
         let mut project = Project::default();
-        let fx = EffectInstance::new(EffectTypeId::new("ColorGrade"));
+        let fx = EffectInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
         project.settings.master_effects.push(fx);
 
@@ -1260,11 +1260,11 @@ mod tests {
     /// (NoteRemove since it was created), redo, then re-edit (NoteRestore).
     #[test]
     fn edit_gen_param_mapping_roundtrip() {
-        use manifold_core::GeneratorTypeId;
+        use manifold_core::PresetTypeId;
         use manifold_core::layer::Layer;
 
         let mut project = Project::default();
-        let layer = Layer::new_generator("Gen".into(), GeneratorTypeId::new("Plasma"), 0);
+        let layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
         let layer_id = layer.layer_id.clone();
         project.timeline.insert_layer(0, layer);
         assert!(

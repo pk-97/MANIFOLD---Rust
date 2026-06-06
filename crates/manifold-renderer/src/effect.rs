@@ -1,6 +1,6 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::preset_context::PresetContext;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::effects::EffectInstance;
 
 /// GPU-aware post-process effect processor.
@@ -19,7 +19,7 @@ use manifold_core::effects::EffectInstance;
 /// `clear_state` on their held `Box<dyn PostProcessEffect>` to drive
 /// the legacy compute path one block at a time.
 pub trait PostProcessEffect: Send {
-    fn effect_type(&self) -> &EffectTypeId;
+    fn effect_type(&self) -> &PresetTypeId;
 
     /// Apply the effect. Reads source, writes to target.
     /// The caller swaps buffers after each effect.

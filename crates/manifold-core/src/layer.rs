@@ -1,9 +1,8 @@
 use crate::clip::TimelineClip;
 use crate::color::Color;
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope, ParameterDriver};
 use crate::generator::GeneratorParamState;
-use crate::generator_type_id::GeneratorTypeId;
 use crate::id::{ClipId, EffectGroupId, LayerId};
 use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
 use crate::units::{Beats, Seconds};
@@ -138,7 +137,7 @@ pub struct Layer {
         skip_serializing_if = "Option::is_none",
         rename = "generatorType"
     )]
-    pub legacy_generator_type: Option<GeneratorTypeId>,
+    pub legacy_generator_type: Option<PresetTypeId>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -242,7 +241,7 @@ impl Layer {
     }
 
     /// Create a new generator layer with fully initialized params.
-    pub fn new_generator(name: String, gen_type: GeneratorTypeId, index: i32) -> Self {
+    pub fn new_generator(name: String, gen_type: PresetTypeId, index: i32) -> Self {
         let mut layer = Self::new(name, LayerType::Generator, index);
         layer.gen_params = Some(GeneratorParamState::new(gen_type));
         layer
@@ -285,13 +284,13 @@ impl Layer {
     }
 
     /// Get the generator type for this layer (from genParams or legacy field).
-    pub fn generator_type(&self) -> &GeneratorTypeId {
+    pub fn generator_type(&self) -> &PresetTypeId {
         if let Some(gp) = &self.gen_params {
             gp.generator_type()
         } else {
             self.legacy_generator_type
                 .as_ref()
-                .unwrap_or(&GeneratorTypeId::NONE)
+                .unwrap_or(&PresetTypeId::NONE)
         }
     }
 
@@ -713,7 +712,7 @@ impl Layer {
     /// jammed into them, producing huge white blobs). Callers that need
     /// to undo a type change snapshot the old graph alongside the old
     /// params and restore both together.
-    pub fn change_generator_type(&mut self, new_type: GeneratorTypeId) {
+    pub fn change_generator_type(&mut self, new_type: PresetTypeId) {
         if self.layer_type != LayerType::Generator {
             return;
         }
@@ -734,7 +733,7 @@ impl Layer {
     /// Unity Layer.cs lines 561-567.
     pub fn restore_generator_state(
         &mut self,
-        old_type: GeneratorTypeId,
+        old_type: PresetTypeId,
         params: Vec<f32>,
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,
@@ -866,7 +865,7 @@ impl crate::effects::EffectContainer for Layer {
     fn has_modular_effects(&self) -> bool {
         self.effects.as_ref().is_some_and(|e| !e.is_empty())
     }
-    fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&crate::effects::EffectInstance> {
+    fn find_effect(&self, effect_type: &PresetTypeId) -> Option<&crate::effects::EffectInstance> {
         self.effects
             .as_ref()?
             .iter()

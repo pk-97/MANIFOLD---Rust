@@ -25,7 +25,7 @@
 //!    blit in `Executor::execute_frame_with_gpu`.
 
 
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::Invert;
 use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
@@ -44,7 +44,7 @@ fn invert_is_pixel_exact_across_fixtures_and_intensities() {
         let input = fixture.build(h);
 
         for &intensity in INTENSITY_SWEEP {
-            let mut fx = make_default_effect(EffectTypeId::INVERT_COLORS);
+            let mut fx = make_default_effect(PresetTypeId::INVERT_COLORS);
             // The legacy effect reads `param_values[0].value` as intensity.
             // Patch the slot rather than going through a command, so the
             // test stays close to the data shape modulation/UI both use.
@@ -80,7 +80,7 @@ fn invert_at_zero_intensity_is_passthrough() {
     let input = Fixture::Gradient.build(h);
     let ctx = default_ctx(h.width, h.height);
 
-    let mut fx = make_default_effect(EffectTypeId::INVERT_COLORS);
+    let mut fx = make_default_effect(PresetTypeId::INVERT_COLORS);
     fx.param_values[0].value = 0.0;
 
     let legacy = h.run_legacy(&fx, &input, &ctx);
@@ -103,7 +103,7 @@ fn invert_at_full_intensity_matches_legacy() {
     let input = Fixture::Swatches.build(h);
     let ctx = default_ctx(h.width, h.height);
 
-    let mut fx = make_default_effect(EffectTypeId::INVERT_COLORS);
+    let mut fx = make_default_effect(PresetTypeId::INVERT_COLORS);
     fx.param_values[0].value = 1.0;
 
     let legacy = h.run_legacy(&fx, &input, &ctx);

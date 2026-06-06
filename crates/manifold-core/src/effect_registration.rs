@@ -3,7 +3,7 @@
 //! Each effect submits an `EffectMetadata` from its implementation file.
 //! The definition and type registries collect these at startup.
 
-use crate::effect_type_id::EffectTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::effect_type_registry::EffectTypeRegistration;
 use crate::effects::ParamDef;
 use crate::generator_registration::ParamSpec;
@@ -62,7 +62,7 @@ pub fn resolve_param_alias<'a>(aliases: &'a [ParamAlias], id: &'a str) -> Option
 
 /// Complete metadata for an effect, submitted via `inventory::submit!`.
 pub struct EffectMetadata {
-    pub id: EffectTypeId,
+    pub id: PresetTypeId,
     pub display_name: &'static str,
     pub category: &'static str,
     pub available: bool,
@@ -81,7 +81,7 @@ inventory::collect!(EffectMetadata);
 /// Discovered at registry-build time and merged into the matching
 /// [`crate::preset_def::PresetDef::legacy_param_aliases`].
 pub struct EffectAliasMetadata {
-    pub id: EffectTypeId,
+    pub id: PresetTypeId,
     pub aliases: &'static [ParamAlias],
 }
 
@@ -117,7 +117,7 @@ pub type ParamValueAlias = (i32, i32);
 /// ```ignore
 /// inventory::submit! {
 ///     EffectValueAliasMetadata {
-///         id: EffectTypeId::MIRROR,
+///         id: PresetTypeId::MIRROR,
 ///         aliases: &[
 ///             ("mode", &[(0, 6), (1, 7), (2, 8)]),
 ///         ],
@@ -135,7 +135,7 @@ pub type ParamValueAlias = (i32, i32);
 /// (because `from` values are by definition pre-migration). Multiple
 /// passes are safe.
 pub struct EffectValueAliasMetadata {
-    pub id: EffectTypeId,
+    pub id: PresetTypeId,
     pub aliases: &'static [(&'static str, &'static [ParamValueAlias])],
 }
 

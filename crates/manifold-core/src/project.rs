@@ -80,9 +80,9 @@ impl Project {
     /// Remove effects with unrecognized types (e.g. removed Unity effects).
     /// Called before on_after_deserialize so they never enter the runtime.
     pub fn strip_unknown_effects(&mut self) {
-        use crate::effect_type_id::EffectTypeId;
+        use crate::preset_type_id::PresetTypeId;
         let strip = |effects: &mut Vec<crate::effects::EffectInstance>| {
-            effects.retain(|fx| *fx.effect_type() != EffectTypeId::UNKNOWN);
+            effects.retain(|fx| *fx.effect_type() != PresetTypeId::UNKNOWN);
         };
         // Master effects
         strip(&mut self.settings.master_effects);
@@ -410,7 +410,7 @@ impl Project {
         }
 
         fn resolve_for_effect(
-            effect_type: &crate::EffectTypeId,
+            effect_type: &crate::PresetTypeId,
             current_id: &str,
             legacy_index: Option<i32>,
         ) -> ResolveOutcome {
@@ -426,7 +426,7 @@ impl Project {
         }
 
         fn resolve_for_generator(
-            gen_type: &crate::GeneratorTypeId,
+            gen_type: &crate::PresetTypeId,
             current_id: &str,
             legacy_index: Option<i32>,
         ) -> ResolveOutcome {
@@ -443,7 +443,7 @@ impl Project {
 
         fn resolve_driver_id_for_effect(
             driver: &mut crate::effects::ParameterDriver,
-            effect_type: &crate::EffectTypeId,
+            effect_type: &crate::PresetTypeId,
         ) {
             let outcome =
                 resolve_for_effect(effect_type, &driver.param_id, driver.legacy_param_index);
@@ -456,7 +456,7 @@ impl Project {
 
         fn resolve_driver_id_for_generator(
             driver: &mut crate::effects::ParameterDriver,
-            gen_type: &crate::GeneratorTypeId,
+            gen_type: &crate::PresetTypeId,
         ) {
             let outcome =
                 resolve_for_generator(gen_type, &driver.param_id, driver.legacy_param_index);
@@ -475,7 +475,7 @@ impl Project {
 
         fn resolve_envelope_id_for_generator(
             env: &mut crate::effects::ParamEnvelope,
-            gen_type: &crate::GeneratorTypeId,
+            gen_type: &crate::PresetTypeId,
         ) {
             let outcome = resolve_for_generator(gen_type, &env.param_id, env.legacy_param_index);
             apply_outcome(outcome, &mut env.param_id, &mut env.legacy_param_index);
@@ -483,7 +483,7 @@ impl Project {
 
         fn resolve_ableton_id_for_effect(
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
-            effect_type: &crate::EffectTypeId,
+            effect_type: &crate::PresetTypeId,
         ) {
             let outcome =
                 resolve_for_effect(effect_type, &mapping.param_id, mapping.legacy_param_index);
@@ -496,7 +496,7 @@ impl Project {
 
         fn resolve_ableton_id_for_generator(
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
-            gen_type: &crate::GeneratorTypeId,
+            gen_type: &crate::PresetTypeId,
         ) {
             let outcome =
                 resolve_for_generator(gen_type, &mapping.param_id, mapping.legacy_param_index);
@@ -979,7 +979,7 @@ fn default_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::EffectTypeId;
+    use crate::PresetTypeId;
     use crate::effects::{EffectInstance, ParamSlot, ParameterDriver};
     use crate::types::{BeatDivision, DriverWaveform};
 
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn legacy_param_index_resolved_to_param_id_for_effect_drivers() {
         let mut p = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5)];
         // Construct a driver as if it came from legacy JSON: empty
         // param_id, legacy_param_index = Some(0).
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn legacy_resolution_idempotent_when_param_id_already_set() {
         let mut p = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5)];
         fx.drivers = Some(vec![ParameterDriver::new(
             "amount",
@@ -1048,7 +1048,7 @@ mod tests {
         let mut layer = Layer::new("test".to_string(), LayerType::Generator, 0);
         // Legacy-shaped envelope targeting Bloom paramIndex 0.
         layer.envelopes_mut().push(ParamEnvelope {
-            target_effect_type: EffectTypeId::BLOOM,
+            target_effect_type: PresetTypeId::BLOOM,
             param_id: std::borrow::Cow::Borrowed(""),
             enabled: true,
             attack_beats: 0.1,
@@ -1083,7 +1083,7 @@ mod tests {
         // empty. Same fail-soft policy as alias-drop. Driver is then
         // ignored at runtime (`param_id_to_index` returns None on "").
         let mut p = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5)];
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed(""),
@@ -1164,7 +1164,7 @@ mod tests {
         // Step 4: now imagine the registry just came online (Bloom is
         // registered in this test crate; pretend the driver was for it).
         let mut p = Project::default();
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5)];
         let mut driver_for_bloom = back.clone();
         // (In a real load, the driver lands inside an EffectInstance
@@ -1199,7 +1199,7 @@ mod tests {
         // loop end-to-end.
         let mut p = Project::default();
         // Synthetic effect type with no registry def in this test build.
-        let unregistered = crate::EffectTypeId::from_string("not-a-real-effect-id".to_string());
+        let unregistered = crate::PresetTypeId::from_string("not-a-real-effect-id".to_string());
         let mut fx = EffectInstance::new(unregistered);
         fx.param_values = vec![
             ParamSlot::exposed(0.5),
@@ -1262,7 +1262,7 @@ mod tests {
             nodes: vec![make_node(0, Some("softblur")), make_node(1, None)],
             wires: vec![],
         };
-        let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("Mirror"));
         fx.graph = Some(def);
         let mut p = Project::default();
         p.settings.master_effects.push(fx);
@@ -1277,7 +1277,7 @@ mod tests {
         );
 
         // Idempotent: a node that already has an explicit id is untouched.
-        let mut fx2 = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let mut fx2 = EffectInstance::new(PresetTypeId::new("Mirror"));
         let mut explicit = make_node(0, Some("softblur"));
         explicit.node_id = crate::NodeId::new("explicit");
         fx2.graph = Some(EffectGraphDef {

@@ -1,5 +1,5 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
@@ -223,7 +223,7 @@ pub(super) fn dispatch_editing(
                 let idx = after_layer + 1;
                 let name = format!("Layer {}", project.timeline.layers.len() + 1);
                 let cmd =
-                    AddLayerCommand::new(name, LayerType::Video, GeneratorTypeId::NONE, idx, None);
+                    AddLayerCommand::new(name, LayerType::Video, PresetTypeId::NONE, idx, None);
                 {
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
@@ -240,7 +240,7 @@ pub(super) fn dispatch_editing(
                 let cmd = AddLayerCommand::new(
                     name,
                     LayerType::Generator,
-                    GeneratorTypeId::PLASMA,
+                    PresetTypeId::PLASMA,
                     idx,
                     None,
                 );

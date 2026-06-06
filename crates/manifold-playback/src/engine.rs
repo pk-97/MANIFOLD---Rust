@@ -1,5 +1,5 @@
 use manifold_core::ClipId;
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::math::BeatQuantizer;
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 /// Port of C# IPlaybackNotifier.cs lines 9-18.
 pub trait PlaybackNotifier {
     fn mark_compositor_dirty(&mut self);
-    fn notify_generator_type_changed(&mut self, layer: &Layer, new_type: GeneratorTypeId);
+    fn notify_generator_type_changed(&mut self, layer: &Layer, new_type: PresetTypeId);
 }
 
 // ─── Constants ───

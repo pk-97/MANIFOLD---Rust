@@ -36,7 +36,7 @@ use std::sync::{Arc, OnceLock};
 
 use half::f16;
 use manifold_core::effects::EffectInstance;
-use manifold_core::{Beats, EffectTypeId, Seconds};
+use manifold_core::{Beats, PresetTypeId, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -664,7 +664,7 @@ pub fn default_ctx(width: u32, height: u32) -> PresetContext {
 /// Default-parameter `EffectInstance` for an effect type. Pulls the
 /// canonical defaults from the registry so tests don't drift from
 /// effect-spec changes.
-pub fn make_default_effect(effect_type: EffectTypeId) -> EffectInstance {
+pub fn make_default_effect(effect_type: PresetTypeId) -> EffectInstance {
     let mut fx = EffectInstance::new(effect_type.clone());
     fx.align_to_definition();
     fx.enabled = true;

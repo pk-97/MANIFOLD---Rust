@@ -5,7 +5,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::*;
 use manifold_core::units::Bpm;
-use manifold_core::{Beats, EffectTypeId, GeneratorTypeId, Seconds};
+use manifold_core::{Beats, PresetTypeId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::*;
 use manifold_editing::commands::drivers::*;
@@ -26,7 +26,7 @@ use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
 // the effects they reference (Bloom is the only one used).
 inventory::submit! {
     EffectMetadata {
-        id: EffectTypeId::BLOOM,
+        id: PresetTypeId::BLOOM,
         display_name: "Bloom",
         category: "Post-Process",
         available: true,
@@ -41,7 +41,7 @@ inventory::submit! {
 
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::PLASMA,
+        id: PresetTypeId::PLASMA,
         display_name: "Plasma",
         is_line_based: false,
         available: true,
@@ -60,7 +60,7 @@ inventory::submit! {
 }
 inventory::submit! {
     GeneratorMetadata {
-        id: GeneratorTypeId::TESSERACT,
+        id: PresetTypeId::TESSERACT,
         display_name: "Tesseract",
         is_line_based: true,
         available: true,
@@ -275,7 +275,7 @@ fn add_layer_undo_roundtrip() {
     let mut cmd = AddLayerCommand::new(
         "New Layer".into(),
         LayerType::Video,
-        GeneratorTypeId::NONE,
+        PresetTypeId::NONE,
         0,
         None,
     );
@@ -467,7 +467,7 @@ fn change_generator_type_undo_roundtrip() {
     let mut project = make_test_project();
     // Layer 1 is a generator layer
     let gp = project.timeline.layers[1].gen_params_or_init();
-    gp.restore(GeneratorTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
+    gp.restore(PresetTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
@@ -476,8 +476,8 @@ fn change_generator_type_undo_roundtrip() {
     let layer_id = project.timeline.layers[1].layer_id.clone();
     let mut cmd = ChangeGeneratorTypeCommand::new(
         layer_id,
-        GeneratorTypeId::PLASMA,
-        GeneratorTypeId::TESSERACT,
+        PresetTypeId::PLASMA,
+        PresetTypeId::TESSERACT,
         old_params,
         old_drivers,
         old_envelopes,
@@ -486,18 +486,18 @@ fn change_generator_type_undo_roundtrip() {
     cmd.execute(&mut project);
     assert_eq!(
         *project.timeline.layers[1].generator_type(),
-        GeneratorTypeId::TESSERACT
+        PresetTypeId::TESSERACT
     );
     // After type change, params are filled with Tesseract's definition defaults (11 params)
     assert_eq!(
         project.timeline.layers[1].snapshot_gen_params().len(),
-        manifold_core::preset_definition_registry::generator::get(&GeneratorTypeId::TESSERACT).param_count
+        manifold_core::preset_definition_registry::generator::get(&PresetTypeId::TESSERACT).param_count
     );
 
     cmd.undo(&mut project);
     assert_eq!(
         *project.timeline.layers[1].generator_type(),
-        GeneratorTypeId::PLASMA
+        PresetTypeId::PLASMA
     );
     assert_eq!(project.timeline.layers[1].snapshot_gen_params().len(), 3);
 }
@@ -523,7 +523,7 @@ fn change_generator_type_clears_and_restores_graph_override() {
     let mut project = make_test_project();
     // Layer 1 is a generator layer in make_test_project.
     let gp = project.timeline.layers[1].gen_params_or_init();
-    gp.restore(GeneratorTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
+    gp.restore(PresetTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
 
     // Plant a non-empty per-layer graph override + version, simulating
     // a user who edited the Plasma graph through the editor.
@@ -545,8 +545,8 @@ fn change_generator_type_clears_and_restores_graph_override() {
 
     let mut cmd = ChangeGeneratorTypeCommand::new(
         layer_id,
-        GeneratorTypeId::PLASMA,
-        GeneratorTypeId::TESSERACT,
+        PresetTypeId::PLASMA,
+        PresetTypeId::TESSERACT,
         old_params,
         old_drivers,
         old_envelopes,
@@ -559,7 +559,7 @@ fn change_generator_type_clears_and_restores_graph_override() {
     // against the new type's bundled JSON instead of the stale graph.
     assert_eq!(
         *project.timeline.layers[1].generator_type(),
-        GeneratorTypeId::TESSERACT
+        PresetTypeId::TESSERACT
     );
     assert!(
         project.timeline.layers[1].generator_graph.is_none(),
@@ -580,7 +580,7 @@ fn change_generator_type_clears_and_restores_graph_override() {
     // post-execute value so the sweep detects the change.
     assert_eq!(
         *project.timeline.layers[1].generator_type(),
-        GeneratorTypeId::PLASMA
+        PresetTypeId::PLASMA
     );
     assert_eq!(
         project.timeline.layers[1].generator_graph.as_ref().and_then(|g| g.name.as_deref()),
@@ -665,7 +665,7 @@ fn add_effect_undo_roundtrip() {
     let mut project = make_test_project();
     let target = EffectTarget::Master;
 
-    let mut effect = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut effect = EffectInstance::new(PresetTypeId::BLOOM);
     effect.param_values = vec![ParamSlot::exposed(0.5)];
 
     let mut cmd = AddEffectCommand::new(target, effect, 0);
@@ -681,7 +681,7 @@ fn add_effect_undo_roundtrip() {
 fn remove_effect_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5)];
         project.settings.master_effects.push(fx);
     }
@@ -703,7 +703,7 @@ fn toggle_effect_undo_roundtrip() {
     project
         .settings
         .master_effects
-        .push(EffectInstance::new(EffectTypeId::BLOOM));
+        .push(EffectInstance::new(PresetTypeId::BLOOM));
 
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ToggleEffectCommand::new(effect_id, true, false);
@@ -719,7 +719,7 @@ fn toggle_effect_undo_roundtrip() {
 fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
         fx.base_param_values = Some(vec![0.5, 0.3]);
         project.settings.master_effects.push(fx);
@@ -760,7 +760,7 @@ fn change_effect_param_unknown_id_is_no_op() {
     // from the schema since the entry was recorded must NOT panic
     // and must NOT scribble random indices. It silently no-ops.
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
     fx.base_param_values = Some(vec![0.5, 0.3]);
     project.settings.master_effects.push(fx);
@@ -797,7 +797,7 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
     // user-tail ids, making undo/redo a silent no-op for any slider
     // exposed from an inner node.
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
     fx.base_param_values = Some(vec![0.5, 0.3]);
     fx.append_user_binding(UserParamBinding {
@@ -845,11 +845,11 @@ fn reorder_effect_undo_roundtrip() {
     project
         .settings
         .master_effects
-        .push(make_effect(&EffectTypeId::BLOOM));
+        .push(make_effect(&PresetTypeId::BLOOM));
     project
         .settings
         .master_effects
-        .push(make_effect(&EffectTypeId::GLITCH));
+        .push(make_effect(&PresetTypeId::GLITCH));
 
     let target = EffectTarget::Master;
     // to_index uses pre-removal indexing: to=2 means "insert after the last element"
@@ -859,21 +859,21 @@ fn reorder_effect_undo_roundtrip() {
     cmd.execute(&mut project);
     assert_eq!(
         *project.settings.master_effects[0].effect_type(),
-        EffectTypeId::GLITCH
+        PresetTypeId::GLITCH
     );
     assert_eq!(
         *project.settings.master_effects[1].effect_type(),
-        EffectTypeId::BLOOM
+        PresetTypeId::BLOOM
     );
 
     cmd.undo(&mut project);
     assert_eq!(
         *project.settings.master_effects[0].effect_type(),
-        EffectTypeId::BLOOM
+        PresetTypeId::BLOOM
     );
     assert_eq!(
         *project.settings.master_effects[1].effect_type(),
-        EffectTypeId::GLITCH
+        PresetTypeId::GLITCH
     );
 }
 
@@ -881,7 +881,7 @@ fn reorder_effect_undo_roundtrip() {
 fn effect_on_layer_undo_roundtrip() {
     let mut project = make_test_project();
 
-    let effect = EffectInstance::new(EffectTypeId::MIRROR);
+    let effect = EffectInstance::new(PresetTypeId::MIRROR);
     let target = EffectTarget::Layer {
         layer_id: project.timeline.layers[0].layer_id.clone(),
     };
@@ -908,11 +908,11 @@ fn group_effects_undo_roundtrip() {
     project
         .settings
         .master_effects
-        .push(make_effect(&EffectTypeId::BLOOM));
+        .push(make_effect(&PresetTypeId::BLOOM));
     project
         .settings
         .master_effects
-        .push(make_effect(&EffectTypeId::GLITCH));
+        .push(make_effect(&PresetTypeId::GLITCH));
 
     let target = EffectTarget::Master;
     let mut cmd = GroupEffectsCommand::new(target, vec![0, 1], "My Group".into());
@@ -952,7 +952,7 @@ fn ungroup_effects_undo_roundtrip() {
     let group = EffectGroup::new("Test".into());
     let gid = group.id.clone();
     {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.group_id = Some(gid.clone());
         project.settings.master_effects.push(fx);
     }
@@ -1054,7 +1054,7 @@ fn add_driver_effect_undo_roundtrip() {
     project
         .settings
         .master_effects
-        .push(make_effect(&EffectTypeId::BLOOM));
+        .push(make_effect(&PresetTypeId::BLOOM));
 
     let effect_id = project.settings.master_effects[0].id.clone();
     let target = DriverTarget::Effect { effect_id };
@@ -1098,7 +1098,7 @@ fn add_driver_effect_undo_roundtrip() {
 fn toggle_driver_enabled_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed("amount"),
             enabled: true,
@@ -1122,7 +1122,7 @@ fn toggle_driver_enabled_undo_roundtrip() {
 fn change_driver_waveform_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed("amount"),
             waveform: DriverWaveform::Sine,
@@ -1153,7 +1153,7 @@ fn change_driver_waveform_undo_roundtrip() {
 fn change_trim_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed("amount"),
             trim_min: 0.0,
@@ -1185,7 +1185,7 @@ fn add_layer_envelope_undo_roundtrip() {
     let mut project = make_test_project();
 
     let envelope = ParamEnvelope {
-        target_effect_type: EffectTypeId::TRANSFORM,
+        target_effect_type: PresetTypeId::TRANSFORM,
         param_id: std::borrow::Cow::Borrowed("x"),
         enabled: true,
         ..make_envelope()
@@ -1263,7 +1263,7 @@ fn commands_work_on_loaded_project() {
     );
 }
 
-fn make_effect(effect_type: &EffectTypeId) -> EffectInstance {
+fn make_effect(effect_type: &PresetTypeId) -> EffectInstance {
     EffectInstance::new(effect_type.clone())
 }
 
@@ -1372,9 +1372,9 @@ fn clear_percussion_undo_roundtrip() {
 fn reorder_effect_group_undo_roundtrip() {
     let mut project = make_test_project();
     // Add 3 master effects
-    let fx_a = EffectInstance::new(EffectTypeId::BLOOM);
-    let fx_b = EffectInstance::new(EffectTypeId::HALATION);
-    let fx_c = EffectInstance::new(EffectTypeId::GLITCH);
+    let fx_a = EffectInstance::new(PresetTypeId::BLOOM);
+    let fx_b = EffectInstance::new(PresetTypeId::HALATION);
+    let fx_c = EffectInstance::new(PresetTypeId::GLITCH);
     project.settings.master_effects = vec![fx_a.clone(), fx_b.clone(), fx_c.clone()];
 
     let old_effects = project.settings.master_effects.clone();
@@ -1386,29 +1386,29 @@ fn reorder_effect_group_undo_roundtrip() {
     cmd.execute(&mut project);
     assert_eq!(
         *project.settings.master_effects[0].effect_type(),
-        EffectTypeId::HALATION
+        PresetTypeId::HALATION
     );
     assert_eq!(
         *project.settings.master_effects[1].effect_type(),
-        EffectTypeId::GLITCH
+        PresetTypeId::GLITCH
     );
     assert_eq!(
         *project.settings.master_effects[2].effect_type(),
-        EffectTypeId::BLOOM
+        PresetTypeId::BLOOM
     );
 
     cmd.undo(&mut project);
     assert_eq!(
         *project.settings.master_effects[0].effect_type(),
-        EffectTypeId::BLOOM
+        PresetTypeId::BLOOM
     );
     assert_eq!(
         *project.settings.master_effects[1].effect_type(),
-        EffectTypeId::HALATION
+        PresetTypeId::HALATION
     );
     assert_eq!(
         *project.settings.master_effects[2].effect_type(),
-        EffectTypeId::GLITCH
+        PresetTypeId::GLITCH
     );
 }
 
@@ -1455,18 +1455,18 @@ fn project_load_strips_unknown_effects() {
     project
         .settings
         .master_effects
-        .push(EffectInstance::new(EffectTypeId::BLOOM));
+        .push(EffectInstance::new(PresetTypeId::BLOOM));
     project
         .settings
         .master_effects
-        .push(EffectInstance::new(EffectTypeId::UNKNOWN));
+        .push(EffectInstance::new(PresetTypeId::UNKNOWN));
     assert_eq!(project.settings.master_effects.len(), 2);
 
     project.strip_unknown_effects();
     assert_eq!(project.settings.master_effects.len(), 1);
     assert_eq!(
         *project.settings.master_effects[0].effect_type(),
-        EffectTypeId::BLOOM
+        PresetTypeId::BLOOM
     );
 }
 
@@ -1490,7 +1490,7 @@ fn expose_effect_param_command_undo_roundtrip() {
     // of this file). Expose UVTransform.translate as a user binding;
     // assert state, undo, assert state.
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.base_param_values = Some(vec![0.5, 1.0]);
     project.settings.master_effects.push(fx);
@@ -1550,7 +1550,7 @@ fn expose_already_exposed_is_idempotent_noop() {
     // not panic, and undo must also be a no-op (not remove the
     // pre-existing binding).
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.base_param_values = Some(vec![0.5, 1.0]);
     fx.append_user_binding(UserParamBinding {
@@ -1597,7 +1597,7 @@ fn expose_already_exposed_is_idempotent_noop() {
 #[test]
 fn unexpose_effect_param_command_undo_roundtrip() {
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.base_param_values = Some(vec![0.5, 1.0]);
     fx.append_user_binding(UserParamBinding {
@@ -1654,7 +1654,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
 #[test]
 fn unexpose_when_not_exposed_is_noop() {
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     project.settings.master_effects.push(fx);
 
@@ -1683,7 +1683,7 @@ fn unexpose_when_not_exposed_is_noop() {
 #[test]
 fn generate_user_param_id_collision_probe() {
     // Linear probe lands on the smallest free .n suffix.
-    let existing = vec![
+    let existing = [
         UserParamBinding {
             id: "user.uv_transform.translate.1".to_string(),
             label: String::new(),
@@ -1734,7 +1734,7 @@ fn generate_user_param_id_collision_probe() {
 #[test]
 fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
@@ -1832,7 +1832,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
         AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
     };
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
@@ -1904,7 +1904,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
 #[test]
 fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
     let mut project = make_test_project();
-    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    let mut fx = EffectInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
@@ -1926,11 +1926,11 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
     // param on a different effect type so the second survives.
     let envs = project.timeline.layers[0].envelopes_mut();
     envs.push(ParamEnvelope::new_for_effect(
-        EffectTypeId::BLOOM,
+        PresetTypeId::BLOOM,
         std::borrow::Cow::Owned("user.uv_transform.translate.1".to_string()),
     ));
     envs.push(ParamEnvelope::new_for_effect(
-        EffectTypeId::MIRROR,
+        PresetTypeId::MIRROR,
         std::borrow::Cow::Borrowed("amount"),
     ));
     project.timeline.layers[0].effects = Some(vec![fx]);
@@ -1965,7 +1965,7 @@ fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
         .expect("layer envelopes vec restored");
     assert_eq!(envs.len(), 2);
     assert!(
-        envs.iter().any(|e| e.target_effect_type == EffectTypeId::BLOOM
+        envs.iter().any(|e| e.target_effect_type == PresetTypeId::BLOOM
             && e.param_id == "user.uv_transform.translate.1"),
         "undo must reinstate the pruned envelope",
     );

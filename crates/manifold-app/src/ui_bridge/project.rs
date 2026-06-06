@@ -1,7 +1,7 @@
 //! Project-related dispatch: file operations, export, audio/percussion, resolution,
 //! MIDI note/channel, generator type, waveform/stem actions.
 
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::{Beats, LayerId};
 use manifold_ui::PanelAction;
@@ -236,7 +236,7 @@ pub(super) fn dispatch_project(
                 let old_type = layer
                     .gen_params()
                     .map(|gp| gp.generator_type().clone())
-                    .unwrap_or(GeneratorTypeId::NONE);
+                    .unwrap_or(PresetTypeId::NONE);
                 if let Some(reg) = available.get(*gen_type_idx) {
                     let new_type = reg.id.clone();
                     if new_type != old_type {

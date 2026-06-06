@@ -1,7 +1,7 @@
 use manifold_core::ClipId;
 use std::collections::HashMap;
 
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::midi::MidiNoteMapping;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
@@ -365,9 +365,9 @@ impl ClipLauncher {
             .layers
             .get(layer_index as usize)
             .map(|l| l.generator_type().clone())
-            .unwrap_or(GeneratorTypeId::NONE);
+            .unwrap_or(PresetTypeId::NONE);
 
-        if generator_type != GeneratorTypeId::NONE {
+        if generator_type != PresetTypeId::NONE {
             let bpm = project.settings.bpm;
             let spb = TempoMapConverter::seconds_per_beat_from_bpm(bpm.0);
             let generator_duration = spb * 4.0; // 1 bar at 4/4 default feel

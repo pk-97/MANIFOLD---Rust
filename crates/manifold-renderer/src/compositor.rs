@@ -169,12 +169,12 @@ pub trait Compositor: Send {
     fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 
     /// Snapshot of a specific effect type's internal graph, identified
-    /// by its `EffectTypeId`. Default `None` — non-graph compositors
+    /// by its `PresetTypeId`. Default `None` — non-graph compositors
     /// have nothing to expose. The real `LayerCompositor` override
     /// delegates into its `EffectRegistry`.
     fn graph_snapshot_for(
         &self,
-        _type_id: &manifold_core::EffectTypeId,
+        _type_id: &manifold_core::PresetTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
         None
     }
@@ -186,7 +186,7 @@ pub trait Compositor: Send {
     /// Default empty.
     fn outer_routings_for(
         &self,
-        _type_id: &manifold_core::EffectTypeId,
+        _type_id: &manifold_core::PresetTypeId,
     ) -> Vec<crate::node_graph::OuterParamRouting> {
         Vec::new()
     }

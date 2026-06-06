@@ -48,7 +48,7 @@
 //! into the source slot once per chain invocation.
 
 use ahash::AHashMap;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::{EffectGroup, EffectInstance};
@@ -208,7 +208,7 @@ pub enum ChainError {
     /// type-id that no longer exists.
     DivergentGraphFellBack {
         effect_id: EffectId,
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
     },
     /// A spec-level `ParamBinding` references a handle the splice
     /// didn't register. The binding silently doesn't apply — the
@@ -216,7 +216,7 @@ pub enum ChainError {
     /// preset JSON's `bindings[].target.handle` was renamed without
     /// updating the inner node's handle.
     StaticBindingHandleMissing {
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         binding_id: String,
     },
     /// A user-exposed param binding (the editor's "expose to card")
@@ -225,7 +225,7 @@ pub enum ChainError {
     /// an exposure mid-show.
     UserBindingResolveFailed {
         effect_id: EffectId,
-        effect_type: EffectTypeId,
+        effect_type: PresetTypeId,
         binding_id: String,
         node_id: String,
         inner_param: String,
@@ -307,7 +307,7 @@ fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
 struct EffectSlot {
     #[allow(dead_code)]
     effect_id: EffectId,
-    effect_type: EffectTypeId,
+    effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
     /// was constructed. Topology rebuilds are triggered by any change
     /// to that slice's structural shape (effect added/removed/reordered,
@@ -1737,12 +1737,12 @@ mod multi_segment_tests {
     //! `group_mix_nodes`, so the per-frame `wet_dry` refresh sets the
     //! `amount` param on every segment uniformly.
     use super::*;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effects::{EffectGroup, EffectInstance};
     use manifold_core::id::EffectGroupId;
     
 
-    fn make_default(ty: EffectTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> EffectInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -1755,10 +1755,10 @@ mod multi_segment_tests {
 
         // Chain: Invert(g1) → ChromaticAberration → Invert(g1)
         // Effects on either side belong to g1; the middle effect doesn't.
-        let mut e1 = make_default(EffectTypeId::INVERT_COLORS);
+        let mut e1 = make_default(PresetTypeId::INVERT_COLORS);
         e1.group_id = Some(g1_id.clone());
-        let e2 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
-        let mut e3 = make_default(EffectTypeId::INVERT_COLORS);
+        let e2 = make_default(PresetTypeId::CHROMATIC_ABERRATION);
+        let mut e3 = make_default(PresetTypeId::INVERT_COLORS);
         e3.group_id = Some(g1_id.clone());
 
         let g1 = EffectGroup {
@@ -1798,11 +1798,11 @@ mod multi_segment_tests {
 
         let g1_id = EffectGroupId::new("g1");
 
-        let mut e1 = make_default(EffectTypeId::INVERT_COLORS);
+        let mut e1 = make_default(PresetTypeId::INVERT_COLORS);
         e1.group_id = Some(g1_id.clone());
-        let mut e2 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
+        let mut e2 = make_default(PresetTypeId::CHROMATIC_ABERRATION);
         e2.group_id = Some(g1_id.clone());
-        let e3 = make_default(EffectTypeId::INVERT_COLORS);
+        let e3 = make_default(PresetTypeId::INVERT_COLORS);
 
         let g1 = EffectGroup {
             id: g1_id.clone(),
@@ -1828,13 +1828,13 @@ mod multi_segment_tests {
         let primitives = PrimitiveRegistry::with_builtin();
 
         let g1_id = EffectGroupId::new("g1");
-        let mut e1 = make_default(EffectTypeId::INVERT_COLORS);
+        let mut e1 = make_default(PresetTypeId::INVERT_COLORS);
         e1.group_id = Some(g1_id.clone());
-        let e2 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
-        let mut e3 = make_default(EffectTypeId::INVERT_COLORS);
+        let e2 = make_default(PresetTypeId::CHROMATIC_ABERRATION);
+        let mut e3 = make_default(PresetTypeId::INVERT_COLORS);
         e3.group_id = Some(g1_id.clone());
-        let e4 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
-        let mut e5 = make_default(EffectTypeId::INVERT_COLORS);
+        let e4 = make_default(PresetTypeId::CHROMATIC_ABERRATION);
+        let mut e5 = make_default(PresetTypeId::INVERT_COLORS);
         e5.group_id = Some(g1_id.clone());
 
         let g1 = EffectGroup {
@@ -1871,11 +1871,11 @@ mod binding_seed_tests {
     //! see [`apply_binding_defaults`].
     use super::*;
     use crate::node_graph::ParamValue;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effects::EffectInstance;
     
 
-    fn make_default(ty: EffectTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> EffectInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -1888,7 +1888,7 @@ mod binding_seed_tests {
     fn soft_focus_inner_blur_starts_at_binding_default_not_primitive_default() {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let fx = make_default(EffectTypeId::SOFT_FOCUS_GRAPH);
+        let fx = make_default(PresetTypeId::SOFT_FOCUS_GRAPH);
 
         let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("SoftFocus chain should build");
@@ -1933,10 +1933,10 @@ mod topology_hash_tests {
     //! `enabled` — visible as the "add effect → must toggle to
     //! work" symptom.
     use super::*;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effects::EffectInstance;
 
-    fn make_default(ty: EffectTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> EffectInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -1947,8 +1947,8 @@ mod topology_hash_tests {
         // gate at `should_render_fused` only re-runs on rebuild, so the watched
         // flag has to move the topology hash. Membership-local: a `preview_effect`
         // that isn't in the chain leaves the hash unchanged (no churn elsewhere).
-        let fx = make_default(EffectTypeId::COLOR_GRADE);
-        let other = make_default(EffectTypeId::VORONOI_PRISM);
+        let fx = make_default(PresetTypeId::COLOR_GRADE);
+        let other = make_default(PresetTypeId::VORONOI_PRISM);
 
         let unwatched = compute_topology_hash(std::slice::from_ref(&fx), &[], 256, 256, None);
         let watched =
@@ -1980,7 +1980,7 @@ mod topology_hash_tests {
         // amount=0.5. The §9.1.5 audit moved most effects' default
         // amount off zero, so we can't rely on the default for this
         // fixture.
-        let mut fx = make_default(EffectTypeId::VORONOI_PRISM);
+        let mut fx = make_default(PresetTypeId::VORONOI_PRISM);
         fx.set_base_param(0, 0.0);
 
         let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
@@ -2007,7 +2007,7 @@ mod topology_hash_tests {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
-        let mut fx = make_default(EffectTypeId::MIRROR); // `amount` default = 1.0, so present in chain by default.
+        let mut fx = make_default(PresetTypeId::MIRROR); // `amount` default = 1.0, so present in chain by default.
         assert!(fx.enabled, "EffectInstance::new defaults enabled = true");
 
         let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
@@ -2043,7 +2043,7 @@ mod topology_hash_tests {
         // but NOT `graph_structure_version`, so the topology hash is unchanged
         // and the chain is NOT rebuilt (state preserved). Only a structural
         // edit moves the hash.
-        let mut fx = make_default(EffectTypeId::MIRROR);
+        let mut fx = make_default(PresetTypeId::MIRROR);
         let base = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
 
         // Value / position edit: snapshot version moves, structure doesn't.
@@ -2075,12 +2075,12 @@ mod topology_hash_tests {
         // (threshold → downsample → blur → mix) is stateless, so it has
         // no per-instance state to preserve and can stay SkipMode::OnZero.
         for ty in [
-            EffectTypeId::STYLIZED_FEEDBACK,
-            EffectTypeId::WATERCOLOR,
-            EffectTypeId::DEPTH_OF_FIELD,
-            EffectTypeId::WIREFRAME_DEPTH,
-            EffectTypeId::BLOB_TRACKING,
-            EffectTypeId::AUTO_GAIN,
+            PresetTypeId::STYLIZED_FEEDBACK,
+            PresetTypeId::WATERCOLOR,
+            PresetTypeId::DEPTH_OF_FIELD,
+            PresetTypeId::WIREFRAME_DEPTH,
+            PresetTypeId::BLOB_TRACKING,
+            PresetTypeId::AUTO_GAIN,
         ] {
             let view = loaded_preset_view_by_id(&ty).unwrap_or_else(|| {
                 panic!("{:?}: missing LoadedPresetView", ty);
@@ -2113,13 +2113,13 @@ mod user_binding_tests {
     //! class is structurally unrepresentable.
     use super::*;
     use crate::node_graph::ParamValue;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effects::{
         EffectInstance, ParamMapping, ParamSlot, UserParamBinding, ParamConvert,
     };
 
 
-    fn make_default(ty: EffectTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> EffectInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -2169,7 +2169,7 @@ mod user_binding_tests {
         }
 
         // Control: same effect, zoom = 0.3, NO note → inner sees 0.3.
-        let mut control = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        let mut control = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
         let mut cg0 =
             ChainGraph::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None)
@@ -2183,7 +2183,7 @@ mod user_binding_tests {
         );
 
         // With a ×2 note on `zoom`: inner sees 0.6, slot still reads 0.3.
-        let mut fx = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        let mut fx = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         fx.param_values[1] = ParamSlot::exposed(0.3);
         fx.upsert_param_mapping(scale_note("zoom", 2.0));
         let mut cg =
@@ -2206,7 +2206,7 @@ mod user_binding_tests {
     }
 
     fn stylized_with_translate_exposed(translate_value: f32) -> EffectInstance {
-        let mut fx = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        let mut fx = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         // StylizedFeedback's graph registers an affine_transform under
         // the handle `"affine"`. Its static card exposes gain / scale /
         // rotation, but NOT `translate_x` — so a user-tail binding to
@@ -2341,7 +2341,7 @@ mod user_binding_tests {
     fn user_binding_with_nonzero_default_seeds_inner_at_build_time() {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let mut fx = make_default(EffectTypeId::STYLIZED_FEEDBACK);
+        let mut fx = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         fx.append_user_binding(UserParamBinding {
             id: "user.affine.translate_x.1".to_string(),
             label: "Translate X".to_string(),
@@ -2523,10 +2523,10 @@ mod generator_input_tests {
     //!    into the generator_input node's params via `set_param`.
     use super::*;
     use crate::node_graph::ParamValue;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
-    fn make_default(ty: EffectTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> EffectInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -2553,7 +2553,7 @@ mod generator_input_tests {
         )
         .expect("test fixture parses");
 
-        let mut fx = make_default(EffectTypeId::INVERT_COLORS);
+        let mut fx = make_default(PresetTypeId::INVERT_COLORS);
         // Mark the divergent path live so try_build picks it up. A divergent
         // def is a structural change, so bump the structure version too.
         fx.graph = Some(custom_def);
@@ -2596,7 +2596,7 @@ mod generator_input_tests {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         // Canonical Invert preset has no system.generator_input.
-        let fx = make_default(EffectTypeId::INVERT_COLORS);
+        let fx = make_default(PresetTypeId::INVERT_COLORS);
 
         let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("Invert chain builds without divergent def");
@@ -2708,7 +2708,7 @@ mod generator_input_tests {
 
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let fx = make_default(EffectTypeId::new("ColorGrade"));
+        let fx = make_default(PresetTypeId::new("ColorGrade"));
 
         let mut cg = ChainGraph::try_build(
             std::slice::from_ref(&fx),
@@ -2783,10 +2783,10 @@ mod chain_error_tests {
     //! pin one variant from the per-build path so the surface
     //! doesn't silently regress.
     use super::*;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effects::{EffectInstance, ParamConvert, UserParamBinding};
 
-    fn make_default(ty: EffectTypeId) -> EffectInstance {
+    fn make_default(ty: PresetTypeId) -> EffectInstance {
         manifold_core::preset_definition_registry::effect::create_default(&ty)
     }
 
@@ -2800,7 +2800,7 @@ mod chain_error_tests {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
-        let mut fx = make_default(EffectTypeId::INVERT_COLORS);
+        let mut fx = make_default(PresetTypeId::INVERT_COLORS);
         // Reference a handle that the canonical Invert splice does
         // NOT register. Resolution fails at build time → records a
         // UserBindingResolveFailed error and the slider stays inert.
@@ -2851,7 +2851,7 @@ mod chain_error_tests {
     fn clean_chain_has_no_errors() {
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
-        let fx = make_default(EffectTypeId::INVERT_COLORS);
+        let fx = make_default(PresetTypeId::INVERT_COLORS);
 
         let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("clean Invert chain builds");

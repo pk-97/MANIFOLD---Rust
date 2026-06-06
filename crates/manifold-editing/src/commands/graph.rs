@@ -1064,7 +1064,7 @@ struct RemovedEnvelopeState {
     /// Effect type id captured at unexpose time. Envelopes match on
     /// `(target_effect_type, param_id)`, so we need the type alongside
     /// the binding id to put them back at the right rows.
-    effect_type: manifold_core::EffectTypeId,
+    effect_type: manifold_core::PresetTypeId,
     /// The pruned envelope rows, in the order they appeared on the
     /// layer. `retain` doesn't preserve indices, so the restore path
     /// appends them — fine because envelopes are keyed by content
@@ -1315,7 +1315,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 } = &mut effect_mirror
                 {
                     let removed_id = binding.id.clone();
-                    let host: Option<(manifold_core::LayerId, manifold_core::EffectTypeId)> =
+                    let host: Option<(manifold_core::LayerId, manifold_core::PresetTypeId)> =
                         project.timeline.layers.iter().find_map(|l| {
                             l.effects.as_ref().and_then(|fxs| {
                                 fxs.iter()
@@ -1722,7 +1722,7 @@ fn prepare_generator_mirror(
     // delivered as JSON presets always carry metadata; defensive
     // synth keeps the bookkeeping uniform if the graph is missing it.
     let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-        id: manifold_core::EffectTypeId::new(""),
+        id: manifold_core::PresetTypeId::new(""),
         display_name: String::new(),
         category: String::new(),
         osc_prefix: String::new(),
@@ -2307,7 +2307,7 @@ impl Command for UngroupNodeCommand {
 mod tests {
     use super::*;
     use manifold_core::EffectId;
-    use manifold_core::EffectTypeId;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
     use manifold_core::effects::EffectInstance;
 
@@ -2351,7 +2351,7 @@ mod tests {
     fn project_with_graph(def: EffectGraphDef) -> (Project, EffectId) {
         let mut project = Project::default();
         let effect_id = EffectId::new("test-group-fx");
-        let mut fx = EffectInstance::new(EffectTypeId::new("test.fx"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("test.fx"));
         fx.id = effect_id.clone();
         fx.graph = Some(def);
         project.settings.master_effects.push(fx);
@@ -2715,7 +2715,7 @@ mod tests {
     /// Project with one master Mirror effect, graph: None.
     fn project_with_one_master_effect() -> (Project, EffectId) {
         let mut project = Project::default();
-        let fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let fx = EffectInstance::new(PresetTypeId::new("Mirror"));
         let id = fx.id.clone();
         project.settings.master_effects.push(fx);
         (project, id)
@@ -3163,7 +3163,7 @@ mod tests {
             PresetMetadata,
         };
         use manifold_core::effects::ParamConvert;
-        use manifold_core::generator_type_id::GeneratorTypeId;
+        use manifold_core::preset_type_id::PresetTypeId;
 
         // Wireframe-like preset: two bundled bindings ("shape" → render.shape,
         // "scale" → render.scale) plus an inner node `render` whose
@@ -3174,7 +3174,7 @@ mod tests {
             name: Some("wireframe-like".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
-                id: EffectTypeId::new("test.wireframe"),
+                id: PresetTypeId::new("test.wireframe"),
                 display_name: "Wireframe".into(),
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
@@ -3266,7 +3266,7 @@ mod tests {
             layer.generator_graph = Some(preset_def());
             // gen_params starts with the two bundled slot values.
             let gp = layer.gen_params_or_init();
-            gp.init_defaults_for_type(GeneratorTypeId::from_string(
+            gp.init_defaults_for_type(PresetTypeId::from_string(
                 "test.wireframe".to_string(),
             ));
             // Override values after init — the registry doesn't know
@@ -3412,7 +3412,7 @@ mod tests {
             PresetMetadata,
         };
         use manifold_core::effects::{ParamConvert, ParamEnvelope, ParameterDriver};
-        use manifold_core::generator_type_id::GeneratorTypeId;
+        use manifold_core::preset_type_id::PresetTypeId;
         use manifold_core::types::{BeatDivision, DriverWaveform};
 
         // Preset already carries a user-added binding (simulates
@@ -3423,7 +3423,7 @@ mod tests {
             name: Some("wireframe-like".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
-                id: EffectTypeId::new("test.wireframe"),
+                id: PresetTypeId::new("test.wireframe"),
                 display_name: "Wireframe".into(),
                 category: "Procedural".into(),
                 osc_prefix: "wireframe".into(),
@@ -3518,7 +3518,7 @@ mod tests {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
             layer.generator_graph = Some(preset_def_with_user_added());
             let gp = layer.gen_params_or_init();
-            gp.init_defaults_for_type(GeneratorTypeId::from_string(
+            gp.init_defaults_for_type(PresetTypeId::from_string(
                 "test.wireframe".to_string(),
             ));
             gp.param_values = vec![
@@ -3628,7 +3628,7 @@ mod tests {
         // + Ableton mapping that target its synthesised id.
         let mut project = Project::default();
         let effect_id = EffectId::new("orphan-cleanup-test");
-        let mut fx = EffectInstance::new(EffectTypeId::new("test.mirror"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("test.mirror"));
         fx.id = effect_id.clone();
         project.settings.master_effects.push(fx);
 
@@ -3753,7 +3753,7 @@ mod tests {
         use manifold_core::layer::Layer;
         use manifold_core::types::LayerType;
 
-        let effect_type = EffectTypeId::new("test.mirror");
+        let effect_type = PresetTypeId::new("test.mirror");
         let effect_id = EffectId::new("envelope-cleanup-test");
 
         // Layer-hosted effect (not master — master has no envelopes).
@@ -3853,7 +3853,7 @@ mod tests {
             name: Some("test-preset".into()),
             description: None,
             preset_metadata: Some(PresetMetadata {
-                id: EffectTypeId::new("test.plasma"),
+                id: PresetTypeId::new("test.plasma"),
                 display_name: "Test".into(),
                 category: "Procedural".into(),
                 osc_prefix: "test".into(),
@@ -3979,7 +3979,7 @@ mod tests {
         // Project with one master effect using the catalog default.
         let mut project = Project::default();
         let effect_id = EffectId::new("test-mirror-instance");
-        let mut fx = EffectInstance::new(EffectTypeId::new("test.mirror"));
+        let mut fx = EffectInstance::new(PresetTypeId::new("test.mirror"));
         fx.id = effect_id.clone();
         project.settings.master_effects.push(fx);
 

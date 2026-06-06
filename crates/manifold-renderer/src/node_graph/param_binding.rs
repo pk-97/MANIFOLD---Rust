@@ -50,7 +50,7 @@
 //! Static strings (V1: developer-defined effects compiled in) and
 //! owned strings (V2: user-exposed parameters generated at runtime)
 //! flow through the same code paths. `Cow::Borrowed` for compile-time
-//! IDs, `Cow::Owned` for user-generated. Same trick `EffectTypeId`
+//! IDs, `Cow::Owned` for user-generated. Same trick `PresetTypeId`
 //! uses.
 
 use std::borrow::Cow;

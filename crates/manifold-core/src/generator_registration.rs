@@ -5,7 +5,7 @@
 
 use crate::effects::ParamDef;
 use crate::preset_definition_registry::StringParamDef;
-use crate::generator_type_id::GeneratorTypeId;
+use crate::preset_type_id::PresetTypeId;
 use crate::generator_type_registry::GeneratorTypeRegistration;
 use crate::preset_def::{PresetDef, PresetKind};
 
@@ -187,7 +187,7 @@ impl ParamSpec {
 
 /// Complete metadata for a generator, submitted via `inventory::submit!`.
 pub struct GeneratorMetadata {
-    pub id: GeneratorTypeId,
+    pub id: PresetTypeId,
     pub display_name: &'static str,
     pub is_line_based: bool,
     pub available: bool,
@@ -203,7 +203,7 @@ inventory::collect!(GeneratorMetadata);
 /// Sidecar alias submission for generators. Mirrors
 /// [`crate::effect_registration::EffectAliasMetadata`].
 pub struct GeneratorAliasMetadata {
-    pub id: GeneratorTypeId,
+    pub id: PresetTypeId,
     pub aliases: &'static [crate::effect_registration::ParamAlias],
 }
 

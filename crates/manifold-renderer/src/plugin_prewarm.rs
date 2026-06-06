@@ -14,7 +14,7 @@
 //! `resize` / `flush_background_work` through them.
 
 use crate::effect::PostProcessEffect;
-use manifold_core::EffectTypeId;
+use manifold_core::PresetTypeId;
 use manifold_gpu::GpuDevice;
 
 /// One plugin-using effect's warmup contribution.
@@ -32,13 +32,13 @@ use manifold_gpu::GpuDevice;
 /// ```ignore
 /// inventory::submit! {
 ///     PluginPrewarm {
-///         id: EffectTypeId::BLOB_TRACKING,
+///         id: PresetTypeId::BLOB_TRACKING,
 ///         prewarm: |device| Box::new(BlobTrackingFX::new(device)),
 ///     }
 /// }
 /// ```
 pub struct PluginPrewarm {
-    pub id: EffectTypeId,
+    pub id: PresetTypeId,
     pub prewarm: fn(&GpuDevice) -> Box<dyn PostProcessEffect>,
 }
 
@@ -58,7 +58,7 @@ pub fn prewarm_all(device: &GpuDevice) -> Vec<Box<dyn PostProcessEffect>> {
 
 /// Every effect type id with a registered prewarm submission. Useful
 /// for tests asserting coverage.
-pub fn prewarm_ids() -> impl Iterator<Item = &'static EffectTypeId> {
+pub fn prewarm_ids() -> impl Iterator<Item = &'static PresetTypeId> {
     inventory::iter::<PluginPrewarm>
         .into_iter()
         .map(|entry| &entry.id)
@@ -75,11 +75,11 @@ mod tests {
     /// its worker is in node.blob_detect_ffi, no prewarm needed.)
     #[test]
     fn plugin_using_effects_all_have_prewarm_submissions() {
-        let registered: std::collections::HashSet<EffectTypeId> =
+        let registered: std::collections::HashSet<PresetTypeId> =
             prewarm_ids().cloned().collect();
         let expected = [
-            EffectTypeId::DEPTH_OF_FIELD,
-            EffectTypeId::WIREFRAME_DEPTH,
+            PresetTypeId::DEPTH_OF_FIELD,
+            PresetTypeId::WIREFRAME_DEPTH,
         ];
         for id in expected {
             assert!(

@@ -1,4 +1,4 @@
-use manifold_core::GeneratorTypeId;
+use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
@@ -77,7 +77,7 @@ impl MidiImportService {
                 "[MidiImportService] Target video layer has no source clips. \
                  Falling back to BasicShapes generator clips."
             );
-            (true, GeneratorTypeId::BASIC_SHAPES)
+            (true, PresetTypeId::BASIC_SHAPES)
         } else {
             (is_generator, gen_type.clone())
         };
