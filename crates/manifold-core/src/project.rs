@@ -765,6 +765,37 @@ impl Project {
         }
     }
 
+    /// The current preset id of the instance addressed by `target`, if found.
+    pub fn instance_preset_id(&self, target: &crate::GraphTarget) -> Option<PresetTypeId> {
+        match target {
+            crate::GraphTarget::Effect(effect_id) => {
+                self.find_effect_by_id(effect_id).map(|fx| fx.effect_type().clone())
+            }
+            crate::GraphTarget::Generator(layer_id) => self
+                .timeline
+                .layers
+                .iter()
+                .find(|l| &l.layer_id == layer_id)
+                .and_then(|l| l.gen_params())
+                .map(|gp| gp.generator_type().clone()),
+        }
+    }
+
+    /// Insert (or replace by id) a project-embedded preset.
+    pub fn upsert_embedded_preset(&mut self, preset: EmbeddedPreset) {
+        let id = preset.id().cloned();
+        if let Some(id) = id {
+            self.embedded_presets.retain(|p| p.id() != Some(&id));
+        }
+        self.embedded_presets.push(preset);
+    }
+
+    /// Remove a project-embedded preset by id. Returns it if present.
+    pub fn remove_embedded_preset(&mut self, id: &PresetTypeId) -> Option<EmbeddedPreset> {
+        let pos = self.embedded_presets.iter().position(|p| p.id() == Some(id))?;
+        Some(self.embedded_presets.remove(pos))
+    }
+
     /// Retarget the instance addressed by `target` at a different preset id,
     /// keeping its param values. Returns `false` if the target wasn't found.
     pub fn set_instance_preset_id(

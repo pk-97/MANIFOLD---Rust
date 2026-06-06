@@ -8,5 +8,6 @@ pub mod envelopes;
 pub mod graph;
 pub mod layer;
 pub mod marker;
+pub mod preset;
 pub mod selection;
 pub mod settings;
