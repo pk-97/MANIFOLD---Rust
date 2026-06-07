@@ -19,6 +19,7 @@ arc-swap = { workspace = true }
 inventory = "0.3"
 tiff = "0.9"
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+png = "0.17"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = "20"
@@ -34,6 +35,10 @@ path = "src/bin/check_presets.rs"
 [[bin]]
 name = "freeze-profile"
 path = "src/bin/freeze_profile.rs"
+
+[[bin]]
+name = "preview-report"
+path = "src/bin/preview_report.rs"
 
 [features]
 
