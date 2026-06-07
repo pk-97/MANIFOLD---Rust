@@ -196,6 +196,13 @@ whole thing.
   `--params` map. For a `.manifold` (a ZIP), the project lives at `project.json` inside, and a
   layer's generator is at `timeline.layers[i].generatorGraph` with values at
   `timeline.layers[i].genParams.paramValues`.
+- **Some groups have no image, and that is fine.** A group whose output is a particle array or a
+  scalar (a control box, a spawn step, a particle move step) produces no texture, and the tool skips
+  it with a "no image output" message. Do not put a `preview://` token for such a group, or it will
+  show as an unmatched token. Describe these groups in text with their Reads and Produces, and where
+  their effect is visible through another group's image, say so. Fluid Sim 2D does this for Spawn
+  Particles, Move Particles, Resolution Scaling, and Clip Triggers: the particles have no picture of
+  their own, you see them through Render Density.
 - **When a group output is not illustrative, show an inner node.** Oily Fluid's Inject Noise group
   outputs the noise after a tiny injection gain, which reads as black. The report instead shows the
   pre-gain pattern with `preview://node:noise_combine` and a caption explaining that it is scaled
