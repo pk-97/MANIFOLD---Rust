@@ -99,7 +99,7 @@ pub struct ContentPipeline {
     /// preview. Mutually exclusive with `node_preview_generator`.
     node_preview_request: Option<(EffectId, Option<NodeId>)>,
     /// Generator-side counterpart `(watched layer, selected node)`. Drives the
-    /// per-node capture on the layer's `JsonGraphGenerator`. `None` = no
+    /// per-node capture on the layer's generator `PresetRuntime`. `None` = no
     /// generator preview.
     node_preview_generator: Option<(LayerId, Option<NodeId>)>,
     /// One-shot "dump every output of this effect to disk" request `(effect,

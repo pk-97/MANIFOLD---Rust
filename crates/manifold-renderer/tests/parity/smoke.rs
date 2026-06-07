@@ -25,7 +25,7 @@ use half::f16;
 use manifold_renderer::generators::bundled_generator_presets::{
     bundled_generator_preset_json, bundled_generator_preset_type_ids,
 };
-use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -48,7 +48,7 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
         let Some(json) = bundled_generator_preset_json(&id) else {
             continue;
         };
-        let mut generator = JsonGraphGenerator::from_json_str_with_device(
+        let mut generator = PresetRuntime::from_json_str_with_device(
             &json,
             &registry,
             &h.device,

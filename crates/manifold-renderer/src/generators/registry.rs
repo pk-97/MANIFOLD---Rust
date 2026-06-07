@@ -1,17 +1,17 @@
 use crate::generators::bundled_generator_presets::{
     bundled_generator_preset_json, bundled_generator_preset_type_ids,
 };
-use crate::generators::json_graph_generator::JsonGraphGenerator;
+use crate::preset_runtime::PresetRuntime;
 use crate::node_graph::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-/// Factory that maps PresetTypeId to concrete [`JsonGraphGenerator`]
+/// Factory that maps PresetTypeId to concrete [`PresetRuntime`]
 /// instances. Pipeline compilation happens at creation time (expensive — do at
 /// startup or first use).
 ///
 /// Every generator is a **bundled JSON preset** at
 /// `assets/generator-presets/*.json`, embedded by `build.rs`; each becomes a
-/// [`JsonGraphGenerator`]. The legacy Rust-factory path (one `Generator` trait
+/// [`PresetRuntime`]. The legacy Rust-factory path (one `Generator` trait
 /// impl per generator, registered via `inventory::submit!`) is gone — the
 /// migration to JSON atom graphs is complete, so there is one concrete runtime.
 pub struct GeneratorRegistry {
@@ -36,7 +36,7 @@ impl GeneratorRegistry {
         let registry = PrimitiveRegistry::with_builtin();
         for type_id in bundled_generator_preset_type_ids() {
             if let Some(json) = bundled_generator_preset_json(&type_id)
-                && let Err(e) = JsonGraphGenerator::from_json_str_with_device(
+                && let Err(e) = PresetRuntime::from_json_str_with_device(
                     &json,
                     &registry,
                     device,
@@ -74,7 +74,7 @@ impl GeneratorRegistry {
         gen_type: &manifold_core::PresetTypeId,
         width: u32,
         height: u32,
-    ) -> Option<Box<JsonGraphGenerator>> {
+    ) -> Option<Box<PresetRuntime>> {
         // No override, no watch context (perf-gate tuning / tests / non-editor
         // call sites) — fuse normally per the device verdict.
         self.create_with_override(device, gen_type, None, width, height, false)
@@ -82,7 +82,7 @@ impl GeneratorRegistry {
 
     /// Same as [`Self::create`] but routes a per-layer
     /// `EffectGraphDef` override (from `Layer::generator_graph`)
-    /// straight into [`JsonGraphGenerator::from_def_with_device`].
+    /// straight into [`PresetRuntime::from_def_with_device`].
     /// `override_def = None` falls back to the bundled JSON preset.
     ///
     /// Returns `None` if neither the override nor the bundled preset
@@ -95,7 +95,7 @@ impl GeneratorRegistry {
         width: u32,
         height: u32,
         is_watched: bool,
-    ) -> Option<Box<JsonGraphGenerator>> {
+    ) -> Option<Box<PresetRuntime>> {
         let registry = PrimitiveRegistry::with_builtin();
 
         // The "effective def" this layer renders: the per-layer graph override
@@ -139,7 +139,7 @@ impl GeneratorRegistry {
             } else {
                 def
             };
-            match JsonGraphGenerator::from_def_with_device(
+            match PresetRuntime::from_def_with_device(
                 render_def,
                 &registry,
                 device,
@@ -163,7 +163,7 @@ impl GeneratorRegistry {
             // effective def in the non-override case, so this only runs for
             // overrides.
             if is_override && let Some(json) = bundled_generator_preset_json(gen_type) {
-                match JsonGraphGenerator::from_json_str_with_device(
+                match PresetRuntime::from_json_str_with_device(
                     &json,
                     &registry,
                     device,

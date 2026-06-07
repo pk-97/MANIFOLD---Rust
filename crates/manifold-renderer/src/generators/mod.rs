@@ -2,7 +2,6 @@ pub mod bundled_generator_presets;
 pub mod clip_trigger;
 pub mod compute_common;
 pub mod generator_math;
-pub mod json_graph_generator;
 pub mod line_pipeline;
 pub mod mesh_common;
 pub mod mesh_pipeline;

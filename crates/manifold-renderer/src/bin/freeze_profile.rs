@@ -23,7 +23,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::primitives::Gain;
@@ -689,7 +689,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
 
         for &(w, h) in RESOLUTIONS {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut generator = JsonGraphGenerator::from_def_with_device(
+                let mut generator = PresetRuntime::from_def_with_device(
                     def.clone(),
                     registry,
                     device,
@@ -818,7 +818,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut generator =
-                JsonGraphGenerator::from_def_with_device(def, registry, device, w, h, FORMAT)
+                PresetRuntime::from_def_with_device(def, registry, device, w, h, FORMAT)
                     .map_err(|e| e.to_string())?;
             let target = RenderTarget::new(device, w, h, FORMAT, "fluidsweep-gen");
             let mk_ctx = |t: f64| PresetContext {

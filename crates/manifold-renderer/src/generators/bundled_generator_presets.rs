@@ -172,14 +172,14 @@ mod tests {
     /// warning in the log. This test catches it at compile time.
     #[test]
     fn every_bundled_preset_chain_builds() {
-        use crate::generators::json_graph_generator::JsonGraphGenerator;
+        use crate::preset_runtime::PresetRuntime;
         use crate::node_graph::PrimitiveRegistry;
         use manifold_gpu::GpuTextureFormat;
         let device = crate::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures: Vec<String> = Vec::new();
         for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
-            if let Err(e) = JsonGraphGenerator::from_json_str_with_device(
+            if let Err(e) = PresetRuntime::from_json_str_with_device(
                 &json,
                 &registry,
                 &device,
@@ -220,7 +220,7 @@ mod tests {
     /// down the run; all failures are collected and reported at once.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
-        use crate::generators::json_graph_generator::JsonGraphGenerator;
+        use crate::preset_runtime::PresetRuntime;
         use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use crate::node_graph::PrimitiveRegistry;
         use crate::render_target::RenderTarget;
@@ -238,7 +238,7 @@ mod tests {
         let mut failures: Vec<String> = Vec::new();
 
         for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
-            let mut g = match JsonGraphGenerator::from_json_str_with_device(
+            let mut g = match PresetRuntime::from_json_str_with_device(
                 &json, &registry, &device, w, h, format,
             ) {
                 Ok(g) => g,

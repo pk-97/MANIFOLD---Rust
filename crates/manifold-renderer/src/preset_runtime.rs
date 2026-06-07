@@ -1,4 +1,4 @@
-//! [`ChainGraph`] — one cached [`Graph`] per `EffectChain`.
+//! [`PresetRuntime`] — one cached [`Graph`] per `EffectChain`.
 //!
 //! Each chain compiles its full effect sequence (every active
 //! [`PresetInstance`], plus `Mix` sub-graphs for wet/dry groups)
@@ -58,14 +58,17 @@ use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    BoundGraph, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LoadedPresetView,
-    MetalBackend, NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding,
+    BindingSource, BoundGraph, EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID,
+    FinalOutput, FrameTime, GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, LoadedPresetView,
+    MetalBackend, NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding, ResolvedTarget,
     ResourceId, Slot, Source, SpliceResult, StateStore, apply_binding_defaults, compile,
     splice_def_into_chain,
 };
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
 use crate::preset_context::PresetContext;
-use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef};
+use manifold_core::effects::ParamSlot;
+use manifold_core::{Beats, Seconds};
 use crate::render_target::RenderTarget;
 
 const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -91,7 +94,7 @@ fn output_resource(
 }
 
 // ---------------------------------------------------------------------------
-// ChainGraph — one Graph per EffectChain (linear, no wet/dry groups)
+// PresetRuntime — one Graph per EffectChain (linear, no wet/dry groups)
 // ---------------------------------------------------------------------------
 
 /// Whole-chain graph: one cached [`Graph`] containing every effect of
@@ -114,7 +117,7 @@ fn output_resource(
 ///
 /// ## When this path is taken
 ///
-/// [`ChainGraph::try_build`] returns `Some` whenever every enabled
+/// [`PresetRuntime::try_build`] returns `Some` whenever every enabled
 /// effect has either a primitive mapping (via
 /// [`primitive_id_for_effect`]) or registered legacy metadata (the
 /// `EffectMetadata` catalog used to live in `node_graph::metadata`)
@@ -134,9 +137,9 @@ fn output_resource(
 /// the rebuild — acceptable because topology changes are
 /// editing-time events, not performance-time. Per-frame param
 /// changes (modulation, Ableton, user) refresh in place, no rebuild.
-pub struct ChainGraph {
-    graph: Graph,
-    plan: ExecutionPlan,
+pub struct PresetRuntime {
+    pub graph: Graph,
+    pub plan: ExecutionPlan,
     executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
@@ -149,10 +152,12 @@ pub struct ChainGraph {
     /// rebuild the graph). Keyed by `EffectGroupId` for the
     /// per-frame lookup.
     group_mix_nodes: Vec<(EffectGroupId, NodeInstanceId)>,
-    source_slot: Slot,
-    /// `Slot` containing the chain's final output texture after
-    /// `execute_frame_with_gpu`.
-    output_slot: Slot,
+    /// Input/output model. `Transform` (effect chain) installs an upstream
+    /// input texture into a dedicated source slot each frame and owns its
+    /// output slot (the host reads `output_texture()`). `Generate` (generator)
+    /// has no input — it renders *into* a host-provided target texture
+    /// installed at the `final_output` source slot each frame.
+    io: PresetIo,
     width: u32,
     height: u32,
     /// Hash of the topology this graph was built for. Compared
@@ -171,7 +176,7 @@ pub struct ChainGraph {
     /// node instance directly. Today that's only `temporal::Feedback`,
     /// but any future primitive that uses the `StateStore` API will
     /// route through here. The store's lifetime is tied to this
-    /// `ChainGraph` — when the graph rebuilds (topology change /
+    /// `PresetRuntime` — when the graph rebuilds (topology change /
     /// resize), the store is dropped along with it, mirroring how
     /// instance-level state (e.g. Watercolor's `feedback` field) is
     /// also lost on rebuild. `clear_state()` calls `cleanup_all()`
@@ -193,13 +198,188 @@ pub struct ChainGraph {
     /// [`Self::set_preview_target`] resolves a target. `Color` when nothing on
     /// this chain is previewed. Read by the host via [`Self::preview_encoding`].
     preview_encoding: crate::node_graph::PreviewEncoding,
+
+    // ---- Generator-only state (empty / None for effect-chain runtimes) ----
+    /// Stable identity for the `GeneratorRegistry`. `Some` for generators
+    /// (built via [`Self::from_def`] / [`Self::from_def_with_device`]); `None`
+    /// for effect chains (which are addressed by `EffectId` per segment).
+    type_id: Option<PresetTypeId>,
+    /// Texture format threaded through to placeholder allocation on a generator
+    /// `resize`. `None` for effect chains and the mock-backend test path.
+    target_format: Option<GpuTextureFormat>,
+    /// String-typed outer-card → inner-node bindings. Generators only — the
+    /// shared float `apply` loop can't carry `String` params. Empty for chains.
+    string_bindings: Vec<StringBindingResolution>,
+    /// Reusable scratch wrapping the host's `&[f32]` value bus into the
+    /// `&[ParamSlot]` the shared binding `apply` takes (generator render path).
+    /// Cleared + refilled each frame so the apply stays allocation-free.
+    param_slot_scratch: Vec<ParamSlot>,
+}
+
+/// Input/output model for a [`PresetRuntime`]. The one genuine difference
+/// between an effect chain and a generator: an effect transforms an upstream
+/// input texture; a generator produces from nothing and writes into a
+/// host-provided target.
+enum PresetIo {
+    /// Effect chain. `source_slot` receives the upstream input texture each
+    /// frame (via `replace_texture_2d`); `output_slot` holds the chain's final
+    /// output texture, which the host reads via [`PresetRuntime::output_texture`].
+    Transform { source_slot: Slot, output_slot: Slot },
+    /// Generator. No input. The host installs its target texture into
+    /// `final_output_slot` each frame; the graph renders into it. `Some(slot)`
+    /// on the production path (real `MetalBackend`); `None` on the mock-backend
+    /// test path (no GPU, slot never used).
+    Generate {
+        generator_input_id: NodeInstanceId,
+        final_output_input_resource: ResourceId,
+        final_output_slot: Option<Slot>,
+    },
+}
+
+/// One resolved String outer-card → inner-node binding (generators only). The
+/// String binding path stays bespoke (the shared float `apply` loop is
+/// float-only): source is keyed by name (lookup into the host's
+/// `clip.string_params` map), no convert because `String → String` is a
+/// pass-through.
+struct StringBindingResolution {
+    target_node: NodeInstanceId,
+    target_param: String,
+    /// Key into the host's `clip.string_params` map. The `presetMetadata`
+    /// `stringBindings` `id` field — same identity as the matching
+    /// `stringParams` entry's `id`.
+    source_key: String,
+    default: String,
+}
+
+/// Errors produced when loading a generator preset (the generator
+/// construction path of [`PresetRuntime`]).
+#[derive(Debug)]
+pub enum JsonGeneratorLoadError {
+    /// JSON parsing failed.
+    Json(serde_json::Error),
+    /// The schema document failed to construct a Graph.
+    Load(LoadError),
+    /// The compiled graph had a static error (cycle, type mismatch, …).
+    Compile(GraphError),
+    /// The preset's JSON contains no `system.generator_input` node.
+    MissingGeneratorInput,
+    /// The preset's JSON contains no `system.final_output` node, or it
+    /// isn't wired.
+    MissingFinalOutput,
+    /// A primitive declared an `Array<T>` output but
+    /// `EffectNode::array_output_capacity` returned `None` for that port.
+    UnsizedArrayOutput { node_type: String, port: String },
+    /// Sibling of `UnsizedArrayOutput` for Texture3D.
+    UnsizedTexture3DOutput { node_type: String, port: String },
+    /// Post-allocation catch-all: an `Array<T>` resource in the compiled plan
+    /// has no bound slot or no underlying buffer.
+    UnboundArrayResource {
+        producer_handle: Option<String>,
+        producer_node_type: String,
+        producer_port: String,
+        cause: &'static str,
+    },
+}
+
+impl std::fmt::Display for JsonGeneratorLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(e) => write!(f, "JSON parse error: {e}"),
+            Self::Load(e) => write!(f, "graph load error: {e}"),
+            Self::Compile(e) => write!(f, "graph compile error: {e:?}"),
+            Self::MissingGeneratorInput => write!(
+                f,
+                "preset has no `{GENERATOR_INPUT_TYPE_ID}` node — required for generator graphs"
+            ),
+            Self::MissingFinalOutput => write!(
+                f,
+                "preset has no `{FINAL_OUTPUT_TYPE_ID}` node, or it is not wired"
+            ),
+            Self::UnsizedArrayOutput { node_type, port } => write!(
+                f,
+                "primitive `{node_type}` Array<T> output port `{port}` has no \
+                 concrete size — `array_output_capacity` returned None. \
+                 Add a `max_capacity` param, or override the method to derive \
+                 size from a forward-dep input (not a state-capture port)."
+            ),
+            Self::UnsizedTexture3DOutput { node_type, port } => write!(
+                f,
+                "primitive `{node_type}` Texture3D output port `{port}` has no \
+                 concrete dims — `texture_3d_output_dims` returned None. \
+                 Add `vol_res` / `vol_depth` params, or override the method to \
+                 derive dims from a forward-dep input."
+            ),
+            Self::UnboundArrayResource {
+                producer_handle,
+                producer_node_type,
+                producer_port,
+                cause,
+            } => {
+                let handle_part = match producer_handle {
+                    Some(h) => format!(" (handle `{h}`)"),
+                    None => String::new(),
+                };
+                write!(
+                    f,
+                    "Array<T> output of `{producer_node_type}.{producer_port}`{handle_part} \
+                     has no bound buffer after chain build: {cause}. \
+                     This is the post-allocation audit catching a wire \
+                     whose source resource was never pre-bound."
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for JsonGeneratorLoadError {}
+
+impl From<serde_json::Error> for JsonGeneratorLoadError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
+}
+impl From<LoadError> for JsonGeneratorLoadError {
+    fn from(e: LoadError) -> Self {
+        Self::Load(e)
+    }
+}
+impl From<GraphError> for JsonGeneratorLoadError {
+    fn from(e: GraphError) -> Self {
+        Self::Compile(e)
+    }
+}
+
+/// Map a [`crate::node_graph::PreAllocationError`] into [`JsonGeneratorLoadError`].
+fn generator_error_from_prealloc(
+    e: crate::node_graph::PreAllocationError,
+) -> JsonGeneratorLoadError {
+    use crate::node_graph::PreAllocationError as P;
+    match e {
+        P::UnsizedArrayOutput { node_type, port, .. } => {
+            JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port }
+        }
+        P::UnsizedTexture3DOutput { node_type, port, .. } => {
+            JsonGeneratorLoadError::UnsizedTexture3DOutput { node_type, port }
+        }
+        P::UnboundArrayResource {
+            producer_handle,
+            producer_node_type,
+            producer_port,
+            cause,
+        } => JsonGeneratorLoadError::UnboundArrayResource {
+            producer_handle,
+            producer_node_type,
+            producer_port,
+            cause,
+        },
+    }
 }
 
 /// Structured error variants the chain runner produces. Every variant
 /// carries the affected effect's identity so the future editor surface
 /// can highlight the right card / node. Today this drives the
 /// consistent `[chain-error]` terminal log; tomorrow it's the data
-/// the editor reads via [`ChainGraph::errors`].
+/// the editor reads via [`PresetRuntime::errors`].
 #[derive(Debug, Clone)]
 pub enum ChainError {
     /// A per-instance divergent graph failed to splice; the chain
@@ -298,7 +478,7 @@ impl std::error::Error for ChainError {}
 /// Push a [`ChainError`] onto an accumulator and emit one consistent
 /// `[chain-error]` line. Replaces the scattered `eprintln!` calls that
 /// previously lacked structure — same data lands in the log, plus
-/// it's now reachable through [`ChainGraph::errors`] for the editor.
+/// it's now reachable through [`PresetRuntime::errors`] for the editor.
 fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
     eprintln!("[chain-error] {err}");
     errors.push(err);
@@ -336,7 +516,7 @@ struct EffectSlot {
     /// collapsed group in the editor would otherwise preview nothing (black).
     /// Computed once at chain build from the pre-flatten preset def via
     /// [`manifold_core::flatten::group_output_producer_map`]; consulted by
-    /// [`ChainGraph::set_preview_target`] to substitute the group's primary
+    /// [`PresetRuntime::set_preview_target`] to substitute the group's primary
     /// texture-output producer. The third element is that output's interface
     /// port name (`forceField`), which drives the preview encoding. Empty for
     /// groupless effects.
@@ -345,7 +525,7 @@ struct EffectSlot {
     /// build from the flattened def via [`PreviewEncoding::propagate`]. Lets the
     /// node-output preview follow the *data*: a Gaussian Blur whose input was a
     /// force field resolves to `VectorField` here even though the blur's own
-    /// descriptor says nothing. [`ChainGraph::set_preview_target`] looks the
+    /// descriptor says nothing. [`PresetRuntime::set_preview_target`] looks the
     /// previewed node up here before falling back to single-node `derive`.
     preview_kinds: ahash::AHashMap<NodeId, crate::node_graph::PreviewEncoding>,
     /// Last `fx.graph_version` whose inner-node param overrides were pushed into
@@ -407,7 +587,7 @@ struct EffectSlot {
     generator_input_node: Option<NodeInstanceId>,
 }
 
-impl ChainGraph {
+impl PresetRuntime {
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
     /// pre-group texture fans out into both the group's effects in
@@ -492,7 +672,7 @@ impl ChainGraph {
         let source_node = graph.add_node(Box::new(Source::new()));
         let mut effect_nodes: Vec<EffectSlot> = Vec::with_capacity(active_effects.len());
         let mut group_mix_nodes: Vec<(EffectGroupId, NodeInstanceId)> = Vec::new();
-        // Structured error accumulator. Moves into `ChainGraph::errors`
+        // Structured error accumulator. Moves into `PresetRuntime::errors`
         // at the end of this function; mid-build failures push here so
         // the editor (and the consistent `[chain-error]` terminal log)
         // can show them tied to the affected effect.
@@ -951,8 +1131,10 @@ impl ChainGraph {
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
             group_mix_nodes,
-            source_slot,
-            output_slot,
+            io: PresetIo::Transform {
+                source_slot,
+                output_slot,
+            },
             width,
             height,
             topology_hash,
@@ -960,6 +1142,10 @@ impl ChainGraph {
             state_store: StateStore::new(),
             errors,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
+            type_id: None,
+            target_format: None,
+            string_bindings: Vec::new(),
+            param_slot_scratch: Vec::new(),
         })
     }
 
@@ -1139,13 +1325,22 @@ impl ChainGraph {
         // **and** keeps the active compute encoder alive across the
         // chain boundary (the blit would have ended it, forcing a
         // fresh compute encoder + cache loss on the first effect).
+        let PresetIo::Transform {
+            source_slot,
+            output_slot,
+        } = self.io
+        else {
+            // `run` is the effect-chain entry; a generator-IO runtime renders
+            // via `render` instead. Defensive — callers never cross the wires.
+            return None;
+        };
         let metal = self
             .executor
             .backend_mut()
             .as_any_mut()
             .and_then(|a| a.downcast_mut::<MetalBackend>())
-            .expect("ChainGraph backend is MetalBackend");
-        let ok = metal.replace_texture_2d(self.source_slot, input_texture.clone());
+            .expect("PresetRuntime backend is MetalBackend");
+        let ok = metal.replace_texture_2d(source_slot, input_texture.clone());
         debug_assert!(ok, "source slot pre-bound at build time");
 
         let frame_time = FrameTime {
@@ -1154,7 +1349,7 @@ impl ChainGraph {
             delta: manifold_core::Seconds(f64::from(ctx.dt)),
             // Forward host frame counter so legacy effects (DoF /
             // WireframeDepth / BlobTracking) dispatched via the
-            // ChainGraph fast path can throttle correctly. Was
+            // PresetRuntime fast path can throttle correctly. Was
             // previously hardcoded to 0 in the adapter, breaking
             // throttle gates.
             frame_count: ctx.frame_count,
@@ -1176,15 +1371,18 @@ impl ChainGraph {
 
         // The chain output is in the slot pre-bound to the last
         // effect's output resource.
-        self.executor.backend().texture_2d(self.output_slot)
+        self.executor.backend().texture_2d(output_slot)
     }
 
     /// The chain's final output texture from the most recent
     /// [`Self::run`]. Returns `None` if the backend lookup fails
     /// (should be unreachable since `output_slot` was pre-bound at
-    /// build time).
+    /// build time), or if this is a generator-IO runtime (no owned output).
     pub fn output_texture(&self) -> Option<&GpuTexture> {
-        self.executor.backend().texture_2d(self.output_slot)
+        let PresetIo::Transform { output_slot, .. } = self.io else {
+            return None;
+        };
+        self.executor.backend().texture_2d(output_slot)
     }
 
     /// Aim the authoring-time output preview at `node_id` within effect
@@ -1419,6 +1617,755 @@ impl ChainGraph {
             }
         }
         self.state_store.cleanup_all();
+    }
+}
+
+// ===========================================================================
+// Generator construction + per-frame surface
+// ===========================================================================
+//
+// A generator is the degenerate `PresetRuntime`: one preset graph (a single
+// `EffectSlot` segment), no input texture (`PresetIo::Generate`), boundary
+// `system.generator_input` + `system.final_output` nodes. It renders *into* a
+// host-provided target texture rather than owning its output. The shared
+// substrate (graph / plan / executor / state_store / preview / dump) is the
+// same as the effect-chain path above.
+
+impl PresetRuntime {
+    /// Parse a generator-preset JSON string and compile it (mock backend —
+    /// fine for unit tests; production uses [`Self::from_json_str_with_device`]).
+    pub fn from_json_str(
+        json: &str,
+        registry: &PrimitiveRegistry,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let doc: EffectGraphDef = serde_json::from_str(json)?;
+        Self::from_def(doc, registry)
+    }
+
+    /// Build a generator from an already-parsed [`EffectGraphDef`]. Same path
+    /// as [`Self::from_json_str`] minus the JSON parse step.
+    pub fn from_def(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        if doc.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
+            return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
+                found: doc.version,
+                max: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            }));
+        }
+
+        let type_id_str: String = match doc.preset_metadata.as_ref() {
+            Some(m) => m.id.as_str().to_string(),
+            None => match doc.name.clone() {
+                Some(n) => n,
+                None => {
+                    return Err(JsonGeneratorLoadError::Load(LoadError::InvalidWire {
+                        wire_index: 0,
+                        reason: "generator preset must declare either a top-level `name` or \
+                                 `presetMetadata.id`"
+                            .into(),
+                    }));
+                }
+            },
+        };
+        let type_id = PresetTypeId::from_string(type_id_str);
+
+        // Validate boundary-node presence on the JSON document BEFORE building
+        // the runtime graph — `compile()` would fail with a less informative
+        // `RequiredInputUnwired` on a missing FinalOutput-source wire.
+        if !doc.nodes.iter().any(|n| n.type_id == GENERATOR_INPUT_TYPE_ID) {
+            return Err(JsonGeneratorLoadError::MissingGeneratorInput);
+        }
+        if !doc.nodes.iter().any(|n| n.type_id == FINAL_OUTPUT_TYPE_ID) {
+            return Err(JsonGeneratorLoadError::MissingFinalOutput);
+        }
+
+        // Capture the binding specs + outer-card param ids before `into_graph`
+        // consumes `doc`. The id list resolves each binding's `source_index`
+        // (which outer slider it draws from) — keyed by id rather than position
+        // so a single slider can fan out to multiple inner-node params.
+        let binding_specs: Vec<manifold_core::effect_graph_def::BindingDef> = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| m.bindings.clone())
+            .unwrap_or_default();
+        let outer_param_index: ahash::AHashMap<String, usize> = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| {
+                m.params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (p.id.clone(), i))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Per-param slider response (preset curve/invert/range), matching the
+        // effect path's `ResolvedBinding::from_static` no-note reshape. Identity
+        // for every shipped preset. `param_id -> (min, max, curve, invert)`.
+        let param_reshape: ahash::AHashMap<
+            String,
+            (f32, f32, manifold_core::macro_bank::MacroCurve, bool),
+        > = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| {
+                m.params
+                    .iter()
+                    .map(|p| (p.id.clone(), (p.min, p.max, p.curve, p.invert)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let string_binding_specs: Vec<manifold_core::effect_graph_def::StringBindingDef> = doc
+            .preset_metadata
+            .as_ref()
+            .map(|m| m.string_bindings.clone())
+            .unwrap_or_default();
+
+        // Group → producer map for the node-output preview, captured before
+        // `into_graph` flattens the groups away.
+        let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
+        // Propagated per-node preview kind, from the flattened document.
+        let preview_kinds = manifold_core::flatten::flatten_groups(&doc)
+            .map(|flat| crate::node_graph::PreviewEncoding::propagate(&flat))
+            .unwrap_or_default();
+
+        // Capture the outer-card param count before `into_graph` consumes `doc`.
+        let n_param_slots: Option<usize> =
+            doc.preset_metadata.as_ref().map(|m| m.params.len());
+
+        let mut graph = doc.into_graph(registry)?;
+        let plan = compile(&graph)?;
+
+        // Re-locate the boundary nodes by runtime id now that we have the live
+        // graph.
+        let generator_input_id = graph
+            .nodes()
+            .find(|inst| inst.node.type_id().as_str() == GENERATOR_INPUT_TYPE_ID)
+            .map(|inst| inst.id)
+            .ok_or(JsonGeneratorLoadError::MissingGeneratorInput)?;
+        let final_output_id = graph
+            .nodes()
+            .find(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
+            .map(|inst| inst.id)
+            .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
+        // Walk the plan for the FinalOutput step, pull its `in` input resource —
+        // that's what the host pre-binds the target texture to.
+        let final_output_input_resource = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == final_output_id)
+            .and_then(|s| s.inputs.iter().find(|(n, _)| *n == "in"))
+            .map(|(_, res)| *res)
+            .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
+
+        // Resolve the binding specs against the live graph into the SHARED
+        // `ResolvedBinding` type — the same one the effect chain uses — so the
+        // per-frame apply runs through `BoundGraph::apply` (skip-on-unchanged
+        // cache + structured error logging). Bindings whose node id / param
+        // doesn't resolve are warned + dropped.
+        use manifold_core::effect_graph_def::BindingTarget;
+        let bindings: Vec<ResolvedBinding> = binding_specs
+            .iter()
+            .filter_map(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    let inst_id = graph.instance_by_node_id(node_id)?;
+                    let source_index = match outer_param_index.get(b.id.as_str()) {
+                        Some(idx) => *idx,
+                        None => {
+                            log::warn!(
+                                "PresetRuntime(gen): binding id `{}` (target node `{node_id}`.`{param}`) \
+                                 has no matching outer-card param — the binding will always emit its \
+                                 default ({}). Add a `params` entry with id=`{}` or remove the binding.",
+                                b.id, b.default_value, b.id,
+                            );
+                            return None;
+                        }
+                    };
+                    let inst = graph.get_node(inst_id)?;
+                    let static_param = inst
+                        .node
+                        .parameters()
+                        .iter()
+                        .map(|p| p.name)
+                        .find(|name| *name == param.as_str())
+                        .or_else(|| {
+                            log::warn!(
+                                "PresetRuntime(gen): binding id `{}` targets node `{node_id}`.`{param}` \
+                                 but that param doesn't exist on the node — dropping binding.",
+                                b.id,
+                            );
+                            None
+                        })?;
+                    let (rmin, rmax, rcurve, rinvert) = param_reshape
+                        .get(b.id.as_str())
+                        .copied()
+                        .unwrap_or((0.0, 1.0, manifold_core::macro_bank::MacroCurve::Linear, false));
+                    let reshape = crate::node_graph::Reshape::from_preset_response(
+                        rmin, rmax, rcurve, rinvert, b.scale, b.offset,
+                    );
+                    Some(ResolvedBinding::assemble(
+                        std::borrow::Cow::Owned(b.id.clone()),
+                        std::borrow::Cow::Owned(b.label.clone()),
+                        b.default_value,
+                        ResolvedTarget::Node {
+                            node: inst_id,
+                            param: static_param,
+                        },
+                        b.convert,
+                        if b.user_added {
+                            BindingSource::User
+                        } else {
+                            BindingSource::Static
+                        },
+                        source_index,
+                        reshape,
+                        false,
+                    ))
+                }
+                BindingTarget::Composite { .. } => None,
+            })
+            .collect();
+        let n_static = bindings.len();
+        let n_static_slots = n_param_slots.unwrap_or(n_static);
+
+        // Hand the resolved bindings to the shared `BoundGraph` (seeds the
+        // skip-cache + plants each binding's declared default).
+        let bound = BoundGraph::new(bindings, &mut graph);
+        // Stable NodeId → live instance over the whole graph.
+        let node_map: Vec<(NodeId, NodeInstanceId)> = graph
+            .nodes()
+            .filter(|n| !n.node_id.as_str().is_empty())
+            .map(|n| (n.node_id.clone(), n.id))
+            .collect();
+
+        let string_bindings: Vec<StringBindingResolution> = string_binding_specs
+            .iter()
+            .filter_map(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    let inst_id = graph.instance_by_node_id(node_id)?;
+                    Some(StringBindingResolution {
+                        target_node: inst_id,
+                        target_param: param.clone(),
+                        source_key: b.id.clone(),
+                        default: b.default_value.clone(),
+                    })
+                }
+                BindingTarget::Composite { .. } => None,
+            })
+            .collect();
+
+        // The generator's single segment. Most `EffectSlot` fields are inert
+        // for a generator (it has no chain index, no per-frame user-tail
+        // rehydrate — its host rebuilds on structure change); the live ones are
+        // `bound`, `node_map`, `generator_input_node`, and the preview maps.
+        let segment = EffectSlot {
+            effect_id: EffectId::default(),
+            effect_type: type_id.clone(),
+            legacy_index: 0,
+            handles: Vec::new(),
+            node_map,
+            group_preview_map,
+            preview_kinds,
+            applied_graph_version: 0,
+            bound,
+            n_static,
+            n_static_slots,
+            user_bindings_version: 0,
+            generator_input_node: Some(generator_input_id),
+        };
+
+        let mut g = Self {
+            graph,
+            plan,
+            executor: Executor::with_mock(),
+            effect_nodes: vec![segment],
+            group_mix_nodes: Vec::new(),
+            io: PresetIo::Generate {
+                generator_input_id,
+                final_output_input_resource,
+                final_output_slot: None,
+            },
+            width: 0,
+            height: 0,
+            topology_hash: 0,
+            built_generation: 0,
+            state_store: StateStore::new(),
+            errors: Vec::new(),
+            preview_encoding: crate::node_graph::PreviewEncoding::default(),
+            type_id: Some(type_id),
+            target_format: None,
+            string_bindings,
+            param_slot_scratch: Vec::new(),
+        };
+        g.apply_string_defaults();
+        Ok(g)
+    }
+
+    /// Parse + compile + wire to a real [`MetalBackend`] for production
+    /// rendering. Pre-binds a 1×1 placeholder at the FinalOutput-source slot so
+    /// per-frame `render()` only swaps the borrowed texture (no hot-path alloc).
+    pub fn from_json_str_with_device(
+        json: &str,
+        registry: &PrimitiveRegistry,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let doc: EffectGraphDef = serde_json::from_str(json)?;
+        Self::from_def_with_device(doc, registry, device, width, height, format)
+    }
+
+    /// Same as [`Self::from_json_str_with_device`] but skips the JSON parse.
+    pub fn from_def_with_device(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let mut g = Self::from_def(doc, registry)?;
+        g.width = width;
+        g.height = height;
+        let mut backend = MetalBackend::new(device, width, height, format);
+        let PresetIo::Generate {
+            final_output_input_resource,
+            ..
+        } = g.io
+        else {
+            unreachable!("from_def always produces Generate IO");
+        };
+        // Pre-bind a 1×1 placeholder at the FinalOutput-source slot so the slot
+        // exists across frames; `install_target` swaps in the host's real target
+        // via `replace_texture_2d` each render call.
+        let placeholder =
+            RenderTarget::new(device, 1, 1, format, "preset_runtime_target_owner");
+        let slot = backend.pre_bind_texture_2d(final_output_input_resource, placeholder);
+        if let PresetIo::Generate {
+            final_output_slot, ..
+        } = &mut g.io
+        {
+            *final_output_slot = Some(slot);
+        }
+        g.target_format = Some(format);
+
+        // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
+        // plan declares, then run the post-allocation audit — the same shared
+        // pipeline the effect chain uses.
+        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, device, &mut backend)
+            .map_err(generator_error_from_prealloc)?;
+
+        g.executor = Executor::new(Box::new(backend));
+        Ok(g)
+    }
+
+    /// Stable identity for the `GeneratorRegistry`. Panics on an effect-chain
+    /// runtime (which has no single type id).
+    pub fn type_id(&self) -> &PresetTypeId {
+        self.type_id
+            .as_ref()
+            .expect("type_id() called on an effect-chain PresetRuntime")
+    }
+
+    /// Alias for [`Self::type_id`] kept for call-site readability on the
+    /// generator path.
+    pub fn generator_type(&self) -> &PresetTypeId {
+        self.type_id()
+    }
+
+    /// Test-only handle to the executor's backend (post-rebuild canvas-dim
+    /// assertions). Not on the hot path.
+    #[cfg(test)]
+    pub(crate) fn backend_for_test(&self) -> &dyn crate::node_graph::Backend {
+        self.executor.backend()
+    }
+
+    /// Replace the internal executor — used when a host wires a real backend
+    /// after a mock-backend construction.
+    pub fn set_executor(&mut self, executor: Executor) {
+        self.executor = executor;
+    }
+
+    /// Enable/disable one-shot "dump every output" mode on the executor
+    /// (preserve every Texture2D output for one frame). Generator path; the
+    /// effect chain uses [`Self::set_dump`] (gated by effect id).
+    pub fn set_dump_all(&mut self, on: bool) {
+        self.executor.set_dump_all(on);
+    }
+
+    /// Update the `system.generator_input` node's per-frame context. No-op on
+    /// an effect-chain runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_frame_context(
+        &mut self,
+        time: f32,
+        beat: f32,
+        aspect: f32,
+        trigger_count: f32,
+        anim_progress: f32,
+        output_width: f32,
+        output_height: f32,
+    ) {
+        let PresetIo::Generate {
+            generator_input_id, ..
+        } = self.io
+        else {
+            return;
+        };
+        let id = generator_input_id;
+        let _ = self.graph.set_param(id, "time", ParamValue::Float(time));
+        let _ = self.graph.set_param(id, "beat", ParamValue::Float(beat));
+        let _ = self.graph.set_param(id, "aspect", ParamValue::Float(aspect));
+        let _ = self
+            .graph
+            .set_param(id, "trigger_count", ParamValue::Float(trigger_count));
+        let _ = self
+            .graph
+            .set_param(id, "anim_progress", ParamValue::Float(anim_progress));
+        let _ = self
+            .graph
+            .set_param(id, "output_width", ParamValue::Float(output_width));
+        let _ = self
+            .graph
+            .set_param(id, "output_height", ParamValue::Float(output_height));
+    }
+
+    /// Push the host's slider values through the preset's bindings to the
+    /// matching inner-node params (generator path). Wraps the float bus into the
+    /// `&[ParamSlot]` the shared `BoundGraph::apply` takes, reusing a persistent
+    /// scratch so the per-frame path doesn't allocate.
+    pub fn apply_param_values(&mut self, values: &[f32]) {
+        self.param_slot_scratch.clear();
+        self.param_slot_scratch
+            .extend(values.iter().map(|v| ParamSlot::exposed(*v)));
+        if let Some(seg) = self.effect_nodes.first_mut() {
+            seg.bound.apply(&mut self.graph, &self.param_slot_scratch);
+        }
+    }
+
+    /// Push the host's per-clip string overrides through the preset's
+    /// `stringBindings` to the matching inner-node String params. Keys absent
+    /// from `values` fall back to the binding's declared default.
+    pub fn apply_string_params(
+        &mut self,
+        values: Option<&std::collections::BTreeMap<String, String>>,
+    ) {
+        for binding in &self.string_bindings {
+            let v: String = values
+                .and_then(|m| m.get(binding.source_key.as_str()))
+                .cloned()
+                .unwrap_or_else(|| binding.default.clone());
+            let _ = self.graph.set_param(
+                binding.target_node,
+                &binding.target_param,
+                ParamValue::String(std::sync::Arc::new(v)),
+            );
+        }
+    }
+
+    /// Seed every string binding with its declared default (once at
+    /// construction, before the host's first `set_string_params` call).
+    fn apply_string_defaults(&mut self) {
+        for binding in &self.string_bindings {
+            let _ = self.graph.set_param(
+                binding.target_node,
+                &binding.target_param,
+                ParamValue::String(std::sync::Arc::new(binding.default.clone())),
+            );
+        }
+    }
+
+    pub fn set_string_params(
+        &mut self,
+        params: Option<&std::collections::BTreeMap<String, String>>,
+    ) {
+        self.apply_string_params(params);
+    }
+
+    /// Push a value/position editor edit's inner-node values into the running
+    /// generator in place (no rebuild — sim/particle state survives) and clear
+    /// the binding cache so live card sliders re-assert over them.
+    pub fn apply_inner_param_overrides(
+        &mut self,
+        def: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) {
+        if let Some(seg) = self.effect_nodes.first_mut() {
+            // Disjoint borrows (same pattern as the chain's `run`):
+            // seg.bound (mut) + seg.node_map (shared) + self.graph (mut).
+            seg.bound
+                .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
+        }
+    }
+
+    /// Run one frame against the configured executor (mock-backend test path).
+    pub fn execute_frame(&mut self, time: FrameTime) {
+        self.executor
+            .execute_frame(&mut self.graph, &self.plan, time);
+    }
+
+    /// Install the host-provided target texture as the source for
+    /// `final_output.in` via `replace_texture_2d` (single atomic retain, no
+    /// alloc). Panics if the backend isn't a `MetalBackend` (mock-backend mode
+    /// never reaches this — `render` is the only caller).
+    fn install_target(&mut self, target: &GpuTexture) {
+        let slot = match self.io {
+            PresetIo::Generate {
+                final_output_slot: Some(slot),
+                ..
+            } => slot,
+            _ => panic!(
+                "PresetRuntime::install_target requires a Generate IO with a pre-bound \
+                 final_output_slot — construct via from_def_with_device"
+            ),
+        };
+        let metal = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<MetalBackend>())
+            .expect(
+                "PresetRuntime::install_target requires a MetalBackend — use \
+                 from_def_with_device to construct the production path",
+            );
+        metal.replace_texture_2d(slot, target.clone());
+    }
+
+    /// Render one generator frame into the host-provided `target` texture.
+    /// Returns the (passed-through) anim progress.
+    pub fn render(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        target: &GpuTexture,
+        ctx: &PresetContext,
+    ) -> f32 {
+        // 1. Push per-frame timing into the generator_input node's params.
+        self.set_frame_context(
+            ctx.time as f32,
+            ctx.beat as f32,
+            ctx.aspect,
+            ctx.trigger_count as f32,
+            ctx.anim_progress,
+            ctx.output_width as f32,
+            ctx.output_height as f32,
+        );
+
+        // 2. Push the host's outer-card slider values through the bindings.
+        let values = &ctx.params[..ctx.param_count.min(ctx.params.len() as u32) as usize];
+        self.apply_param_values(values);
+
+        // 3. Install the host's target as the FinalOutput's source slot.
+        self.install_target(target);
+
+        // 4. Run the graph through the state-aware executor entry.
+        let frame_time = FrameTime {
+            beats: Beats(ctx.beat),
+            seconds: Seconds(ctx.time),
+            delta: Seconds(ctx.dt as f64),
+            frame_count: 0,
+        };
+        self.executor.execute_frame_with_state(
+            &mut self.graph,
+            &self.plan,
+            frame_time,
+            gpu,
+            &mut self.state_store,
+            /* owner_key */ 0,
+        );
+
+        ctx.anim_progress
+    }
+
+    /// Reset all generator state (per-primitive `extra_fields` + the runtime
+    /// `StateStore`). Called after export warmup re-seek.
+    pub fn reset_state(&mut self, _device: &GpuDevice) {
+        for inst in self.graph.nodes_mut() {
+            inst.node.clear_state();
+        }
+        self.state_store.cleanup_all();
+    }
+
+    /// Resize the generator's backend + re-pre-bind the final-output
+    /// placeholder + re-run the canonical pre-allocate pass (resize wipes every
+    /// pinned binding incl. Array<T> buffers and Texture3D volumes).
+    pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+        let Some(format) = self.target_format else {
+            // Mock-backend test path — no GPU, no resources to invalidate.
+            return;
+        };
+        let PresetIo::Generate {
+            final_output_input_resource,
+            ..
+        } = self.io
+        else {
+            return;
+        };
+        let Some(metal) = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<MetalBackend>())
+        else {
+            return;
+        };
+        metal.resize(width, height);
+        // `resize` wiped every pinned binding (incl. the final-output
+        // placeholder), so the slot index is stale. Pre-bind a fresh 1×1
+        // placeholder; `install_target` swaps in the host's real target next
+        // frame.
+        let placeholder =
+            RenderTarget::new(device, 1, 1, format, "preset_runtime_target_owner");
+        let slot = metal.pre_bind_texture_2d(final_output_input_resource, placeholder);
+        if let PresetIo::Generate {
+            final_output_slot, ..
+        } = &mut self.io
+        {
+            *final_output_slot = Some(slot);
+        }
+        // Re-run the canonical pre-allocate pass so downstream primitives don't
+        // render against an empty Array<T>/Texture3D wire after resize.
+        let Some(metal) = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<MetalBackend>())
+        else {
+            return;
+        };
+        if let Err(e) =
+            crate::node_graph::pre_allocate_resources(&self.graph, &self.plan, device, metal)
+        {
+            log::warn!("PresetRuntime::resize re-allocation failed: {e}");
+        }
+    }
+
+    /// Aim the authoring-time node-output preview at the editor's stable
+    /// [`NodeId`](manifold_core::NodeId) within this generator, or clear it. A
+    /// selected *group* container resolves to its primary texture-output
+    /// producer (groups flatten away, so a direct lookup misses).
+    pub fn set_preview_node(&mut self, node_id: Option<&manifold_core::NodeId>) {
+        use crate::node_graph::PreviewEncoding;
+        let mut encoding = PreviewEncoding::Color;
+        // The generator's single segment carries the preview maps.
+        let target = node_id.and_then(|nid| {
+            // Direct node hit.
+            if let Some(inst) = self.graph.instance_by_node_id(nid) {
+                encoding = self
+                    .effect_nodes
+                    .first()
+                    .and_then(|s| s.preview_kinds.get(nid).copied())
+                    .unwrap_or_else(|| self.encoding_for_instance(inst, None));
+                return Some(inst);
+            }
+            // Group container: capture its producer.
+            let seg = self.effect_nodes.first()?;
+            if let Some((_, producer, port)) =
+                seg.group_preview_map.iter().find(|(group, _, _)| group == nid)
+                && let Some(inst) = self.graph.instance_by_node_id(producer)
+            {
+                encoding = PreviewEncoding::from_port_name(port)
+                    .or_else(|| seg.preview_kinds.get(producer).copied())
+                    .unwrap_or(PreviewEncoding::Color);
+                return Some(inst);
+            }
+            None
+        });
+        self.preview_encoding = encoding;
+        self.executor.set_preview_target(target);
+    }
+
+    /// After a `render` with dump mode on, every captured Texture2D output as
+    /// `(node_id, port, type_id, texture)` — the generator's whole pipeline (no
+    /// per-effect filter, unlike the chain's [`Self::dump_textures`]).
+    pub fn dump_textures_all(&self) -> Vec<(String, String, String, &GpuTexture)> {
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_resources() {
+            let Some(tex) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().texture_2d(s))
+            else {
+                continue;
+            };
+            let (name, type_id) = self
+                .graph
+                .get_node(node)
+                .map(|inst| {
+                    (
+                        inst.node_id.to_string(),
+                        inst.node.type_id().as_str().to_string(),
+                    )
+                })
+                .unwrap_or_default();
+            out.push((name, port.to_string(), type_id, tex));
+        }
+        out
+    }
+
+    /// Whole-graph `Array` dump (generator path) — the array counterpart of
+    /// [`Self::dump_textures_all`].
+    pub fn dump_arrays_all(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
+        use crate::node_graph::ports::{ChannelElementType, PortType, std430_layout};
+        let kind = |t: ChannelElementType| match t {
+            ChannelElementType::F32 => "f32",
+            ChannelElementType::I32 => "i32",
+            ChannelElementType::U32 => "u32",
+            ChannelElementType::Vec2F => "vec2f",
+            ChannelElementType::Vec3F => "vec3f",
+            ChannelElementType::Vec4F => "vec4f",
+        };
+        let mut out = Vec::new();
+        for &(node, port, res) in self.executor.dump_array_resources() {
+            let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
+                continue;
+            };
+            let Some(buffer) = self
+                .executor
+                .backend()
+                .slot_for(res)
+                .and_then(|s| self.executor.backend().array_buffer(s))
+            else {
+                continue;
+            };
+            let (offsets, _, _) = std430_layout(at.specs);
+            let fields = at
+                .specs
+                .iter()
+                .zip(offsets)
+                .map(|(spec, off)| {
+                    let name = spec
+                        .name
+                        .debug_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("ch@{off}"));
+                    (name, kind(spec.ty), off)
+                })
+                .collect();
+            let (name, type_id) = self
+                .graph
+                .get_node(node)
+                .map(|inst| {
+                    (
+                        inst.node_id.to_string(),
+                        inst.node.type_id().as_str().to_string(),
+                    )
+                })
+                .unwrap_or_default();
+            out.push(crate::compositor::ArrayDump {
+                name,
+                port: port.to_string(),
+                type_id,
+                buffer,
+                item_size: at.item_size,
+                fields,
+            });
+        }
+        out
     }
 }
 
@@ -1667,7 +2614,7 @@ type _EffectMetadataAlias = EffectMetadata;
 #[cfg(test)]
 mod multi_segment_tests {
     //! Regression tests for the multi-segment wet/dry group support in
-    //! `ChainGraph::try_build`. A "multi-segment" group is one whose
+    //! `PresetRuntime::try_build`. A "multi-segment" group is one whose
     //! enabled effects sit in non-contiguous positions in the chain —
     //! e.g. group `g` contains effects at indices 0 and 2, with a
     //! non-group effect at index 1 between them.
@@ -1717,10 +2664,10 @@ mod multi_segment_tests {
         };
 
         let result =
-            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
+            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
 
         let cg = result.expect(
-            "ChainGraph should build for a non-contiguous wet/dry group \
+            "PresetRuntime should build for a non-contiguous wet/dry group \
              (multi-segment Mix support)",
         );
 
@@ -1760,9 +2707,9 @@ mod multi_segment_tests {
         };
 
         let result =
-            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
+            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
 
-        let cg = result.expect("ChainGraph should build for contiguous group");
+        let cg = result.expect("PresetRuntime should build for contiguous group");
         assert_eq!(cg.group_mix_nodes.len(), 1);
     }
 
@@ -1792,7 +2739,7 @@ mod multi_segment_tests {
             parent_group_id: None,
         };
 
-        let result = ChainGraph::try_build(
+        let result = PresetRuntime::try_build(
             &[e1, e2, e3, e4, e5],
             &[g1],
             &primitives,
@@ -1803,7 +2750,7 @@ mod multi_segment_tests {
             None,
         );
 
-        let cg = result.expect("ChainGraph should build for three-segment group");
+        let cg = result.expect("PresetRuntime should build for three-segment group");
         assert_eq!(cg.group_mix_nodes.len(), 3);
     }
 }
@@ -1836,7 +2783,7 @@ mod binding_seed_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::SOFT_FOCUS_GRAPH);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("SoftFocus chain should build");
 
         let slot = cg
@@ -1957,7 +2904,7 @@ mod topology_hash_tests {
         assert!(fx.enabled, "PresetInstance::new defaults enabled = true");
 
         let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        let cg_on = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
+        let cg_on = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
             .expect("Mirror chain builds at enabled = true");
         assert_eq!(
             cg_on.effect_nodes.len(),
@@ -1975,7 +2922,7 @@ mod topology_hash_tests {
 
         // With this as the only effect, the chain should refuse to build
         // (no active effects → None) — equivalent to "the chain becomes empty".
-        let cg_off = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None);
+        let cg_off = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None);
         assert!(
             cg_off.is_none(),
             "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
@@ -2096,7 +3043,7 @@ mod user_binding_tests {
         def
     }
 
-    fn affine_scale(cg: &ChainGraph, slot: &EffectSlot) -> ParamValue {
+    fn affine_scale(cg: &PresetRuntime, slot: &EffectSlot) -> ParamValue {
         let (_, affine_id) = slot
             .handles
             .iter()
@@ -2121,7 +3068,7 @@ mod user_binding_tests {
 
         // Mirror the per-frame apply `run()` performs: push the live
         // `param_values` through the slot's bindings into the graph.
-        fn apply(cg: &mut ChainGraph, values: &[ParamSlot]) {
+        fn apply(cg: &mut PresetRuntime, values: &[ParamSlot]) {
             let slot = &mut cg.effect_nodes[0];
             slot.bound.apply(&mut cg.graph, values);
         }
@@ -2130,7 +3077,7 @@ mod user_binding_tests {
         let mut control = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
         let mut cg0 =
-            ChainGraph::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None)
+            PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None)
                 .expect("control chain builds");
         apply(&mut cg0, &control.param_values);
         let slot0 = &cg0.effect_nodes[0];
@@ -2152,7 +3099,7 @@ mod user_binding_tests {
         fx.graph_version = fx.graph_version.wrapping_add(1);
         fx.graph_structure_version = fx.graph_structure_version.wrapping_add(1);
         let mut cg =
-            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
+            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
                 .expect("reshaped chain builds");
         apply(&mut cg, &fx.param_values);
         let slot = &cg.effect_nodes[0];
@@ -2217,7 +3164,7 @@ mod user_binding_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = stylized_with_translate_exposed(0.48);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("StylizedFeedback chain with one user binding builds");
 
         let slot = cg
@@ -2248,7 +3195,7 @@ mod user_binding_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = stylized_with_translate_exposed(0.48);
 
-        let mut cg = ChainGraph::try_build(
+        let mut cg = PresetRuntime::try_build(
             std::slice::from_ref(&fx),
             &[],
             &primitives,
@@ -2330,7 +3277,7 @@ mod user_binding_tests {
         assert_eq!(fx.param_values.len(), 4);
         fx.param_values[slot_index] = ParamSlot::exposed(0.42);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("StylizedFeedback chain with one user binding builds");
         let slot = cg
             .effect_nodes
@@ -2483,7 +3430,7 @@ mod generator_input_tests {
     //! 1. **Splice surface**: a preset that includes
     //!    `system.generator_input` causes [`SpliceResult::generator_input_id`]
     //!    to be `Some`, threaded onto [`EffectSlot::generator_input_node`].
-    //! 2. **Per-frame push**: [`ChainGraph::run`] writes the
+    //! 2. **Per-frame push**: [`PresetRuntime::run`] writes the
     //!    [`PresetContext`]'s `time` / `beat` / `aspect` / output dims
     //!    into the generator_input node's params via `set_param`.
     use super::*;
@@ -2536,7 +3483,7 @@ mod generator_input_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = invert_with_generator_input();
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("chain builds with a divergent def including system.generator_input");
 
         let slot = cg
@@ -2563,7 +3510,7 @@ mod generator_input_tests {
         // Canonical Invert preset has no system.generator_input.
         let fx = make_default(PresetTypeId::INVERT_COLORS);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("Invert chain builds without divergent def");
 
         let slot = cg
@@ -2577,7 +3524,7 @@ mod generator_input_tests {
         );
     }
 
-    /// Per-frame contract: after `ChainGraph::run`, the generator_input
+    /// Per-frame contract: after `PresetRuntime::run`, the generator_input
     /// node's `time` / `beat` / `aspect` / `output_width` /
     /// `output_height` params reflect the [`PresetContext`].
     /// Exercises the param-write half of the system; the
@@ -2594,7 +3541,7 @@ mod generator_input_tests {
         let fx = invert_with_generator_input();
 
         let mut cg =
-            ChainGraph::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
+            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
                 .expect("chain builds");
 
         let gi_id = cg
@@ -2655,7 +3602,7 @@ mod generator_input_tests {
     }
 
     /// **The production main-path proof (design §12.3 step 5).** With the freeze
-    /// toggle on (default), [`ChainGraph::try_build`] renders a canonical
+    /// toggle on (default), [`PresetRuntime::try_build`] renders a canonical
     /// ColorGrade card through the FUSED node, not the 7 atoms: the built chain
     /// graph contains one `node.wgsl_compute` and none of the original
     /// `node.gain` / `node.mix` workers, and it runs one frame producing an
@@ -2675,7 +3622,7 @@ mod generator_input_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::new("ColorGrade"));
 
-        let mut cg = ChainGraph::try_build(
+        let mut cg = PresetRuntime::try_build(
             std::slice::from_ref(&fx),
             &[],
             &primitives,
@@ -2744,7 +3691,7 @@ mod chain_error_tests {
     //!
     //! Today the immediate user-visible benefit is the consistent
     //! `[chain-error]` terminal log; tomorrow these are the data
-    //! the editor reads via [`ChainGraph::errors`]. The tests below
+    //! the editor reads via [`PresetRuntime::errors`]. The tests below
     //! pin one variant from the per-build path so the surface
     //! doesn't silently regress.
     use super::*;
@@ -2786,7 +3733,7 @@ mod chain_error_tests {
             offset: 0.0,
         });
 
-        let cg = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
             .expect("Invert chain still builds; the binding just fails to resolve");
 
         let errors = cg.errors();
@@ -2818,13 +3765,636 @@ mod chain_error_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::INVERT_COLORS);
 
-        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
             .expect("clean Invert chain builds");
 
         assert!(
             cg.errors().is_empty(),
             "clean chain must have no structured errors; got {:?}",
             cg.errors()
+        );
+    }
+}
+
+#[cfg(test)]
+mod generator_runtime_tests {
+    //! Generator construction + per-frame regression tests (folded in from the
+    //! deleted `JsonGraphGenerator` module). They drive the `from_*` generator
+    //! constructors and the `render`/`apply_param_values`/`resize`/preview
+    //! surface of the unified [`PresetRuntime`].
+    use super::*;
+    use crate::node_graph::PrimitiveRegistry;
+    use manifold_core::Beats;
+    use manifold_core::Seconds;
+
+    /// Regression for the "Lissajous repeats back-to-back in clip-trigger mode"
+    /// bug: two bindings keyed by the same outer-card id (`clip_trigger`) must
+    /// both pick up that slider's value (fan-out by source id, not position).
+    #[test]
+    fn fan_out_binding_writes_every_target_with_the_same_outer_value() {
+        let json = include_str!("../assets/generator-presets/Lissajous.json");
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Lissajous preset must load");
+
+        let mux_x_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "mux_x")
+            .map(|(_, id)| id)
+            .expect("Lissajous declares a `mux_x` handle");
+        let mux_y_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "mux_y")
+            .map(|(_, id)| id)
+            .expect("Lissajous declares a `mux_y` handle");
+
+        g.apply_param_values(&[
+            0.13, 0.09, 0.07, 0.002, 1.0, 1.0, 0.0, 1.0, 0.1, 1.0, 1.0,
+        ]);
+
+        let mux_x = g.graph.get_node(mux_x_id).unwrap();
+        assert!(
+            matches!(
+                mux_x.params.get("selector"),
+                Some(ParamValue::Float(v)) if (*v - 1.0).abs() < 1e-5
+            ),
+            "mux_x.selector should be 1.0, got {:?}",
+            mux_x.params.get("selector"),
+        );
+        let mux_y = g.graph.get_node(mux_y_id).unwrap();
+        assert!(
+            matches!(
+                mux_y.params.get("selector"),
+                Some(ParamValue::Float(v)) if (*v - 1.0).abs() < 1e-5
+            ),
+            "mux_y.selector should be 1.0 (fan-out from same `clip_trigger` outer \
+             slider as mux_x), got {:?}",
+            mux_y.params.get("selector"),
+        );
+    }
+
+    /// Regression for the "Plasma looks frozen" bug: outer-card slider values
+    /// must reach the inner-node param via the preset's declared bindings.
+    #[test]
+    fn apply_param_values_routes_into_inner_node_params() {
+        let json = include_str!("../assets/generator-presets/Plasma.json");
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Plasma preset must load");
+        let plasma_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "plasma")
+            .map(|(_, id)| id)
+            .expect("Plasma preset declares a node with handle `plasma`");
+
+        g.apply_param_values(&[3.0, 0.75, 0.42, 2.5, 1.5, 1.0]);
+
+        let inst = g.graph.get_node(plasma_id).unwrap();
+        assert!(matches!(
+            inst.params.get("complexity"),
+            Some(ParamValue::Float(v)) if (*v - 0.75).abs() < 1e-5
+        ));
+        assert!(matches!(
+            inst.params.get("contrast"),
+            Some(ParamValue::Float(v)) if (*v - 0.42).abs() < 1e-5
+        ));
+        assert!(matches!(
+            inst.params.get("speed"),
+            Some(ParamValue::Float(v)) if (*v - 2.5).abs() < 1e-5
+        ));
+        assert!(matches!(
+            inst.params.get("scale"),
+            Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
+        ));
+    }
+
+    /// Regression for the OilyFluid "Speed slider snaps back" bug.
+    /// `apply_inner_param_overrides` must clear the binding cache so the next
+    /// `apply_param_values` re-asserts the bound card value over the def default.
+    #[test]
+    fn inner_param_overrides_re_assert_bound_card_values() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+        let json = include_str!("../assets/generator-presets/Plasma.json");
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut g = PresetRuntime::from_json_str(json, &registry).expect("Plasma preset must load");
+        let plasma_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "plasma")
+            .map(|(_, id)| id)
+            .expect("plasma handle");
+
+        let card_values = [3.0_f32, 0.75, 0.42, 2.5, 1.5, 1.0];
+        g.apply_param_values(&card_values);
+        assert!(matches!(
+            g.graph.get_node(plasma_id).unwrap().params.get("speed"),
+            Some(ParamValue::Float(v)) if (*v - 2.5).abs() < 1e-5
+        ));
+
+        let mut def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        for node in &mut def.nodes {
+            if node.handle.as_deref() == Some("plasma") {
+                node.params
+                    .insert("speed".to_string(), SerializedParamValue::Float { value: 9.0 });
+            }
+        }
+        g.apply_inner_param_overrides(&def);
+
+        g.apply_param_values(&card_values);
+        assert!(
+            matches!(
+                g.graph.get_node(plasma_id).unwrap().params.get("speed"),
+                Some(ParamValue::Float(v)) if (*v - 2.5).abs() < 1e-5
+            ),
+            "bound Speed must re-assert its card value (2.5) over the def's baked 9.0; got {:?}",
+            g.graph.get_node(plasma_id).unwrap().params.get("speed"),
+        );
+    }
+
+    /// Generator mirror of the effect reshape proof: a `scale` on the card
+    /// binding's `BindingDef` reshapes what the inner node sees.
+    #[test]
+    fn stock_generator_reshape_changes_inner_node() {
+        let json = include_str!("../assets/generator-presets/Plasma.json");
+        let registry = PrimitiveRegistry::with_builtin();
+
+        let plasma_id = |g: &PresetRuntime| {
+            g.graph
+                .handles()
+                .find(|(h, _)| *h == "plasma")
+                .map(|(_, id)| id)
+                .expect("plasma handle")
+        };
+        let values = [3.0_f32, 0.75, 0.42, 2.5, 1.5, 1.0];
+
+        let mut g0 = PresetRuntime::from_json_str(json, &registry).expect("load");
+        g0.apply_param_values(&values);
+        let id0 = plasma_id(&g0);
+        assert!(matches!(
+            g0.graph.get_node(id0).unwrap().params.get("complexity"),
+            Some(ParamValue::Float(v)) if (*v - 0.75).abs() < 1e-5
+        ));
+
+        let mut def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_str(json).expect("parse Plasma def");
+        let meta = def
+            .preset_metadata
+            .as_mut()
+            .expect("Plasma carries presetMetadata");
+        meta.bindings
+            .iter_mut()
+            .find(|b| b.id == "complexity")
+            .expect("complexity binding exists")
+            .scale = 2.0;
+        let reshaped_json = serde_json::to_string(&def).expect("serialize reshaped def");
+        let mut g = PresetRuntime::from_json_str(&reshaped_json, &registry).expect("load");
+        g.apply_param_values(&values);
+        let id = plasma_id(&g);
+        assert!(
+            matches!(
+                g.graph.get_node(id).unwrap().params.get("complexity"),
+                Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
+            ),
+            "a ×2 reshape must scale plasma.complexity 0.75 -> 1.5, got {:?}",
+            g.graph.get_node(id).unwrap().params.get("complexity"),
+        );
+        assert_eq!(values[1], 0.75, "the host value slice is never mutated");
+    }
+
+    /// Regression for the on-stage FluidSimulation Curl bug: a binding's `scale`
+    /// must fold into the inner-node param on the generator path.
+    #[test]
+    fn generator_binding_scale_folds_into_inner_param() {
+        let json = r#"{
+            "version": 1,
+            "name": "ScaledBindingTest",
+            "presetMetadata": {
+                "id": "ScaledBindingTest",
+                "displayName": "Scaled Binding Test",
+                "category": "Generator",
+                "oscPrefix": "scaledBindingTest",
+                "params": [
+                    { "id": "amt", "name": "Amount", "min": 0.0, "max": 10.0, "defaultValue": 0.0 }
+                ],
+                "bindings": [
+                    { "id": "amt", "label": "Amount", "defaultValue": 0.0,
+                      "target": { "kind": "handleNode", "handle": "so", "param": "offset" },
+                      "scale": 0.5,
+                      "convert": { "type": "Float" } }
+                ]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "node.scale_offset_texture", "handle": "so" },
+                { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("scaled-binding test preset must load");
+        let so_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "so")
+            .map(|(_, id)| id)
+            .expect("preset declares a `so` handle");
+
+        g.apply_param_values(&[4.0]);
+
+        let inst = g.graph.get_node(so_id).unwrap();
+        assert!(
+            matches!(
+                inst.params.get("offset"),
+                Some(ParamValue::Float(v)) if (*v - 2.0).abs() < 1e-5
+            ),
+            "generator binding scale dropped: offset should be 4.0 * 0.5 = 2.0, got {:?}",
+            inst.params.get("offset"),
+        );
+    }
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    #[test]
+    fn trivial_passthrough_generator_loads_and_executes() {
+        let json = r#"{
+            "version": 1,
+            "name": "TestPassthrough",
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+            ]
+        }"#;
+
+        let mut preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("trivial generator preset must load");
+        assert_eq!(preset.type_id().as_str(), "TestPassthrough");
+        preset.set_frame_context(1.5, 0.5, 1.78, 4.0, 0.25, 1920.0, 1080.0);
+        preset.execute_frame(frame_time());
+    }
+
+    /// `PresetRuntime` holds a `Graph` which doesn't impl Debug, so we
+    /// destructure the Result by hand rather than `expect_err`.
+    fn unwrap_err(
+        r: Result<PresetRuntime, JsonGeneratorLoadError>,
+    ) -> JsonGeneratorLoadError {
+        match r {
+            Ok(_) => panic!("expected JsonGeneratorLoadError, got Ok(PresetRuntime)"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn missing_generator_input_is_a_clean_error() {
+        let json = r#"{
+            "version": 1,
+            "name": "Bad",
+            "nodes": [ { "id": 0, "typeId": "system.final_output" } ],
+            "wires": []
+        }"#;
+        let err = unwrap_err(PresetRuntime::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        ));
+        assert!(
+            matches!(err, JsonGeneratorLoadError::MissingGeneratorInput),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn infra_session_integration_smoke_test() {
+        let json = r#"{
+            "version": 2,
+            "name": "InfraSmoke",
+            "presetMetadata": {
+                "id": "InfraSmoke",
+                "displayName": "Infra Smoke",
+                "category": "Diagnostic",
+                "oscPrefix": "infra_smoke",
+                "params": [],
+                "bindings": []
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.wgsl_compute", "handle": "branch_a" },
+                { "id": 2, "typeId": "node.wgsl_compute", "handle": "branch_b" },
+                { "id": 3, "typeId": "node.mux_texture", "handle": "mux" },
+                { "id": 4, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "selector" },
+                { "fromNode": 1, "fromPort": "output_tex", "toNode": 3, "toPort": "in_0" },
+                { "fromNode": 2, "fromPort": "output_tex", "toNode": 3, "toPort": "in_1" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+
+        let preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("infra smoke preset must load");
+        assert_eq!(preset.type_id().as_str(), "InfraSmoke");
+    }
+
+    #[test]
+    fn bundled_strange_attractor_loads_and_compiles() {
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/ComputeStrangeAttractor.json");
+        let preset = PresetRuntime::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("bundled ComputeStrangeAttractor must load + compile");
+        assert_eq!(preset.type_id().as_str(), "ComputeStrangeAttractor");
+    }
+
+    #[test]
+    fn bundled_plasma_loads_and_compiles() {
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/Plasma.json");
+        let preset = PresetRuntime::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("bundled Plasma must load + compile");
+        assert_eq!(preset.type_id().as_str(), "Plasma");
+    }
+
+    #[test]
+    fn resize_re_pre_allocates_array_buffers() {
+        use crate::node_graph::{Backend, PortType};
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/Lissajous.json");
+        let mut g = PresetRuntime::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("Lissajous preset must load");
+
+        let array_resources: Vec<ResourceId> = (0..g.plan.resource_count() as u32)
+            .map(ResourceId)
+            .filter(|id| matches!(g.plan.resource_type(*id), Some(PortType::Array(_))))
+            .collect();
+        assert!(
+            !array_resources.is_empty(),
+            "Lissajous preset must produce at least one Array<T> wire",
+        );
+
+        {
+            let metal = g
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<MetalBackend>())
+                .expect("production path constructs a MetalBackend");
+            for &res in &array_resources {
+                let slot = metal
+                    .slot_for(res)
+                    .unwrap_or_else(|| panic!("Array resource {res:?} unbound after construction"));
+                assert!(
+                    Backend::array_buffer(metal, slot).is_some(),
+                    "Array resource {res:?} has no backing buffer after construction",
+                );
+            }
+        }
+
+        g.resize(&device, 1280, 720);
+
+        let metal = g
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("production path constructs a MetalBackend");
+        for &res in &array_resources {
+            let slot = metal
+                .slot_for(res)
+                .unwrap_or_else(|| panic!("Array resource {res:?} unbound after resize"));
+            assert!(
+                Backend::array_buffer(metal, slot).is_some(),
+                "Array resource {res:?} has no backing buffer after resize",
+            );
+        }
+    }
+
+    #[test]
+    fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
+        use crate::node_graph::Backend;
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/ComputeStrangeAttractor.json");
+        let mut g = PresetRuntime::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+        )
+        .expect("ComputeStrangeAttractor preset must load");
+
+        let find_node = |type_id: &str| -> NodeInstanceId {
+            for step in g.plan.steps() {
+                let inst = g.graph.get_node(step.node).expect("step's node");
+                if inst.node.type_id().as_str() == type_id {
+                    return step.node;
+                }
+            }
+            panic!("node `{type_id}` not in compiled plan");
+        };
+        let integrate_node = find_node("node.wgsl_compute");
+        let scatter_node = find_node("node.scatter_particles");
+
+        let resource_for = |node: NodeInstanceId, port: &str, is_input: bool| -> ResourceId {
+            for step in g.plan.steps() {
+                if step.node == node {
+                    let ports = if is_input { &step.inputs } else { &step.outputs };
+                    for &(name, id) in ports {
+                        if name == port {
+                            return id;
+                        }
+                    }
+                }
+            }
+            panic!(
+                "missing {} port `{port}` on node {node:?}",
+                if is_input { "input" } else { "output" }
+            );
+        };
+
+        let integrate_in_res = resource_for(integrate_node, "particles", true);
+        let integrate_out_res = resource_for(integrate_node, "particles", false);
+        let scatter_in_res = resource_for(scatter_node, "particles", true);
+
+        let metal = g
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("production path constructs a MetalBackend");
+
+        let in_slot = metal.slot_for(integrate_in_res).expect("integrate.in bound");
+        let out_slot = metal.slot_for(integrate_out_res).expect("integrate.out bound");
+        let scatter_slot = metal.slot_for(scatter_in_res).expect("scatter.particles bound");
+
+        assert_eq!(in_slot, out_slot, "aliased_array_io in→out must share a slot");
+        assert_eq!(
+            out_slot, scatter_slot,
+            "integrate.out and scatter.particles must resolve to the same slot",
+        );
+        assert!(
+            Backend::array_buffer(metal, in_slot).is_some(),
+            "the shared slot must back a real GpuBuffer",
+        );
+    }
+
+    #[test]
+    fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
+        use crate::node_graph::Backend;
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/ComputeStrangeAttractor.json");
+
+        let cases = [(1280u32, 720u32), (3840u32, 2160u32)];
+        for (w, h) in cases {
+            let mut g = PresetRuntime::from_json_str_with_device(
+                json,
+                &PrimitiveRegistry::with_builtin(),
+                &device,
+                w,
+                h,
+                GpuTextureFormat::Rgba16Float,
+            )
+            .expect("preset must load");
+
+            let scatter = (|| {
+                for step in g.plan.steps() {
+                    let inst = g.graph.get_node(step.node).expect("step's node");
+                    if inst.node.type_id().as_str() == "node.scatter_particles" {
+                        return step.node;
+                    }
+                }
+                panic!("scatter node missing");
+            })();
+            let accum_res = (|| {
+                for step in g.plan.steps() {
+                    if step.node == scatter {
+                        for &(name, id) in &step.outputs {
+                            if name == "accum" {
+                                return id;
+                            }
+                        }
+                    }
+                }
+                panic!("scatter.accum resource missing");
+            })();
+
+            let metal = g
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<MetalBackend>())
+                .expect("metal backend");
+            let slot = metal.slot_for(accum_res).expect("scatter.accum unbound");
+            let buf = Backend::array_buffer(metal, slot).expect("no backing buffer");
+            let expected = (w as u64) * (h as u64) * 4;
+            assert_eq!(
+                buf.size, expected,
+                "scatter.accum at canvas {w}x{h} should be {expected} bytes, got {}",
+                buf.size,
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_trivial_passthrough_preset_loads_and_executes() {
+        let json = include_str!("../assets/generator-presets/TrivialPassthrough.json");
+        let mut preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("bundled TrivialPassthrough must load");
+        assert_eq!(preset.type_id().as_str(), "TrivialPassthrough");
+        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
+        preset.execute_frame(frame_time());
+    }
+
+    #[test]
+    fn missing_final_output_is_a_clean_error() {
+        let json = r#"{
+            "version": 1,
+            "name": "Bad",
+            "nodes": [ { "id": 0, "typeId": "system.generator_input" } ],
+            "wires": []
+        }"#;
+        let err = unwrap_err(PresetRuntime::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        ));
+        assert!(
+            matches!(err, JsonGeneratorLoadError::MissingFinalOutput),
+            "got {err:?}"
+        );
+    }
+
+    /// Node-output preview, grouped generator: selecting the collapsed
+    /// `Flow Field` group resolves to the concrete producer of its `forceField`
+    /// output. The group → producer map lives on the single segment now.
+    #[test]
+    fn grouped_generator_preview_resolves_group_to_producer() {
+        let json = include_str!("../assets/generator-presets/FluidSimulation.json");
+        let g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("FluidSimulation preset must load");
+
+        assert!(
+            g.graph
+                .instance_by_node_id(&manifold_core::NodeId::new("Flow Field"))
+                .is_none(),
+            "group container should have no runtime instance after flattening"
+        );
+
+        let seg = g.effect_nodes.first().expect("generator has one segment");
+        let (producer, port) = seg
+            .group_preview_map
+            .iter()
+            .find(|(group, _, _)| *group == manifold_core::NodeId::new("Flow Field"))
+            .map(|(_, producer, port)| (producer.clone(), port.clone()))
+            .expect("Flow Field group must be in the preview map");
+        assert_eq!(
+            producer,
+            manifold_core::NodeId::new("field_blur_v"),
+            "Flow Field's forceField output is produced by field_blur_v"
+        );
+        assert_eq!(port, "forceField", "the group's primary output port name");
+        assert_eq!(
+            crate::node_graph::PreviewEncoding::derive("node.gaussian_blur", &port),
+            crate::node_graph::PreviewEncoding::VectorField,
+        );
+        assert!(
+            g.graph.instance_by_node_id(&producer).is_some(),
+            "the resolved producer must be a real runtime node"
         );
     }
 }

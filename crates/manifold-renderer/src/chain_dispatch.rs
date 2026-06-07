@@ -1,7 +1,7 @@
-//! Per-layer / per-group [`ChainGraph`] caching + dispatch.
+//! Per-layer / per-group [`PresetRuntime`] caching + dispatch.
 //!
 //! Replaces the old [`EffectChain`](removed) shim with a free-function
-//! interface that operates on an `Option<ChainGraph>` slot. The slot
+//! interface that operates on an `Option<PresetRuntime>` slot. The slot
 //! lives on the owner (e.g., [`LayerCompositor`]'s per-layer
 //! [`AHashMap`]); this module owns:
 //!
@@ -17,14 +17,14 @@
 //!   project load.
 //!
 //! No struct wrapper. The old `EffectChain` carried exactly one
-//! `Option<ChainGraph>` plus a debug-only topology dump field — moving
+//! `Option<PresetRuntime>` plus a debug-only topology dump field — moving
 //! the dump into a local in [`dispatch_chain`] dropped the wrapper to
 //! a no-op around `Option`. §6.6 #31.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::effect_chain_graph::ChainGraph;
+use crate::preset_runtime::PresetRuntime;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
@@ -55,18 +55,18 @@ pub struct ChainDispatchStats {
     /// Number of [`dispatch_chain`] calls that did real work (non-empty
     /// chain with at least one enabled effect).
     pub dispatches: u64,
-    /// Number of [`ChainGraph::try_build`] invocations (topology rebuilds).
+    /// Number of [`PresetRuntime::try_build`] invocations (topology rebuilds).
     pub rebuilds: u64,
-    /// Number of [`ChainGraph::run`] invocations (successful fast path).
+    /// Number of [`PresetRuntime::run`] invocations (successful fast path).
     pub graph_runs: u64,
     /// Total enabled effects across all dispatched chains.
     pub effects: u64,
     /// Total wall time (ns) spent in [`dispatch_chain`] calls (CPU only —
     /// excludes GPU work the encoder commands).
     pub dispatch_ns: u64,
-    /// Wall time (ns) spent in [`ChainGraph::try_build`].
+    /// Wall time (ns) spent in [`PresetRuntime::try_build`].
     pub rebuild_ns: u64,
-    /// Wall time (ns) spent in [`ChainGraph::run`] proper (param refresh +
+    /// Wall time (ns) spent in [`PresetRuntime::run`] proper (param refresh +
     /// `execute_frame_with_gpu`).
     pub graph_run_ns: u64,
 }
@@ -121,7 +121,7 @@ fn topology_dump(
 // ---------------------------------------------------------------------------
 
 /// Apply `effects` against `input_texture`, returning the chain's final
-/// output. `cache` is the per-owner [`ChainGraph`] slot — `None` to
+/// output. `cache` is the per-owner [`PresetRuntime`] slot — `None` to
 /// start, populated on first dispatch and reused across frames. The
 /// caller owns the slot and is responsible for clearing it when the
 /// owner is reset.
@@ -130,13 +130,13 @@ fn topology_dump(
 ///
 /// - The chain has no enabled effects (caller should use the original
 ///   input).
-/// - [`ChainGraph::try_build`] failed for this topology — unreachable
+/// - [`PresetRuntime::try_build`] failed for this topology — unreachable
 ///   in production with every shipped effect mapped to a primitive.
 ///
 /// The cache survives "no enabled effects" frames so its `RenderTarget`
 /// pool and primitive state aren't thrown away on transient ducks.
 pub fn dispatch_chain<'a>(
-    cache: &'a mut Option<ChainGraph>,
+    cache: &'a mut Option<PresetRuntime>,
     gpu: &mut GpuEncoder<'_>,
     input_texture: &'a GpuTexture,
     effects: &[PresetInstance],
@@ -173,7 +173,7 @@ pub fn dispatch_chain<'a>(
             eprintln!("[rebuild] curr={curr}");
         }
         let t0 = std::time::Instant::now();
-        *cache = ChainGraph::try_build(
+        *cache = PresetRuntime::try_build(
             effects,
             groups,
             primitive_registry(),
@@ -208,7 +208,7 @@ pub fn dispatch_chain<'a>(
 /// Reset per-effect transient state on the cached chain (mip pyramids,
 /// feedback buffers, [`StateStore`](crate::node_graph::StateStore)
 /// entries). No-op when the cache is empty.
-pub fn clear_chain_state(cache: &mut Option<ChainGraph>) {
+pub fn clear_chain_state(cache: &mut Option<PresetRuntime>) {
     if let Some(cg) = cache.as_mut() {
         cg.clear_state();
     }

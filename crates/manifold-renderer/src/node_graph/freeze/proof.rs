@@ -1021,7 +1021,7 @@ fn every_fused_generator_executes_one_frame() {
     use super::install::fused_generator_def_by_id;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::bundled_generator_presets::bundled_generator_preset_type_ids;
-    use crate::generators::json_graph_generator::JsonGraphGenerator;
+    use crate::preset_runtime::PresetRuntime;
     use std::panic::AssertUnwindSafe;
 
     let device = crate::test_device();
@@ -1053,7 +1053,7 @@ fn every_fused_generator_executes_one_frame() {
         };
         fused_count += 1;
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut g = JsonGraphGenerator::from_def_with_device(
+            let mut g = PresetRuntime::from_def_with_device(
                 fused_def.clone(),
                 &registry,
                 &device,
@@ -1100,7 +1100,7 @@ fn every_fused_generator_executes_one_frame() {
 fn fused_generator_renders_like_unfused() {
     use super::install::fuse_generator_def;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
-    use crate::generators::json_graph_generator::JsonGraphGenerator;
+    use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
     let registry = PrimitiveRegistry::with_builtin();
@@ -1149,7 +1149,7 @@ fn fused_generator_renders_like_unfused() {
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g =
-            JsonGraphGenerator::from_def_with_device(def, &registry, &device, w, h, FMT)
+            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
                 .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-gen-out");
         let mut enc = device.create_encoder("freeze-gen");
@@ -1196,7 +1196,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
     use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
-    use crate::generators::json_graph_generator::JsonGraphGenerator;
+    use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
     let registry = PrimitiveRegistry::with_builtin();
@@ -1230,7 +1230,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     };
     // Warm up a few frames (instance/particle buffers populate), then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = JsonGraphGenerator::from_def_with_device(def, &registry, &device, w, h, FMT)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
             .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-dp-out");
         for i in 0..6u32 {

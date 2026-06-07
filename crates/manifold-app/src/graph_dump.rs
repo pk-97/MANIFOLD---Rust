@@ -371,7 +371,7 @@ mod tests {
     #[ignore = "headless GPU dump; run manually with --ignored"]
     fn dump_blackhole_headless() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+        use manifold_renderer::preset_runtime::PresetRuntime;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
         use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use manifold_renderer::node_graph::PrimitiveRegistry;
@@ -388,7 +388,7 @@ mod tests {
         let device = GpuDevice::new();
         let registry = PrimitiveRegistry::with_builtin();
         let mut generator =
-            JsonGraphGenerator::from_json_str_with_device(&json, &registry, &device, w, h, FMT)
+            PresetRuntime::from_json_str_with_device(&json, &registry, &device, w, h, FMT)
                 .expect("build BlackHole generator");
         let target = RenderTarget::new(&device, w, h, FMT, "dump-target");
 
@@ -433,7 +433,7 @@ mod tests {
         }
 
         let textures: Vec<DumpTexture> = generator
-            .dump_textures()
+            .dump_textures_all()
             .into_iter()
             .map(|(name, port, type_id, texture)| DumpTexture {
                 name,
@@ -442,7 +442,7 @@ mod tests {
                 texture,
             })
             .collect();
-        let arrays = generator.dump_arrays();
+        let arrays = generator.dump_arrays_all();
         let dir = std::path::PathBuf::from("/tmp/manifold-blackhole-dump");
         let _ = std::fs::remove_dir_all(&dir);
         write_graph_dump(&device, &textures, &dir).expect("dump textures");
@@ -464,7 +464,7 @@ mod tests {
     #[ignore = "headless GPU sweep; run manually with --ignored"]
     fn sweep_blackhole_cloud() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
+        use manifold_renderer::preset_runtime::PresetRuntime;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
         use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
         use manifold_renderer::node_graph::PrimitiveRegistry;
@@ -528,7 +528,7 @@ mod tests {
                 set_val(&mut doc, 4, "scaled_energy", serde_json::json!(8192.0));
             }
 
-            let mut generator = JsonGraphGenerator::from_json_str_with_device(
+            let mut generator = PresetRuntime::from_json_str_with_device(
                 &doc.to_string(),
                 &registry,
                 &device,

@@ -41,7 +41,7 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_renderer::chain_dispatch::dispatch_chain;
-use manifold_renderer::effect_chain_graph::ChainGraph;
+use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::node_graph::{
@@ -167,7 +167,7 @@ impl ParityHarness {
         // ping-pong buffers.
         let dest = self.make_target("parity-legacy-dest");
 
-        let mut chain: Option<ChainGraph> = None;
+        let mut chain: Option<PresetRuntime> = None;
         let mut render_enc = self.device.create_encoder("parity-legacy-render");
         {
             let mut gpu = RendererGpuEncoder::new(&mut render_enc, &self.device);

@@ -2,7 +2,6 @@ pub mod background_worker;
 pub mod chain_dispatch;
 pub mod compositor;
 pub mod effect;
-pub mod effect_chain_graph;
 pub mod effects;
 pub mod fsr1;
 pub mod generator_renderer;
@@ -21,6 +20,7 @@ pub mod plugin_prewarm;
 pub mod pq_encoder;
 pub mod preset_context;
 pub mod preset_loader;
+pub mod preset_runtime;
 pub mod render_target;
 pub mod render_target_pool;
 #[cfg(target_os = "macos")]

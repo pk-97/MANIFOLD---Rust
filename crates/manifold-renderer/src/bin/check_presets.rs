@@ -27,9 +27,7 @@ use std::time::Instant;
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::generators::json_graph_generator::{
-    JsonGeneratorLoadError, JsonGraphGenerator,
-};
+use manifold_renderer::preset_runtime::{JsonGeneratorLoadError, PresetRuntime};
 use manifold_renderer::node_graph::{EffectGraphDefExt, PrimitiveRegistry, compile};
 
 const ASSET_SUBDIRS: &[&str] = &["assets/effect-presets", "assets/generator-presets"];
@@ -127,7 +125,7 @@ fn check_one(
     // the same Array allocation path (yet); the load/compile check
     // above is sufficient for them.
     if is_generator {
-        JsonGraphGenerator::from_def_with_device(
+        PresetRuntime::from_def_with_device(
             def,
             registry,
             device,

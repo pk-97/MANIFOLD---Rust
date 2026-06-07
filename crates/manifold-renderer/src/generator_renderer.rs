@@ -1,5 +1,5 @@
-use crate::generators::json_graph_generator::JsonGraphGenerator;
 use crate::generators::registry::GeneratorRegistry;
+use crate::preset_runtime::PresetRuntime;
 use crate::gpu_encoder::GpuEncoder;
 use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use crate::render_target::RenderTarget;
@@ -37,7 +37,7 @@ impl ActiveClip {
 /// Per-layer generator state. Persists across clips to maintain
 /// temporal state (particle positions, attractors, etc.).
 struct LayerGeneratorState {
-    generator: Box<JsonGraphGenerator>,
+    generator: Box<PresetRuntime>,
     generator_type: PresetTypeId,
     trigger_count: u32,
     /// `Layer::generator_graph_structure_version` at the time this generator
