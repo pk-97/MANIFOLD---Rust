@@ -4,8 +4,9 @@
 all gates green); Phase 4 **core** + Phase 5 (`ParamMapping` deletion / single
 reshape resolver / fork-route edits / content-thread overlay refresh) landed on
 branch `pointwise-fusion` — see the Phase 5 section for the green-gate summary.
-Remaining: Phase 4 UI (deferred, tracked below), Phase 6 (one `PresetRuntime` +
-graph-home unification), Phase 7 (command/UI collapse + final sweep). The previous seven attempts stalled for one
+Phase 6 (one `PresetRuntime`) landed 2026-06-07 (commit `8d33c9d2`). Remaining:
+Phase 4 UI (deferred, tracked below), Phase 7's UI collapse (the command/mirror
+half landed; the UI-thread card collapse + final `rg` sweep remain). The previous seven attempts stalled for one
 reason: each finished the *definition* side and deferred the *instance* and
 *runtime* side. This plan does that deferred half, on a cleaner model than the
 prior attempts assumed (see "The model" below). When it is done,
@@ -452,26 +453,58 @@ reaches its preset range from the slider *and* from a driver/envelope; editing a
 shared preset forks and leaves siblings byte-identical; `ParamMapping` gone;
 golden `Liveschool` + fixture corpus round-trip.
 
-### Phase 6 — One runtime `PresetRuntime` (manifold-renderer)
+### Phase 6 — One runtime `PresetRuntime` (manifold-renderer) ✅ DONE (2026-06-07, commit `8d33c9d2`)
 
-Collapse `ChainGraph` and `JsonGraphGenerator` into `PresetRuntime` (optional
-input slot ⇒ generator). The `Generator` trait collapses in. The freeze/fusion
-compiler reads exposure from the one preset (the `82a75332` binding-blindness
-class is now impossible). Delete `JsonGraphGenerator`, the `Generator` trait, and
-the `GeneratorRegistry` fork.
+Collapsed `ChainGraph` and `JsonGraphGenerator` into one `PresetRuntime` in
+`crates/manifold-renderer/src/preset_runtime.rs`. An effect chain and a generator
+are the same type, distinguished by a `PresetIo` enum: `Transform { source_slot,
+output_slot }` (effect — install upstream input, own the output texture) vs
+`Generate { generator_input_id, final_output_input_resource, final_output_slot }`
+(generator — no input, render into the host-provided target). A generator is the
+degenerate case: one preset graph = a single `EffectSlot` segment, input None,
+`system.generator_input` + `system.final_output` boundaries. The shared substrate
+(Graph / ExecutionPlan / Executor / StateStore / preview / dump / execute-frame)
+is one implementation; chain-style `run()` and generator-style `render()` /
+`set_frame_context` / `apply_param_values` / `set_string_params` / `resize` /
+`reset_state` all live on the one type. `effect_chain_graph.rs` and
+`generators/json_graph_generator.rs` are **deleted**; every caller migrated
+(chain_dispatch, layer_compositor, parity harness; registry, generator_renderer,
+content_pipeline, graph_dump, check_presets, freeze_profile,
+bundled_generator_presets, freeze/proof, parity smoke). The `Generator` trait and
+`GraphHost` were already gone (Phase 5 lineage); the `GeneratorRegistry` still
+exists as the per-layer factory (hands out `Box<PresetRuntime>`).
 
-Gate: full `cargo test --workspace`; all parity tests; `bundled_presets`; every
-shipped effect and generator renders a frame (the WireframeDepthGraph DNN-blit
-fail is the documented pre-existing exception until its decomp lands).
+Gate (all green / no regressions vs the pre-merge baseline `5531002d`): workspace
+`--all-targets` compiles; clippy `-D warnings` clean; `check-presets`; bundled
+presets 14/15 (only WireframeDepthGraph, the documented pre-existing DNN-blit
+fail); `preset_runtime` lib tests 35/36 (only `stock_param_reshape`, pre-existing
+on the branch); parity 10/12 (`lut1d` + `watercolor`, pre-existing fusion-vs-legacy
+divergence — confirmed byte-identical at `5531002d` via a stash-check). The
+generator render path through `PresetRuntime` is covered by
+`bundled_generator_presets::every_bundled_preset_executes_one_frame` (green) and
+`parity::smoke` (green). **Live smoke test still owed on Peter's machine:** wet/dry
+drag, feedback trails across frames, resize, clip start/stop, fused kernels on
+screen — the harness can't launch the GUI.
 
 ### Phase 7 — Command/UI collapse + final sweep (editing + app + ui)
 
-Mirror dances (`mirror_effect_side`, `prepare/apply/unmirror_generator_mirror`)
-collapse into one `mirror` over `&mut PresetInstance`. The two card-build blocks
-in `state_sync.rs` collapse into one. Final `rg` deletion sweep: zero
-`EffectInstance`, `GeneratorParamState`, `EffectTypeId`, `GeneratorTypeId`,
-`GraphHost`, `GeneratorHost`, `JsonGraphGenerator`, `Generator` (trait),
-`ParamMapping` outside historical doc mentions.
+The command/mirror half already landed (STEP 3 `df4b5fd6`, STEP 4 `5531002d`):
+the mirror dances collapsed into one `mirror_effect_side`/`unmirror_effect_side`
+over `&mut PresetInstance` (the generator-specific `prepare/apply/unmirror_generator_*`
+are deleted), and the two `state_sync.rs` card-build blocks collapsed into one
+`build_card_modulation`. **Remaining for Phase 7:**
+- **Doc-comment polish** — after the Phase 6 runtime merge, `ChainGraph` /
+  `JsonGraphGenerator` / `effect_chain_graph` / `json_graph_generator` survive only
+  in *doc comments* across the renderer (bound_graph, param_binding, graph_loader,
+  graph, freeze/{install,proof,perf_gate}, metal_backend, effect_node,
+  primitives/{temporal,mod,nested_cubes_geometry}, bundled_generator_presets,
+  loaded_preset_view, check_presets). Zero dead *code* references remain (verified
+  via `rg`); these are stale prose / intra-doc links to retarget at `PresetRuntime`
+  / `preset_runtime`.
+- **Final `rg` deletion sweep:** zero `EffectInstance`, `GeneratorParamState`,
+  `EffectTypeId`, `GeneratorTypeId`, `GraphHost`, `GeneratorHost`,
+  `JsonGraphGenerator`, `Generator` (trait), `ParamMapping`, `ChainGraph` outside
+  historical doc mentions.
 
 Gate: full `cargo test --workspace`; `clippy --workspace -D warnings`; deletion
 sweep clean; real-app smoke test on Peter's machine (this env can't launch the
@@ -504,7 +537,7 @@ the ZIP layout) carry their own migration slice under one `projectVersion` bump
 and do not land until the golden `Liveschool` round-trip + the pre-1.5 fixture
 corpus are green — so the format is never left half-migrated between phases.
 
-## Status (2026-06-06) — type/abstraction unification COMPLETE; runtime merge + UI remain
+## Status (2026-06-07) — type/abstraction + runtime merge COMPLETE; Phase 4 UI + final sweep remain
 
 **Done and shipped (branch `preset-collapse-phase5`, each gated green):**
 - One thin instance (`PresetInstance`), one type id (`PresetTypeId`), one reshape
@@ -537,25 +570,20 @@ Master/clip effect envelopes stay inert (no clip-timing source), exactly as
 before. This kills the same-type-effect collision bug class. Gated:
 core/editing/io/playback green, clippy clean, renderer baseline unchanged.
 
-**Remaining — larger unfinished unifications (NOT essential differences):**
-- **one mirror + one card-build path.** The residual split is the **`param_values`
-  layout model**, not envelope/exposure storage (those are now shared:
-  `flip_graph_exposed` works on `node.exposed_params` for both kinds). An effect's
-  `param_values` is `[registry static prefix | user-binding tail]`; a generator's
-  is fully positional against `graph.preset_metadata.params` (no registry static
-  block). `append_user_binding`/`align_to_definition` are built around the effect
-  registry prefix, so the generator mirror (`prepare/apply/unmirror_generator_*`)
-  manages its slot manually. Collapsing the mirror + the two `state_sync`
-  card-build blocks into one path over `&mut PresetInstance` means reconciling
-  that layout — a change to the live `param_values` performance surface, so it
-  needs care + a real-app smoke test, not just headless gates.
-- **one runtime (`PresetRuntime`).** `ChainGraph` (chain of N effects + source
-  input + wet/dry + fusion) and `JsonGraphGenerator` (single preset, no input, +
-  sim-state / string-params / clip lifecycle) are sibling wrappers over the
-  already-shared `Graph`/`BoundGraph`/`Executor` substrate. Fold both into one
-  `PresetRuntime` with an optional input slot; the distinct lifecycles stay in the
-  callers (`GeneratorRenderer` vs compositor). Large live-render-path rewrite —
-  gate on `bundled_presets` + the parity suite + a smoke test of live chains.
+**Larger unifications — now DONE:**
+- **one mirror + one card-build path.** ✅ DONE (STEP 3 commit `df4b5fd6`, STEP 4
+  commit `5531002d`). The expose/unexpose mirror routes both kinds through
+  `mirror_effect_side`/`unmirror_effect_side` over `&mut PresetInstance`; the
+  generator-specific `prepare/apply/unmirror_generator_*` (~480 lines) + the
+  `MirrorReverse` enum are deleted. `align_to_definition` / `static_param_count`
+  (new) / `remove`+`restore_user_binding_at` are kind-aware with the asymmetry
+  documented above (generator bundled params authored by the per-instance graph
+  metadata; effect bundled params by the registry). The two `state_sync` card-build
+  blocks share one `build_card_modulation(inst, n, resolve)`.
+- **one runtime (`PresetRuntime`).** ✅ DONE (Phase 6, commit `8d33c9d2`) — see the
+  Phase 6 section above. `ChainGraph` + `JsonGraphGenerator` folded into one
+  `PresetRuntime` (`PresetIo::Transform` vs `Generate`); both old files deleted;
+  every caller migrated; gated with zero regressions vs the `5531002d` baseline.
 
 - `GraphTarget` remains a two-variant enum (the one genuinely essential
   difference: effect addressed by stable id across master/layer/clip; generator

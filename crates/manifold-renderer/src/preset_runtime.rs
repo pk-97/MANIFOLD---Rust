@@ -890,8 +890,8 @@ impl PresetRuntime {
             // position) so a single outer slider can fan out to
             // multiple inner-node params and the second/third binding
             // still reads the right slot. Mirrors the generator-side
-            // shape — see
-            // `JsonGraphGenerator::from_def`'s `outer_param_index`.
+            // shape — see the generator `from_def`'s `outer_param_index`
+            // (same file, the `Generate`-IO constructor).
             let outer_param_index: ahash::AHashMap<&str, usize> = view
                 .canonical_def
                 .preset_metadata
