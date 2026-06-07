@@ -9,7 +9,7 @@ Oily Fluid is a generator. It takes no input and produces its own image, startin
 The simulation maintains two buffers and updates them every frame:
 
 - the **color**, the visible image, and
-- the **flow**, a velocity field that stores a direction and speed for every pixel.
+- the **flow**, which holds a direction and speed at every pixel: which way each part of the image is moving, and how fast.
 
 Both begin black, with no image and no motion. Each frame runs four phases in order. The phases are easiest to follow starting from the first frame, where both buffers are empty, and then watching the image accumulate.
 
@@ -23,31 +23,31 @@ Inject Noise produces a smooth, organic pattern (simplex noise, a gradient noise
 
 On the first frame the buffers are black, so this scaled pattern is the only signal present. It is the source of all image content, and it is added to the color in Phase 3.
 
-![The noise pattern at full amplitude, before it is scaled for injection](preview://node:noise_combine)
+![The noise pattern at full strength, before it is scaled for injection](preview://node:noise_combine)
 
-*Shown at full amplitude. In the graph the pattern is scaled to roughly 0.01 before use. The image is built from many of these small contributions accumulated over time, not from one strong noise field.*
+*Shown at full strength. In the graph the pattern is scaled to roughly 0.01 before use. The image is built from many of these small contributions accumulated over time, not from one strong burst of noise.*
 
 ### Phase 2: Build the flow
 
-Phase 2 derives the velocity field that will move the color this frame. It reads **the current color**, which is black on the first frame and the image accumulated so far on every later frame.
+Phase 2 builds the flow that will move the color this frame. It reads **the current color**, which is black on the first frame and the image accumulated so far on every later frame.
 
 - **Curl Forcing** computes the gradient of the color: at each pixel, the direction in which the color changes fastest. That direction runs across the boundary between two regions, pointing from the darker side toward the lighter one. Rotating a vector by 90 degrees turns across into along, so the rotated gradient runs parallel to the boundary, following the contour of the region. A force directed along a region's contour pushes the fluid around the region instead of out through its edge, and that circulation is the curl the group is named for. On a black frame there is no gradient and therefore no force. Once the color has structure, the contours of its regions set where the fluid turns.
 
 ![Curl Forcing](preview://Curl Forcing)
 
-- **Smooth Velocity** downsamples the existing velocity field and applies a separable Gaussian blur. A high-frequency field would fragment the color into grain. A smooth, low-frequency field transports it in broad coherent sheets, which produces the thick, viscous appearance.
+- **Smooth Velocity** drops the flow to a lower resolution (downsamples it) and blurs it (a separable Gaussian blur). A sharp, detailed flow would fragment the color into grain. A smooth, broad flow transports it in coherent sheets, which produces the thick, viscous appearance.
 
 ![Smooth Velocity](preview://Smooth Velocity)
 
-- **Advect Velocity** produces the velocity for this frame. Advection, the core operation of the simulation, transports a field along a velocity field: each pixel follows the velocity one step back to where its material came from and copies the value there, so the field is dragged in the direction the arrows point, like a pattern on water carried by the current. Here the velocity is advected along itself, which carries its own motion forward like momentum. The result is then attenuated so it cannot grow without bound (set by Velocity Damp), and the curl force from Curl Forcing is added.
+- **Advect Velocity** produces the flow for this frame. Advection, the core operation of the simulation, carries one buffer's contents along the flow: each pixel follows the flow one step back to where its material came from and copies the value there, so the contents are dragged in the direction the flow points, like a pattern on water carried by the current. Here the flow is carried along itself, which keeps its own motion going like momentum. The result is then reduced slightly so it cannot grow without bound (set by Velocity Damp), and the curl force from Curl Forcing is added.
 
 ![Advect Velocity](preview://Advect Velocity)
 
 ### Phase 3: Stir the color
 
-Phase 3 updates the visible image. Advect Color reads **the current color**, advects each pixel of it along the **velocity field from Phase 2**, attenuates the result, and adds the **scaled noise from Phase 1**.
+Phase 3 updates the visible image. Advect Color reads **the current color**, advects each pixel of it along the **flow from Phase 2**, fades the result, and adds the **scaled noise from Phase 1**.
 
-The attenuation retains almost all of the existing color, controlled by Feedback at roughly 0.9999. Because so little is lost per frame, each new contribution is laid over everything retained so far. On the first frame there is nothing to advect, so the output is a single faint layer of noise. Over many frames the retained layers accumulate while advection transports and folds them, which is what forms the marbling.
+The fade retains almost all of the existing color, controlled by Feedback at roughly 0.9999. Because so little is lost per frame, each new contribution is laid over everything retained so far. On the first frame there is nothing to advect, so the output is a single faint layer of noise. Over many frames the retained layers accumulate while advection transports and folds them, which is what forms the marbling.
 
 ![Advect Color](preview://Advect Color)
 
@@ -55,10 +55,10 @@ The color produced here is the updated image. It is passed to Phase 4 for displa
 
 ### Phase 4: Show it
 
-Phase 4 shades the color for display and does not feed back into the simulation. Render Modes interprets the color's brightness as a height field, derives surface normals from it (a normal map), and lights those normals, which gives the image its raised, wet appearance. The Mode control selects the shading style:
+Phase 4 shades the color for display and does not feed back into the simulation. Render Modes reads the color's brightness as a surface, with bright areas standing for high ground and dark for low. From that surface it builds a normal map, an image that records the direction the surface faces at each point, which is what lighting needs in order to shade it. Lighting the normal map gives the image its raised, wet appearance. The Mode control selects the shading style:
 
 - **Oil Slick** offsets the color channels along the flow direction for a chromatic, petrol-like sheen (a flow-driven chromatic shift).
-- **Flow Field** and **Lines** convolve a texture along the velocity field to visualize it (line integral convolution, LIC).
+- **Flow Field** and **Lines** draw a texture into streaks that follow the flow, making it visible (line integral convolution, LIC).
 - **Height Map** applies plain directional lighting (Lambertian diffuse).
 - **PBR** applies a glossy material (matcap base with a Fresnel rim and Blinn specular highlight).
 
@@ -70,11 +70,11 @@ Color Grade then applies the final brightness, hue, and contrast, producing the 
 
 ### The image, frame by frame
 
-On frame 1 both buffers are black. Phase 1 contributes a faint layer of noise, and Phases 2 and 3 have no structure to act on, so the output is nearly black. On frame 2 that faint layer provides the structure Phase 2 needs. Curl Forcing derives a small velocity field from its edges, and Phase 3 advects the layer along that field and adds another contribution. Because each frame retains almost all of the previous color, the contributions accumulate, advection folds them into marbling, and the overall brightness rises. After a few seconds the image is fully developed. The current color that Phase 2 reads is simply the output Phase 3 produced on the previous frame, and that chain terminates at the initial black frame.
+On frame 1 both buffers are black. Phase 1 contributes a faint layer of noise, and Phases 2 and 3 have no structure to act on, so the output is nearly black. On frame 2 that faint layer provides the structure Phase 2 needs. Curl Forcing derives a small flow from its edges, and Phase 3 advects the layer along that flow and adds another contribution. Because each frame retains almost all of the previous color, the contributions accumulate, advection folds them into marbling, and the overall brightness rises. After a few seconds the image is fully developed. The current color that Phase 2 reads is simply the output Phase 3 produced on the previous frame, and that chain terminates at the initial black frame.
 
 ![Output](preview://Output)
 
-*The final composited image after warm-up. The velocity field develops within a second or two, while the color amplitude and surface relief build over the following several seconds, so a fresh start appears flat before the marbling develops.*
+*The final composited image after warm-up. The flow develops within a second or two, while the color and surface relief build over the following several seconds, so a fresh start appears flat before the marbling develops.*
 
 ## Controls
 
