@@ -1266,6 +1266,102 @@ enum OscScope<'a> {
 /// exposed entry; hidden static slots and unchecked user-tail entries
 /// (the latter are removed from `user_param_bindings` rather than
 /// hidden, so they never reach this loop) are filtered at build time.
+/// The per-param driver + envelope display arrays for a card, all sized to `n`
+/// (the card's param count). Shared by the effect and generator card builders —
+/// the only thing that differs between them is `resolve`, the `param_id → slot
+/// index` mapping (an effect resolves via `param_id_to_value_index`, a generator
+/// via its graph/registry `id_to_index`). The arrays are identical; the
+/// per-card `has_drv` / `has_env` summary flags stay with each caller (the
+/// generator card intentionally forces them false).
+struct CardModulation {
+    driver_active: Vec<bool>,
+    trim_min: Vec<f32>,
+    trim_max: Vec<f32>,
+    driver_beat_div_idx: Vec<i32>,
+    driver_waveform_idx: Vec<i32>,
+    driver_reversed: Vec<bool>,
+    driver_dotted: Vec<bool>,
+    driver_triplet: Vec<bool>,
+    envelope_active: Vec<bool>,
+    target_norm: Vec<f32>,
+    env_attack: Vec<f32>,
+    env_decay: Vec<f32>,
+    env_sustain: Vec<f32>,
+    env_release: Vec<f32>,
+    env_mode: Vec<manifold_core::effects::EnvelopeMode>,
+    env_random_jump: Vec<bool>,
+    env_range_min: Vec<f32>,
+    env_range_max: Vec<f32>,
+}
+
+/// Build the driver + envelope display arrays for one preset instance's card.
+/// `resolve` maps a modulation row's `param_id` to its card slot index.
+fn build_card_modulation(
+    inst: &PresetInstance,
+    n: usize,
+    resolve: impl Fn(&str) -> Option<usize>,
+) -> CardModulation {
+    let mut m = CardModulation {
+        driver_active: vec![false; n],
+        trim_min: vec![0.0; n],
+        trim_max: vec![1.0; n],
+        driver_beat_div_idx: vec![-1; n],
+        driver_waveform_idx: vec![-1; n],
+        driver_reversed: vec![false; n],
+        driver_dotted: vec![false; n],
+        driver_triplet: vec![false; n],
+        envelope_active: vec![false; n],
+        target_norm: vec![1.0; n],
+        env_attack: vec![0.0; n],
+        env_decay: vec![0.0; n],
+        env_sustain: vec![0.0; n],
+        env_release: vec![0.0; n],
+        env_mode: vec![manifold_core::effects::EnvelopeMode::Adsr; n],
+        env_random_jump: vec![false; n],
+        env_range_min: vec![0.0; n],
+        env_range_max: vec![1.0; n],
+    };
+    if let Some(ref drivers) = inst.drivers {
+        for d in drivers {
+            if !d.enabled {
+                continue;
+            }
+            let Some(pi) = resolve(d.param_id.as_ref()).filter(|&pi| pi < n) else {
+                continue;
+            };
+            m.driver_active[pi] = true;
+            m.trim_min[pi] = d.trim_min;
+            m.trim_max[pi] = d.trim_max;
+            m.driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
+            m.driver_waveform_idx[pi] = d.waveform as i32;
+            m.driver_reversed[pi] = d.reversed;
+            m.driver_dotted[pi] = d.beat_division.is_dotted();
+            m.driver_triplet[pi] = d.beat_division.is_triplet();
+        }
+    }
+    if let Some(ref envelopes) = inst.envelopes {
+        for env in envelopes {
+            if !env.enabled {
+                continue;
+            }
+            let Some(pi) = resolve(env.param_id.as_ref()).filter(|&pi| pi < n) else {
+                continue;
+            };
+            m.envelope_active[pi] = true;
+            m.target_norm[pi] = env.target_normalized;
+            m.env_attack[pi] = env.attack_beats;
+            m.env_decay[pi] = env.decay_beats;
+            m.env_sustain[pi] = env.sustain_level;
+            m.env_release[pi] = env.release_beats;
+            m.env_mode[pi] = env.mode;
+            m.env_random_jump[pi] = env.random_jump;
+            m.env_range_min[pi] = env.range_min;
+            m.env_range_max[pi] = env.range_max;
+        }
+    }
+    m
+}
+
 fn effects_to_configs(
     effects: &[PresetInstance],
     osc_scope: OscScope<'_>,
@@ -1428,71 +1524,12 @@ fn effects_to_configs(
                 });
             }
 
-            // Per-param driver state. Sized to `n` (static + user). Lookup
-            // via `param_id_to_value_index` so user-tail driver bindings
-            // also light up their slider's D button.
-            let mut has_drv = false;
-            let mut driver_active = vec![false; n];
-            let mut trim_min = vec![0.0f32; n];
-            let mut trim_max = vec![1.0f32; n];
-            let mut driver_beat_div_idx = vec![-1i32; n];
-            let mut driver_waveform_idx = vec![-1i32; n];
-            let mut driver_reversed = vec![false; n];
-            let mut driver_dotted = vec![false; n];
-            let mut driver_triplet = vec![false; n];
-            if let Some(ref drivers) = fx.drivers {
-                for d in drivers {
-                    let Some(pi) = fx.param_id_to_value_index(d.param_id.as_ref()) else {
-                        continue;
-                    };
-                    if pi < n && d.enabled {
-                        has_drv = true;
-                        driver_active[pi] = true;
-                        trim_min[pi] = d.trim_min;
-                        trim_max[pi] = d.trim_max;
-                        driver_beat_div_idx[pi] =
-                            beat_div_to_button_index(d.beat_division.base_division());
-                        driver_waveform_idx[pi] = d.waveform as i32;
-                        driver_reversed[pi] = d.reversed;
-                        driver_dotted[pi] = d.beat_division.is_dotted();
-                        driver_triplet[pi] = d.beat_division.is_triplet();
-                    }
-                }
-            }
-
-            // Per-param envelope state. Same sizing + lookup story.
-            let mut has_env = false;
-            let mut envelope_active = vec![false; n];
-            let mut target_norm = vec![1.0f32; n];
-            let mut env_attack = vec![0.0f32; n];
-            let mut env_decay = vec![0.0f32; n];
-            let mut env_sustain = vec![0.0f32; n];
-            let mut env_release = vec![0.0f32; n];
-            let mut env_mode = vec![manifold_core::effects::EnvelopeMode::Adsr; n];
-            let mut env_random_jump = vec![false; n];
-            let mut env_range_min = vec![0.0f32; n];
-            let mut env_range_max = vec![1.0f32; n];
-            for env in fx.envelopes.as_deref().unwrap_or(&[]) {
-                if env.enabled {
-                    let Some(pi) = fx.param_id_to_value_index(env.param_id.as_ref()) else {
-                        continue;
-                    };
-                    if pi < n {
-                        has_env = true;
-                        envelope_active[pi] = true;
-                        target_norm[pi] = env.target_normalized;
-                        env_attack[pi] = env.attack_beats;
-                        env_decay[pi] = env.decay_beats;
-                        env_sustain[pi] = env.sustain_level;
-                        env_release[pi] = env.release_beats;
-                        env_mode[pi] = env.mode;
-                        env_random_jump[pi] = env.random_jump;
-                        env_range_min[pi] = env.range_min;
-                        env_range_max[pi] = env.range_max;
-                    }
-                }
-            }
-
+            // Per-param driver + envelope arrays (shared builder). Effects
+            // resolve a modulation row's param_id through
+            // `param_id_to_value_index` so user-tail bindings light up too.
+            let m = build_card_modulation(fx, n, |id| fx.param_id_to_value_index(id));
+            let has_drv = m.driver_active.iter().any(|&b| b);
+            let has_env = m.envelope_active.iter().any(|&b| b);
             let has_abl = params.iter().any(|p| p.ableton_display.is_some());
             let has_graph_mod = fx.graph.is_some();
 
@@ -1512,24 +1549,24 @@ fn effects_to_configs(
                 has_env,
                 has_abl,
                 has_graph_mod,
-                driver_active,
-                envelope_active,
-                trim_min,
-                trim_max,
-                target_norm,
-                env_attack,
-                env_decay,
-                env_sustain,
-                env_release,
-                env_mode,
-                env_random_jump,
-                env_range_min,
-                env_range_max,
-                driver_beat_div_idx,
-                driver_waveform_idx,
-                driver_reversed,
-                driver_dotted,
-                driver_triplet,
+                driver_active: m.driver_active,
+                envelope_active: m.envelope_active,
+                trim_min: m.trim_min,
+                trim_max: m.trim_max,
+                target_norm: m.target_norm,
+                env_attack: m.env_attack,
+                env_decay: m.env_decay,
+                env_sustain: m.env_sustain,
+                env_release: m.env_release,
+                env_mode: m.env_mode,
+                env_random_jump: m.env_random_jump,
+                env_range_min: m.env_range_min,
+                env_range_max: m.env_range_max,
+                driver_beat_div_idx: m.driver_beat_div_idx,
+                driver_waveform_idx: m.driver_waveform_idx,
+                driver_reversed: m.driver_reversed,
+                driver_dotted: m.driver_dotted,
+                driver_triplet: m.driver_triplet,
             })
         })
         .collect()
@@ -1768,71 +1805,11 @@ fn gen_params_to_config(
         };
     let n = params.len();
 
-    // Per-param driver state. Walks both tiers — `id_to_index` was
-    // built against the chosen source (graph metadata when present,
-    // registry otherwise), so user-added ids resolve.
-    let mut driver_active = vec![false; n];
-    let mut trim_min = vec![0.0f32; n];
-    let mut trim_max = vec![1.0f32; n];
-    let mut driver_beat_div_idx = vec![-1i32; n];
-    let mut driver_waveform_idx = vec![-1i32; n];
-    let mut driver_reversed = vec![false; n];
-    let mut driver_dotted = vec![false; n];
-    let mut driver_triplet = vec![false; n];
-    if let Some(ref drivers) = gp.drivers {
-        for d in drivers {
-            if !d.enabled {
-                continue;
-            }
-            let Some(&pi) = id_to_index.get(d.param_id.as_ref()) else {
-                continue;
-            };
-            if pi < n {
-                driver_active[pi] = true;
-                trim_min[pi] = d.trim_min;
-                trim_max[pi] = d.trim_max;
-                driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
-                driver_waveform_idx[pi] = d.waveform as i32;
-                driver_reversed[pi] = d.reversed;
-                driver_dotted[pi] = d.beat_division.is_dotted();
-                driver_triplet[pi] = d.beat_division.is_triplet();
-            }
-        }
-    }
-
-    // Per-param envelope state — same id_to_index source.
-    let mut envelope_active = vec![false; n];
-    let mut target_norm = vec![1.0f32; n];
-    let mut env_attack = vec![0.0f32; n];
-    let mut env_decay = vec![0.0f32; n];
-    let mut env_sustain = vec![0.0f32; n];
-    let mut env_release = vec![0.0f32; n];
-    let mut env_mode = vec![manifold_core::effects::EnvelopeMode::Adsr; n];
-    let mut env_random_jump = vec![false; n];
-    let mut env_range_min = vec![0.0f32; n];
-    let mut env_range_max = vec![1.0f32; n];
-    if let Some(ref envelopes) = gp.envelopes {
-        for env in envelopes {
-            if !env.enabled {
-                continue;
-            }
-            let Some(&pi) = id_to_index.get(env.param_id.as_ref()) else {
-                continue;
-            };
-            if pi < n {
-                envelope_active[pi] = true;
-                target_norm[pi] = env.target_normalized;
-                env_attack[pi] = env.attack_beats;
-                env_decay[pi] = env.decay_beats;
-                env_sustain[pi] = env.sustain_level;
-                env_release[pi] = env.release_beats;
-                env_mode[pi] = env.mode;
-                env_random_jump[pi] = env.random_jump;
-                env_range_min[pi] = env.range_min;
-                env_range_max[pi] = env.range_max;
-            }
-        }
-    }
+    // Per-param driver + envelope arrays (shared builder). The generator
+    // resolves a modulation row's param_id through the `id_to_index` built
+    // above against the chosen source (graph metadata when present, registry
+    // otherwise), so user-added ids resolve.
+    let m = build_card_modulation(gp, n, |id| id_to_index.get(id).copied());
 
     // String param defs → populate with current clip values. Source
     // remains the registry — string params are a Rust-side concept
@@ -1878,24 +1855,24 @@ fn gen_params_to_config(
         layer_id: None,
         params,
         string_params,
-        driver_active,
-        envelope_active,
-        trim_min,
-        trim_max,
-        target_norm,
-        env_attack,
-        env_decay,
-        env_sustain,
-        env_release,
-        env_mode,
-        env_random_jump,
-        env_range_min,
-        env_range_max,
-        driver_beat_div_idx,
-        driver_waveform_idx,
-        driver_reversed,
-        driver_dotted,
-        driver_triplet,
+        driver_active: m.driver_active,
+        envelope_active: m.envelope_active,
+        trim_min: m.trim_min,
+        trim_max: m.trim_max,
+        target_norm: m.target_norm,
+        env_attack: m.env_attack,
+        env_decay: m.env_decay,
+        env_sustain: m.env_sustain,
+        env_release: m.env_release,
+        env_mode: m.env_mode,
+        env_random_jump: m.env_random_jump,
+        env_range_min: m.env_range_min,
+        env_range_max: m.env_range_max,
+        driver_beat_div_idx: m.driver_beat_div_idx,
+        driver_waveform_idx: m.driver_waveform_idx,
+        driver_reversed: m.driver_reversed,
+        driver_dotted: m.driver_dotted,
+        driver_triplet: m.driver_triplet,
     }
 }
 
