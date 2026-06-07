@@ -31,7 +31,7 @@ On the first frame the buffers are black, so this scaled pattern is the only sig
 
 Phase 2 derives the velocity field that will move the color this frame. It reads **the current color**, which is black on the first frame and the image accumulated so far on every later frame.
 
-- **Curl Forcing** computes the gradient of the color, the direction of steepest change at each pixel, which points across the boundaries between regions. It rotates that gradient by 90 degrees to produce a field aligned with those boundaries. Applied as a force, a field aligned with edges drives the fluid to circulate around regions rather than flow across them. This rotational forcing is the curl the group is named for. With no gradient on a black frame there is no force. Once the color has structure, its boundaries set where the fluid turns.
+- **Curl Forcing** computes the gradient of the color: at each pixel, the direction in which the color changes fastest. That direction runs across the boundary between two regions, pointing from the darker side toward the lighter one. Rotating a vector by 90 degrees turns across into along, so the rotated gradient runs parallel to the boundary, following the contour of the region. A force directed along a region's contour pushes the fluid around the region instead of out through its edge, and that circulation is the curl the group is named for. On a black frame there is no gradient and therefore no force. Once the color has structure, the contours of its regions set where the fluid turns.
 
 ![Curl Forcing](preview://Curl Forcing)
 
