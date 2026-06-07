@@ -1300,54 +1300,52 @@ impl ContentThread {
         // override lost it during edits — same canonical helper the
         // runtime path uses, so editor canvas and live render resolve
         // to the same bindings set.
-        let def: manifold_core::effect_graph_def::EffectGraphDef =
-            if let Some(override_def) = layer.generator_graph() {
-                let mut d = override_def.clone();
-                manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
-                    &mut d, gen_type,
-                );
-                d
-            } else {
-                let json = manifold_renderer::node_graph::bundled_preset_json(gen_type)?;
-                serde_json::from_str(&json).ok()?
-            };
-        let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&def)?;
-        // Populate outer_routings from the preset's bindings so the
-        // graph editor's right panel knows which inner params are bound
-        // to outer-card sliders. For effects this is filled in by the
-        // compositor's `outer_routings_for`; generators don't have an
-        // effect registry, so we build the routings directly from the
-        // JSON def's `presetMetadata.bindings`.
-        if let Some(meta) = def.preset_metadata.as_ref() {
-            use manifold_core::effect_graph_def::BindingTarget;
-            use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
-            // node_id → display handle, for the editor's per-row join. The
-            // routing carries the handle (the editor keys node rows by
-            // handle within a single snapshot); the binding addresses by
-            // id, resolved here against the def's own nodes.
-            let handle_by_id: std::collections::HashMap<&str, &str> = def
-                .nodes
-                .iter()
-                .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
-                .collect();
-            snap.outer_routings = meta
-                .bindings
-                .iter()
-                .filter_map(|b| match &b.target {
-                    BindingTarget::Node { node_id, param } => {
-                        let handle = handle_by_id.get(node_id.as_str())?;
-                        Some(OuterParamRouting {
-                            outer_label: b.label.clone(),
-                            outer_param_id: b.id.clone(),
-                            node_handle: handle.to_string(),
-                            inner_param: param.clone(),
-                            source: OuterParamSource::Static,
-                        })
-                    }
-                    BindingTarget::Composite { .. } => None,
-                })
-                .collect();
-        }
+        let snap = if let Some(override_def) = layer.generator_graph() {
+            // Per-instance override: exposure state lives on the layer's
+            // graph, not the bundled view, so build from the override
+            // (grafting bundled metadata back if edits dropped it) and
+            // project routings from the override def's own metadata — the
+            // same projection `outer_routings_from_view` does, over `d`.
+            let mut d = override_def.clone();
+            manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
+                &mut d, gen_type,
+            );
+            let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&d)?;
+            if let Some(meta) = d.preset_metadata.as_ref() {
+                use manifold_core::effect_graph_def::BindingTarget;
+                use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+                let handle_by_id: std::collections::HashMap<&str, &str> = d
+                    .nodes
+                    .iter()
+                    .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
+                    .collect();
+                snap.outer_routings = meta
+                    .bindings
+                    .iter()
+                    .filter_map(|b| match &b.target {
+                        BindingTarget::Node { node_id, param } => {
+                            let handle = handle_by_id.get(node_id.as_str())?;
+                            Some(OuterParamRouting {
+                                outer_label: b.label.clone(),
+                                outer_param_id: b.id.clone(),
+                                node_handle: handle.to_string(),
+                                inner_param: param.clone(),
+                                source: OuterParamSource::Static,
+                            })
+                        }
+                        BindingTarget::Composite { .. } => None,
+                    })
+                    .collect();
+            }
+            snap
+        } else {
+            // Pristine layer: the unified LoadedPresetView. Generators now
+            // get views (#4), so this is the exact path effects take in
+            // `active_graph_snapshot` — `snapshot_for_view` does
+            // `from_def(canonical_def)` + `outer_routings_from_view`.
+            let view = manifold_renderer::node_graph::loaded_preset_view_by_id(gen_type)?;
+            manifold_renderer::node_graph::snapshot_for_view(view)?
+        };
         let arc = Arc::new(snap);
         self.cached_generator_graph_snapshot = Some(CachedGeneratorGraphSnapshot {
             layer_id: layer_id.clone(),

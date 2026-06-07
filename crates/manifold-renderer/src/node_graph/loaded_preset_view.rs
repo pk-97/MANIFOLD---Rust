@@ -120,9 +120,15 @@ fn rebuild_view_cache(generation: u64) {
 
 fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
     let mut m: AHashMap<PresetTypeId, &'static LoadedPresetView> = AHashMap::default();
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(
-        manifold_core::preset_def::PresetKind::Effect,
-    ) {
+    // Both kinds — effect and generator ids are globally disjoint, so one
+    // id-keyed view map serves both. Generators gain editor snapshot +
+    // reshape views here (#4); `bundled_preset_def` is kind-agnostic (A3),
+    // and a generator without `presetMetadata` simply yields no view.
+    use crate::node_graph::bundled_presets::bundled_preset_type_ids;
+    use manifold_core::preset_def::PresetKind;
+    for type_id in bundled_preset_type_ids(PresetKind::Effect)
+        .chain(bundled_preset_type_ids(PresetKind::Generator))
+    {
         if let Some(view) = build_view(&type_id) {
             m.insert(type_id, Box::leak(Box::new(view)));
         }

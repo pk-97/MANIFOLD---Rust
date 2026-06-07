@@ -156,9 +156,9 @@ impl Application {
                     return Some(r);
                 }
                 let gp = layer.gen_params()?;
-                let def =
-                    manifold_renderer::node_graph::bundled_preset_def(gp.generator_type())?;
-                full_reshape_from_def(def, param_id)
+                let view =
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())?;
+                full_reshape_from_def(view.canonical_def, param_id)
             }
         }
     }
@@ -194,7 +194,8 @@ impl Application {
                     return None;
                 }
                 let gp = layer.gen_params()?;
-                manifold_renderer::node_graph::bundled_preset_def(gp.generator_type()).cloned()
+                manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
+                    .map(|v| v.canonical_def.clone())
             }
         }
     }
