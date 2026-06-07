@@ -53,18 +53,45 @@ collapse could flow into Phase 5 (which consumes the core and naturally pulls in
 the edit-routing). These MUST be built before Phase 4 — and the whole plan — is
 complete:
 
-- [ ] **Undoable `ForkPresetCommand`** (manifold-editing) — wraps
-      `Project::fork_preset` so a fork goes through the undo stack like every
-      other mutation. (Phase 5's auto-fork-on-edit will use it too.)
-- [ ] **Export / import a project preset** — write an `EmbeddedPreset.def` to a
-      standalone `.json` (the shareable file); import a `.json` into
-      `Project.embedded_presets`. io fns + the file-dialog wiring.
+- [x] **Undoable `ForkPresetCommand`** (manifold-editing) — DONE. Wraps
+      `Project::fork_preset`; `ForkPresetCommand::new(target, kind, source_def)`,
+      `forked_id()` after execute. (`crates/manifold-editing/src/commands/preset.rs`.)
+- [x] **Export / import a project preset** — io DONE
+      (`manifold_io::preset_file::{export_preset, import_preset, serialize_preset,
+      deserialize_preset}`, ext `manifoldpreset`). The **menu wiring** is the UI item below.
 - [ ] **UI** (needs the running app, building blind):
-  - [ ] Picker lists project-embedded presets alongside stock/user.
-  - [ ] Explicit "Duplicate / Make unique" action that forks the current preset.
-  - [ ] Export / import menu actions.
-  - [ ] Visible header label when an instance is on a project variant
-        (e.g. "Oily Fluid — Layer 2 variant").
+  - [x] **Variant header label** — DONE (commit `6cf72f32`): `state_sync::card_preset_name`
+        shows `"<Base> (variant)"` when the instance's preset id is a `"{base}#{n}"`
+        fork. Needs a visual pass on wording/placement.
+  - [ ] **Picker lists project-embedded presets** — `browser_popup.rs`: append
+        `project.embedded_presets` entries to the catalog `known_type_ids` list.
+  - [ ] **Duplicate / Make unique** action — integration map (all verified to exist):
+        add `PanelAction::MakePresetUnique(GraphParamTarget)` emitted by a new
+        header button in `param_card.rs` (follow the `cog_btn_id` add_button +
+        click-arm pattern in `build_effect_header` / generator header); `ui_bridge`
+        maps `GraphParamTarget`→`GraphTarget` and sends a NEW
+        `ContentCommand::MakePresetUnique { target }`; the `content_commands.rs`
+        handler resolves `source_def` (diverged: `instance.graph` /
+        `layer.generator_graph`; pristine effect:
+        `manifold_renderer::node_graph::loaded_preset_view_by_id(type)?.canonical_def.clone()`;
+        pristine generator: parse `bundled_generator_preset_json(type)`), builds
+        `ForkPresetCommand`, runs it through `editing_service` (undoable), then
+        `refresh_preset_overlay_if_changed()`. **Why content-side, not a plain
+        `Execute(Box<Command>)`:** `source_def` needs renderer/catalog access the UI
+        thread lacks.
+  - [ ] **Export / import menu actions** — header menu (or card menu) →
+        `rfd::FileDialog` (`save_file`/`pick_file`, `manifoldpreset` filter, pattern
+        in `ui_bridge/project.rs`) → `manifold_io::preset_file`. Export uses the
+        resolved current def (same resolution as Make-unique); import →
+        `project.upsert_embedded_preset(EmbeddedPreset{kind, def})` (+ optional
+        retarget of the current instance).
+
+> **Status 2026-06-07:** the variant label landed. The other three are
+> *blind-buildable* (the data/command wiring compiles + follows existing patterns)
+> but their core behaviour — the fork→render→display round-trip, the picker showing
+> the right entries, the file-dialog flow — is only verifiable with the app running,
+> so they're best finished with Peter at the keyboard (the integration map above
+> makes that fast).
 
 Note: the **auto-fork-on-shared-edit** behaviour is intentionally NOT here — it
 is the same edit path Phase 5 builds when it deletes `ParamMapping`, so it lands
