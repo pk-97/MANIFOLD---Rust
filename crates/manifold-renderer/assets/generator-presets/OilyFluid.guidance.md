@@ -39,7 +39,7 @@ Phase 2 derives the velocity field that will move the color this frame. It reads
 
 ![Smooth Velocity](preview://Smooth Velocity)
 
-- **Advect Velocity** assembles the velocity for this frame. The existing field is advected along itself, carrying its own momentum forward, then attenuated so it cannot grow without bound (set by Velocity Damp), and the curl force from Curl Forcing is added.
+- **Advect Velocity** produces the velocity for this frame. Advection, the core operation of the simulation, transports a field along a velocity field: each pixel follows the velocity one step back to where its material came from and copies the value there, so the field is dragged in the direction the arrows point, like a pattern on water carried by the current. Here the velocity is advected along itself, which carries its own motion forward like momentum. The result is then attenuated so it cannot grow without bound (set by Velocity Damp), and the curl force from Curl Forcing is added.
 
 ![Advect Velocity](preview://Advect Velocity)
 
