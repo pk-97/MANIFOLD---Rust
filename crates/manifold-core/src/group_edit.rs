@@ -203,6 +203,7 @@ pub fn group_selection(
         output_formats: BTreeMap::new(),
         output_canvas_scales: BTreeMap::new(),
         group: Some(Box::new(GroupDef {
+            description: None,
             interface,
             nodes: body_nodes,
             wires: body_wires,

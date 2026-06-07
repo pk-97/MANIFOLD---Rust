@@ -270,6 +270,13 @@ pub struct GroupDef {
     pub interface: GroupInterface,
     pub nodes: Vec<EffectGraphNode>,
     pub wires: Vec<EffectGraphWire>,
+    /// One-line, plain-language summary of what this group does to its output —
+    /// the group's own purpose ("builds the swirl force from the colour's
+    /// edges"), authored at group altitude rather than describing any inner
+    /// atom. Surfaced by the editor and the guidance-report tool. Optional, so
+    /// every existing grouped document deserializes and re-serializes unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Tagged-enum wire form of the renderer's `ParamValue`. Tagged because
@@ -772,6 +779,7 @@ mod tests {
             SerializedParamValue::Float { value: 0.7 },
         );
         let body = GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![InterfacePortDef {
                     name: "src".to_string(),

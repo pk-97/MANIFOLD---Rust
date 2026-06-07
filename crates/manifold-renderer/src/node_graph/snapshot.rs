@@ -843,6 +843,7 @@ mod tests {
             port_type: String::new(),
         };
         let body = GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![iport("src")],
                 outputs: vec![iport("out")],

@@ -726,6 +726,7 @@ mod tests {
     fn soft_focus_group(id: u32, handle: &str) -> EffectGraphNode {
         let mut g = node(id, GROUP_TYPE_ID, Some(handle));
         g.group = Some(Box::new(GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![port("src")],
                 outputs: vec![port("out")],
@@ -796,6 +797,7 @@ mod tests {
         blur.node_id = crate::NodeId::new("stable_blur");
         let mut group = node(1, GROUP_TYPE_ID, Some("soft"));
         group.group = Some(Box::new(GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![port("src")],
                 outputs: vec![port("out")],
@@ -886,6 +888,7 @@ mod tests {
         let inner = soft_focus_group(1, "inner");
         let mut outer = node(5, GROUP_TYPE_ID, Some("outer"));
         outer.group = Some(Box::new(GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![port("src")],
                 outputs: vec![port("out")],
@@ -1092,6 +1095,7 @@ mod tests {
         let mut outer = node(1, GROUP_TYPE_ID, Some("wrap"));
         let inner = soft_focus_group(10, "inner");
         outer.group = Some(Box::new(GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![port("src")],
                 outputs: vec![port("out")],
@@ -1143,6 +1147,7 @@ mod tests {
     fn producer_map_prefers_first_texture_output() {
         let mut g = node(1, GROUP_TYPE_ID, Some("g"));
         g.group = Some(Box::new(GroupDef {
+            description: None,
             interface: GroupInterface {
                 inputs: vec![port("src")],
                 outputs: vec![

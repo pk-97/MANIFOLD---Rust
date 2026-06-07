@@ -29,6 +29,7 @@ use manifold_renderer::generators::json_graph_generator::JsonGraphGenerator;
 use manifold_renderer::node_graph::{PrimitiveRegistry, PreviewEncoder, PreviewEncoding, descriptor_for};
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::render_target::RenderTarget;
+use manifold_renderer::tonemap::{TonemapPipeline, TonemapSettings};
 
 const SIM_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const OUT_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
@@ -115,6 +116,9 @@ struct Capture {
     title: String,
     node_id: Option<NodeId>, // None = the final output (whole effect)
     type_id: Option<String>,
+    /// The group's own one-line purpose, if the author wrote one. Preferred
+    /// over the producer atom's tooltip, which describes the wrong altitude.
+    description: Option<String>,
 }
 
 fn main() {
@@ -142,6 +146,10 @@ fn main() {
     let encoder = PreviewEncoder::new(&device, OUT_FORMAT);
     let sim_out = RenderTarget::new(&device, res, res, SIM_FORMAT, "report-sim-out");
     let color = RenderTarget::new(&device, res, res, OUT_FORMAT, "report-color");
+    // The hero output is tonemapped through the same ACES path the live display
+    // uses, so the report's "Output" image matches what is on screen rather than
+    // the raw HDR buffer (which reads dark for low-amplitude sims).
+    let tonemap = TonemapPipeline::new(&device, res, res);
 
     // Build the type-id lookup over the flattened graph so a group's producer
     // (or any node) can be described from its descriptor summary.
@@ -162,6 +170,7 @@ fn main() {
         title: format!("{preset_name} — Output"),
         node_id: None,
         type_id: None,
+        description: None,
     }];
     for node in &def.nodes {
         let is_group = node.type_id == "group";
@@ -174,6 +183,7 @@ fn main() {
                 title,
                 node_id: Some(node.node_id.clone()),
                 type_id: type_of.get(&producer).cloned(),
+                description: node.group.as_ref().and_then(|g| g.description.clone()),
             });
         }
     }
@@ -210,7 +220,15 @@ fn main() {
         // the captured node texture with its semantic encoding.
         let (source_tex, encoding): (Option<&manifold_gpu::GpuTexture>, PreviewEncoding) =
             if cap.node_id.is_none() {
-                (Some(&sim_out.texture), PreviewEncoding::Color)
+                // Tonemap the generator's HDR output on its own command buffer,
+                // then encode the SDR result raw — this is the on-screen image.
+                let mut native = device.create_encoder("report-tonemap");
+                {
+                    let mut gpu = GpuEncoder::new(&mut native, &device);
+                    tonemap.apply(&mut gpu, &sim_out.texture, &TonemapSettings::default());
+                }
+                native.commit_and_wait_completed();
+                (Some(&tonemap.output.texture), PreviewEncoding::Color)
             } else {
                 (generator.preview_texture(), generator.preview_encoding())
             };
@@ -227,10 +245,13 @@ fn main() {
         report.push_str(&format!("## {}\n\n", cap.title));
         report.push_str(&format!("![{}]({})\n\n", cap.title, fname));
         report.push_str(&format!("*Encoding: {}*\n\n", encoding_label(encoding)));
-        if let Some(tid) = &cap.type_id
-            && let Some(d) = descriptor_for(tid)
-        {
-            report.push_str(&format!("{}\n\n", d.summary));
+        // Prefer the group's own authored purpose; fall back to the producer
+        // atom's tooltip (right node, wrong altitude, but better than nothing).
+        let blurb = cap.description.clone().or_else(|| {
+            cap.type_id.as_deref().and_then(descriptor_for).map(|d| d.summary.to_string())
+        });
+        if let Some(blurb) = blurb {
+            report.push_str(&format!("{blurb}\n\n"));
         }
         println!("  captured {} ({})", cap.title, encoding_label(encoding));
     }

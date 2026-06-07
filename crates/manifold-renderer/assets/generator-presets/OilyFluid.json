@@ -402,6 +402,7 @@
       "handle": "Curl Forcing",
       "nodeId": "curl_forcing",
       "group": {
+        "description": "Reads the colour image, finds its edges, and turns them into a sideways push that makes the fluid swirl around shapes instead of spreading out.",
         "interface": {
           "inputs": [
             {
@@ -578,6 +579,7 @@
       "handle": "Smooth Velocity",
       "nodeId": "smooth_velocity",
       "group": {
+        "description": "Shrinks and blurs the flow field so the motion happens in slow broad sheets rather than sharp grain. This is where the oily heaviness comes from.",
         "interface": {
           "inputs": [
             {
@@ -688,6 +690,7 @@
       "handle": "Advect Velocity",
       "nodeId": "advect_velocity",
       "group": {
+        "description": "Builds the next frame's flow. The flow carries itself forward, eases off so it cannot build up forever, and takes in the swirls from Curl Forcing.",
         "interface": {
           "inputs": [
             {
@@ -836,6 +839,7 @@
       "handle": "Inject Noise",
       "nodeId": "inject_noise",
       "group": {
+        "description": "Generates a small amount of slowly shifting noise each frame. This is the only fresh material the simulation gets, the seed every pattern grows from.",
         "interface": {
           "inputs": [
             {
@@ -1050,6 +1054,7 @@
       "handle": "Advect Color",
       "nodeId": "advect_color",
       "group": {
+        "description": "Drags the colour along the new flow, fades it slightly so old colour dies off, and mixes in the fresh noise. Repeated every frame, this is the marbling.",
         "interface": {
           "inputs": [
             {
@@ -1198,6 +1203,7 @@
       "handle": "Render Modes",
       "nodeId": "render_modes",
       "group": {
+        "description": "Turns the flat colour into a lit wet-looking surface, then shows it one of five ways set by the Mode knob: oil slick, flow lines, lit relief, or a glossy material.",
         "interface": {
           "inputs": [
             {
@@ -1886,6 +1892,7 @@
       "handle": "Color Grade",
       "nodeId": "color_grade",
       "group": {
+        "description": "The final look pass. Brightness, saturation, hue, and contrast on the finished image.",
         "interface": {
           "inputs": [
             {
