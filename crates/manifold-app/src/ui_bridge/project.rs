@@ -231,7 +231,9 @@ pub(super) fn dispatch_project(
                 .as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
             if let Some(layer_idx) = resolved_idx {
-                let available = manifold_core::generator_type_registry::available_generators();
+                let available = manifold_core::preset_type_registry::available_of_kind(
+                    manifold_core::preset_def::PresetKind::Generator,
+                );
                 let layer = &project.timeline.layers[layer_idx];
                 let old_type = layer
                     .gen_params()

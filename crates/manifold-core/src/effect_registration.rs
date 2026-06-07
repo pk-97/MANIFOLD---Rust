@@ -4,7 +4,7 @@
 //! The definition and type registries collect these at startup.
 
 use crate::preset_type_id::PresetTypeId;
-use crate::effect_type_registry::EffectTypeRegistration;
+use crate::preset_type_registry::PresetTypeRegistration;
 use crate::effects::ParamDef;
 use crate::generator_registration::ParamSpec;
 use crate::preset_def::{PresetDef, PresetKind};
@@ -169,12 +169,13 @@ impl EffectMetadata {
         }
     }
 
-    /// Convert to the existing `EffectTypeRegistration` type.
-    pub fn to_type_registration(&self) -> EffectTypeRegistration {
-        EffectTypeRegistration {
+    /// Convert to the unified picker registration (kind = Effect).
+    pub fn to_type_registration(&self) -> PresetTypeRegistration {
+        PresetTypeRegistration {
             id: self.id.clone(),
             display_name: self.display_name,
-            category: self.category,
+            category: Some(self.category),
+            kind: PresetKind::Effect,
             available: self.available,
         }
     }

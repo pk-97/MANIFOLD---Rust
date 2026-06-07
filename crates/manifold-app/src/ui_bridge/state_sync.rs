@@ -680,12 +680,12 @@ pub fn push_state(
 
     // Cache master effect names for the LED exit path dropdown
     {
-        use manifold_core::effect_type_registry;
+        use manifold_core::preset_type_registry;
         let names: Vec<String> = project
             .settings
             .master_effects
             .iter()
-            .map(|fx| effect_type_registry::display_name(fx.effect_type()).to_string())
+            .map(|fx| preset_type_registry::display_name(fx.effect_type()).to_string())
             .collect();
         ui.master_effect_names = names;
     }
@@ -725,11 +725,11 @@ pub fn push_state(
             } else if is_gen {
                 chrome.sync_name(
                     tree,
-                    manifold_core::generator_type_registry::display_name(&clip.generator_type),
+                    manifold_core::preset_type_registry::display_name(&clip.generator_type),
                 );
                 chrome.sync_gen_type(
                     tree,
-                    manifold_core::generator_type_registry::display_name(&clip.generator_type),
+                    manifold_core::preset_type_registry::display_name(&clip.generator_type),
                 );
             }
         }
@@ -742,7 +742,7 @@ pub fn push_state(
             if let Some(card) = ui.inspector.master_effect_mut(i) {
                 card.sync_effect_name(
                     tree,
-                    manifold_core::effect_type_registry::display_name(effect.effect_type()),
+                    manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
                 card.sync_values(tree, &effect.param_values);
@@ -758,7 +758,7 @@ pub fn push_state(
                 if let Some(card) = ui.inspector.layer_effect_mut(i) {
                     card.sync_effect_name(
                         tree,
-                        manifold_core::effect_type_registry::display_name(effect.effect_type()),
+                        manifold_core::preset_type_registry::display_name(effect.effect_type()),
                     );
                     card.sync_enabled(tree, effect.enabled);
                     card.sync_values(tree, &effect.param_values);
@@ -774,7 +774,7 @@ pub fn push_state(
         {
             gp.sync_gen_type_name(
                 tree,
-                manifold_core::generator_type_registry::display_name(gp_state.generator_type()),
+                manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
             );
             gp.sync_values(tree, &gp_state.param_values);
         }
@@ -830,7 +830,7 @@ pub fn sync_project_data(
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                     blend_mode: format!("{:?}", layer.default_blend_mode),
                     generator_type: layer.gen_params().map(|g| {
-                        manifold_core::generator_type_registry::display_name(g.generator_type())
+                        manifold_core::preset_type_registry::display_name(g.generator_type())
                             .to_string()
                     }),
                     clip_count: layer.clips.len(),
@@ -968,7 +968,7 @@ pub fn sync_project_data(
                     layer
                         .gen_params()
                         .map(|gp| {
-                            manifold_core::generator_type_registry::display_name(
+                            manifold_core::preset_type_registry::display_name(
                                 gp.generator_type(),
                             )
                             .to_string()
@@ -1028,7 +1028,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
                 layer
                     .gen_params()
                     .map(|gp| {
-                        manifold_core::generator_type_registry::display_name(gp.generator_type())
+                        manifold_core::preset_type_registry::display_name(gp.generator_type())
                             .to_string()
                     })
                     .unwrap_or_else(|| "Gen".to_string())
@@ -1555,7 +1555,7 @@ fn effects_to_configs(
                 effect_index: i,
                 effect_id: fx.id.clone(),
                 name: card_preset_name(fx.effect_type(), |i| {
-                    manifold_core::effect_type_registry::display_name(i).to_string()
+                    manifold_core::preset_type_registry::display_name(i).to_string()
                 }),
                 enabled: fx.enabled,
                 collapsed: fx.collapsed,
@@ -1856,7 +1856,7 @@ fn gen_params_to_config(
     ParamCardConfig {
         kind: ParamCardKind::Generator,
         name: card_preset_name(gp.generator_type(), |i| {
-            manifold_core::generator_type_registry::display_name(i).to_string()
+            manifold_core::preset_type_registry::display_name(i).to_string()
         }),
         // Effect-only fields carry defaults — the generator card ignores
         // them (no enabled toggle, no badges, no per-card graph-mod tint).

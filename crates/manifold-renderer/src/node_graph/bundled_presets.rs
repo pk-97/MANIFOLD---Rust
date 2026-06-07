@@ -164,7 +164,7 @@ mod tests {
     /// picker registry never reads JSON.
     #[test]
     fn every_bundled_preset_appears_in_effect_type_registry() {
-        use manifold_core::effect_type_registry;
+        use manifold_core::preset_type_registry;
         for type_id in bundled_preset_type_ids() {
             let Some(def) = bundled_preset_def(&type_id) else {
                 continue;
@@ -173,9 +173,9 @@ mod tests {
                 continue; // v1 entry — no display metadata to project
             }
             assert!(
-                effect_type_registry::is_registered(&type_id),
+                preset_type_registry::is_registered(&type_id),
                 "{}: bundled preset has presetMetadata but isn't in \
-                 effect_type_registry::REGISTRY — the picker won't \
+                 preset_type_registry — the picker won't \
                  show it. The REGISTRY LazyLock probably skipped the \
                  JSON dual-source loop.",
                 type_id.as_str(),

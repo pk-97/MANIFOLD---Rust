@@ -720,7 +720,7 @@ pub(crate) fn led_exit_path_label(
     led_exit_index: i32,
     master_effects: &[manifold_core::effects::PresetInstance],
 ) -> String {
-    use manifold_core::effect_type_registry;
+    use manifold_core::preset_type_registry;
     match led_exit_index {
         -1 => "After All FX".into(),
         0 => "Before FX".into(),
@@ -729,7 +729,7 @@ pub(crate) fn led_exit_path_label(
             if let Some(fx) = master_effects.get(idx) {
                 format!(
                     "After {}",
-                    effect_type_registry::display_name(fx.effect_type())
+                    preset_type_registry::display_name(fx.effect_type())
                 )
             } else {
                 "After All FX".into()

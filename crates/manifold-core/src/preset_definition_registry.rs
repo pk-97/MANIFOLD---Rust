@@ -436,13 +436,12 @@ pub fn all_of_kind(kind: PresetKind) -> Vec<PresetTypeId> {
         .collect()
 }
 
-// ─── Effect disk-source bucket + picker converter ───
+// ─── Effect disk-source bucket ───
 //
-// The `effect` submodule survives ONLY for the two genuinely per-kind
-// concerns: the JSON disk-source inventory bucket (so an effect preset never
-// lands in the generator store) and the picker-registration converter (which
-// returns the effect-specific `EffectTypeRegistration`). Resolution
-// accessors moved to module scope above.
+// The `effect` submodule survives ONLY for the JSON disk-source inventory
+// bucket (so an effect preset never lands in the generator store).
+// Resolution accessors moved to module scope above; the picker converter
+// moved to `crate::preset_type_registry`.
 
 pub mod effect {
     use super::*;
@@ -479,26 +478,12 @@ pub mod effect {
     }
 
     inventory::collect!(PresetSource);
-
-    /// Convert a parsed [`PresetMetadata`] into the picker-side
-    /// [`crate::effect_type_registry::EffectTypeRegistration`].
-    pub fn preset_metadata_to_type_registration(
-        meta: &PresetMetadata,
-    ) -> crate::effect_type_registry::EffectTypeRegistration {
-        crate::effect_type_registry::EffectTypeRegistration {
-            id: meta.id.clone(),
-            display_name: Box::leak(meta.display_name.clone().into_boxed_str()),
-            category: Box::leak(meta.category.clone().into_boxed_str()),
-            available: meta.available,
-        }
-    }
 }
 
-// ─── Generator disk-source bucket + picker converter ───
+// ─── Generator disk-source bucket ───
 //
-// Mirror of the `effect` submodule: the generator JSON disk-source bucket
-// and the generator-specific picker converter. Resolution accessors moved to
-// module scope above.
+// Mirror of the `effect` submodule: the generator JSON disk-source bucket.
+// The picker converter moved to `crate::preset_type_registry`.
 
 pub mod generator {
     use super::*;
@@ -527,18 +512,6 @@ pub mod generator {
     }
 
     inventory::collect!(PresetSource);
-
-    /// Convert a [`PresetMetadata`] into the picker-side
-    /// [`crate::generator_type_registry::GeneratorTypeRegistration`].
-    pub fn preset_metadata_to_type_registration(
-        meta: &PresetMetadata,
-    ) -> crate::generator_type_registry::GeneratorTypeRegistration {
-        crate::generator_type_registry::GeneratorTypeRegistration {
-            id: PresetTypeId::from_string(meta.id.as_str().to_string()),
-            display_name: leak_str(&meta.display_name),
-            available: meta.available,
-        }
-    }
 }
 
 // ─── Format helper (shared) ───

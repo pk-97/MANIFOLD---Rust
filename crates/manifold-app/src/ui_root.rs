@@ -1040,10 +1040,10 @@ impl UIRoot {
                 true
             }
             PanelAction::AddEffectClicked(tab) => {
-                use manifold_core::effect_type_registry;
+                use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
 
-                let available = effect_type_registry::available_effects();
+                let available = preset_type_registry::available_of_kind(PresetKind::Effect);
                 let mut items: Vec<(String, i32, String)> = available
                     .iter()
                     .enumerate()
@@ -1051,7 +1051,7 @@ impl UIRoot {
                         (
                             reg.display_name.to_string(),
                             i as i32,
-                            reg.category.to_string(),
+                            reg.category.unwrap_or("").to_string(),
                         )
                     })
                     .collect();
@@ -1061,7 +1061,7 @@ impl UIRoot {
                 let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
 
                 // Unique category names
-                let cat_names: Vec<String> = effect_type_registry::ALL_CATEGORIES
+                let cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
                     .iter()
                     .map(|&c| c.to_string())
                     .collect();
@@ -1085,10 +1085,10 @@ impl UIRoot {
                 true
             }
             PanelAction::GenTypeClicked(layer_id) => {
-                use manifold_core::generator_type_registry;
+                use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
 
-                let available = generator_type_registry::available_generators();
+                let available = preset_type_registry::available_of_kind(PresetKind::Generator);
                 let mut items: Vec<(String, i32)> = available
                     .iter()
                     .enumerate()

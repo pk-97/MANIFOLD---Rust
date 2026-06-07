@@ -249,8 +249,8 @@ fn generator_param_count_fluid_sim_3d() {
 #[test]
 fn generator_all_types_have_params() {
     // Every generator type (except None) must have at least 1 param defined
-    use manifold_core::generator_type_registry;
-    for reg in generator_type_registry::all() {
+    use manifold_core::{preset_def::PresetKind, preset_type_registry};
+    for reg in preset_type_registry::all_of_kind(PresetKind::Generator) {
         assert!(
             preset_definition_registry::get(&reg.id).param_count > 0,
             "{:?} has no param definitions",
@@ -262,8 +262,8 @@ fn generator_all_types_have_params() {
 #[test]
 fn generator_max_param_count() {
     // FluidSimulation3D has the most params (21)
-    use manifold_core::generator_type_registry;
-    let max = generator_type_registry::all()
+    use manifold_core::{preset_def::PresetKind, preset_type_registry};
+    let max = preset_type_registry::all_of_kind(PresetKind::Generator)
         .iter()
         .map(|reg| preset_definition_registry::get(&reg.id).param_count)
         .max()

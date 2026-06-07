@@ -2200,9 +2200,9 @@ pub(super) fn dispatch_inspector(
         }
 
         PanelAction::AddEffect(tab, effect_type_idx) => {
-            use manifold_core::effect_type_registry;
             use manifold_core::effects::PresetInstance;
-            let available = effect_type_registry::available_effects();
+            use manifold_core::{preset_def::PresetKind, preset_type_registry};
+            let available = preset_type_registry::available_of_kind(PresetKind::Effect);
             let Some(reg) = available.get(*effect_type_idx) else {
                 return DispatchResult::handled();
             };

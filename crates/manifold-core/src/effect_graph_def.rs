@@ -343,7 +343,7 @@ pub struct PresetMetadata {
     /// Display name shown on the effect card and in the picker.
     pub display_name: String,
     /// Picker category (`Spatial`, `Color`, `Stylize`, `Filmic`,
-    /// `Diagnostic` — see `effect_type_registry::ALL_CATEGORIES`).
+    /// `Diagnostic` — see `preset_type_registry::ALL_CATEGORIES`).
     pub category: String,
     /// OSC path prefix for external addressing. Conventionally
     /// snake_case (`"edge_stretch_by_color"`).

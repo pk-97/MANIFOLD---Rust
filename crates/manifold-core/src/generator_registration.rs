@@ -6,7 +6,7 @@
 use crate::effects::ParamDef;
 use crate::preset_definition_registry::StringParamDef;
 use crate::preset_type_id::PresetTypeId;
-use crate::generator_type_registry::GeneratorTypeRegistration;
+use crate::preset_type_registry::PresetTypeRegistration;
 use crate::preset_def::{PresetDef, PresetKind};
 
 /// Static parameter specification — all fields are `'static` so the struct
@@ -251,11 +251,13 @@ impl GeneratorMetadata {
         }
     }
 
-    /// Convert to the existing `GeneratorTypeRegistration` type.
-    pub fn to_type_registration(&self) -> GeneratorTypeRegistration {
-        GeneratorTypeRegistration {
+    /// Convert to the unified picker registration (kind = Generator).
+    pub fn to_type_registration(&self) -> PresetTypeRegistration {
+        PresetTypeRegistration {
             id: self.id.clone(),
             display_name: self.display_name,
+            category: None,
+            kind: crate::preset_def::PresetKind::Generator,
             available: self.available,
         }
     }
