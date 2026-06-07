@@ -358,9 +358,9 @@ fn node_tokens(doc: &str) -> Vec<String> {
 fn inject_into_guidance(doc: &str, shots: &[Shot]) -> String {
     let mut out = doc.to_string();
     for s in shots {
-        // Swap the token for the image path and append a caption naming the
-        // smart-preview encoding the image was rendered with.
-        let repl = format!("]({})\n\n*Smart preview: {}.*", s.fname, encoding_caption(s.encoding));
+        // Swap the token for the image path and append a short caption naming the
+        // smart-preview encoding. The key (above) defines what each one means.
+        let repl = format!("]({})\n\n*{}.*", s.fname, encoding_name(s.encoding));
         out = out.replace(&format!("](preview://{})", s.title), &repl);
     }
     out = out.replace("[[preview-legend]]", &build_legend(shots));
@@ -383,16 +383,15 @@ fn build_legend(shots: &[Shot]) -> String {
         PreviewEncoding::Depth,
     ];
     let mut out = String::from(
-        "Each image is rendered with the graph editor's smart preview, which maps the \
-         underlying data to color so it can be read at a glance. The encodings that appear \
-         in this report:\n",
+        "Each image uses the graph editor's smart preview, which maps the underlying data \
+         to color so it can be read at a glance. The encodings that appear in this report:\n",
     );
     for e in ORDER {
         if shots.iter().any(|s| s.encoding == e) {
             out.push_str(&format!("\n- **{}**: {}", encoding_name(e), encoding_legend(e)));
         }
     }
-    out.push('\n');
+    out.push_str("\n\nEach image below is labelled with the encoding it uses.\n");
     out
 }
 
@@ -477,20 +476,7 @@ fn encoding_label(e: PreviewEncoding) -> &'static str {
     }
 }
 
-/// One-line caption appended under each report image, naming its smart-preview
-/// mode and what the colors mean.
-fn encoding_caption(e: PreviewEncoding) -> &'static str {
-    match e {
-        PreviewEncoding::Color => "raw color, shown as displayed",
-        PreviewEncoding::ScalarLift => "brightness lift, dark detail raised so faint structure is visible",
-        PreviewEncoding::ScalarSigned => "signed scale, blue negative to red positive",
-        PreviewEncoding::VectorField => "flow wheel, hue is direction and brightness is speed",
-        PreviewEncoding::Normal => "normal map, surface directions as RGB",
-        PreviewEncoding::Depth => "depth ramp, near to far",
-    }
-}
-
-/// Short name of an encoding for the legend heading.
+/// Short name of an encoding for the legend heading and per-image caption.
 fn encoding_name(e: PreviewEncoding) -> &'static str {
     match e {
         PreviewEncoding::Color => "Raw color",
@@ -509,10 +495,10 @@ fn encoding_legend(e: PreviewEncoding) -> &'static str {
             "the image shown as displayed. The final output is tonemapped to match the live screen."
         }
         PreviewEncoding::ScalarLift => {
-            "the real channel values with dark areas raised by a fixed curve, so a low-amplitude field is visible instead of reading as black."
+            "the real channel values with dark areas raised by a fixed curve, so faint detail shows instead of reading as solid black."
         }
         PreviewEncoding::VectorField => {
-            "a velocity or force field drawn as color. The hue of each pixel gives the direction of its vector and the brightness gives the magnitude, so black is no motion."
+            "a flow or force drawn as color. The hue at each pixel gives the direction it points and the brightness gives the speed, so black is no motion."
         }
         PreviewEncoding::ScalarSigned => {
             "values that cross zero. Blue is negative, black is zero, red is positive."
