@@ -4,9 +4,14 @@
 
 ## How it works
 
-Oily Fluid is a generator: it starts from black and makes its own image with no input. Everything grows from one source, a little noise added each frame, which a fluid simulation stirs into drifting marbled patterns. It keeps two images in memory between frames: the color (the picture, which is all the past noise stirred together) and a flow field (a vector field, an arrow at every pixel giving the direction and speed of motion). Both start black.
+Oily Fluid is a generator: it starts from black and makes its own image with no input. It keeps two pictures in memory and carries them from one frame to the next:
 
-Each frame runs in four phases.
+- the **color** — what you see, and
+- the **flow** — an invisible field of arrows, one per pixel, saying which way that pixel is moving.
+
+Both start black. Each frame reads those two, builds new versions, and writes them back, so every frame is a small edit of the one before. The engine is that the two feed each other: the **color's shape decides where the flow swirls**, and the **flow then drags the color around**. Add a trickle of fresh noise so it never runs dry, and that two-way loop is the whole thing.
+
+A frame runs in four phases. What matters is what each one reads and what it hands to the next.
 
 ### Phase 1: Make the seed
 
@@ -16,31 +21,43 @@ Inject Noise generates a soft, cloud-like texture (simplex noise, a smooth gradi
 
 *Shown at full amplitude. In the graph this pattern is scaled down to the Noise value (around 0.01) before being added to the color each frame. That looks like almost nothing on its own, but because Feedback keeps about 99.99% of the color, the whisper accumulates over many frames into the full image.*
 
+**Hands to:** nothing yet. The scaled seed is set aside and only enters the picture at the very end of Phase 3.
+
 ### Phase 2: Build the flow
 
-This decides how the seed gets pushed.
+Phase 2 reads the **color from the previous frame** and turns it into the flow that will move the color this frame. This is the first half of the loop: the picture decides the motion.
 
-**Curl Forcing** finds where the stored color changes fastest, its edges (the gradient, by central differences), giving an arrow across each edge. It normalizes those to pure direction and rotates them 90°. A gradient turned 90° becomes a swirl (curl, a flow's rotation or vorticity), which makes the liquid circle shapes instead of spreading outward.
+- **Curl Forcing** reads that stored color and finds where it changes fastest, its edges (the gradient, by central differences), giving an arrow across each edge. It normalizes those to pure direction and rotates them 90°. A gradient turned 90° becomes a swirl (curl, a flow's rotation or vorticity), so the boundaries in the picture become the places the liquid circles.
 
 ![Curl Forcing](preview://Curl Forcing)
 
-**Smooth Velocity** softens the stored flow, shrinking it (box-filter downsample) then blurring it (separable Gaussian). A sharp flow tears the color into grain. A soft one moves it in slow thick sheets, the oily heaviness.
+- **Smooth Velocity** reads the **stored flow** and softens it, shrinking it (box-filter downsample) then blurring it (separable Gaussian). A sharp flow tears the color into grain; a soft one moves it in slow thick sheets, the oily heaviness.
 
 ![Smooth Velocity](preview://Smooth Velocity)
 
-**Advect Velocity** builds the new flow: the old flow drags itself forward (self-advection), eases off so it cannot blow up (damping), and adds the curl swirls. It is stored and used in Phase 3.
+- **Advect Velocity** combines them into the new flow: the smoothed flow drags itself forward along the stored flow (self-advection), eases off so it cannot blow up (damping), and adds in the swirls from Curl Forcing.
 
 ![Advect Velocity](preview://Advect Velocity)
 
+**Hands to:** the new flow is written back as next frame's flow, and passed straight into Phase 3 to move the color now.
+
 ### Phase 3: Stir the color
 
-Advect Color drags the stored color along the new flow (advection, the core semi-Lagrangian transport step), fades it slightly so old material dies off (decay, set by Feedback), and mixes in the new noise. The result is what you see, and the stored color the next frame reads. That drag-fade-refill cycle, every frame, is the marbling.
+With the new flow in hand, Phase 3 moves the color. Advect Color takes three inputs and combines them in order:
+
+1. the **stored color** from the previous frame,
+2. the **new flow from Phase 2**, used to drag every pixel of that color along the current (advection, the core semi-Lagrangian transport step),
+3. the **seed from Phase 1**, mixed in after a slight fade (decay, set by Feedback) that lets old color die off.
+
+This is the second half of the loop: the motion moves the picture. Drag, fade, refill, every frame — that is the marbling.
 
 ![Advect Color](preview://Advect Color)
 
+**Hands to:** this becomes the new color, written back to memory. It does three jobs at once. Phase 4 displays it. The next frame stores it. And next frame's Phase 2 reads it to build the next flow — which is what closes the loop: the color you just made shapes the motion that will move it.
+
 ### Phase 4: Show it
 
-Render Modes lights the flat color: it reads brightness as height, finds the surface tilt (normals, a normal map), and shines light across it for wet-looking relief. The Mode control picks the style:
+Phase 4 only reads the color and lights it; nothing here feeds back into the simulation. Render Modes reads the color's brightness as a height, finds the surface tilt (normals, a normal map), and shines light across it for wet-looking relief. The Mode control picks the style:
 
 - **Oil Slick** splits colors along the flow (flow-driven chromatic shift) for the petrol sheen.
 - **Flow Field** and **Lines** smear a texture along the current (line integral convolution, LIC).
@@ -49,7 +66,7 @@ Render Modes lights the flat color: it reads brightness as height, finds the sur
 
 ![Render Modes](preview://Render Modes)
 
-Then Color Grade applies the final brightness, hue, and contrast.
+Color Grade then applies the final brightness, hue, and contrast.
 
 ![Color Grade](preview://Color Grade)
 
