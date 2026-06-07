@@ -194,6 +194,12 @@ fn main() {
     // The capture list, in document order: the whole output first ("Output", a
     // clean token for the guidance doc), then each top-level group (or every
     // top-level node with --nodes).
+    // Read the authored guidance up front so any `preview://node:<id>` tokens
+    // (an inner node previewed directly, e.g. a seed pattern before its gain)
+    // get captured alongside the groups.
+    let guidance = guidance_sidecar(&path);
+    let node_targets = guidance.as_deref().map(node_tokens).unwrap_or_default();
+
     let mut captures = vec![Capture {
         title: "Output".to_string(),
         node_id: None,
@@ -214,6 +220,16 @@ fn main() {
                 description: node.group.as_ref().and_then(|g| g.description.clone()),
             });
         }
+    }
+    // Inner-node targets requested by the guidance doc, addressed by stable nodeId.
+    for id in &node_targets {
+        let nid = NodeId::new(id);
+        captures.push(Capture {
+            title: format!("node:{id}"),
+            node_id: Some(nid.clone()),
+            type_id: type_of.get(&nid).cloned(),
+            description: None,
+        });
     }
 
     // Warm the simulation up (no preview target) so feedback graphs develop.
@@ -285,10 +301,10 @@ fn main() {
     // Build the report. If an authored guidance doc sits next to the preset
     // (`<stem>.guidance.md`), inject the captured images into it at
     // `](preview://Title)` tokens; otherwise emit the auto-generated report.
-    let report = match guidance_sidecar(&path) {
+    let report = match &guidance {
         Some(doc) => {
             println!("using authored guidance: {}", sidecar_path(&path).display());
-            inject_into_guidance(&doc, &shots)
+            inject_into_guidance(doc, &shots)
         }
         None => auto_report(&preset_name, &path, &def, &shots),
     };
@@ -313,6 +329,27 @@ fn sidecar_path(preset: &Path) -> PathBuf {
 
 fn guidance_sidecar(preset: &Path) -> Option<String> {
     std::fs::read_to_string(sidecar_path(preset)).ok()
+}
+
+/// Collect the inner-node ids referenced by `](preview://node:<id>)` tokens in
+/// an authored guidance doc, so they can be captured directly (a group shows its
+/// output; this shows one chosen node inside it).
+fn node_tokens(doc: &str) -> Vec<String> {
+    const NEEDLE: &str = "preview://node:";
+    let mut ids: Vec<String> = Vec::new();
+    let mut rest = doc;
+    while let Some(i) = rest.find(NEEDLE) {
+        let after = &rest[i + NEEDLE.len()..];
+        let id: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        rest = &after[id.len()..];
+        if !id.is_empty() && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// Replace every `](preview://Title)` token in the authored doc with the real

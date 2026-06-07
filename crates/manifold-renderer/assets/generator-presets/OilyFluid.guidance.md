@@ -12,7 +12,9 @@ Each frame runs in four phases.
 
 Inject Noise generates a soft, cloud-like texture (simplex noise, a smooth gradient noise like Perlin, not harsh white-noise static). It is a moving slice through a 3D noise field, so it drifts and never quite repeats. This is the only new content the simulation ever gets. On a black start it is the whole image, and it keeps trickling in so the patterns never die out.
 
-![Inject Noise](preview://Inject Noise)
+![The noise seed at full amplitude, before it is scaled for injection](preview://node:noise_combine)
+
+*Shown at full amplitude. In the graph this pattern is scaled down to the Noise value (around 0.01) before being added to the color each frame. That looks like almost nothing on its own, but because Feedback keeps about 99.99% of the color, the whisper accumulates over many frames into the full image.*
 
 ### Phase 2: Build the flow
 
