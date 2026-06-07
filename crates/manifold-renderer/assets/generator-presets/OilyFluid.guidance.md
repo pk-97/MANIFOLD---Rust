@@ -78,4 +78,4 @@ Then Color Grade applies the final brightness, hue, and contrast.
 
 ![Output](preview://Output)
 
-*The final image at default parameters after a short warm-up. The flow field develops in a second or two, but the color amplitude builds more slowly, so a fresh start looks flat before the marbling deepens.*
+*The final composited image after warm-up. The flow field develops within a second or two, while the color amplitude and surface relief build over the following seconds, so a fresh start looks flat before the marbling deepens.*

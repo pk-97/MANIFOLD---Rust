@@ -39,6 +39,7 @@ struct Args {
     frames: u32,
     res: u32,
     nodes: bool,
+    params: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -46,20 +47,40 @@ fn parse_args() -> Args {
     let mut frames = 240u32;
     let mut res = 512u32;
     let mut nodes = false;
+    let mut params = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--frames" => frames = it.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
             "--res" => res = it.next().and_then(|v| v.parse().ok()).unwrap_or(res),
             "--nodes" => nodes = true,
+            "--params" => params = it.next().map(PathBuf::from),
             _ => preset = Some(a),
         }
     }
     let preset = preset.unwrap_or_else(|| {
-        eprintln!("usage: preview-report <preset> [--frames N] [--res W] [--nodes]");
+        eprintln!("usage: preview-report <preset> [--frames N] [--res W] [--nodes] [--params <id:value json>]");
         std::process::exit(2);
     });
-    Args { preset, frames, res, nodes }
+    Args { preset, frames, res, nodes, params }
+}
+
+/// Resolve the outer-card param values for the render context: each preset param
+/// in declared order, taking an override from the `{id: value}` JSON when given,
+/// else the param's own default. Returns the array and the count to mark live.
+fn build_params(def: &EffectGraphDef, overrides_path: Option<&Path>) -> ([f32; MAX_GEN_PARAMS], u32) {
+    let mut arr = [0.0f32; MAX_GEN_PARAMS];
+    let overrides: std::collections::HashMap<String, f32> = overrides_path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return (arr, 0);
+    };
+    for (i, spec) in meta.params.iter().enumerate().take(MAX_GEN_PARAMS) {
+        arr[i] = overrides.get(&spec.id).copied().unwrap_or(spec.default_value);
+    }
+    (arr, meta.params.len().min(MAX_GEN_PARAMS) as u32)
 }
 
 /// Resolve a preset arg to a JSON path: a direct path, or a name looked up in
@@ -88,7 +109,7 @@ fn slugify(s: &str) -> String {
         .to_string()
 }
 
-fn ctx_at(frame: u32, res: u32) -> PresetContext {
+fn ctx_at(frame: u32, res: u32, params: &[f32; MAX_GEN_PARAMS], param_count: u32) -> PresetContext {
     let dt = 1.0 / 60.0;
     PresetContext {
         time: frame as f64 * dt,
@@ -104,8 +125,8 @@ fn ctx_at(frame: u32, res: u32) -> PresetContext {
         frame_count: frame as i64,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
+        params: *params,
+        param_count,
     }
 }
 
@@ -142,6 +163,12 @@ fn main() {
         def.clone(), &registry, &device, res, res, SIM_FORMAT,
     )
     .expect("build generator");
+
+    let (param_arr, param_count) = build_params(&def, args.params.as_deref());
+    if param_count > 0 {
+        println!("applying {param_count} outer-card params{}",
+            if args.params.is_some() { " (with overrides)" } else { " (defaults)" });
+    }
 
     let encoder = PreviewEncoder::new(&device, OUT_FORMAT);
     let sim_out = RenderTarget::new(&device, res, res, SIM_FORMAT, "report-sim-out");
@@ -192,7 +219,7 @@ fn main() {
     // Warm the simulation up (no preview target) so feedback graphs develop.
     generator.set_preview_node(None);
     for f in 0..args.frames {
-        render_frame(&mut generator, &device, &sim_out, &ctx_at(f, res));
+        render_frame(&mut generator, &device, &sim_out, &ctx_at(f, res, &param_arr, param_count));
     }
     println!("warmed up {} frames at {res}x{res}", args.frames);
 
@@ -213,7 +240,7 @@ fn main() {
     for (i, cap) in captures.iter().enumerate() {
         frame += 1;
         generator.set_preview_node(cap.node_id.as_ref());
-        render_frame(&mut generator, &device, &sim_out, &ctx_at(frame, res));
+        render_frame(&mut generator, &device, &sim_out, &ctx_at(frame, res, &param_arr, param_count));
 
         let is_hero = cap.node_id.is_none();
         let (source_tex, encoding): (Option<&manifold_gpu::GpuTexture>, PreviewEncoding) = if is_hero
