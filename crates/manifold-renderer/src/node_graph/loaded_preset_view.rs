@@ -120,7 +120,9 @@ fn rebuild_view_cache(generation: u64) {
 
 fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
     let mut m: AHashMap<PresetTypeId, &'static LoadedPresetView> = AHashMap::default();
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(
+        manifold_core::preset_def::PresetKind::Effect,
+    ) {
         if let Some(view) = build_view(&type_id) {
             m.insert(type_id, Box::leak(Box::new(view)));
         }

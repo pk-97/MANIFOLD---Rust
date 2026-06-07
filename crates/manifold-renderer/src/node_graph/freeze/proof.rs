@@ -648,7 +648,7 @@ fn every_fused_preset_executes_one_frame() {
     let mut failures: Vec<String> = Vec::new();
     let mut fused_count = 0usize;
 
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         let preset_id = type_id.as_str().to_string();
         // WireframeDepthGraph carries a documented, fusion-unrelated pre-existing
         // bug (a 42×42 vs 256×256 same-size-blit panic in its depth path); it
@@ -770,9 +770,6 @@ fn fused_source_region_matches_unfused() {
 /// already proves the Source render/binding path end-to-end.)
 #[test]
 fn every_fused_generator_kernel_compiles() {
-    use crate::generators::bundled_generator_presets::{
-        bundled_generator_preset_json, bundled_generator_preset_type_ids,
-    };
     use std::panic::AssertUnwindSafe;
 
     let device = crate::test_device();
@@ -781,8 +778,8 @@ fn every_fused_generator_kernel_compiles() {
     let mut fused_generators = 0usize;
     let mut fused_kernels = 0usize;
 
-    for type_id in bundled_generator_preset_type_ids() {
-        let Some(json) = bundled_generator_preset_json(&type_id) else {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+        let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) else {
             continue;
         };
         let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else {
@@ -947,7 +944,7 @@ fn fusion_coverage_baseline() {
     let mut total_regions = 0usize;
     let mut detail: Vec<String> = Vec::new();
 
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
             continue;
         };
@@ -1020,7 +1017,6 @@ fn grouped_presets_fuse_through_entry_points() {
 fn every_fused_generator_executes_one_frame() {
     use super::install::fused_generator_def_by_id;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
-    use crate::generators::bundled_generator_presets::bundled_generator_preset_type_ids;
     use crate::preset_runtime::PresetRuntime;
     use std::panic::AssertUnwindSafe;
 
@@ -1047,7 +1043,7 @@ fn every_fused_generator_executes_one_frame() {
     let mut failures: Vec<String> = Vec::new();
     let mut fused_count = 0usize;
 
-    for type_id in bundled_generator_preset_type_ids() {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
         let Some(fused_def) = fused_generator_def_by_id(&type_id) else {
             continue;
         };
@@ -1195,14 +1191,13 @@ fn fused_generator_renders_like_unfused() {
 fn digitalplants_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
     use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
-    use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
     use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
 
-    let json = bundled_generator_preset_json(&manifold_core::PresetTypeId::new("DigitalPlants"))
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("DigitalPlants"))
         .expect("DigitalPlants preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
     // The whole point: DigitalPlants' GPU per-instance chain must fuse into a

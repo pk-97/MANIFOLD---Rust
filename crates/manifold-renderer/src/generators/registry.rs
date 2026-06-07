@@ -1,7 +1,6 @@
-use crate::generators::bundled_generator_presets::{
-    bundled_generator_preset_json, bundled_generator_preset_type_ids,
-};
+use crate::node_graph::{bundled_preset_json, bundled_preset_type_ids};
 use crate::preset_runtime::PresetRuntime;
+use manifold_core::preset_def::PresetKind;
 use crate::node_graph::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
@@ -27,15 +26,15 @@ impl GeneratorRegistry {
     /// Creates and immediately drops each generator — the compiled Metal pipeline
     /// binaries persist in the archive. Call at startup before `save_pipeline_archive()`.
     pub fn prewarm_all(&self, device: &GpuDevice) {
-        let json_count = bundled_generator_preset_type_ids().count();
+        let json_count = bundled_preset_type_ids(PresetKind::Generator).count();
         log::info!("Pre-warming {json_count} JSON generator pipelines...");
         // Pre-warm JSON-defined generators. We need a default
         // render resolution here — use a small placeholder; real sizes
         // come through on the first frame's `resize`. The pipelines
         // baked into each primitive cache at first dispatch regardless.
         let registry = PrimitiveRegistry::with_builtin();
-        for type_id in bundled_generator_preset_type_ids() {
-            if let Some(json) = bundled_generator_preset_json(&type_id)
+        for type_id in bundled_preset_type_ids(PresetKind::Generator) {
+            if let Some(json) = bundled_preset_json(&type_id)
                 && let Err(e) = PresetRuntime::from_json_str_with_device(
                     &json,
                     &registry,
@@ -112,7 +111,7 @@ impl GeneratorRegistry {
             graft_preset_metadata_from_bundle(&mut grafted, gen_type);
             (Some(grafted), true)
         } else {
-            let parsed = bundled_generator_preset_json(gen_type).and_then(|json| {
+            let parsed = bundled_preset_json(gen_type).and_then(|json| {
                 serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(&json).ok()
             });
             (parsed, false)
@@ -162,7 +161,7 @@ impl GeneratorRegistry {
             // real, transient editing state.) The canonical itself is the
             // effective def in the non-override case, so this only runs for
             // overrides.
-            if is_override && let Some(json) = bundled_generator_preset_json(gen_type) {
+            if is_override && let Some(json) = bundled_preset_json(gen_type) {
                 match PresetRuntime::from_json_str_with_device(
                     &json,
                     &registry,
@@ -191,7 +190,7 @@ impl GeneratorRegistry {
     /// "Add Generator" menu.
     pub fn known_type_ids(&self) -> Vec<manifold_core::PresetTypeId> {
         let mut out: Vec<manifold_core::PresetTypeId> =
-            bundled_generator_preset_type_ids().collect();
+            bundled_preset_type_ids(PresetKind::Generator).collect();
         out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         out
     }
@@ -217,7 +216,7 @@ pub fn graft_preset_metadata_from_bundle(
     if def.preset_metadata.is_some() {
         return;
     }
-    let Some(json) = bundled_generator_preset_json(gen_type) else {
+    let Some(json) = bundled_preset_json(gen_type) else {
         return;
     };
     let Ok(base) = serde_json::from_str::<manifold_core::effect_graph_def::EffectGraphDef>(&json)

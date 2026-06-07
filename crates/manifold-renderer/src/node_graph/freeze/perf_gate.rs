@@ -203,7 +203,7 @@ pub fn tune_all(device: &GpuDevice) {
     let dev = device.device_name();
     let mut map: AHashMap<PresetTypeId, bool> = AHashMap::default();
 
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         // Only effects that actually produce a fused view have anything to gate.
         let Some(fused_view) = fused_view_by_id(&type_id) else {
             continue;
@@ -242,15 +242,12 @@ pub fn tune_all(device: &GpuDevice) {
     let _ = VERDICTS.set(map);
 
     // ── Generators: same measure/decide, against the fused generator def. ──
-    use crate::generators::bundled_generator_presets::{
-        bundled_generator_preset_json, bundled_generator_preset_type_ids,
-    };
     let mut gen_map: AHashMap<PresetTypeId, bool> = AHashMap::default();
-    for type_id in bundled_generator_preset_type_ids() {
+    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
         let Some(fused_def) = fused_generator_def_by_id(&type_id) else {
             continue; // no fusable region
         };
-        let Some(json) = bundled_generator_preset_json(&type_id) else {
+        let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) else {
             continue;
         };
         let Ok(canonical) = serde_json::from_str::<EffectGraphDef>(&json) else {

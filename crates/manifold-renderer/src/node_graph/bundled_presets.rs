@@ -29,19 +29,25 @@ use ahash::AHashMap;
 use arc_swap::ArcSwap;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::preset_def::PresetKind;
 
-use crate::preset_loader::{EFFECT_CATALOG, catalog_generation};
+use crate::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, catalog_generation};
 
-/// Raw JSON for the bundled preset of `effect_type`, or `None` if no
-/// preset has that type id.
+/// Raw JSON for the bundled preset of `preset_type` (either kind), or
+/// `None` if no preset has that type id.
 ///
-/// The string is the current on-disk file verbatim. Hot-reload (step 10):
-/// the catalog lives behind an [`ArcSwap`], so this returns an owned
-/// `Arc<str>` cloned from the current snapshot rather than a `&'static`
-/// borrow — a concurrent reload can swap the snapshot without invalidating
-/// a value the caller already holds.
-pub fn bundled_preset_json(effect_type: &PresetTypeId) -> Option<Arc<str>> {
-    EFFECT_CATALOG.load().json(effect_type.as_str())
+/// Kind-agnostic: effect and generator ids are globally disjoint
+/// (verified), so this checks the effect catalog then the generator one
+/// and returns the single match. The string is the current on-disk file
+/// verbatim. Hot-reload (step 10): the catalogs live behind [`ArcSwap`], so
+/// this returns an owned `Arc<str>` cloned from the current snapshot rather
+/// than a `&'static` borrow — a concurrent reload can swap the snapshot
+/// without invalidating a value the caller already holds.
+pub fn bundled_preset_json(preset_type: &PresetTypeId) -> Option<Arc<str>> {
+    EFFECT_CATALOG
+        .load()
+        .json(preset_type.as_str())
+        .or_else(|| GENERATOR_CATALOG.load().json(preset_type.as_str()))
 }
 
 /// Generation-stamped parsed-def cache. Keyed `&'static str` → leaked
@@ -77,7 +83,13 @@ fn rebuild_def_cache(generation: u64) {
     // (finite) shipping preset count × the number of reloads in a session —
     // authoring-time, never on the perform path.
     let mut m: AHashMap<&'static str, &'static EffectGraphDef> = AHashMap::default();
-    for (id, json) in EFFECT_CATALOG.load().entries() {
+    // Parse BOTH catalogs into the one cache — ids are globally disjoint, so
+    // a generator gets the same leaked-`&'static` parsed-def path effects
+    // already have (the cluster-#4 DefCache parity). The leak is bounded by
+    // the (finite) shipping preset count × reloads per session.
+    let effect_catalog = EFFECT_CATALOG.load();
+    let generator_catalog = GENERATOR_CATALOG.load();
+    for (id, json) in effect_catalog.entries().chain(generator_catalog.entries()) {
         let def: EffectGraphDef = serde_json::from_str(&json)
             .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
         let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
@@ -90,24 +102,28 @@ fn rebuild_def_cache(generation: u64) {
         .store(generation, std::sync::atomic::Ordering::Release);
 }
 
-/// Parsed [`EffectGraphDef`] for the bundled preset of `effect_type`,
-/// or `None` if no preset is registered.
+/// Parsed [`EffectGraphDef`] for the bundled preset of `preset_type`
+/// (either kind), or `None` if no preset is registered.
 ///
 /// First call (and every call after a hot-reload generation bump) parses
-/// the current catalog snapshot into a leaked map; subsequent calls return
-/// a borrowed reference into that map. At rest, parsing happens once.
+/// both catalog snapshots into a leaked map; subsequent calls return a
+/// borrowed reference into that map. At rest, parsing happens once.
 ///
-/// Parse failures panic with the effect type id and underlying error
-/// — these come from files we author, so any failure is a developer
-/// mistake to fix, not a runtime condition to handle.
-pub fn bundled_preset_def(effect_type: &PresetTypeId) -> Option<&'static EffectGraphDef> {
-    parsed_def_map().get(effect_type.as_str()).copied()
+/// Parse failures panic with the type id and underlying error — these come
+/// from files we author, so any failure is a developer mistake to fix, not
+/// a runtime condition to handle.
+pub fn bundled_preset_def(preset_type: &PresetTypeId) -> Option<&'static EffectGraphDef> {
+    parsed_def_map().get(preset_type.as_str()).copied()
 }
 
-/// Every [`PresetTypeId`] that has a bundled preset registered (current
-/// snapshot).
-pub fn bundled_preset_type_ids() -> impl Iterator<Item = PresetTypeId> {
-    EFFECT_CATALOG
+/// Every [`PresetTypeId`] of `kind` that has a bundled preset registered
+/// (current snapshot of that kind's catalog).
+pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetTypeId> {
+    let catalog = match kind {
+        PresetKind::Effect => &EFFECT_CATALOG,
+        PresetKind::Generator => &GENERATOR_CATALOG,
+    };
+    catalog
         .load()
         .type_ids()
         .map(|id| PresetTypeId::from_string(id.to_string()))
@@ -165,7 +181,7 @@ mod tests {
     #[test]
     fn every_bundled_preset_appears_in_effect_type_registry() {
         use manifold_core::preset_type_registry;
-        for type_id in bundled_preset_type_ids() {
+        for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let Some(def) = bundled_preset_def(&type_id) else {
                 continue;
             };
@@ -186,7 +202,7 @@ mod tests {
     #[test]
     fn every_bundled_preset_loads_validates_and_compiles() {
         let registry = PrimitiveRegistry::with_builtin();
-        for type_id in bundled_preset_type_ids() {
+        for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let def = bundled_preset_def(&type_id)
                 .expect("registered preset must have a parsed def")
                 .clone();
@@ -230,7 +246,7 @@ mod tests {
         use crate::node_graph::graph::Graph;
 
         let registry = PrimitiveRegistry::with_builtin();
-        for type_id in bundled_preset_type_ids() {
+        for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let def = bundled_preset_def(&type_id).expect("registered");
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
@@ -291,7 +307,7 @@ mod tests {
 
         let mut failures: Vec<String> = Vec::new();
 
-        for type_id in bundled_preset_type_ids() {
+        for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let preset_id = type_id.as_str().to_string();
             let Some(def) = bundled_preset_def(&type_id) else {
                 continue;

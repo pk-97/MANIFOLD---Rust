@@ -22,9 +22,6 @@
 //!   message names the generator so you can grep its WGSL.
 
 use half::f16;
-use manifold_renderer::generators::bundled_generator_presets::{
-    bundled_generator_preset_json, bundled_generator_preset_type_ids,
-};
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
@@ -44,8 +41,8 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
     let registry = PrimitiveRegistry::with_builtin();
 
     let mut count = 0_usize;
-    for id in bundled_generator_preset_type_ids() {
-        let Some(json) = bundled_generator_preset_json(&id) else {
+    for id in manifold_renderer::node_graph::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+        let Some(json) = manifold_renderer::node_graph::bundled_preset_json(&id) else {
             continue;
         };
         let mut generator = PresetRuntime::from_json_str_with_device(

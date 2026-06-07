@@ -322,8 +322,7 @@ pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGr
 /// modulation bindings can't be retargeted (stranded) — either way it renders
 /// unfused, always correct. Mirrors [`fused_view_by_id`].
 pub fn fused_generator_def_by_id(id: &PresetTypeId) -> Option<&'static EffectGraphDef> {
-    use crate::generators::bundled_generator_presets::bundled_generator_preset_json;
-    let json = bundled_generator_preset_json(id)?;
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
     let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
     fused_generator_def_for(&def)
 }

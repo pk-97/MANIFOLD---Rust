@@ -1468,18 +1468,15 @@ mod audit {
     fn audit_all_presets() {
         let registry = PrimitiveRegistry::with_builtin();
         eprintln!("=== EFFECT PRESETS ===");
-        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids() {
+        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
             if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
                 let json = serde_json::to_string(view.canonical_def).unwrap();
                 audit_one(type_id.as_str(), &json, &registry);
             }
         }
         eprintln!("=== GENERATOR PRESETS ===");
-        use crate::generators::bundled_generator_presets::{
-            bundled_generator_preset_json, bundled_generator_preset_type_ids,
-        };
-        for type_id in bundled_generator_preset_type_ids() {
-            if let Some(json) = bundled_generator_preset_json(&type_id) {
+        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+            if let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) {
                 audit_one(type_id.as_str(), &json, &registry);
             }
         }

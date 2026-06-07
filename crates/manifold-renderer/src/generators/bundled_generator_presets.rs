@@ -9,9 +9,14 @@
 //! The [`GeneratorRegistry`](crate::generators::registry::GeneratorRegistry)
 //! consults this table when creating a generator: if an entry matches
 //! the requested type id, the registry constructs a
-//! [`JsonGraphGenerator`](crate::generators::json_graph_generator::JsonGraphGenerator)
-//! from the JSON; otherwise it falls back to the `inventory::submit!`
-//! Rust factories.
+//! [`PresetRuntime`](crate::preset_runtime::PresetRuntime) from the JSON;
+//! otherwise it falls back to the `inventory::submit!` Rust factories.
+//!
+//! The raw-JSON / def / type-id lookups live in the kind-agnostic
+//! [`crate::node_graph::bundled_presets`] (fork #3 — one loader for both
+//! kinds). This module keeps only the generator disk-bucket metadata loader
+//! plus its `PresetSource` submission (the legit disk-source split) and the
+//! generator-sweep tests.
 //!
 //! ## Add a new generator preset
 //!
@@ -20,7 +25,6 @@
 //!    boundary nodes (see [`crate::generators::json_graph_generator`]).
 //! 2. Relaunch — the loader scans it; no rebuild required.
 
-use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use crate::preset_loader::GENERATOR_CATALOG;
@@ -55,26 +59,10 @@ inventory::submit! {
     }
 }
 
-/// Raw embedded JSON for the bundled generator preset of
-/// `generator_type`, or `None` if no preset is registered for that id.
-pub fn bundled_generator_preset_json(
-    generator_type: &PresetTypeId,
-) -> Option<std::sync::Arc<str>> {
-    GENERATOR_CATALOG.load().json(generator_type.as_str())
-}
-
-/// Every `PresetTypeId` that has a bundled JSON preset registered.
-/// Iterated by the GeneratorRegistry at startup to discover all
-/// JSON-defined generators alongside the inventory-registered Rust
-/// generators.
-pub fn bundled_generator_preset_type_ids() -> impl Iterator<Item = PresetTypeId> {
-    GENERATOR_CATALOG
-        .load()
-        .type_ids()
-        .map(|id| PresetTypeId::from_string(id.to_string()))
-        .collect::<Vec<_>>()
-        .into_iter()
-}
+// `bundled_generator_preset_json` and `bundled_generator_preset_type_ids`
+// folded into the kind-agnostic `node_graph::bundled_presets`
+// (`bundled_preset_json` / `bundled_preset_type_ids(PresetKind::Generator)`)
+// — fork #3.
 
 #[cfg(test)]
 mod tests {
@@ -88,9 +76,11 @@ mod tests {
     /// and break the editor's cog button on those layers.
     #[test]
     fn bundled_presets_include_shipping_generators() {
-        let ids: Vec<String> = bundled_generator_preset_type_ids()
-            .map(|t| t.as_str().to_string())
-            .collect();
+        let ids: Vec<String> = crate::node_graph::bundled_preset_type_ids(
+            manifold_core::preset_def::PresetKind::Generator,
+        )
+        .map(|t| t.as_str().to_string())
+        .collect();
         assert!(
             ids.contains(&"TrivialPassthrough".to_string()),
             "TrivialPassthrough preset must ship — got {ids:?}",

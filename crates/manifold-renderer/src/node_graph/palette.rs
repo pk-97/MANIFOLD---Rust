@@ -257,7 +257,9 @@ mod tests {
         // Previously only Mirror + SoftFocusGraph had catalog graphs;
         // the bundled-preset registry now covers every ChainSpec, so
         // per-card divergence works on every effect.
-        for type_id in crate::node_graph::bundled_preset_type_ids() {
+        for type_id in
+            crate::node_graph::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect)
+        {
             assert!(
                 catalog_graph_def_for(&type_id).is_some(),
                 "missing catalog default for shipping effect {}",

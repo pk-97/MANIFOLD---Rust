@@ -904,7 +904,7 @@ impl Application {
                             .map(|(_, l)| l.generator_type().clone())
                             .filter(|gt| !gt.is_none())
                             .and_then(|gt| {
-                                manifold_renderer::generators::bundled_generator_presets::bundled_generator_preset_json(&gt)
+                                manifold_renderer::node_graph::bundled_preset_json(&gt)
                             })
                             .and_then(|json| serde_json::from_str(&json).ok());
                     }
