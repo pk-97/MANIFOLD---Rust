@@ -402,7 +402,7 @@
       "handle": "Curl Forcing",
       "nodeId": "curl_forcing",
       "group": {
-        "description": "Reads the colour image, finds its edges, and turns them into a sideways push that makes the fluid swirl around shapes instead of spreading out.",
+        "description": "Reads the colour and measures where it changes fastest, its edges (the gradient, found by central differences), then rotates those directions a quarter turn (90 degrees). A gradient turned 90 degrees becomes a swirl (curl, a flow's rotation), which makes the liquid circle shapes instead of spreading outward. The Curl knob sets the strength.",
         "interface": {
           "inputs": [
             {
@@ -579,7 +579,7 @@
       "handle": "Smooth Velocity",
       "nodeId": "smooth_velocity",
       "group": {
-        "description": "Shrinks and blurs the flow field so the motion happens in slow broad sheets rather than sharp grain. This is where the oily heaviness comes from.",
+        "description": "Shrinks the flow field (a box-filter downsample) then blurs it (a separable Gaussian blur). A sharp, detailed flow would tear the colour into grain. A soft, broad flow moves it in slow thick sheets, which is where the oily heaviness comes from.",
         "interface": {
           "inputs": [
             {
@@ -690,7 +690,7 @@
       "handle": "Advect Velocity",
       "nodeId": "advect_velocity",
       "group": {
-        "description": "Builds the next frame's flow. The flow carries itself forward, eases off so it cannot build up forever, and takes in the swirls from Curl Forcing.",
+        "description": "Builds the next frame's flow. The stored flow drags itself forward (self-advection, the way momentum carries water), eases off slightly so it cannot build up forever (damping), and takes in the swirls from Curl Forcing.",
         "interface": {
           "inputs": [
             {
@@ -839,7 +839,7 @@
       "handle": "Inject Noise",
       "nodeId": "inject_noise",
       "group": {
-        "description": "Generates a small amount of slowly shifting noise each frame. This is the only fresh material the simulation gets, the seed every pattern grows from.",
+        "description": "Generates a small amount of slowly shifting random texture (simplex noise, a smooth gradient noise in the Perlin family). It is a moving slice through a 3D noise field, so it drifts and never quite repeats. This is the only fresh content the simulation ever gets, the seed every pattern grows from.",
         "interface": {
           "inputs": [
             {
@@ -1054,7 +1054,7 @@
       "handle": "Advect Color",
       "nodeId": "advect_color",
       "group": {
-        "description": "Drags the colour along the new flow, fades it slightly so old colour dies off, and mixes in the fresh noise. Repeated every frame, this is the marbling.",
+        "description": "Drags the stored colour along the new flow (advection, the core semi-Lagrangian transport step), fades the result slightly so old colour dies off (decay, set by Feedback), and mixes in the fresh noise. Repeated every frame, this drag-fade-refill cycle is the marbling.",
         "interface": {
           "inputs": [
             {
@@ -1203,7 +1203,7 @@
       "handle": "Render Modes",
       "nodeId": "render_modes",
       "group": {
-        "description": "Turns the flat colour into a lit wet-looking surface, then shows it one of five ways set by the Mode knob: oil slick, flow lines, lit relief, or a glossy material.",
+        "description": "Turns the flat colour into a lit surface: it reads each pixel's brightness as a height, finds the slope (a normal map), and shines light across it for a raised, wet-looking relief. The Mode knob picks the final look (oil slick, flow lines, lit relief, or a glossy material).",
         "interface": {
           "inputs": [
             {
@@ -1892,7 +1892,7 @@
       "handle": "Color Grade",
       "nodeId": "color_grade",
       "group": {
-        "description": "The final look pass. Brightness, saturation, hue, and contrast on the finished image.",
+        "description": "The final look pass. Brightness, saturation, hue, and contrast applied to the finished image.",
         "interface": {
           "inputs": [
             {

@@ -164,10 +164,11 @@ fn main() {
         .map(|(group, producer, _port)| (group, producer))
         .collect();
 
-    // The capture list, in document order: the whole output first, then each
-    // top-level group (or every top-level node with --nodes).
+    // The capture list, in document order: the whole output first ("Output", a
+    // clean token for the guidance doc), then each top-level group (or every
+    // top-level node with --nodes).
     let mut captures = vec![Capture {
-        title: format!("{preset_name} — Output"),
+        title: "Output".to_string(),
         node_id: None,
         type_id: None,
         description: None,
@@ -197,68 +198,133 @@ fn main() {
 
     let out_dir = PathBuf::from("report").join(slugify(&preset_name));
     std::fs::create_dir_all(&out_dir).expect("create out dir");
-
-    let mut report = String::new();
-    report.push_str(&format!("# {preset_name} — node guidance report\n\n"));
-    report.push_str(&format!(
-        "Auto-generated from `{}`. Each image is the live output of that group, \
-         shown with the same smart-preview encoding the graph editor uses.\n\n",
-        path.file_name().unwrap().to_string_lossy()
-    ));
-    if let Some(desc) = &def.description {
-        report.push_str(&format!("> {}\n\n", first_sentence(desc)));
+    // Clear stale PNGs so a rename or regroup doesn't leave orphans behind.
+    if let Ok(entries) = std::fs::read_dir(&out_dir) {
+        for e in entries.flatten() {
+            if e.path().extension().and_then(|x| x.to_str()) == Some("png") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
 
+    // Capture each image; collect what the report layout needs.
+    let mut shots: Vec<Shot> = Vec::new();
     let mut frame = args.frames;
     for (i, cap) in captures.iter().enumerate() {
         frame += 1;
         generator.set_preview_node(cap.node_id.as_ref());
         render_frame(&mut generator, &device, &sim_out, &ctx_at(frame, res));
 
-        // For the whole-output capture there is no preview node: encode the
-        // generator's own final output texture (raw colour). Otherwise encode
-        // the captured node texture with its semantic encoding.
-        let (source_tex, encoding): (Option<&manifold_gpu::GpuTexture>, PreviewEncoding) =
-            if cap.node_id.is_none() {
-                // Tonemap the generator's HDR output on its own command buffer,
-                // then encode the SDR result raw — this is the on-screen image.
-                let mut native = device.create_encoder("report-tonemap");
-                {
-                    let mut gpu = GpuEncoder::new(&mut native, &device);
-                    tonemap.apply(&mut gpu, &sim_out.texture, &TonemapSettings::default());
-                }
-                native.commit_and_wait_completed();
-                (Some(&tonemap.output.texture), PreviewEncoding::Color)
-            } else {
-                (generator.preview_texture(), generator.preview_encoding())
-            };
+        let is_hero = cap.node_id.is_none();
+        let (source_tex, encoding): (Option<&manifold_gpu::GpuTexture>, PreviewEncoding) = if is_hero
+        {
+            // Tonemap the HDR output on its own command buffer — the on-screen image.
+            let mut native = device.create_encoder("report-tonemap");
+            {
+                let mut gpu = GpuEncoder::new(&mut native, &device);
+                tonemap.apply(&mut gpu, &sim_out.texture, &TonemapSettings::default());
+            }
+            native.commit_and_wait_completed();
+            (Some(&tonemap.output.texture), PreviewEncoding::Color)
+        } else {
+            (generator.preview_texture(), generator.preview_encoding())
+        };
 
         let Some(source_tex) = source_tex else {
             println!("  {} — no image output, skipped", cap.title);
             continue;
         };
 
-        let pixels = encode_and_read(&device, &encoder, source_tex, &color, encoding, res);
+        // A raw-colour intermediate (not the hero) reads near-black for a
+        // low-amplitude sim, so lift it with the same asinh curve the flow
+        // encodings use. The hero stays tonemapped to match the screen.
+        let render_encoding = if !is_hero && encoding == PreviewEncoding::Color {
+            PreviewEncoding::ScalarLift
+        } else {
+            encoding
+        };
+
+        let pixels = encode_and_read(&device, &encoder, source_tex, &color, render_encoding, res);
         let fname = format!("{:02}_{}.png", i, slugify(&cap.title));
         write_png(&out_dir.join(&fname), res, res, &pixels);
 
-        report.push_str(&format!("## {}\n\n", cap.title));
-        report.push_str(&format!("![{}]({})\n\n", cap.title, fname));
-        report.push_str(&format!("*Encoding: {}*\n\n", encoding_label(encoding)));
-        // Prefer the group's own authored purpose; fall back to the producer
-        // atom's tooltip (right node, wrong altitude, but better than nothing).
         let blurb = cap.description.clone().or_else(|| {
             cap.type_id.as_deref().and_then(descriptor_for).map(|d| d.summary.to_string())
         });
-        if let Some(blurb) = blurb {
-            report.push_str(&format!("{blurb}\n\n"));
-        }
-        println!("  captured {} ({})", cap.title, encoding_label(encoding));
+        shots.push(Shot { title: cap.title.clone(), fname, encoding: render_encoding, blurb });
+        println!("  captured {} ({})", cap.title, encoding_label(render_encoding));
     }
 
+    // Build the report. If an authored guidance doc sits next to the preset
+    // (`<stem>.guidance.md`), inject the captured images into it at
+    // `](preview://Title)` tokens; otherwise emit the auto-generated report.
+    let report = match guidance_sidecar(&path) {
+        Some(doc) => {
+            println!("using authored guidance: {}", sidecar_path(&path).display());
+            inject_into_guidance(&doc, &shots)
+        }
+        None => auto_report(&preset_name, &path, &def, &shots),
+    };
     let report_path = out_dir.join("report.md");
     std::fs::write(&report_path, report).expect("write report");
     println!("\nwrote {}", report_path.display());
+}
+
+/// One captured group image and the metadata the report needs to place it.
+struct Shot {
+    title: String,
+    fname: String,
+    encoding: PreviewEncoding,
+    blurb: Option<String>,
+}
+
+/// `<dir>/<stem>.guidance.md` next to the preset JSON.
+fn sidecar_path(preset: &Path) -> PathBuf {
+    let stem = preset.file_stem().unwrap_or_default().to_string_lossy();
+    preset.with_file_name(format!("{stem}.guidance.md"))
+}
+
+fn guidance_sidecar(preset: &Path) -> Option<String> {
+    std::fs::read_to_string(sidecar_path(preset)).ok()
+}
+
+/// Replace every `](preview://Title)` token in the authored doc with the real
+/// image path. Tokens with no matching capture are left untouched (visible as a
+/// broken link, so the gap is obvious) and reported.
+fn inject_into_guidance(doc: &str, shots: &[Shot]) -> String {
+    let mut out = doc.to_string();
+    for s in shots {
+        out = out.replace(&format!("](preview://{})", s.title), &format!("]({})", s.fname));
+    }
+    if let Some(idx) = out.find("](preview://") {
+        let tail = &out[idx..(idx + 60).min(out.len())];
+        eprintln!("warning: unmatched guidance image token near `{tail}`");
+    }
+    out
+}
+
+/// Fallback report for presets with no authored guidance doc: one section per
+/// captured group, image plus its description.
+fn auto_report(preset_name: &str, path: &Path, def: &EffectGraphDef, shots: &[Shot]) -> String {
+    let mut report = String::new();
+    report.push_str(&format!("# {preset_name} — node guidance report\n\n"));
+    report.push_str(&format!(
+        "Auto-generated from `{}`. Each image is the live output of that group, \
+         shown with the smart-preview encoding the graph editor uses.\n\n",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    if let Some(desc) = &def.description {
+        report.push_str(&format!("> {}\n\n", first_sentence(desc)));
+    }
+    for s in shots {
+        report.push_str(&format!("## {}\n\n", s.title));
+        report.push_str(&format!("![{}]({})\n\n", s.title, s.fname));
+        report.push_str(&format!("*Encoding: {}*\n\n", encoding_label(s.encoding)));
+        if let Some(blurb) = &s.blurb {
+            report.push_str(&format!("{blurb}\n\n"));
+        }
+    }
+    report
 }
 
 /// Render one generator frame onto `target`, committing and waiting so the
