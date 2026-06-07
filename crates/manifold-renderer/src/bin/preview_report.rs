@@ -358,12 +358,41 @@ fn node_tokens(doc: &str) -> Vec<String> {
 fn inject_into_guidance(doc: &str, shots: &[Shot]) -> String {
     let mut out = doc.to_string();
     for s in shots {
-        out = out.replace(&format!("](preview://{})", s.title), &format!("]({})", s.fname));
+        // Swap the token for the image path and append a caption naming the
+        // smart-preview encoding the image was rendered with.
+        let repl = format!("]({})\n\n*Smart preview: {}.*", s.fname, encoding_caption(s.encoding));
+        out = out.replace(&format!("](preview://{})", s.title), &repl);
     }
+    out = out.replace("[[preview-legend]]", &build_legend(shots));
     if let Some(idx) = out.find("](preview://") {
         let tail = &out[idx..(idx + 60).min(out.len())];
         eprintln!("warning: unmatched guidance image token near `{tail}`");
     }
+    out
+}
+
+/// A legend covering the smart-preview encodings actually used in this report,
+/// substituted for a `[[preview-legend]]` token in the guidance doc.
+fn build_legend(shots: &[Shot]) -> String {
+    const ORDER: [PreviewEncoding; 6] = [
+        PreviewEncoding::Color,
+        PreviewEncoding::ScalarLift,
+        PreviewEncoding::ScalarSigned,
+        PreviewEncoding::VectorField,
+        PreviewEncoding::Normal,
+        PreviewEncoding::Depth,
+    ];
+    let mut out = String::from(
+        "Each image is rendered with the graph editor's smart preview, which maps the \
+         underlying data to color so it can be read at a glance. The encodings that appear \
+         in this report:\n",
+    );
+    for e in ORDER {
+        if shots.iter().any(|s| s.encoding == e) {
+            out.push_str(&format!("\n- **{}**: {}", encoding_name(e), encoding_legend(e)));
+        }
+    }
+    out.push('\n');
     out
 }
 
@@ -445,6 +474,53 @@ fn encoding_label(e: PreviewEncoding) -> &'static str {
         PreviewEncoding::VectorField => "vector field (flow wheel)",
         PreviewEncoding::Normal => "normal map",
         PreviewEncoding::Depth => "depth ramp",
+    }
+}
+
+/// One-line caption appended under each report image, naming its smart-preview
+/// mode and what the colors mean.
+fn encoding_caption(e: PreviewEncoding) -> &'static str {
+    match e {
+        PreviewEncoding::Color => "raw color, shown as displayed",
+        PreviewEncoding::ScalarLift => "brightness lift, dark detail raised so faint structure is visible",
+        PreviewEncoding::ScalarSigned => "signed scale, blue negative to red positive",
+        PreviewEncoding::VectorField => "flow wheel, hue is direction and brightness is speed",
+        PreviewEncoding::Normal => "normal map, surface directions as RGB",
+        PreviewEncoding::Depth => "depth ramp, near to far",
+    }
+}
+
+/// Short name of an encoding for the legend heading.
+fn encoding_name(e: PreviewEncoding) -> &'static str {
+    match e {
+        PreviewEncoding::Color => "Raw color",
+        PreviewEncoding::ScalarLift => "Brightness lift",
+        PreviewEncoding::ScalarSigned => "Signed scale",
+        PreviewEncoding::VectorField => "Flow wheel",
+        PreviewEncoding::Normal => "Normal map",
+        PreviewEncoding::Depth => "Depth ramp",
+    }
+}
+
+/// Full legend description of what an encoding's colors mean.
+fn encoding_legend(e: PreviewEncoding) -> &'static str {
+    match e {
+        PreviewEncoding::Color => {
+            "the image shown as displayed. The final output is tonemapped to match the live screen."
+        }
+        PreviewEncoding::ScalarLift => {
+            "the real channel values with dark areas raised by a fixed curve, so a low-amplitude field is visible instead of reading as black."
+        }
+        PreviewEncoding::VectorField => {
+            "a velocity or force field drawn as color. The hue of each pixel gives the direction of its vector and the brightness gives the magnitude, so black is no motion."
+        }
+        PreviewEncoding::ScalarSigned => {
+            "values that cross zero. Blue is negative, black is zero, red is positive."
+        }
+        PreviewEncoding::Normal => {
+            "surface directions encoded as a standard blue-dominant normal map."
+        }
+        PreviewEncoding::Depth => "distance from near to far on a perceptual color ramp.",
     }
 }
 

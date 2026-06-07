@@ -4,73 +4,77 @@
 
 ## How it works
 
-Oily Fluid builds its own picture from nothing. There is no input clip — it starts on a black screen and grows the image itself, a little more every frame.
+Oily Fluid is a generator. It takes no input and produces its own image, starting from a black frame and developing the picture over time.
 
-To do that it keeps two things and updates them each frame:
+The simulation maintains two buffers and updates them every frame:
 
-- the **color** — the picture you actually see, and
-- the **flow** — a hidden map of which way each part of the picture is being pushed.
+- the **color**, the visible image, and
+- the **flow**, a velocity field that stores a direction and speed for every pixel.
 
-Before the first frame, both are black: no picture, no motion. Every frame then runs the same four steps. The clearest way to read them is to start from that black screen and watch the picture appear.
+Both begin black, with no image and no motion. Each frame runs four phases in order. The phases are easiest to follow starting from the first frame, where both buffers are empty, and then watching the image accumulate.
 
-### Phase 1 — Make the seed
+### Reading the images
 
-Inject Noise lays down a soft, cloudy pattern (simplex noise, the smooth Perlin kind, not TV static), drifting slowly because it is a moving slice through a 3D noise field. It then scales this way down, to the Noise amount of about 0.01, so what actually gets handed on is a faint whisper.
+[[preview-legend]]
 
-On the very first frame, when everything is black, this whisper is the only thing on the screen. It is the raw material the whole image is built from, and Phase 3 is where it gets added in.
+### Phase 1: Make the seed
 
-![The noise seed at full amplitude, before it is scaled for injection](preview://node:noise_combine)
+Inject Noise produces a smooth, organic pattern (simplex noise, a gradient noise related to Perlin noise rather than uncorrelated static). The pattern evolves slowly because the node samples a moving plane through a 3D noise volume. The result is then scaled by the Noise parameter, roughly 0.01, so the amount passed on each frame is very small.
 
-*Shown at full amplitude. In the graph it is scaled down to a whisper before use. The image is built from many of those whispers stacked over time, not one bright noise field.*
+On the first frame the buffers are black, so this scaled pattern is the only signal present. It is the source of all image content, and it is added to the color in Phase 3.
 
-### Phase 2 — Build the flow
+![The noise pattern at full amplitude, before it is scaled for injection](preview://node:noise_combine)
 
-Now the simulation works out how to push the color around. It looks at **the color as it currently stands** — on the first frame that is still almost black, on every later frame it is the picture built so far — and turns it into a flow.
+*Shown at full amplitude. In the graph the pattern is scaled to roughly 0.01 before use. The image is built from many of these small contributions accumulated over time, not from one strong noise field.*
 
-- **Curl Forcing** finds the edges in that color, the lines where one shade meets another, and turns each into a sideways push, rotated a quarter turn so the liquid circles those edges instead of spreading off them (this rotation is the curl). On a black screen there are no edges, so nothing is pushed yet; once the picture has shape, its own edges become the swirls.
+### Phase 2: Build the flow
+
+Phase 2 derives the velocity field that will move the color this frame. It reads **the current color**, which is black on the first frame and the image accumulated so far on every later frame.
+
+- **Curl Forcing** computes the gradient of the color, the direction of steepest change at each pixel, which points across the boundaries between regions. It rotates that gradient by 90 degrees to produce a field aligned with those boundaries. Applied as a force, a field aligned with edges drives the fluid to circulate around regions rather than flow across them. This rotational forcing is the curl the group is named for. With no gradient on a black frame there is no force. Once the color has structure, its boundaries set where the fluid turns.
 
 ![Curl Forcing](preview://Curl Forcing)
 
-- **Smooth Velocity** takes the flow the simulation already had going and softens it, shrinking then blurring it (a separable Gaussian blur), so the motion happens in broad slow sheets rather than sharp jitter. That softness is where the thick, oily feel comes from.
+- **Smooth Velocity** downsamples the existing velocity field and applies a separable Gaussian blur. A high-frequency field would fragment the color into grain. A smooth, low-frequency field transports it in broad coherent sheets, which produces the thick, viscous appearance.
 
 ![Smooth Velocity](preview://Smooth Velocity)
 
-- **Advect Velocity** rolls these into the flow for this frame: the existing motion carries itself forward (self-advection — it has momentum, like real water), loses a little energy so it cannot run away (damping), and picks up the new swirls from Curl Forcing.
+- **Advect Velocity** assembles the velocity for this frame. The existing field is advected along itself, carrying its own momentum forward, then attenuated so it cannot grow without bound (set by Velocity Damp), and the curl force from Curl Forcing is added.
 
 ![Advect Velocity](preview://Advect Velocity)
 
-### Phase 3 — Stir the color
+### Phase 3: Stir the color
 
-This is where the picture actually changes. Advect Color takes **the color as it stands**, drags every pixel of it along the **flow just built in Phase 2** (advection, the core transport step), fades it a touch, and mixes in the **whisper of seed from Phase 1**.
+Phase 3 updates the visible image. Advect Color reads **the current color**, advects each pixel of it along the **velocity field from Phase 2**, attenuates the result, and adds the **scaled noise from Phase 1**.
 
-On the first frame there is nothing to drag — the color is black — so all you get is that one faint layer of noise. But the fade keeps almost all of the existing color (set by Feedback, near 0.9999), so on every following frame the new whisper lands on top of everything kept so far. Drag, fade, add, repeated, is what turns a stack of whispers into flowing marble.
+The attenuation retains almost all of the existing color, controlled by Feedback at roughly 0.9999. Because so little is lost per frame, each new contribution is laid over everything retained so far. On the first frame there is nothing to advect, so the output is a single faint layer of noise. Over many frames the retained layers accumulate while advection transports and folds them, which is what forms the marbling.
 
 ![Advect Color](preview://Advect Color)
 
-The color this phase produces is the new picture. It is what Phase 4 shows, and it is also what the *next* frame reads back in Phase 2 to decide the next flow.
+The color produced here is the updated image. It is passed to Phase 4 for display and written back as the buffer that the next frame reads in Phase 2.
 
-### Phase 4 — Show it
+### Phase 4: Show it
 
-Finally the color is lit. Render Modes reads the color's brightness as a surface height, works out which way that surface tilts (a normal map), and shines light across it for a raised, wet look. The Mode control picks the style:
+Phase 4 shades the color for display and does not feed back into the simulation. Render Modes interprets the color's brightness as a height field, derives surface normals from it (a normal map), and lights those normals, which gives the image its raised, wet appearance. The Mode control selects the shading style:
 
-- **Oil Slick** splits colors along the flow for a petrol sheen (flow-driven chromatic shift).
-- **Flow Field** and **Lines** smear a texture along the current to draw it (line integral convolution, LIC).
-- **Height Map** lights the relief plainly (Lambertian diffuse).
-- **PBR** makes it glossy (matcap base, Fresnel rim, Blinn specular).
+- **Oil Slick** offsets the color channels along the flow direction for a chromatic, petrol-like sheen (a flow-driven chromatic shift).
+- **Flow Field** and **Lines** convolve a texture along the velocity field to visualize it (line integral convolution, LIC).
+- **Height Map** applies plain directional lighting (Lambertian diffuse).
+- **PBR** applies a glossy material (matcap base with a Fresnel rim and Blinn specular highlight).
 
 ![Render Modes](preview://Render Modes)
 
-Color Grade then applies the final brightness, hue, and contrast, and that is the frame you see.
+Color Grade then applies the final brightness, hue, and contrast, producing the frame on screen.
 
 ![Color Grade](preview://Color Grade)
 
-### The picture, frame by frame
+### The image, frame by frame
 
-Frame 1 starts black, so Phase 1 lays a whisper of noise and Phases 2 and 3 have almost nothing to work with — you end with a barely-there cloud. Frame 2 now has that cloud to read, so Phase 2 turns its edges into a small flow and Phase 3 smears the cloud along it and adds another whisper. Because each frame keeps almost all of the last, the layers pile up, the swirls fold them into marbling, and the brightness climbs. A few seconds of that and you have the full image. So "the color as it stands" that Phase 2 reads is simply whatever Phase 3 produced the frame before, and the chain traces all the way back to the first black screen.
+On frame 1 both buffers are black. Phase 1 contributes a faint layer of noise, and Phases 2 and 3 have no structure to act on, so the output is nearly black. On frame 2 that faint layer provides the structure Phase 2 needs. Curl Forcing derives a small velocity field from its edges, and Phase 3 advects the layer along that field and adds another contribution. Because each frame retains almost all of the previous color, the contributions accumulate, advection folds them into marbling, and the overall brightness rises. After a few seconds the image is fully developed. The current color that Phase 2 reads is simply the output Phase 3 produced on the previous frame, and that chain terminates at the initial black frame.
 
 ![Output](preview://Output)
 
-*The final composited image after warm-up. The flow develops within a second or two, while the color and surface relief build over the next several seconds, so a fresh start looks flat before the marbling deepens.*
+*The final composited image after warm-up. The velocity field develops within a second or two, while the color amplitude and surface relief build over the following several seconds, so a fresh start appears flat before the marbling develops.*
 
 ## Controls
 
@@ -79,12 +83,12 @@ Frame 1 starts black, so Phase 1 lays a whisper of noise and Phases 2 and 3 have
 | Control | What it does |
 |---|---|
 | Speed | Overall flow rate. Scales how fast the flow and color move each frame. |
-| Feedback | How long color lingers before fading. Higher gives longer trails and denser buildup. |
-| Curl | Swirl strength. How hard the edges twist the flow into spirals. |
-| Noise | How much fresh texture is injected each frame. |
-| Velocity Damp | How quickly the flow loses energy. Lower settles it sooner. |
-| Velocity Displace | How far the flow drags itself each step. |
-| Color Displace | How far the color is dragged along the flow each step. |
+| Feedback | How long color is retained before fading. Higher values give longer trails and denser buildup. |
+| Curl | Swirl strength. How strongly edges rotate the flow into spirals. |
+| Noise | How much new texture is injected each frame. |
+| Velocity Damp | How quickly the flow loses energy. Lower values settle it sooner. |
+| Velocity Displace | How far the flow advects itself each step. |
+| Color Displace | How far the color is advected along the flow each step. |
 
 ### Look
 
@@ -92,5 +96,5 @@ Frame 1 starts black, so Phase 1 lays a whisper of noise and Phases 2 and 3 have
 |---|---|
 | Mode | Final look: Oil Slick, Flow Field, Height Map, PBR, or Lines. |
 | Relief | Strength of the lit surface relief. |
-| Chroma | Color-split amount in Oil Slick mode. |
+| Chroma | Channel-offset amount in Oil Slick mode. |
 | Brightness, Saturation, Hue, Contrast | Final color grade on the output. |
