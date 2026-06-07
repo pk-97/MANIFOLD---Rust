@@ -491,7 +491,7 @@ fn change_generator_type_undo_roundtrip() {
     // After type change, params are filled with Tesseract's definition defaults (11 params)
     assert_eq!(
         project.timeline.layers[1].snapshot_gen_params().len(),
-        manifold_core::preset_definition_registry::generator::get(&PresetTypeId::TESSERACT).param_count
+        manifold_core::preset_definition_registry::get(&PresetTypeId::TESSERACT).param_count
     );
 
     cmd.undo(&mut project);

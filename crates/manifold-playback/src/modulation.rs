@@ -408,7 +408,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
             && let Some(gp) = layer.gen_params_mut()
         {
             let gen_type = gp.generator_type();
-            let gen_def = match preset_definition_registry::generator::try_get(gen_type) {
+            let gen_def = match preset_definition_registry::try_get(gen_type) {
                 Some(d) => d,
                 None => continue,
             };
@@ -456,7 +456,7 @@ fn evaluate_effect_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bool
         _ => return false,
     };
 
-    let effect_def = match preset_definition_registry::effect::try_get(fx.effect_type()) {
+    let effect_def = match preset_definition_registry::try_get(fx.effect_type()) {
         Some(d) => d,
         None => return false,
     };
@@ -523,7 +523,7 @@ pub fn evaluate_all_envelopes(
             if !fx.enabled {
                 continue;
             }
-            let Some(def) = preset_definition_registry::effect::try_get(fx.effect_type()) else {
+            let Some(def) = preset_definition_registry::try_get(fx.effect_type()) else {
                 continue;
             };
             if apply_instance_envelopes(fx, &def, active_elapsed, active_duration) {
@@ -564,7 +564,7 @@ pub fn evaluate_gen_param_envelopes(
         let Some(gp) = layer.gen_params_mut() else {
             continue;
         };
-        let Some(def) = preset_definition_registry::generator::try_get(gp.generator_type()) else {
+        let Some(def) = preset_definition_registry::try_get(gp.generator_type()) else {
             continue;
         };
         if apply_instance_envelopes(gp, &def, active_elapsed, active_duration) {
@@ -657,7 +657,7 @@ mod tests {
     use manifold_core::effects::{EnvelopeMode, ParamEnvelope};
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
     use manifold_core::layer::Layer;
-    use manifold_core::preset_definition_registry::effect;
+    use manifold_core::preset_definition_registry::create_default;
     use manifold_core::project::Project;
     use manifold_core::PresetTypeId;
 
@@ -697,7 +697,7 @@ mod tests {
     /// A video layer carrying one default `TestEnvFx` effect instance.
     fn layer_with_one_effect() -> Layer {
         let mut layer = Layer::new_video("FxLayer".into(), 0);
-        layer.effects = Some(vec![effect::create_default(&TEST_FX)]);
+        layer.effects = Some(vec![create_default(&TEST_FX)]);
         layer
     }
 
@@ -820,8 +820,8 @@ mod tests {
     #[test]
     fn envelopes_are_per_instance_not_pooled_by_type() {
         let mut layer = Layer::new_video("FxLayer".into(), 0);
-        let mut fx_a = effect::create_default(&TEST_FX);
-        let mut fx_b = effect::create_default(&TEST_FX);
+        let mut fx_a = create_default(&TEST_FX);
+        let mut fx_b = create_default(&TEST_FX);
         // Only the SECOND same-type effect carries an envelope.
         fx_a.envelopes = None;
         fx_b.envelopes = Some(vec![adsr_full("amount")]);

@@ -561,7 +561,7 @@ pub struct PresetInstance {
     pub enabled: bool,
     pub collapsed: bool,
     /// Positional parameter storage. The first
-    /// `crate::preset_definition_registry::effect::get(&effect_type).param_count`
+    /// `crate::preset_definition_registry::get(&effect_type).param_count`
     /// slots correspond to the effect's static-spec bindings in
     /// declaration order; the remaining slots correspond to
     /// [`Self::user_param_bindings`] in declaration order. After the
@@ -671,7 +671,7 @@ impl ParamValuesWire {
         match self {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::effect::try_get(effect_type) else {
+                let Some(def) = crate::preset_definition_registry::try_get(effect_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
                          effect type '{}' (Map keys: {:?}). align_to_definition will fill with \
@@ -737,7 +737,7 @@ impl ParamValuesWire {
         match self {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::generator::try_get(gen_type) else {
+                let Some(def) = crate::preset_definition_registry::try_get(gen_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
                          generator type '{}' (Map keys: {:?}). In production this should never \
@@ -799,7 +799,7 @@ impl FloatValuesWire {
         match self {
             FloatValuesWire::Positional(v) => v,
             FloatValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::effect::try_get(effect_type) else {
+                let Some(def) = crate::preset_definition_registry::try_get(effect_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ baseParamValues for \
                          unregistered effect type '{}' (Map keys: {:?}).",
@@ -852,7 +852,7 @@ impl FloatValuesWire {
         match self {
             FloatValuesWire::Positional(v) => v,
             FloatValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::generator::try_get(gen_type) else {
+                let Some(def) = crate::preset_definition_registry::try_get(gen_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
                          generator type '{}' (Map keys: {:?}). In production this should never \
@@ -901,7 +901,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::preset_definition_registry::generator::try_get(gen_type);
+    let def = crate::preset_definition_registry::try_get(gen_type);
     let can_emit_map = def.as_ref().is_some_and(|d| {
         values.len() <= d.param_ids.len()
             && d.param_ids
@@ -943,7 +943,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::preset_definition_registry::generator::try_get(gen_type);
+    let def = crate::preset_definition_registry::try_get(gen_type);
     let can_emit_map = def.as_ref().is_some_and(|d| {
         values.len() <= d.param_ids.len()
             && d.param_ids
@@ -987,7 +987,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::preset_definition_registry::effect::try_get(effect_type);
+    let def = crate::preset_definition_registry::try_get(effect_type);
     let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
     let can_emit_map = def.as_ref().is_some_and(|d| {
@@ -1033,7 +1033,7 @@ where
 {
     use serde::ser::{SerializeMap, SerializeSeq};
 
-    let def = crate::preset_definition_registry::effect::try_get(effect_type);
+    let def = crate::preset_definition_registry::try_get(effect_type);
     let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
     let can_emit_map = def.as_ref().is_some_and(|d| {
@@ -1896,19 +1896,16 @@ impl PresetInstance {
         {
             return meta.bindings.iter().filter(|b| !b.user_added).count();
         }
-        let def = if self.is_generator() {
-            crate::preset_definition_registry::generator::try_get(&self.effect_type)
-        } else {
-            crate::preset_definition_registry::effect::try_get(&self.effect_type)
-        };
-        def.map(|d| d.param_count).unwrap_or(0)
+        crate::preset_definition_registry::try_get(&self.effect_type)
+            .map(|d| d.param_count)
+            .unwrap_or(0)
     }
 
     pub fn param_id_to_value_index(&self, id: &str) -> Option<usize> {
-        if let Some(idx) = crate::preset_definition_registry::effect::param_id_to_index(&self.effect_type, id) {
+        if let Some(idx) = crate::preset_definition_registry::param_id_to_index(&self.effect_type, id) {
             return Some(idx);
         }
-        let n_static = crate::preset_definition_registry::effect::try_get(&self.effect_type)
+        let n_static = crate::preset_definition_registry::try_get(&self.effect_type)
             .map(|d| d.param_count)
             .unwrap_or(0);
         self.user_binding_index(id).map(|j| n_static + j)
@@ -1934,7 +1931,7 @@ impl PresetInstance {
     /// edit — at typical driver counts (<50) the scan is cheaper than
     /// the bookkeeping.
     pub fn resolve_param(&self, id: &str) -> Option<ResolvedParam> {
-        let def = crate::preset_definition_registry::effect::try_get(&self.effect_type)?;
+        let def = crate::preset_definition_registry::try_get(&self.effect_type)?;
         resolve_param_in(&def, self, id)
     }
 
@@ -2266,16 +2263,15 @@ impl PresetInstance {
         // alignment below, which is what lets the generator expose/unexpose
         // mirror route through the shared `append_user_binding` /
         // `remove_user_binding_by_id` helpers.
-        let static_defaults: Option<Vec<f32>> = if self.is_generator() {
-            if let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref()) {
-                let bundled = meta.bindings.iter().filter(|b| !b.user_added).count();
-                Some(meta.params.iter().take(bundled).map(|p| p.default_value).collect())
-            } else {
-                crate::preset_definition_registry::generator::try_get(&self.effect_type)
-                    .map(|d| d.param_defs.iter().map(|pd| pd.default_value).collect())
-            }
+        let static_defaults: Option<Vec<f32>> = if self.is_generator()
+            && let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
+        {
+            // Graph-backed generator: the graph is the param authority.
+            let bundled = meta.bindings.iter().filter(|b| !b.user_added).count();
+            Some(meta.params.iter().take(bundled).map(|p| p.default_value).collect())
         } else {
-            crate::preset_definition_registry::effect::try_get(&self.effect_type)
+            // Effect, or generator without a graph: the unified registry.
+            crate::preset_definition_registry::try_get(&self.effect_type)
                 .map(|d| d.param_defs.iter().map(|pd| pd.default_value).collect())
         };
         if let Some(static_defaults) = static_defaults {
@@ -2385,7 +2381,7 @@ impl PresetInstance {
     /// the hidden-max bug; the slider range + modulation resolver bound the
     /// value against the PRESET range, not the stale catalog one).
     pub fn set_param_base(&mut self, index: usize, value: f32) {
-        if let Some(def) = crate::preset_definition_registry::generator::try_get(&self.effect_type)
+        if let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
             && self.param_values.len() < def.param_count
         {
             self.migrate_to_registry_length();
@@ -2406,7 +2402,7 @@ impl PresetInstance {
     /// Extend-only pad of `param_values`/`base_param_values` to the generator
     /// registry's param count, filling the tail with registry defaults.
     pub fn migrate_to_registry_length(&mut self) {
-        let Some(def) = crate::preset_definition_registry::generator::try_get(&self.effect_type)
+        let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
         else {
             return;
         };
@@ -2461,7 +2457,7 @@ impl PresetInstance {
             Some(b) => b,
             None => return,
         };
-        let def = crate::preset_definition_registry::generator::try_get(&self.effect_type);
+        let def = crate::preset_definition_registry::try_get(&self.effect_type);
         let id_to_index = def.as_ref().map(|d| &d.id_to_index);
 
         if let Some(drivers) = &self.drivers {
@@ -2511,7 +2507,7 @@ impl PresetInstance {
     /// Initialize base + effective arrays from the generator registry defaults,
     /// setting the type.
     pub fn init_defaults_for_type(&mut self, gen_type: PresetTypeId) {
-        if let Some(def) = crate::preset_definition_registry::generator::try_get(&gen_type) {
+        if let Some(def) = crate::preset_definition_registry::try_get(&gen_type) {
             self.effect_type = gen_type;
             self.param_values = def
                 .param_defs
@@ -2587,13 +2583,10 @@ impl ParamSource for PresetInstance {
         // satisfy the trait's borrowed return without rippling `String`
         // through every `ParamSource` caller. See
         // `preset_definition_registry::intern_display_name`.
-        if self.is_generator() {
-            return crate::preset_definition_registry::generator::try_get(&self.effect_type)
-                .map(|d| crate::preset_definition_registry::intern_display_name(&d.display_name))
-                .unwrap_or("Generator");
-        }
-        match crate::preset_definition_registry::effect::try_get(&self.effect_type) {
+        match crate::preset_definition_registry::try_get(&self.effect_type) {
             Some(def) => crate::preset_definition_registry::intern_display_name(&def.display_name),
+            // Unknown type: kind-appropriate fallback label.
+            None if self.is_generator() => "Generator",
             None => "?",
         }
     }
@@ -2603,18 +2596,16 @@ impl ParamSource for PresetInstance {
     }
 
     fn get_param_def(&self, index: usize) -> ParamDef {
-        if self.is_generator() {
-            return match crate::preset_definition_registry::generator::try_get(&self.effect_type) {
-                Some(def) if index < def.param_count => def.param_defs[index].clone(),
-                _ => ParamDef::default(),
-            };
+        let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type) else {
+            return ParamDef::default();
+        };
+        if index < def.param_count {
+            return def.param_defs[index].clone();
         }
-        if let Some(def) = crate::preset_definition_registry::effect::try_get(&self.effect_type) {
-            if index < def.param_count {
-                return def.param_defs[index].clone();
-            }
-            // User-binding tail: synthesize a ParamDef from the
-            // user-added binding (routing) + its reshape note (range).
+        // Past the static prefix: effects synthesize a ParamDef from the
+        // user-added binding tail (routing + reshape range). Generators have
+        // no user-tail in this path, so they fall through to the default.
+        if !self.is_generator() {
             let user_idx = index - def.param_count;
             if let Some(b) = self.user_added_bindings().nth(user_idx) {
                 let ub = self.synth_user_binding(b);

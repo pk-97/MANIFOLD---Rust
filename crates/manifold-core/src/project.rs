@@ -278,7 +278,7 @@ impl Project {
     /// Walks master + every layer's effects.
     fn migrate_legacy_param_values(&mut self) {
         fn apply_to_effect(fx: &mut crate::effects::PresetInstance) {
-            let Some(def) = crate::preset_definition_registry::effect::try_get(fx.effect_type()) else {
+            let Some(def) = crate::preset_definition_registry::try_get(fx.effect_type()) else {
                 return;
             };
             if def.legacy_value_aliases.is_empty() {
@@ -447,7 +447,7 @@ impl Project {
             current_id: &str,
             legacy_index: Option<i32>,
         ) -> ResolveOutcome {
-            let Some(def) = crate::preset_definition_registry::effect::try_get(effect_type) else {
+            let Some(def) = crate::preset_definition_registry::try_get(effect_type) else {
                 return ResolveOutcome::RegistryMissing;
             };
             resolve_against(
@@ -463,7 +463,7 @@ impl Project {
             current_id: &str,
             legacy_index: Option<i32>,
         ) -> ResolveOutcome {
-            let Some(def) = crate::preset_definition_registry::generator::try_get(gen_type) else {
+            let Some(def) = crate::preset_definition_registry::try_get(gen_type) else {
                 return ResolveOutcome::RegistryMissing;
             };
             resolve_against(

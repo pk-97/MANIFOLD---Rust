@@ -2636,7 +2636,7 @@ mod multi_segment_tests {
     
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
-        manifold_core::preset_definition_registry::effect::create_default(&ty)
+        manifold_core::preset_definition_registry::create_default(&ty)
     }
 
     #[test]
@@ -2769,7 +2769,7 @@ mod binding_seed_tests {
     
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
-        manifold_core::preset_definition_registry::effect::create_default(&ty)
+        manifold_core::preset_definition_registry::create_default(&ty)
     }
 
     /// SoftFocus is the canonical reproducer: its outer `radius`
@@ -2830,7 +2830,7 @@ mod topology_hash_tests {
     use manifold_core::effects::PresetInstance;
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
-        manifold_core::preset_definition_registry::effect::create_default(&ty)
+        manifold_core::preset_definition_registry::create_default(&ty)
     }
 
     #[test]
@@ -3013,7 +3013,7 @@ mod user_binding_tests {
 
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
-        manifold_core::preset_definition_registry::effect::create_default(&ty)
+        manifold_core::preset_definition_registry::create_default(&ty)
     }
 
     /// Clone the canonical preset def for `ty` and set a non-identity
@@ -3439,7 +3439,7 @@ mod generator_input_tests {
     use manifold_core::effect_graph_def::EffectGraphDef;
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
-        manifold_core::preset_definition_registry::effect::create_default(&ty)
+        manifold_core::preset_definition_registry::create_default(&ty)
     }
 
     /// A divergent PresetInstance whose graph contains a
@@ -3699,7 +3699,7 @@ mod chain_error_tests {
     use manifold_core::effects::{PresetInstance, ParamConvert, UserParamBinding};
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
-        manifold_core::preset_definition_registry::effect::create_default(&ty)
+        manifold_core::preset_definition_registry::create_default(&ty)
     }
 
     /// A user-exposed binding pointing at a handle the splice didn't

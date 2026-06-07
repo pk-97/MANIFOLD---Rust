@@ -324,7 +324,7 @@ impl Layer {
             return meta.params.iter().position(|p| p.id == param_id);
         }
         let gen_type = self.generator_type();
-        crate::preset_definition_registry::generator::param_id_to_index(gen_type, param_id)
+        crate::preset_definition_registry::param_id_to_index(gen_type, param_id)
     }
 
 

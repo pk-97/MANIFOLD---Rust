@@ -82,7 +82,7 @@ inventory::submit! {
 // manifold-renderer; the inventory remains as a fallback so upstream
 // test binaries that don't link the renderer (e.g.,
 // manifold-editing's `command_roundtrips`) still resolve TESSERACT
-// through `crate::preset_definition_registry::generator::get`. Same pattern as
+// through `crate::preset_definition_registry::get`. Same pattern as
 // Lissajous and WireframeZoo.
 
 inventory::submit! {

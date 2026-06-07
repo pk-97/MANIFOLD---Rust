@@ -584,8 +584,13 @@ fn apply_reload() -> u64 {
     let effect_meta = crate::node_graph::loaded_presets_from_bundled();
     let generator_meta =
         crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled();
-    manifold_core::preset_definition_registry::rebuild_effect_definitions(&effect_meta);
-    manifold_core::preset_definition_registry::rebuild_generator_definitions(&generator_meta);
+    // ONE atomic swap of the merged store — both kinds' metadata in a single
+    // rebuild so a reader observing the new generation never sees a
+    // half-merged registry.
+    manifold_core::preset_definition_registry::rebuild_preset_definitions(
+        &effect_meta,
+        &generator_meta,
+    );
 
     let generation = bump_catalog_generation();
     log::info!("[presets] hot-reload applied; catalog generation = {generation}");

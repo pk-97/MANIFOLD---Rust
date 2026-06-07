@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn migrate_pads_short_param_arrays_with_defaults_preserving_existing() {
         let gt = PresetTypeId::BLACK_HOLE;
-        let target_count = crate::preset_definition_registry::generator::try_get(&gt)
+        let target_count = crate::preset_definition_registry::try_get(&gt)
             .expect("BLACK_HOLE registered")
             .param_count;
         assert!(target_count >= 4, "test assumes BLACK_HOLE has at least 4 params");
@@ -69,7 +69,7 @@ mod tests {
         assert_eq!(state.param_values[1].value, 2.5);
         assert_eq!(state.param_values[2].value, 3.5);
 
-        let def = crate::preset_definition_registry::generator::try_get(&gt).unwrap();
+        let def = crate::preset_definition_registry::try_get(&gt).unwrap();
         for i in 3..target_count {
             assert_eq!(
                 state.param_values[i].value, def.param_defs[i].default_value,
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn set_param_after_registry_growth_does_not_wipe_existing_values() {
         let gt = PresetTypeId::BLACK_HOLE;
-        let target_count = crate::preset_definition_registry::generator::try_get(&gt)
+        let target_count = crate::preset_definition_registry::try_get(&gt)
             .expect("BLACK_HOLE registered")
             .param_count;
 
@@ -105,7 +105,7 @@ mod tests {
     fn set_param_base_writes_through_for_json_only_generator_with_no_registry_entry() {
         let unknown_type = PresetTypeId::from_string("DoesNotExist".to_string());
         assert!(
-            crate::preset_definition_registry::generator::try_get(&unknown_type).is_none(),
+            crate::preset_definition_registry::try_get(&unknown_type).is_none(),
             "fixture relies on this type NOT being in the registry"
         );
 

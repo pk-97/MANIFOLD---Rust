@@ -123,7 +123,7 @@ impl ActiveInspectorDrag {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
                     && let Some(gp) = layer.gen_params_mut()
                     && let Some(slot) =
-                        manifold_core::preset_definition_registry::generator::param_id_to_index(
+                        manifold_core::preset_definition_registry::param_id_to_index(
                             gp.generator_type(),
                             param_id.as_ref(),
                         )
@@ -988,7 +988,7 @@ impl Application {
                     if let Some((effect_id, effect_type, old_val)) = effect_info {
                         // Clamp to param range from registry
                         let new_val = if let Some(def) =
-                            manifold_core::preset_definition_registry::effect::try_get(effect_type)
+                            manifold_core::preset_definition_registry::try_get(effect_type)
                         {
                             if let Some(pd) = def.param_defs.get(param_idx) {
                                 parsed.clamp(pd.min, pd.max)
@@ -1000,7 +1000,7 @@ impl Application {
                         };
                         if (old_val - new_val).abs() > f32::EPSILON
                             && let Some(param_id) =
-                                manifold_core::preset_definition_registry::effect::param_index_to_id(
+                                manifold_core::preset_definition_registry::param_index_to_id(
                                     effect_type,
                                     param_idx,
                                 )
@@ -1032,7 +1032,7 @@ impl Application {
                     let gen_type = layer.generator_type();
                     // Clamp to param range from generator registry
                     let new_val = if let Some(def) =
-                        manifold_core::preset_definition_registry::generator::try_get(gen_type)
+                        manifold_core::preset_definition_registry::try_get(gen_type)
                     {
                         if let Some(pd) = def.param_defs.get(param_idx) {
                             parsed.clamp(pd.min, pd.max)
@@ -1047,7 +1047,7 @@ impl Application {
                         // Resolve the positional registry index to the stable
                         // param id the unified by-id command addresses.
                         let param_id =
-                            manifold_core::preset_definition_registry::generator::try_get(gen_type)
+                            manifold_core::preset_definition_registry::try_get(gen_type)
                                 .and_then(|d| d.param_ids.get(param_idx).map(|s| s.to_string()));
                         if (old_val - new_val).abs() > f32::EPSILON
                             && let Some(param_id) = param_id
@@ -1081,7 +1081,7 @@ impl Application {
                 {
                     let gen_type = layer.generator_type();
                     if let Some(def) =
-                        manifold_core::preset_definition_registry::generator::try_get(gen_type)
+                        manifold_core::preset_definition_registry::try_get(gen_type)
                         && let Some(sp_def) = def.string_param_defs.get(sp_idx)
                     {
                         let key = sp_def.key.to_string();

@@ -1387,7 +1387,7 @@ fn effects_to_configs(
         .iter()
         .enumerate()
         .filter_map(|(i, fx)| {
-            let reg_def = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())?;
+            let reg_def = manifold_core::preset_definition_registry::try_get(fx.effect_type())?;
             let static_count = reg_def.param_count;
             // User bindings are synthesized from the graph's user-added
             // metadata + reshape notes (the single binding-storage list).
@@ -1403,13 +1403,13 @@ fn effects_to_configs(
                 .map(|(pi, pd)| {
                     let osc_address = match osc_scope {
                         OscScope::Master => {
-                            manifold_core::preset_definition_registry::effect::get_osc_address(
+                            manifold_core::preset_definition_registry::get_osc_address(
                                 fx.effect_type(),
                                 pi,
                             )
                         }
                         OscScope::Layer(lid) => {
-                            manifold_core::preset_definition_registry::effect::get_osc_address_for_layer(
+                            manifold_core::preset_definition_registry::get_osc_address_for_layer(
                                 fx.effect_type(),
                                 lid,
                                 pi,
@@ -1622,7 +1622,7 @@ fn gen_params_to_config(
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
 ) -> ParamCardConfig {
-    let reg_def = manifold_core::preset_definition_registry::generator::try_get(gp.generator_type());
+    let reg_def = manifold_core::preset_definition_registry::try_get(gp.generator_type());
     let graph_meta = generator_graph.and_then(|g| g.preset_metadata.as_ref());
 
     // Resolve the canonical slider list:
@@ -1691,7 +1691,7 @@ fn gen_params_to_config(
                     .map(|(pi, pd)| {
                         id_to_index.insert(pd.id.clone(), pi);
                         let osc_address =
-                            manifold_core::preset_definition_registry::generator::get_osc_address_for_layer(
+                            manifold_core::preset_definition_registry::get_osc_address_for_layer(
                                 gp.generator_type(),
                                 layer_id,
                                 pi,
@@ -1764,7 +1764,7 @@ fn gen_params_to_config(
                     .map(|(pi, pd)| {
                         id_to_index.insert(pd.id.clone(), pi);
                         let osc_address =
-                            manifold_core::preset_definition_registry::generator::get_osc_address_for_layer(
+                            manifold_core::preset_definition_registry::get_osc_address_for_layer(
                                 gp.generator_type(),
                                 layer_id,
                                 pi,
@@ -1907,7 +1907,7 @@ fn describe_macro_mapping(
             effect_type,
             param_id,
         } => {
-            let def = manifold_core::preset_definition_registry::effect::try_get(effect_type);
+            let def = manifold_core::preset_definition_registry::try_get(effect_type);
             let effect_name = def
                 .as_ref()
                 .map(|d| d.display_name.clone())
@@ -1946,7 +1946,7 @@ fn describe_macro_mapping(
                 .find(|l| l.layer_id == *layer_id)
                 .map(|l| l.name.as_str())
                 .unwrap_or("?");
-            let def = manifold_core::preset_definition_registry::effect::try_get(effect_type);
+            let def = manifold_core::preset_definition_registry::try_get(effect_type);
             let effect_name = def
                 .as_ref()
                 .map(|d| d.display_name.clone())
@@ -1974,7 +1974,7 @@ fn describe_macro_mapping(
                 .and_then(|l| l.gen_params())
                 .and_then(|gp| {
                     let def =
-                        manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())?;
+                        manifold_core::preset_definition_registry::try_get(gp.generator_type())?;
                     let idx = def.id_to_index.get(param_id.as_ref()).copied()?;
                     def.param_defs.get(idx).map(|p| p.name.clone())
                 })

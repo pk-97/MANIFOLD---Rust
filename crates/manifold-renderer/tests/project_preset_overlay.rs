@@ -40,7 +40,7 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
         "fixture id must not exist in the stock/user catalog"
     );
     assert!(
-        manifold_core::preset_definition_registry::generator::try_get(&preset_id).is_none(),
+        manifold_core::preset_definition_registry::try_get(&preset_id).is_none(),
         "fixture id must not be in the core registry yet"
     );
 
@@ -53,7 +53,7 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
         GENERATOR_CATALOG.load().json(id).is_some(),
         "project generator preset must resolve in the renderer catalog after overlay"
     );
-    let def = manifold_core::preset_definition_registry::generator::try_get(&preset_id)
+    let def = manifold_core::preset_definition_registry::try_get(&preset_id)
         .expect("project generator preset must be in the core registry after overlay");
     assert_eq!(def.display_name, format!("Test Fork {id}"));
 
@@ -64,7 +64,7 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
         "clearing the overlay must remove the project preset from the catalog"
     );
     assert!(
-        manifold_core::preset_definition_registry::generator::try_get(&preset_id).is_none(),
+        manifold_core::preset_definition_registry::try_get(&preset_id).is_none(),
         "clearing the overlay must remove the project preset from the core registry"
     );
 }

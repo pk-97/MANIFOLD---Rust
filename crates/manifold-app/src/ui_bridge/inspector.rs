@@ -1376,7 +1376,7 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
             {
                 let gen_type = layer.generator_type();
-                if let Some(def) = manifold_core::preset_definition_registry::generator::try_get(gen_type)
+                if let Some(def) = manifold_core::preset_definition_registry::try_get(gen_type)
                     && let Some(sp_def) = def.string_param_defs.get(*sp_idx)
                 {
                     let key = sp_def.key.to_string();
@@ -2207,7 +2207,7 @@ pub(super) fn dispatch_inspector(
                 return DispatchResult::handled();
             };
             let effect_type = reg.id.clone();
-            let defaults = manifold_core::preset_definition_registry::effect::get_defaults(&effect_type);
+            let defaults = manifold_core::preset_definition_registry::get_defaults(&effect_type);
             let mut effect = PresetInstance::new(effect_type);
             effect.param_values = defaults;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -2350,12 +2350,12 @@ pub(super) fn dispatch_inspector(
                 {
                     (spec.min, spec.max)
                 } else {
-                    manifold_core::preset_definition_registry::generator::param_id_to_index(
+                    manifold_core::preset_definition_registry::param_id_to_index(
                         gp.generator_type(),
                         param_id.as_ref(),
                     )
                     .and_then(|slot| {
-                        manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())
+                        manifold_core::preset_definition_registry::try_get(gp.generator_type())
                             .and_then(|def| def.param_defs.get(slot).map(|pd| (pd.min, pd.max)))
                     })
                     .unwrap_or((0.0, 1.0))

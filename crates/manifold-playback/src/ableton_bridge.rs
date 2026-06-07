@@ -2129,7 +2129,7 @@ impl AbletonBridge {
                     needed.insert(key);
 
                     let effect_def =
-                        manifold_core::preset_definition_registry::effect::try_get(fx.effect_type());
+                        manifold_core::preset_definition_registry::try_get(fx.effect_type());
                     let resolved_idx = effect_def
                         .as_ref()
                         .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
@@ -2182,7 +2182,7 @@ impl AbletonBridge {
                             );
                             needed.insert(key);
 
-                            let effect_def = manifold_core::preset_definition_registry::effect::try_get(
+                            let effect_def = manifold_core::preset_definition_registry::try_get(
                                 fx.effect_type(),
                             );
                             let resolved_idx = effect_def.as_ref().and_then(|d| {
@@ -2238,7 +2238,7 @@ impl AbletonBridge {
                     needed.insert(key);
 
                     let gen_def =
-                        manifold_core::preset_definition_registry::generator::try_get(gp.generator_type());
+                        manifold_core::preset_definition_registry::try_get(gp.generator_type());
                     let resolved_idx = gen_def
                         .as_ref()
                         .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());

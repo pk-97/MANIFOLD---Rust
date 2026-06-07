@@ -219,7 +219,7 @@ impl Application {
                     .find(|l| &l.layer_id == lid)?
                     .gen_params()?;
                 let def =
-                    manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())?;
+                    manifold_core::preset_definition_registry::try_get(gp.generator_type())?;
                 let idx = *def.id_to_index.get(param_id)?;
                 gp.param_values.get(idx).map(|p| p.value)
             }
@@ -2260,7 +2260,7 @@ impl Application {
                     // diverged, else the catalog graph. The trim track spans the
                     // preset's authored (pre-fork) range from the registry.
                     let registry_range =
-                        manifold_core::preset_definition_registry::effect::try_get(fx.effect_type())
+                        manifold_core::preset_definition_registry::try_get(fx.effect_type())
                             .and_then(|def| {
                                 def.id_to_index
                                     .get(param_id)
@@ -2298,7 +2298,7 @@ impl Application {
                     return;
                 };
                 let registry_range =
-                    manifold_core::preset_definition_registry::generator::try_get(gp.generator_type())
+                    manifold_core::preset_definition_registry::try_get(gp.generator_type())
                         .and_then(|def| {
                             def.id_to_index
                                 .get(param_id)
@@ -3755,7 +3755,7 @@ fn build_static_block_targets(
     let Some(fx) = project.find_effect_by_id(eid) else {
         return Default::default();
     };
-    let Some(def) = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type()) else {
+    let Some(def) = manifold_core::preset_definition_registry::try_get(fx.effect_type()) else {
         return Default::default();
     };
     snap.outer_routings

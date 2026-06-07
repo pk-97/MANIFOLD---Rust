@@ -792,7 +792,7 @@ impl ContentThread {
             fn build_effect_params(
                 fx: &manifold_core::effects::PresetInstance,
             ) -> Vec<manifold_profiler::NamedParam> {
-                let def = manifold_core::preset_definition_registry::effect::try_get(fx.effect_type());
+                let def = manifold_core::preset_definition_registry::try_get(fx.effect_type());
                 fx.param_values
                     .iter()
                     .enumerate()
@@ -809,7 +809,7 @@ impl ContentThread {
                 gen_type: &manifold_core::PresetTypeId,
                 values: &[f32],
             ) -> Vec<manifold_profiler::NamedParam> {
-                let def = manifold_core::preset_definition_registry::generator::try_get(gen_type);
+                let def = manifold_core::preset_definition_registry::try_get(gen_type);
                 values
                     .iter()
                     .enumerate()
