@@ -93,7 +93,7 @@ mod tests {
 
         // Values inside each param's clamp range (Speed 0..5, Cam Dist 0.1..50, Tilt 0..90).
         let mut state = gen_with_params(gt, vec![2.5, 8.0, 9.0]);
-        state.set_param_base(0, 2.5);
+        state.set_base_param(0, 2.5);
 
         assert_eq!(state.param_values.len(), target_count);
         assert_eq!(state.param_values[0].value, 2.5);
@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn set_param_base_writes_through_for_json_only_generator_with_no_registry_entry() {
+    fn set_base_param_writes_through_for_json_only_generator_with_no_registry_entry() {
         let unknown_type = PresetTypeId::from_string("DoesNotExist".to_string());
         assert!(
             crate::preset_definition_registry::try_get(&unknown_type).is_none(),
@@ -110,12 +110,12 @@ mod tests {
         );
 
         let mut state = gen_with_params(unknown_type, vec![0.0, 1.0]);
-        state.set_param_base(1, 0.75);
+        state.set_base_param(1, 0.75);
 
         assert_eq!(state.param_values[1].value, 0.75, "write landed on bundled slot");
         assert_eq!(state.base_param_values.as_ref().unwrap()[1], 0.75);
 
-        state.set_param_base(2, 0.42);
+        state.set_base_param(2, 0.42);
         assert_eq!(state.param_values.len(), 3, "param_values auto-extended");
         assert_eq!(state.param_values[2].value, 0.42, "tail write landed");
         assert_eq!(state.base_param_values.as_ref().unwrap()[2], 0.42);
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn generator_serialize_round_trips_type_and_values() {
         let mut gp = PresetInstance::new_generator(PresetTypeId::BLACK_HOLE);
-        gp.set_param_base(0, 1.25);
+        gp.set_base_param(0, 1.25);
         let json = serde_json::to_string(&gp).unwrap();
         assert!(json.contains("\"generatorType\":\"BlackHole\""), "{json}");
 
@@ -132,6 +132,6 @@ mod tests {
         let back = deserialize_generator_instance(&mut de).unwrap();
         assert_eq!(*back.generator_type(), PresetTypeId::BLACK_HOLE);
         assert!(back.is_generator());
-        assert_eq!(back.get_param_base(0), 1.25);
+        assert_eq!(back.get_base_param(0), 1.25);
     }
 }

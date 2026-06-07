@@ -1043,7 +1043,7 @@ impl Application {
                         parsed
                     };
                     if let Some(gp) = layer.gen_params() {
-                        let old_val = gp.get_param_base(param_idx);
+                        let old_val = gp.get_base_param(param_idx);
                         // Resolve the positional registry index to the stable
                         // param id the unified by-id command addresses.
                         let param_id =

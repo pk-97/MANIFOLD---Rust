@@ -324,7 +324,7 @@ impl OscParamRouter {
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
                     {
-                        gp.set_param_base(*param_index, write.value);
+                        gp.set_base_param(*param_index, write.value);
                     }
                 }
                 OscParamTarget::Macro { index } => {

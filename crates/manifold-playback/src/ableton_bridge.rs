@@ -881,7 +881,7 @@ impl AbletonBridge {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                     && let Some(gp) = layer.gen_params_mut()
                 {
-                    gp.set_param_base(param_index, value);
+                    gp.set_base_param(param_index, value);
                 }
             }
             AbletonMappingTarget::MacroSlot { slot_index } => {

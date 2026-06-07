@@ -1479,10 +1479,10 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(slot) = layer.resolve_gen_param_slot(param_id.as_ref())
+                && let Some(slot) = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()))
                 && let Some(gp) = layer.gen_params()
             {
-                let val = gp.get_param_base(slot);
+                let val = gp.get_base_param(slot);
                 *drag_snapshot = Some(val);
                 *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::GenParam {
                     layer_id: layer.layer_id.clone(),
@@ -1496,11 +1496,11 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                    let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                    let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
                     if let Some(slot) = slot
                         && let Some(gp) = layer.gen_params_mut()
                     {
-                        gp.set_param_base(slot, *val);
+                        gp.set_base_param(slot, *val);
                     }
                 }
                 if let Some(crate::app::ActiveInspectorDrag::GenParam { value, .. }) =
@@ -1515,11 +1515,11 @@ pub(super) fn dispatch_inspector(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                            let slot = layer.resolve_gen_param_slot(pid.as_ref());
+                            let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(pid.as_ref()));
                             if let Some(slot) = slot
                                 && let Some(gp) = layer.gen_params_mut()
                             {
-                                gp.set_param_base(slot, v);
+                                gp.set_base_param(slot, v);
                             }
                         }
                     })),
@@ -1532,10 +1532,10 @@ pub(super) fn dispatch_inspector(
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(slot) = layer.resolve_gen_param_slot(param_id.as_ref())
+                && let Some(slot) = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()))
                 && let Some(gp) = layer.gen_params()
             {
-                let new_val = gp.get_param_base(slot);
+                let new_val = gp.get_base_param(slot);
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let layer_id = layer.layer_id.clone();
                     let cmd = ChangeGraphParamCommand::new(
@@ -1556,13 +1556,13 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
                 if let Some(slot) = slot
                     && let Some(gp) = layer.gen_params_mut()
                 {
-                    let old_val = gp.get_param_base(slot);
+                    let old_val = gp.get_base_param(slot);
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    gp.set_param_base(slot, new_val);
+                    gp.set_base_param(slot, new_val);
                     let cmd = ChangeGraphParamCommand::new(
                         manifold_core::GraphTarget::Generator(layer_id),
                         param_id.clone(),
@@ -1583,13 +1583,13 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
                 if let Some(slot) = slot
                     && let Some(gp) = layer.gen_params_mut()
                 {
-                    let old_val = gp.get_param_base(slot);
+                    let old_val = gp.get_base_param(slot);
                     let new_val = old_val + 1.0;
-                    gp.set_param_base(slot, new_val);
+                    gp.set_base_param(slot, new_val);
                     let cmd = ChangeGraphParamCommand::new(
                         manifold_core::GraphTarget::Generator(layer_id),
                         param_id.clone(),
@@ -1607,13 +1607,13 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
                 if let Some(slot) = slot
                     && let Some(gp) = layer.gen_params_mut()
                 {
-                    let old = gp.get_param_base(slot);
+                    let old = gp.get_base_param(slot);
                     if (old - *default_val).abs() > f32::EPSILON {
-                        gp.set_param_base(slot, *default_val);
+                        gp.set_base_param(slot, *default_val);
                         let cmd = ChangeGraphParamCommand::new(
                             manifold_core::GraphTarget::Generator(layer_id),
                             param_id.clone(),
@@ -1635,7 +1635,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 let target = DriverTarget::GeneratorParam { layer_id };
                 if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                    let slot = layer.resolve_gen_param_slot(param_id.as_ref());
+                    let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
                     let Some(gp) = layer.gen_params() else {
                         return DispatchResult::handled();
                     };

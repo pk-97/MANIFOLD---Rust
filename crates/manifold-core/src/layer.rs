@@ -309,23 +309,6 @@ impl Layer {
         }
     }
 
-    /// Resolve a generator param id to its slot index in
-    /// `gen_params.param_values`. Tier-aware: when this layer carries a
-    /// per-instance `generator_graph` with `preset_metadata`, the lookup
-    /// walks the graph's `params` list (which includes user-added
-    /// bindings); otherwise it falls back to the static
-    /// `preset_definition_registry::generator`. Returns `None` if the id
-    /// isn't recognised.
-    pub fn resolve_gen_param_slot(&self, param_id: &str) -> Option<usize> {
-        if let Some(graph) = self.generator_graph()
-            && let Some(meta) = graph.preset_metadata.as_ref()
-            && !meta.params.is_empty()
-        {
-            return meta.params.iter().position(|p| p.id == param_id);
-        }
-        let gen_type = self.generator_type();
-        crate::preset_definition_registry::param_id_to_index(gen_type, param_id)
-    }
 
 
     /// Ensure both clip ordering caches are up-to-date.
@@ -821,20 +804,11 @@ impl Layer {
         cloned
     }
 
-    /// Set a generator param base value at index.
+    /// Set a generator param base value at index. Routes through the
+    /// unified [`crate::effects::PresetInstance::set_base_param`].
     pub fn set_gen_param_base(&mut self, index: usize, value: f32) {
         if let Some(gp) = &mut self.gen_params {
-            gp.ensure_base_values();
-            if let Some(base) = &mut gp.base_param_values {
-                while base.len() <= index {
-                    base.push(0.0);
-                }
-                base[index] = value;
-            }
-            while gp.param_values.len() <= index {
-                gp.param_values.push(crate::effects::ParamSlot::default());
-            }
-            gp.param_values[index].value = value;
+            gp.set_base_param(index, value);
         }
     }
 }

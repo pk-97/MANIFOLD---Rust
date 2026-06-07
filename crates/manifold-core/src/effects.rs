@@ -1712,7 +1712,19 @@ impl PresetInstance {
     }
 
     /// Set the user-intended base value. Unity lines 113-126.
+    ///
+    /// The single base setter for both kinds (absorbed the former
+    /// generator-named `set_param_base`). A generator migrate-on-touch grows
+    /// `param_values` to the registry length before writing — generator-only,
+    /// because an effect's `param_values` is already aligned by
+    /// `align_to_definition`.
     pub fn set_base_param(&mut self, index: usize, value: f32) {
+        if self.is_generator()
+            && let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
+            && self.param_values.len() < def.param_count
+        {
+            self.migrate_to_registry_length();
+        }
         self.ensure_base_values();
         while self.param_values.len() <= index {
             self.param_values.push(ParamSlot::default());
@@ -1902,6 +1914,17 @@ impl PresetInstance {
     }
 
     pub fn param_id_to_value_index(&self, id: &str) -> Option<usize> {
+        // Generator with a per-instance graph: the graph's `preset_metadata`
+        // params are the slot authority (matches `static_param_count` and the
+        // former `Layer::resolve_gen_param_slot`). Effects, and generators
+        // without a graph, resolve against the registry static prefix +
+        // user-binding tail.
+        if self.is_generator()
+            && let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
+            && !meta.params.is_empty()
+        {
+            return meta.params.iter().position(|p| p.id == id);
+        }
         if let Some(idx) = crate::preset_definition_registry::param_id_to_index(&self.effect_type, id) {
             return Some(idx);
         }
@@ -2366,39 +2389,6 @@ impl PresetInstance {
 /// read the generator registry via `self.effect_type` (which holds the preset
 /// type for both kinds). Only ever called on generator-kind instances.
 impl PresetInstance {
-    /// Read the user-set base value (before modulation), generator naming.
-    pub fn get_param_base(&self, index: usize) -> f32 {
-        if let Some(base) = &self.base_param_values
-            && index < base.len()
-        {
-            return base[index];
-        }
-        self.get_param(index)
-    }
-
-    /// Set the user-intended base value (generator path): migrate-on-touch to
-    /// registry length, then write. No registry clamp (Phase 5 — that clamp was
-    /// the hidden-max bug; the slider range + modulation resolver bound the
-    /// value against the PRESET range, not the stale catalog one).
-    pub fn set_param_base(&mut self, index: usize, value: f32) {
-        if let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
-            && self.param_values.len() < def.param_count
-        {
-            self.migrate_to_registry_length();
-        }
-        self.ensure_base_values();
-        while self.param_values.len() <= index {
-            self.param_values.push(ParamSlot::default());
-        }
-        if let Some(base) = &mut self.base_param_values {
-            while base.len() <= index {
-                base.push(0.0);
-            }
-            base[index] = value;
-        }
-        self.param_values[index].value = value;
-    }
-
     /// Extend-only pad of `param_values`/`base_param_values` to the generator
     /// registry's param count, filling the tail with registry defaults.
     pub fn migrate_to_registry_length(&mut self) {
@@ -2644,18 +2634,11 @@ impl ParamSource for PresetInstance {
     }
 
     fn get_base_param(&self, index: usize) -> f32 {
-        if self.is_generator() {
-            return PresetInstance::get_param_base(self, index);
-        }
         PresetInstance::get_base_param(self, index)
     }
 
     fn set_base_param(&mut self, index: usize, value: f32) {
-        if self.is_generator() {
-            PresetInstance::set_param_base(self, index, value);
-        } else {
-            PresetInstance::set_base_param(self, index, value);
-        }
+        PresetInstance::set_base_param(self, index, value);
     }
 
     fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {

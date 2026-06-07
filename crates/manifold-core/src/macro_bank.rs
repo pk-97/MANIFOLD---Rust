@@ -489,7 +489,7 @@ impl MacroBank {
                         ) else {
                             continue;
                         };
-                        gp.set_param_base(idx, mapped);
+                        gp.set_base_param(idx, mapped);
                     }
                 }
             }
