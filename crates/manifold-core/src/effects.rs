@@ -1881,6 +1881,29 @@ impl PresetInstance {
     /// Returns `None` for unknown ids — callers (driver evaluation,
     /// Ableton update, OSC dispatch) treat this as orphaned addressing.
     /// Boundary-frequency lookup, not a per-pixel hot path.
+    /// The instance's static (registry-defined) param count — the length of
+    /// the `param_values` prefix before the user-added tail. Kind-aware: an
+    /// effect's prefix comes from the effect registry, a generator's from the
+    /// generator registry. Used by the unified expose/unexpose mirror to place
+    /// a new user-binding slot at `static_param_count() + user_position`.
+    pub fn static_param_count(&self) -> usize {
+        // Matches `align_to_definition`'s asymmetric authority: a generator with
+        // a per-instance graph counts its non-user-added graph bindings (the
+        // graph is the param authority); an effect, or a generator without a
+        // graph, uses the kind's registry (an effect's graph metadata is a stub).
+        if self.is_generator()
+            && let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
+        {
+            return meta.bindings.iter().filter(|b| !b.user_added).count();
+        }
+        let def = if self.is_generator() {
+            crate::preset_definition_registry::generator::try_get(&self.effect_type)
+        } else {
+            crate::preset_definition_registry::effect::try_get(&self.effect_type)
+        };
+        def.map(|d| d.param_count).unwrap_or(0)
+    }
+
     pub fn param_id_to_value_index(&self, id: &str) -> Option<usize> {
         if let Some(idx) = crate::preset_definition_registry::effect::param_id_to_index(&self.effect_type, id) {
             return Some(idx);
@@ -2027,10 +2050,7 @@ impl PresetInstance {
     /// returned by [`Self::param_id_to_value_index`]).
     pub fn remove_user_binding_by_id(&mut self, id: &str) -> Option<UserParamBinding> {
         let j = self.user_binding_index(id)?;
-        let n_static = crate::preset_definition_registry::effect::try_get(&self.effect_type)
-            .map(|d| d.param_count)
-            .unwrap_or(0);
-        let value_idx = n_static + j;
+        let value_idx = self.static_param_count() + j;
 
         // Synthesize the removed view BEFORE mutating the graph (it reads
         // the binding + its reshape note).
@@ -2158,11 +2178,11 @@ impl PresetInstance {
         // Reshape (range / curve / invert) rides on the `ParamSpecDef` pushed
         // above — the preset is the single source. No per-instance note.
 
-        // Value slot at the original tail index `n_static + position`.
-        let n_static = crate::preset_definition_registry::effect::try_get(&self.effect_type)
-            .map(|d| d.param_count)
-            .unwrap_or(0);
-        let value_idx = n_static + position;
+        // Value slot at the original tail index `n_static + position`. The
+        // just-restored binding is user-added, so it doesn't change the bundled
+        // (`static_param_count`) prefix — kind-aware so generators restore at
+        // the right slot too.
+        let value_idx = self.static_param_count() + position;
         if value_idx <= self.param_values.len() {
             self.param_values.insert(value_idx, slot_value);
         } else {
@@ -2231,19 +2251,35 @@ impl PresetInstance {
             .map(|b| b.default_value)
             .collect();
 
-        // Kind-aware registry lookup: an effect's static param block is defined
-        // by the effect registry, a generator's by the generator registry. Both
-        // produce the same `[static prefix | user-added tail]` `param_values`
-        // layout, so the alignment below is identical once `def` is resolved —
-        // this is what lets the generator mirror route through the shared
-        // `append_user_binding` / `remove_user_binding_by_id` helpers.
-        let def = if self.is_generator() {
-            crate::preset_definition_registry::generator::try_get(&self.effect_type)
+        // Resolve the static (bundled) param block — the `param_values` prefix
+        // before the user-added tail. The authority is *asymmetric*:
+        //  - **Generator with a per-instance graph:** the graph metadata is the
+        //    source of truth (the generator registry can be stale or `NONE`
+        //    while the graph carries the real params). `meta.params` is
+        //    `[bundled | user-added]`, so the bundled prefix is the non-
+        //    `user_added` bindings.
+        //  - **Effect, or generator without a graph:** the kind's registry. An
+        //    effect's per-instance graph metadata is only a *stub* (may carry
+        //    just user-added bindings), so the registry — not the graph — is the
+        //    bundled-param authority for effects.
+        // Both then share the identical `[static prefix | user-added tail]`
+        // alignment below, which is what lets the generator expose/unexpose
+        // mirror route through the shared `append_user_binding` /
+        // `remove_user_binding_by_id` helpers.
+        let static_defaults: Option<Vec<f32>> = if self.is_generator() {
+            if let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref()) {
+                let bundled = meta.bindings.iter().filter(|b| !b.user_added).count();
+                Some(meta.params.iter().take(bundled).map(|p| p.default_value).collect())
+            } else {
+                crate::preset_definition_registry::generator::try_get(&self.effect_type)
+                    .map(|d| d.param_defs.iter().map(|pd| pd.default_value).collect())
+            }
         } else {
             crate::preset_definition_registry::effect::try_get(&self.effect_type)
+                .map(|d| d.param_defs.iter().map(|pd| pd.default_value).collect())
         };
-        if let Some(def) = def {
-            let static_target = def.param_count;
+        if let Some(static_defaults) = static_defaults {
+            let static_target = static_defaults.len();
             let n_user = user_defaults.len();
             let target = static_target + n_user;
             if self.param_values.len() == target {
@@ -2278,12 +2314,7 @@ impl PresetInstance {
                 .take(static_target)
                 .skip(static_copy)
             {
-                *slot = ParamSlot::exposed(
-                    def.param_defs
-                        .get(i)
-                        .map(|pd| pd.default_value)
-                        .unwrap_or(0.0),
-                );
+                *slot = ParamSlot::exposed(static_defaults.get(i).copied().unwrap_or(0.0));
             }
             // User-binding tail — copy what we have, pad from binding defaults.
             for j in 0..n_user {
@@ -2311,11 +2342,7 @@ impl PresetInstance {
                     .take(static_target)
                     .skip(base_static_copy)
                 {
-                    *slot = def
-                        .param_defs
-                        .get(i)
-                        .map(|pd| pd.default_value)
-                        .unwrap_or(0.0);
+                    *slot = static_defaults.get(i).copied().unwrap_or(0.0);
                 }
                 for j in 0..n_user {
                     aligned_base[static_target + j] = base_user_tail_now

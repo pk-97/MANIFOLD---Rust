@@ -924,21 +924,12 @@ enum NodeExposeReverse {
         /// `exposed_params` set. `true` if it was present before
         /// execute, `false` otherwise. Restored unconditionally on undo.
         prev_in_set: bool,
-        /// Per-target mirror reverse state. Exactly one of the two
-        /// inner variants ever populates per execute — the dispatch
-        /// is keyed off the command's `target` field, not stored on
-        /// the reverse state.
-        mirror: MirrorReverse,
+        /// Mirror reverse state. Mirror collapse: effect and generator
+        /// targets both run through `mirror_effect_side` over the target's
+        /// `&mut PresetInstance` (the generator graph lives on `gen_params`),
+        /// so there is one reverse type for both.
+        mirror: EffectMirrorReverse,
     },
-}
-
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-enum MirrorReverse {
-    /// Effect target. Restored via `unmirror_effect_side`.
-    Effect(EffectMirrorReverse),
-    /// Generator target. Restored via `unmirror_generator_side`.
-    Generator(GeneratorMirrorReverse),
 }
 
 // `RemovedUserBinding` is large because it captures the full
@@ -987,68 +978,6 @@ enum EffectMirrorReverse {
     /// No-op: the Effect-side state already matched the requested
     /// state (idempotent re-toggle). Nothing to undo on the mirror.
     NoOp,
-}
-
-/// Generator-side reverse state for `ToggleNodeParamExposeCommand`.
-/// Generators (approach A in `docs/EFFECT_GENERATOR_CARD_UNIFICATION.md`)
-/// store user-added binding metadata in the **graph itself** — new
-/// entries get appended to `preset_metadata.params` + `bindings`, and
-/// `gp.param_values` grows by one slot. There's no parallel
-/// `Vec<UserParamBinding>` on the host like effects use; the graph is
-/// the single source of truth for everything except the per-frame
-/// value bus.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-enum GeneratorMirrorReverse {
-    /// Exposure toggle covered an existing (bundled or already-added)
-    /// binding — nothing to do on the metadata side beyond the
-    /// `exposed_params` flip handled at the outer level. Slot value
-    /// stays.
-    NoOp,
-    /// Appended a new user-added binding. Undo removes the
-    /// `BindingDef` + `ParamSpecDef` pair (both freshly appended at
-    /// the tail) and pops the matching `gp.param_values` slot.
-    AppendedUserBinding {
-        /// The id we minted for this binding. Captured for `Debug`
-        /// formatting and test assertions; undo removes by positional
-        /// index rather than by id, so the field is not read during
-        /// `unmirror_generator_side`.
-        #[allow(dead_code)]
-        user_param_id: String,
-        /// Tail index where the new `BindingDef` was inserted. Always
-        /// `bindings.len() - 1` immediately after append, captured for
-        /// robustness against intervening edits before undo.
-        binding_index: usize,
-        /// Tail index where the new `ParamSpecDef` was inserted.
-        spec_index: usize,
-        /// Slot index in `gp.param_values` where the new value lives.
-        /// `spec_index` and `slot_index` track the same position — both
-        /// captured for assertion-friendly undo restoration.
-        slot_index: usize,
-    },
-    /// Removed a user-added binding (user_added=true). Undo
-    /// reinserts the BindingDef + ParamSpecDef at the captured
-    /// positions, restores the slot value at `slot_index`, and
-    /// re-attaches any orphaned automation rows.
-    RemovedUserBinding {
-        binding: manifold_core::effect_graph_def::BindingDef,
-        spec: manifold_core::effect_graph_def::ParamSpecDef,
-        binding_index: usize,
-        spec_index: usize,
-        slot_index: usize,
-        slot_value: f32,
-        /// Drivers pruned from `gp.drivers` because their `param_id`
-        /// matched the removed binding's id.
-        removed_drivers: Vec<manifold_core::effects::ParameterDriver>,
-        /// Envelopes pruned from `gp.envelopes`. Generators store
-        /// envelopes directly on `PresetInstance` (not on the
-        /// host layer like effects do), so capturing them needs only
-        /// the same borrow as the rest of the gen-mirror cleanup.
-        removed_envelopes: Vec<manifold_core::effects::ParamEnvelope>,
-        /// Ableton mappings pruned from `gp.ableton_mappings`.
-        removed_ableton_mappings:
-            Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
-    },
 }
 
 impl ToggleNodeParamExposeCommand {
@@ -1211,11 +1140,10 @@ impl Command for ToggleNodeParamExposeCommand {
         let inner_convert = self.inner_meta.unwrap_or(manifold_core::effects::ParamConvert::Float);
         let inner_is_angle = self.inner_is_angle;
 
-        // Graph-side write — for Effect targets, capture the
-        // static-block slot so the effect-side mirror knows whether
-        // to flip an existing `param_values[i].exposed` or append a
-        // user binding. For Generator targets, capture the spec for
-        // the user-added append/remove path directly on the graph.
+        // Graph-side write — flip the node's `exposed_params` membership and
+        // locate the static-block slot (if any). Identical for both kinds:
+        // `with_target_graph_mut` resolves the target's graph (an effect's, or
+        // a layer generator's `gen_params.graph`).
         let graph_result = with_target_graph_mut(
             project,
             &self.target,
@@ -1225,97 +1153,49 @@ impl Command for ToggleNodeParamExposeCommand {
                 let prev_in_set = flip_graph_exposed(def, &node_id, &inner_param, expose)
                     .unwrap_or(false);
                 let static_slot = static_slot_for(def, &node_id, &inner_param);
-                let gen_spec = match &self.target {
-                    GraphTarget::Generator(_) => Some(prepare_generator_mirror(
-                        def,
-                        &node_id,
-                        &node_handle,
-                        &inner_param,
-                        expose,
-                        &inner_label,
-                        inner_min,
-                        inner_max,
-                        inner_default,
-                        inner_convert,
-                    )),
-                    GraphTarget::Effect(_) => None,
-                };
-                (prev_in_set, static_slot, gen_spec)
+                (prev_in_set, static_slot)
             },
         );
 
-        let Some((prev_in_set, static_slot, gen_spec)) = graph_result else {
+        let Some((prev_in_set, static_slot)) = graph_result else {
             // Target didn't resolve — nothing to undo.
             self.reverse = NodeExposeReverse::None;
             return;
         };
 
-        // Per-target mirror. Effect mirror touches PresetInstance +
-        // host layer (envelopes); generator mirror touches the layer's
-        // PresetInstance only.
-        let mirror = match &self.target {
-            GraphTarget::Effect(effect_id) => {
-                let effect = match project.find_effect_by_id_mut(effect_id) {
-                    Some(fx) => fx,
-                    None => {
-                        // Effect was deleted between graph borrow and
-                        // mirror borrow. Capture just the graph bit so
-                        // undo restores it; no mirror to record.
-                        self.reverse = NodeExposeReverse::Captured {
-                            prev_in_set,
-                            mirror: MirrorReverse::Effect(EffectMirrorReverse::NoOp),
-                        };
-                        return;
-                    }
-                };
-                // Envelope-home unification: envelopes ride on the
-                // instance, so `mirror_effect_side` prunes + captures them
-                // in the same borrow as drivers / Ableton mappings — no
-                // separate layer walk.
-                let effect_mirror = mirror_effect_side(
-                    effect,
-                    &node_id,
-                    &node_handle,
-                    &inner_param,
-                    expose,
-                    static_slot,
-                    &inner_label,
-                    inner_min,
-                    inner_max,
-                    inner_default,
-                    inner_convert,
-                    inner_is_angle,
-                );
-                MirrorReverse::Effect(effect_mirror)
-            }
-            GraphTarget::Generator(layer_id) => {
-                // Generator side: apply gen_spec to the layer's
-                // PresetInstance. The spec is pre-computed
-                // against the graph borrow so we know exactly which
-                // (binding, spec) pair was just appended or which
-                // slot needs removal.
-                let Some(spec) = gen_spec else {
-                    // No spec means the graph borrow returned `None`
-                    // for `prepare_generator_mirror` — defensive
-                    // fall-through. Capture as NoOp.
-                    self.reverse = NodeExposeReverse::Captured {
-                        prev_in_set,
-                        mirror: MirrorReverse::Generator(GeneratorMirrorReverse::NoOp),
-                    };
-                    return;
-                };
-                let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) else {
-                    // Layer vanished between graph borrow and gen-params
-                    // borrow. Capture the graph bit only.
-                    self.reverse = NodeExposeReverse::Captured {
-                        prev_in_set,
-                        mirror: MirrorReverse::Generator(GeneratorMirrorReverse::NoOp),
-                    };
-                    return;
-                };
-                let gen_mirror = apply_generator_mirror(layer, spec);
-                MirrorReverse::Generator(gen_mirror)
-            }
+        // Mirror collapse: both effect and generator targets run through
+        // `mirror_effect_side` over the target's `&mut PresetInstance` — a
+        // bundled param flips its `param_values[slot].exposed`, a user-added
+        // param appends/removes a binding (and prunes its automation) via the
+        // kind-aware `append_user_binding` / `remove_user_binding_by_id`. A
+        // generator's `param_values[].exposed` bool is unread (its card shows
+        // every graph param), so the bundled-slot flip is a harmless no-op
+        // there; the real exposure is the `exposed_params` set flipped above.
+        let instance: Option<&mut manifold_core::effects::PresetInstance> = match &self.target {
+            GraphTarget::Effect(effect_id) => project.find_effect_by_id_mut(effect_id),
+            GraphTarget::Generator(layer_id) => project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .map(|(_, layer)| layer.gen_params_or_init()),
+        };
+        let mirror = match instance {
+            Some(inst) => mirror_effect_side(
+                inst,
+                &node_id,
+                &node_handle,
+                &inner_param,
+                expose,
+                static_slot,
+                &inner_label,
+                inner_min,
+                inner_max,
+                inner_default,
+                inner_convert,
+                inner_is_angle,
+            ),
+            // Instance vanished between the graph borrow and the mirror borrow.
+            // Capture just the graph bit so undo restores it.
+            None => EffectMirrorReverse::NoOp,
         };
 
         self.reverse = NodeExposeReverse::Captured {
@@ -1337,39 +1217,23 @@ impl Command for ToggleNodeParamExposeCommand {
         let node_id = self.node_id.clone();
         let inner_param = self.inner_param.clone();
 
-        match mirror {
-            MirrorReverse::Effect(effect_mirror) => {
-                // Envelope-home unification: envelopes restore onto the
-                // instance inside `unmirror_effect_side`, in the same borrow
-                // as drivers / Ableton mappings.
-                if let GraphTarget::Effect(effect_id) = &self.target
-                    && let Some(effect) = project.find_effect_by_id_mut(effect_id)
-                {
-                    unmirror_effect_side(effect, effect_mirror);
-                }
-
-                // Effect-side graph restore — bit only. The
-                // generator-side restore handles its own graph
-                // bookkeeping inline because the layer borrow
-                // covers it.
-                let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-                    restore_graph_exposed(def, &node_id, &inner_param, prev_in_set);
-                });
-            }
-            MirrorReverse::Generator(gen_mirror) => {
-                if let GraphTarget::Generator(layer_id) = &self.target
-                    && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-                {
-                    unmirror_generator_side(
-                        layer,
-                        gen_mirror,
-                        prev_in_set,
-                        &node_id,
-                        &inner_param,
-                    );
-                }
-            }
+        // Mirror collapse: restore the target's `&mut PresetInstance` through
+        // `unmirror_effect_side` (binding + slot + automation, all in one
+        // borrow now that envelopes ride on the instance), then restore the
+        // graph `exposed_params` bit. Identical for both kinds.
+        let instance: Option<&mut manifold_core::effects::PresetInstance> = match &self.target {
+            GraphTarget::Effect(effect_id) => project.find_effect_by_id_mut(effect_id),
+            GraphTarget::Generator(layer_id) => project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .map(|(_, layer)| layer.gen_params_or_init()),
+        };
+        if let Some(inst) = instance {
+            unmirror_effect_side(inst, mirror);
         }
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            restore_graph_exposed(def, &node_id, &inner_param, prev_in_set);
+        });
     }
 
     fn description(&self) -> &str {
@@ -1456,10 +1320,9 @@ fn mirror_effect_side(
         let binding = user_bindings[position].clone();
         let binding_id = binding.id.clone();
         // Capture the slot value BEFORE removal (the slot lives at
-        // static_count + position).
-        let static_count = manifold_core::preset_definition_registry::effect::try_get(effect.effect_type())
-            .map(|def| def.param_count)
-            .unwrap_or(0);
+        // static_count + position). Kind-aware so a generator instance routes
+        // through here too (mirror collapse).
+        let static_count = effect.static_param_count();
         let slot_idx = static_count + position;
         let slot_value = effect
             .param_values
@@ -1577,487 +1440,6 @@ fn unmirror_effect_side(
                     .envelopes
                     .get_or_insert_with(Vec::new)
                     .extend(removed_envelopes);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Generator-side mirror helpers
-// ---------------------------------------------------------------------------
-
-/// Specification of what the generator-side mirror needs to do to
-/// `Layer.gen_params`, pre-computed against the graph borrow so the
-/// downstream layer borrow has zero metadata work to do.
-///
-/// `RemovedUserBinding` captures a full `BindingDef` + `ParamSpecDef`
-/// for undo, which makes it ~250 bytes — well past the
-/// `large_enum_variant` lint threshold. The spec lives on the stack
-/// for one execute() call and is then folded into
-/// `GeneratorMirrorReverse` (which has the same shape constraint),
-/// so the size is bounded by the undo-stack cap (200 entries). Boxing
-/// just adds heap traffic for no benefit here.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-enum GeneratorMirrorSpec {
-    /// No metadata change needed — the binding already existed before
-    /// (bundled or previously user-added). Caller still bumps the
-    /// graph version through `with_target_graph_mut`.
-    NoOp,
-    /// A user-added binding was just appended to the graph's
-    /// `preset_metadata.{params, bindings}`. The layer's
-    /// `gp.param_values` needs a new tail slot to match.
-    AppendedUserBinding {
-        user_param_id: String,
-        binding_index: usize,
-        spec_index: usize,
-        slot_index: usize,
-        default_value: f32,
-    },
-    /// A user-added binding was just removed from the graph's
-    /// `preset_metadata.{params, bindings}`. The layer's
-    /// `gp.param_values` slot at `slot_index` needs removing, plus
-    /// orphaned drivers/envelopes/Ableton mappings get pruned + captured.
-    RemovedUserBinding {
-        binding: manifold_core::effect_graph_def::BindingDef,
-        spec: manifold_core::effect_graph_def::ParamSpecDef,
-        binding_index: usize,
-        spec_index: usize,
-        slot_index: usize,
-    },
-}
-
-/// Run inside `with_target_graph_mut` for a `GraphTarget::Generator`.
-/// Either appends a new user-added `(BindingDef, ParamSpecDef)` pair
-/// (when exposing a previously-unexposed inner param with no existing
-/// binding), removes an existing user-added pair (when unexposing a
-/// `user_added=true` binding), or returns `NoOp` (bundled bindings on
-/// expose/unexpose just flip `exposed_params`).
-#[allow(clippy::too_many_arguments)]
-fn prepare_generator_mirror(
-    def: &mut EffectGraphDef,
-    node_id: &NodeId,
-    node_handle: &str,
-    inner_param: &str,
-    expose: bool,
-    inner_label: &str,
-    inner_min: f32,
-    inner_max: f32,
-    inner_default: f32,
-    inner_convert: manifold_core::effects::ParamConvert,
-) -> GeneratorMirrorSpec {
-    use manifold_core::effect_graph_def::{
-        BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
-    };
-
-    // Resolve / create the preset metadata block. Generators
-    // delivered as JSON presets always carry metadata; defensive
-    // synth keeps the bookkeeping uniform if the graph is missing it.
-    let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
-        id: manifold_core::PresetTypeId::new(""),
-        display_name: String::new(),
-        category: String::new(),
-        osc_prefix: String::new(),
-        legacy_discriminant: None,
-        available: true,
-        is_line_based: false,
-        params: Vec::new(),
-        bindings: Vec::new(),
-        skip_mode: Default::default(),
-        param_aliases: Vec::new(),
-        value_aliases: Vec::new(),
-        string_params: Vec::new(),
-        string_bindings: Vec::new(),
-    });
-
-    // Locate an existing binding for (node_id, param). A bundled
-    // binding stays in metadata across uncheck; a user-added binding
-    // gets pulled along with its slot.
-    let existing = meta
-        .bindings
-        .iter()
-        .position(|b| match &b.target {
-            BindingTarget::Node { node_id: nid, param } => {
-                nid == node_id && param == inner_param
-            }
-            BindingTarget::Composite { .. } => false,
-        });
-
-    if expose {
-        if existing.is_some() {
-            // Bundled or already-added binding — `exposed_params`
-            // bit is the only state change. Slot already exists.
-            return GeneratorMirrorSpec::NoOp;
-        }
-        // Mint a stable user-binding id. Reuses the same generator
-        // as effect-side user bindings for symmetry — drivers /
-        // envelopes / Ableton bindings address by id and the
-        // namespace is shared.
-        let existing_ids: Vec<&str> =
-            meta.bindings.iter().map(|b| b.id.as_str()).collect();
-        let user_param_id = generate_unique_user_param_id_in(
-            node_handle,
-            inner_param,
-            &existing_ids,
-        );
-        let spec = ParamSpecDef {
-            id: user_param_id.clone(),
-            name: inner_label.to_string(),
-            min: inner_min,
-            max: inner_max,
-            default_value: inner_default,
-            whole_numbers: matches!(
-                inner_convert,
-                manifold_core::effects::ParamConvert::IntRound
-                    | manifold_core::effects::ParamConvert::EnumRound
-                    | manifold_core::effects::ParamConvert::Trigger
-            ),
-            is_toggle: matches!(
-                inner_convert,
-                manifold_core::effects::ParamConvert::BoolThreshold
-            ),
-            is_trigger: matches!(
-                inner_convert,
-                manifold_core::effects::ParamConvert::Trigger
-            ),
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            // Freshly-exposed params ship identity slider response.
-            curve: manifold_core::macro_bank::MacroCurve::Linear,
-            invert: false,
-        };
-        let binding = BindingDef {
-            id: user_param_id.clone(),
-            label: inner_label.to_string(),
-            default_value: inner_default,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: inner_param.to_string(),
-            },
-            convert: inner_convert,
-            user_added: true,
-            scale: 1.0,
-            offset: 0.0,
-        };
-        let spec_index = meta.params.len();
-        let binding_index = meta.bindings.len();
-        meta.params.push(spec);
-        meta.bindings.push(binding);
-        // Slot index matches spec position — `gp.param_values` is
-        // positional against `preset_metadata.params`.
-        let slot_index = spec_index;
-        GeneratorMirrorSpec::AppendedUserBinding {
-            user_param_id,
-            binding_index,
-            spec_index,
-            slot_index,
-            default_value: inner_default,
-        }
-    } else {
-        // Unexpose: only user-added bindings get pulled. Bundled
-        // bindings (user_added=false) survive — uncheck flips
-        // `exposed_params` only, the slot stays so drivers /
-        // Ableton / OSC mappings keep addressing it.
-        let Some(binding_index) = existing else {
-            return GeneratorMirrorSpec::NoOp;
-        };
-        let binding = &meta.bindings[binding_index];
-        if !binding.user_added {
-            return GeneratorMirrorSpec::NoOp;
-        }
-        let binding_id = binding.id.clone();
-        let spec_index = meta.params.iter().position(|p| p.id == binding_id);
-        // The spec MUST exist alongside its binding; both are
-        // appended atomically by the expose path. Defensive bail if
-        // somehow misaligned.
-        let Some(spec_index) = spec_index else {
-            return GeneratorMirrorSpec::NoOp;
-        };
-        let binding = meta.bindings.remove(binding_index);
-        let spec = meta.params.remove(spec_index);
-        let slot_index = spec_index;
-        GeneratorMirrorSpec::RemovedUserBinding {
-            binding,
-            spec,
-            binding_index,
-            spec_index,
-            slot_index,
-        }
-    }
-}
-
-/// Local user-id minter for generator user bindings. Mirrors the
-/// effect-side `generate_user_param_id` shape but operates on an
-/// `&[&str]` of existing ids (the generator graph stores them as
-/// `BindingDef.id`s rather than as a `Vec<UserParamBinding>`).
-fn generate_unique_user_param_id_in(
-    node_handle: &str,
-    inner_param: &str,
-    existing_ids: &[&str],
-) -> String {
-    // Trim long handles to keep the user-facing id short. Same
-    // convention as `crate::commands::effects::generate_user_param_id`.
-    let short_handle = node_handle
-        .rsplit_once('.')
-        .map(|(_, tail)| tail)
-        .unwrap_or(node_handle);
-    let base = format!("user.{short_handle}.{inner_param}");
-    let mut n: u32 = 1;
-    loop {
-        let candidate = format!("{base}.{n}");
-        if !existing_ids.iter().any(|id| *id == candidate) {
-            return candidate;
-        }
-        n += 1;
-    }
-}
-
-/// Apply the precomputed `GeneratorMirrorSpec` to a layer's
-/// `PresetInstance`. Returns the matching
-/// `GeneratorMirrorReverse` for undo capture.
-fn apply_generator_mirror(
-    layer: &mut manifold_core::layer::Layer,
-    spec: GeneratorMirrorSpec,
-) -> GeneratorMirrorReverse {
-    match spec {
-        GeneratorMirrorSpec::NoOp => GeneratorMirrorReverse::NoOp,
-        GeneratorMirrorSpec::AppendedUserBinding {
-            user_param_id,
-            binding_index,
-            spec_index,
-            slot_index,
-            default_value,
-        } => {
-            // Extend gp.param_values to match the new
-            // preset_metadata.params length. Slot lives at the tail.
-            if let Some(gp) = layer.gen_params_mut() {
-                if gp.param_values.len() <= slot_index {
-                    while gp.param_values.len() < slot_index {
-                        gp.param_values
-                            .push(manifold_core::effects::ParamSlot::default());
-                    }
-                    gp.param_values
-                        .push(manifold_core::effects::ParamSlot::exposed(default_value));
-                } else {
-                    gp.param_values[slot_index] =
-                        manifold_core::effects::ParamSlot::exposed(default_value);
-                }
-                if let Some(base) = gp.base_param_values.as_mut() {
-                    if base.len() <= slot_index {
-                        while base.len() < slot_index {
-                            base.push(0.0);
-                        }
-                        base.push(default_value);
-                    } else {
-                        base[slot_index] = default_value;
-                    }
-                }
-            }
-            GeneratorMirrorReverse::AppendedUserBinding {
-                user_param_id,
-                binding_index,
-                spec_index,
-                slot_index,
-            }
-        }
-        GeneratorMirrorSpec::RemovedUserBinding {
-            binding,
-            spec,
-            binding_index,
-            spec_index,
-            slot_index,
-        } => {
-            let binding_id = binding.id.clone();
-            let mut slot_value = binding.default_value;
-            let mut removed_drivers: Vec<manifold_core::effects::ParameterDriver> =
-                Vec::new();
-            let mut removed_envelopes: Vec<manifold_core::effects::ParamEnvelope> =
-                Vec::new();
-            let mut removed_ableton_mappings: Vec<
-                manifold_core::ableton_mapping::AbletonParamMapping,
-            > = Vec::new();
-            if let Some(gp) = layer.gen_params_mut() {
-                if slot_index < gp.param_values.len() {
-                    slot_value = gp.param_values.remove(slot_index).value;
-                }
-                if let Some(base) = gp.base_param_values.as_mut()
-                    && slot_index < base.len()
-                {
-                    base.remove(slot_index);
-                }
-                // Prune drivers / envelopes / Ableton referencing the
-                // removed binding's id. Each automation row references
-                // params by `param_id` (a stable string), not by slot
-                // index, so id-based retain is the correct semantics.
-                if let Some(ds) = gp.drivers.as_mut() {
-                    ds.retain(|d| {
-                        let keep = d.param_id != binding_id;
-                        if !keep {
-                            removed_drivers.push(d.clone());
-                        }
-                        keep
-                    });
-                    if ds.is_empty() {
-                        gp.drivers = None;
-                    }
-                }
-                if let Some(es) = gp.envelopes.as_mut() {
-                    es.retain(|e| {
-                        let keep = e.param_id != binding_id;
-                        if !keep {
-                            removed_envelopes.push(e.clone());
-                        }
-                        keep
-                    });
-                    if es.is_empty() {
-                        gp.envelopes = None;
-                    }
-                }
-                if let Some(ms) = gp.ableton_mappings.as_mut() {
-                    ms.retain(|m| {
-                        let keep = m.param_id != binding_id;
-                        if !keep {
-                            removed_ableton_mappings.push(m.clone());
-                        }
-                        keep
-                    });
-                    if ms.is_empty() {
-                        gp.ableton_mappings = None;
-                    }
-                }
-            }
-            GeneratorMirrorReverse::RemovedUserBinding {
-                binding,
-                spec,
-                binding_index,
-                spec_index,
-                slot_index,
-                slot_value,
-                removed_drivers,
-                removed_envelopes,
-                removed_ableton_mappings,
-            }
-        }
-    }
-}
-
-/// Reverse `apply_generator_mirror` for undo. Restores both the
-/// `gp.param_values` slot + automation AND the graph-side
-/// `preset_metadata.{params, bindings}` entries — one layer borrow
-/// covers everything because the graph lives inside `Layer`.
-///
-/// `prev_in_set` + `node_handle` + `inner_param` come from the
-/// outer `NodeExposeReverse::Captured` state so we can restore the
-/// `exposed_params` bit in the same pass, saving the
-/// `with_existing_target_graph_mut` call that the effect-side undo
-/// uses at the end.
-fn unmirror_generator_side(
-    layer: &mut manifold_core::layer::Layer,
-    mirror: GeneratorMirrorReverse,
-    prev_in_set: bool,
-    node_id: &NodeId,
-    inner_param: &str,
-) {
-    // Restore the graph-side metadata first so the slot it points
-    // at exists / doesn't exist before we touch `gp.param_values`.
-    // The generator graph lives on `gen_params` now (graph-home unification).
-    if let Some(gp) = layer.gen_params_mut() {
-        if let Some(def) = gp.graph.as_mut() {
-            match &mirror {
-                GeneratorMirrorReverse::AppendedUserBinding {
-                    binding_index,
-                    spec_index,
-                    ..
-                } => {
-                    if let Some(meta) = def.preset_metadata.as_mut() {
-                        if *binding_index < meta.bindings.len() {
-                            meta.bindings.remove(*binding_index);
-                        }
-                        if *spec_index < meta.params.len() {
-                            meta.params.remove(*spec_index);
-                        }
-                    }
-                }
-                GeneratorMirrorReverse::RemovedUserBinding {
-                    binding,
-                    spec,
-                    binding_index,
-                    spec_index,
-                    ..
-                } => {
-                    if let Some(meta) = def.preset_metadata.as_mut() {
-                        let bi = (*binding_index).min(meta.bindings.len());
-                        let si = (*spec_index).min(meta.params.len());
-                        meta.bindings.insert(bi, binding.clone());
-                        meta.params.insert(si, spec.clone());
-                    }
-                }
-                GeneratorMirrorReverse::NoOp => {}
-            }
-            // Exposure bit lives on the node's `exposed_params` set —
-            // restore it inline since we already hold the graph borrow.
-            restore_graph_exposed(def, node_id, inner_param, prev_in_set);
-        }
-        // Bump version so the renderer rebuilds against the
-        // restored shape. `with_existing_target_graph_mut` does this
-        // for the effect-side; we mirror it manually here.
-        if gp.graph.is_some() {
-            gp.graph_version = gp.graph_version.wrapping_add(1);
-        }
-    }
-
-    match mirror {
-        GeneratorMirrorReverse::NoOp => {}
-        GeneratorMirrorReverse::AppendedUserBinding { slot_index, .. } => {
-            if let Some(gp) = layer.gen_params_mut() {
-                if slot_index < gp.param_values.len() {
-                    gp.param_values.remove(slot_index);
-                }
-                if let Some(base) = gp.base_param_values.as_mut()
-                    && slot_index < base.len()
-                {
-                    base.remove(slot_index);
-                }
-            }
-        }
-        GeneratorMirrorReverse::RemovedUserBinding {
-            slot_index,
-            slot_value,
-            removed_drivers,
-            removed_envelopes,
-            removed_ableton_mappings,
-            ..
-        } => {
-            if let Some(gp) = layer.gen_params_mut() {
-                let restored = manifold_core::effects::ParamSlot::exposed(slot_value);
-                if slot_index <= gp.param_values.len() {
-                    gp.param_values.insert(slot_index, restored);
-                } else {
-                    gp.param_values.push(restored);
-                }
-                if let Some(base) = gp.base_param_values.as_mut() {
-                    if slot_index <= base.len() {
-                        base.insert(slot_index, slot_value);
-                    } else {
-                        base.push(slot_value);
-                    }
-                }
-                if !removed_drivers.is_empty() {
-                    gp.drivers
-                        .get_or_insert_with(Vec::new)
-                        .extend(removed_drivers);
-                }
-                if !removed_envelopes.is_empty() {
-                    gp.envelopes
-                        .get_or_insert_with(Vec::new)
-                        .extend(removed_envelopes);
-                }
-                if !removed_ableton_mappings.is_empty() {
-                    gp.ableton_mappings
-                        .get_or_insert_with(Vec::new)
-                        .extend(removed_ableton_mappings);
-                }
             }
         }
     }
