@@ -1159,6 +1159,23 @@ pub fn sync_inspector_data(
 ///
 /// One `GraphTarget` covers both arms, so the editor is a single surface that
 /// doesn't fork its data model on Effect vs Generator.
+/// Card title for a preset instance. A project-embedded ("forked") preset is
+/// minted with an id of the form `"{base}#{n}"` (see
+/// [`manifold_core::project::Project::mint_embedded_preset_id`]); when the
+/// instance is on such a variant, the title shows the base catalog name plus a
+/// `(variant)` marker so the operator can see at a glance that this card is on a
+/// project-local fork rather than the shared stock preset. Non-variant instances
+/// show the plain registry display name.
+fn card_preset_name(id: &PresetTypeId, display: impl Fn(&PresetTypeId) -> String) -> String {
+    match id.as_str().split_once('#') {
+        Some((base, _)) => {
+            let base_id = PresetTypeId::from_string(base.to_string());
+            format!("{} (variant)", display(&base_id))
+        }
+        None => display(id),
+    }
+}
+
 pub(crate) fn editor_card_config(
     project: &Project,
     watched_graph_target: Option<&manifold_core::GraphTarget>,
@@ -1537,8 +1554,9 @@ fn effects_to_configs(
                 kind: ParamCardKind::Effect,
                 effect_index: i,
                 effect_id: fx.id.clone(),
-                name: manifold_core::effect_type_registry::display_name(fx.effect_type())
-                    .to_string(),
+                name: card_preset_name(fx.effect_type(), |i| {
+                    manifold_core::effect_type_registry::display_name(i).to_string()
+                }),
                 enabled: fx.enabled,
                 collapsed: fx.collapsed,
                 supports_envelopes: true,
@@ -1837,8 +1855,9 @@ fn gen_params_to_config(
 
     ParamCardConfig {
         kind: ParamCardKind::Generator,
-        name: manifold_core::generator_type_registry::display_name(gp.generator_type())
-            .to_string(),
+        name: card_preset_name(gp.generator_type(), |i| {
+            manifold_core::generator_type_registry::display_name(i).to_string()
+        }),
         // Effect-only fields carry defaults — the generator card ignores
         // them (no enabled toggle, no badges, no per-card graph-mod tint).
         // `layer_id` is supplied separately by the inspector via
