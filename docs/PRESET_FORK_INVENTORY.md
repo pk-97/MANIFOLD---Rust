@@ -47,11 +47,20 @@ playback full suite green (exit 0) incl. the golden Liveschool io round-trip
 `get_param_base`/`resolve_gen_param_slot`/`evaluate_gen_param_envelopes`/
 `effect_type_registry`/`generator_type_registry`/`active_generator_graph_snapshot`
 symbols survive; the only `GraphParamTarget::Generator` uses left are the single
-resolver + two kind-specific picker-context reads (dispatch unified). The
+resolver + two kind-specific picker-context reads (dispatch unified).
+
+**Zero regressions — baseline-proven.** `cargo test --workspace --no-fail-fast`
+on the collapse tip and on `84cdc5bc` (the commit *before* STEP-4 #8–#16) show
+the **identical** failure set — every red is pre-existing on this WIP branch,
+not introduced by the collapse. The full pre-existing list (all baseline-
+confirmed, all in GPU/parity/inventory subsystems untouched by this work):
+Liveschool `FluidSimulation` Ableton mapping; `WireframeDepthGraph` first-frame
+execute; `lut1d` + `watercolor` parity; renderer `plugin_prewarm` (DepthOfField),
+`preset_runtime::…stock_param_reshape…`, 6× `layer_compositor::chain_pool_tests`
+(`anti_clump_particles` GPU assert); `all_wgsl_shaders_validate`; ui
+`generator_max_param_count` + `generator_param_count_fluid_sim_3d`. The
 remaining UI-layer behaviors (editor live drag, modulation config, generator
-snapshot) compile/clippy/grep-clean but want a running app for visual confirm;
-the one renderer execute failure (`WireframeDepthGraph` first-frame) is the
-documented pre-existing in-flight-decomp fail, orthogonal to this work.
+snapshot) compile/clippy/grep-clean but want a running app for visual confirm.
 
 ## How to finish — continuation recipe (post-compaction handoff)
 
