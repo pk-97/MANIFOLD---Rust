@@ -213,37 +213,53 @@ fn migrate_v140_to_v150(root: &mut Value) {
 /// nothing to fold (and a freshly-saved v1.4 project already carries the
 /// bindings in the graph).
 fn migrate_v130_to_v140(root: &mut Value) {
+    // Effects and generators are the same `PresetInstance` shape now, so this
+    // per-instance fold walks all of them through one traversal. Generators
+    // never carried `userParamBindings` (they always used the graph binding
+    // list), so `fold_user_param_bindings` is a no-op on them — including them
+    // keeps the walk kind-agnostic without changing the output.
+    for_each_preset_instance(root, fold_user_param_bindings);
+}
+
+/// Apply `f` to every `PresetInstance` JSON object in the project — master
+/// effects, each layer's effects, each clip's effects, and each layer's
+/// generator (`genParams`). The single per-instance traversal for load
+/// migrations: effects and generators are one type now, so a per-instance
+/// migration walks them here instead of a per-kind hand-rolled loop.
+fn for_each_preset_instance(root: &mut Value, mut f: impl FnMut(&mut Value)) {
     if let Some(effects) = root
         .get_mut("settings")
         .and_then(|s| s.get_mut("masterEffects"))
         .and_then(|e| e.as_array_mut())
     {
         for fx in effects.iter_mut() {
-            fold_user_param_bindings(fx);
+            f(fx);
         }
     }
-    if let Some(layers) = root
+    let Some(layers) = root
         .get_mut("timeline")
         .and_then(|t| t.get_mut("layers"))
         .and_then(|l| l.as_array_mut())
-    {
-        for layer in layers.iter_mut() {
-            if let Some(effects) = layer.get_mut("effects").and_then(|e| e.as_array_mut()) {
-                for fx in effects.iter_mut() {
-                    fold_user_param_bindings(fx);
-                }
+    else {
+        return;
+    };
+    for layer in layers.iter_mut() {
+        if let Some(effects) = layer.get_mut("effects").and_then(|e| e.as_array_mut()) {
+            for fx in effects.iter_mut() {
+                f(fx);
             }
-            if let Some(clips) = layer.get_mut("clips").and_then(|c| c.as_array_mut()) {
-                for clip in clips.iter_mut() {
-                    if let Some(effects) =
-                        clip.get_mut("effects").and_then(|e| e.as_array_mut())
-                    {
-                        for fx in effects.iter_mut() {
-                            fold_user_param_bindings(fx);
-                        }
+        }
+        if let Some(clips) = layer.get_mut("clips").and_then(|c| c.as_array_mut()) {
+            for clip in clips.iter_mut() {
+                if let Some(effects) = clip.get_mut("effects").and_then(|e| e.as_array_mut()) {
+                    for fx in effects.iter_mut() {
+                        f(fx);
                     }
                 }
             }
+        }
+        if let Some(gp) = layer.get_mut("genParams").filter(|g| g.is_object()) {
+            f(gp);
         }
     }
 }
