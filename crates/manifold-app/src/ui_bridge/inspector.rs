@@ -109,6 +109,33 @@ fn effect_env_index(
     Some((id, idx))
 }
 
+/// Resolve a `GraphParamTarget` (the card's effect-row index or generator
+/// marker) to a stable `GraphTarget`, for routing through
+/// `Project::with_preset_graph_mut` and the GraphTarget-keyed editing
+/// commands. The single resolver behind every collapsed param/modulation
+/// dispatch arm: effects address by stable `EffectId` (editor-aware via
+/// `resolve_effect_id`), generators by the active layer's `LayerId`.
+fn resolve_graph_target(
+    gpt: &GraphParamTarget,
+    editor_target: Option<&manifold_core::GraphTarget>,
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    project: &Project,
+) -> Option<manifold_core::GraphTarget> {
+    match gpt {
+        GraphParamTarget::Effect(idx) => {
+            super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *idx)
+                .map(manifold_core::GraphTarget::Effect)
+        }
+        GraphParamTarget::Generator => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project)?;
+            let lid = project.timeline.layers.get(layer_idx)?.layer_id.clone();
+            Some(manifold_core::GraphTarget::Generator(lid))
+        }
+    }
+}
+
 pub(super) fn dispatch_inspector(
     action: &PanelAction,
     project: &mut Project,
@@ -717,25 +744,29 @@ pub(super) fn dispatch_inspector(
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
-        PanelAction::ParamRightClick(GraphParamTarget::Effect(fx_idx), param_id, default_val) => {
-            let tab = effective_tab;
-            let eid = super::resolve_effect_id(
-                editor_target,
-                tab,
-                active_layer,
-                selection,
-                project,
-                *fx_idx,
-            );
-            if let Some(eid) = eid
-                && let Some(fx) = project.find_effect_by_id_mut(&eid)
-                && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
+        PanelAction::ParamRightClick(gpt, param_id, default_val) => {
+            // Reset-to-default for both kinds. Routing through
+            // with_preset_graph_mut is what fixed the generator snap-back
+            // (#5): the committed command now resolves and writes the slot
+            // for a generator exactly as for an effect.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let old = fx.get_base_param(slot);
-                if (old - *default_val).abs() > f32::EPSILON {
-                    fx.set_base_param(slot, *default_val);
+                let changed = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        let slot = inst.param_id_to_value_index(param_id.as_ref())?;
+                        let old = inst.get_base_param(slot);
+                        if (old - *default_val).abs() > f32::EPSILON {
+                            inst.set_base_param(slot, *default_val);
+                            Some(old)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten();
+                if let Some(old) = changed {
                     let cmd = ChangeGraphParamCommand::new(
-                        manifold_core::GraphTarget::Effect(eid),
+                        target,
                         param_id.clone(),
                         old,
                         *default_val,
@@ -1601,33 +1632,6 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::ParamRightClick(GraphParamTarget::Generator, param_id, default_val) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-            {
-                let layer_id = layer.layer_id.clone();
-                let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
-                if let Some(slot) = slot
-                    && let Some(gp) = layer.gen_params_mut()
-                {
-                    let old = gp.get_base_param(slot);
-                    if (old - *default_val).abs() > f32::EPSILON {
-                        gp.set_base_param(slot, *default_val);
-                        let cmd = ChangeGraphParamCommand::new(
-                            manifold_core::GraphTarget::Generator(layer_id),
-                            param_id.clone(),
-                            old,
-                            *default_val,
-                        );
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
         // ── Gen modulation ─────────────────────────────────────────
         PanelAction::DriverToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
