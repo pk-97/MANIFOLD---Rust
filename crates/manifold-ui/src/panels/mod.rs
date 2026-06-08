@@ -474,6 +474,12 @@ pub enum PanelAction {
     /// retarget the layer to it (Phase-4 "make unique"), so a per-instance
     /// recalibration becomes a named, shareable variant.
     MakeGeneratorUnique,
+    /// Export the active layer's generator preset to a `.json` file (Phase-4;
+    /// opens a native save dialog, writes via `manifold_io::preset_file`).
+    ExportGeneratorPreset,
+    /// Import a `.json` preset file as a project-embedded preset and retarget
+    /// the active layer to it (Phase-4; native open dialog).
+    ImportGeneratorPreset,
 
     // Macros panel collapse
     MacrosCollapseToggle,

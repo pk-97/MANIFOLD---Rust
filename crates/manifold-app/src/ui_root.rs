@@ -1350,6 +1350,8 @@ impl UIRoot {
                     items.push(DropdownItem::new("Paste Generator"));
                 }
                 items.push(DropdownItem::new("Make Unique"));
+                items.push(DropdownItem::new("Export Preset…"));
+                items.push(DropdownItem::new("Import Preset…"));
                 self.dropdown_context = Some(DropdownContext::GenCardContext);
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -1477,6 +1479,8 @@ impl UIRoot {
                     Some("Copy Generator") => Some(PanelAction::CopyGenerator),
                     Some("Paste Generator") => Some(PanelAction::PasteGenerator),
                     Some("Make Unique") => Some(PanelAction::MakeGeneratorUnique),
+                    Some("Export Preset\u{2026}") => Some(PanelAction::ExportGeneratorPreset),
+                    Some("Import Preset\u{2026}") => Some(PanelAction::ImportGeneratorPreset),
                     _ => None,
                 }
             }

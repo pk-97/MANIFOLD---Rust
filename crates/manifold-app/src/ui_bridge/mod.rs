@@ -214,6 +214,8 @@ pub fn dispatch(
         | PanelAction::CopyGenerator
         | PanelAction::PasteGenerator
         | PanelAction::MakeGeneratorUnique
+        | PanelAction::ExportGeneratorPreset
+        | PanelAction::ImportGeneratorPreset
         | PanelAction::MacrosCollapseToggle
         | PanelAction::MacroSnapshot(_)
         | PanelAction::MacroChanged(..)
