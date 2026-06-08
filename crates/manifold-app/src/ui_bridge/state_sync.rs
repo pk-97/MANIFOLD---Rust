@@ -1269,6 +1269,7 @@ fn effect_card_config_by_id(
 
 /// OSC address scope for effect param configs.
 /// Master effects use `/master/`, layer effects use `/layer/{id}/`, clips have no OSC.
+#[derive(Clone, Copy)]
 enum OscScope<'a> {
     Master,
     Layer(&'a str),
@@ -1379,6 +1380,9 @@ fn build_card_modulation(
     m
 }
 
+/// Thin adapter: build a card config for each effect in `effects`, skipping
+/// any whose preset def is missing. The real work is the unified
+/// [`preset_to_config`].
 fn effects_to_configs(
     effects: &[PresetInstance],
     osc_scope: OscScope<'_>,
@@ -1387,124 +1391,123 @@ fn effects_to_configs(
         .iter()
         .enumerate()
         .filter_map(|(i, fx)| {
-            let reg_def = manifold_core::preset_definition_registry::try_get(fx.effect_type())?;
-            let static_count = reg_def.param_count;
-            // User bindings are synthesized from the graph's user-added
-            // metadata + reshape notes (the single binding-storage list).
-            let user_bindings = fx.user_param_bindings();
-            let user_count = user_bindings.len();
-            let n = static_count + user_count;
+            preset_to_config(
+                fx,
+                manifold_core::preset_def::PresetKind::Effect,
+                i,
+                osc_scope,
+                None,
+                None,
+            )
+        })
+        .collect()
+}
 
-            // Static prefix: one ParamInfo per def-declared slot.
-            let mut params: Vec<ParamInfo> = reg_def
+/// One normalized param row, sourced per-kind, then rendered uniformly into a
+/// [`ParamInfo`] by [`preset_to_config`]. Bridges the two spec shapes
+/// (registry `ParamDef` and graph-metadata `ParamSpecDef`) into one.
+struct SpecRow {
+    id: String,
+    name: String,
+    min: f32,
+    max: f32,
+    default: f32,
+    whole_numbers: bool,
+    is_angle: bool,
+    is_toggle: bool,
+    is_trigger: bool,
+    value_labels: Option<Vec<String>>,
+    exposed: bool,
+}
+
+/// The empty generator card (no resolvable param source). Mirrors the old
+/// `gen_params_to_config` fallback exactly.
+fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
+    ParamCardConfig {
+        kind: ParamCardKind::Generator,
+        name: inst.generator_type().to_string(),
+        collapsed: false,
+        effect_index: 0,
+        effect_id: manifold_core::EffectId::new(""),
+        enabled: true,
+        supports_envelopes: true,
+        has_drv: false,
+        has_env: false,
+        has_abl: false,
+        has_graph_mod: false,
+        layer_id: None,
+        params: vec![],
+        string_params: vec![],
+        driver_active: vec![],
+        envelope_active: vec![],
+        trim_min: vec![],
+        trim_max: vec![],
+        target_norm: vec![],
+        env_attack: vec![],
+        env_decay: vec![],
+        env_sustain: vec![],
+        env_release: vec![],
+        env_mode: vec![],
+        env_random_jump: vec![],
+        env_range_min: vec![],
+        env_range_max: vec![],
+        driver_beat_div_idx: vec![],
+        driver_waveform_idx: vec![],
+        driver_reversed: vec![],
+        driver_dotted: vec![],
+        driver_triplet: vec![],
+    }
+}
+
+/// Unified card-config builder for any [`PresetInstance`] (effect or
+/// generator). Fork #9: the two parallel builders (`effects_to_configs` body
+/// and `gen_params_to_config`) collapse here — the kind fork is confined to
+/// param-sourcing (effects: registry static prefix + user tail; generators:
+/// graph metadata if present, else registry) and a handful of card fields.
+/// Everything downstream — the `ParamInfo` construction, the `id->index`
+/// lookup, [`build_card_modulation`], the `ParamCardConfig` assembly — is
+/// shared. Returns `None` only for an effect whose preset def is missing
+/// (skipped as a card); a generator with no source returns the empty card.
+fn preset_to_config(
+    inst: &PresetInstance,
+    kind: manifold_core::preset_def::PresetKind,
+    effect_index: usize,
+    osc_scope: OscScope<'_>,
+    clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
+    generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+) -> Option<ParamCardConfig> {
+    use manifold_core::preset_def::PresetKind;
+    let preset_type = inst.effect_type();
+    let reg_def = manifold_core::preset_definition_registry::try_get(preset_type);
+
+    // ── Source the normalized spec rows per kind ──
+    let rows: Vec<SpecRow> = match kind {
+        PresetKind::Effect => {
+            // Effects: registry static prefix + per-instance user-tail bindings.
+            let reg_def = reg_def.as_deref()?; // skip cards for def-less effects
+            let static_count = reg_def.param_count;
+            let mut rows: Vec<SpecRow> = reg_def
                 .param_defs
                 .iter()
                 .enumerate()
-                .map(|(pi, pd)| {
-                    let osc_address = match osc_scope {
-                        OscScope::Master => {
-                            manifold_core::preset_definition_registry::get_osc_address(
-                                fx.effect_type(),
-                                pi,
-                            )
-                        }
-                        OscScope::Layer(lid) => {
-                            manifold_core::preset_definition_registry::get_osc_address_for_layer(
-                                fx.effect_type(),
-                                lid,
-                                pi,
-                            )
-                        }
-                    };
-                    // Check for Ableton mapping on this param. The card
-                    // is positional (pi: usize), but mappings key on
-                    // `param_id` — look it up via the param def we're
-                    // already iterating.
-                    let abl_mapping = fx.ableton_mappings.as_ref().and_then(|mappings| {
-                        if pd.id.is_empty() {
-                            return None;
-                        }
-                        mappings.iter().find(|m| m.param_id == pd.id)
-                    });
-                    let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
-                        macro_name: mapping.address.macro_name.clone(),
-                        track_name: mapping.address.track_name.clone(),
-                        device_name: mapping.address.device_name.clone(),
-                        status: mapping.status,
-                        inverted: mapping.inverted,
-                    });
-                    let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-                    // Stock effect params aren't special — they're just curated
-                    // JSON. The card slider's range + label come straight from the
-                    // preset's `ParamSpecDef` (`pd`): a recalibration edits that
-                    // spec in the instance's per-instance graph override (so `pd`
-                    // here reflects it), and a fork rewrites the registry def the
-                    // same way. There is no per-instance note anymore.
-                    let (slider_min, slider_max) = (pd.min, pd.max);
-                    let slider_name = pd.name.clone();
-                    ParamInfo {
-                        // Static-tier `ParamId`. The registry's
-                        // `ParamDef.id` is a runtime-owned `String`
-                        // (V1 deserialisation history), so we clone
-                        // into `Cow::Owned`. Cost is one alloc per
-                        // panel rebuild, paid at editing-time only —
-                        // not in the per-frame state-sync hot loop.
-                        param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                        name: slider_name,
-                        min: slider_min,
-                        max: slider_max,
-                        default: pd.default_value,
-                        whole_numbers: pd.whole_numbers,
-                        // Static-tier params don't carry an angle hint today
-                        // (no shipped preset exposes a raw angle at the top
-                        // level). Angle degree display rides the user-tier
-                        // binding below.
-                        is_angle: false,
-                        // Hide the slider when the slot has been
-                        // unchecked in the editor sidebar. Slot index
-                        // `pi` aligns 1:1 with `fx.param_values[pi]`.
-                        exposed: fx.is_param_exposed(pi),
-                        // Effect params render as sliders, never toggle/
-                        // trigger button rows (a generator-only surface).
-                        is_toggle: false,
-                        is_trigger: false,
-                        value_labels: pd.value_labels.clone(),
-                        osc_address,
-                        ableton_display,
-                        ableton_range,
-                        // Stock effect params are now remappable too: the
-                        // mapping drawer edits the param's reshape on the
-                        // instance's per-instance graph override (materialized
-                        // from the catalog on first edit), so the Author-card
-                        // chevron shows on every exposed row, not just
-                        // user-exposed bindings.
-                        mappable: true,
-                    }
+                .map(|(pi, pd)| SpecRow {
+                    id: pd.id.clone(),
+                    name: pd.name.clone(),
+                    min: pd.min,
+                    max: pd.max,
+                    default: pd.default_value,
+                    whole_numbers: pd.whole_numbers,
+                    is_angle: false,
+                    // Effect params render as sliders, never toggle/trigger rows.
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: pd.value_labels.clone(),
+                    exposed: inst.is_param_exposed(pi),
                 })
                 .collect();
-
-            // User-tail: append one ParamInfo per user binding.
-            // Slot index in param_values is `static_count + j`.
-            for (j, ub) in user_bindings.iter().enumerate() {
-                let slot_idx = static_count + j;
-                let abl_mapping = fx
-                    .ableton_mappings
-                    .as_ref()
-                    .and_then(|mappings| mappings.iter().find(|m| m.param_id == ub.id));
-                let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
-                    macro_name: mapping.address.macro_name.clone(),
-                    track_name: mapping.address.track_name.clone(),
-                    device_name: mapping.address.device_name.clone(),
-                    status: mapping.status,
-                    inverted: mapping.inverted,
-                });
-                let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-                params.push(ParamInfo {
-                    // User-tier `ParamId`: owned string from the
-                    // per-instance binding. Same id namespace as the
-                    // static-tier prefix above; `param_id_to_value_index`
-                    // resolves both transparently.
-                    param_id: std::borrow::Cow::Owned(ub.id.clone()),
+            for (j, ub) in inst.user_param_bindings().iter().enumerate() {
+                rows.push(SpecRow {
+                    id: ub.id.clone(),
                     name: ub.label.clone(),
                     min: ub.min,
                     max: ub.max,
@@ -1514,80 +1517,204 @@ fn effects_to_configs(
                         manifold_core::effects::ParamConvert::IntRound
                             | manifold_core::effects::ParamConvert::EnumRound
                     ),
-                    // Angle hint captured at expose time from the inner
-                    // param's ParamType::Angle. Card slider shows degrees;
-                    // stored value stays radians.
                     is_angle: ub.is_angle,
-                    // User-tail bindings are exposed by definition — they
-                    // exist on `user_param_bindings` because the user
-                    // ticked their checkbox. Unchecking removes the
-                    // binding entirely (not just hides it).
-                    exposed: fx.is_param_exposed(slot_idx),
                     is_toggle: false,
                     is_trigger: false,
                     value_labels: None,
-                    // No OSC address for user-tail bindings — the
-                    // existing OSC dispatcher addresses by param_id and
-                    // routes via `param_id_to_value_index`, which
-                    // handles user-tail. Address surfacing on the card
-                    // is a follow-up.
-                    osc_address: None,
-                    ableton_display,
-                    ableton_range,
-                    // User-tail bindings ARE the remappable surface (range /
-                    // scale / offset / invert / curve). The Author card shows a
-                    // mapping-drawer chevron on these rows.
-                    mappable: true,
+                    exposed: inst.is_param_exposed(static_count + j),
                 });
             }
+            rows
+        }
+        PresetKind::Generator => {
+            // Generators: graph metadata params (includes user-added at the
+            // tail) when present, else the registry def. All visible sliders.
+            let graph_meta = generator_graph.and_then(|g| g.preset_metadata.as_ref());
+            if let Some(m) = graph_meta.filter(|m| !m.params.is_empty()) {
+                m.params
+                    .iter()
+                    .map(|pd| SpecRow {
+                        id: pd.id.clone(),
+                        name: pd.name.clone(),
+                        min: pd.min,
+                        max: pd.max,
+                        default: pd.default_value,
+                        whole_numbers: pd.whole_numbers,
+                        is_angle: false,
+                        is_toggle: pd.is_toggle,
+                        is_trigger: pd.is_trigger,
+                        value_labels: if pd.value_labels.is_empty() {
+                            None
+                        } else {
+                            Some(pd.value_labels.clone())
+                        },
+                        exposed: true,
+                    })
+                    .collect()
+            } else if let Some(def) = reg_def.as_deref() {
+                def.param_defs
+                    .iter()
+                    .map(|pd| SpecRow {
+                        id: pd.id.clone(),
+                        name: pd.name.clone(),
+                        min: pd.min,
+                        max: pd.max,
+                        default: pd.default_value,
+                        whole_numbers: pd.whole_numbers,
+                        is_angle: false,
+                        is_toggle: pd.is_toggle,
+                        is_trigger: pd.is_trigger,
+                        value_labels: pd.value_labels.clone(),
+                        exposed: true,
+                    })
+                    .collect()
+            } else {
+                return Some(empty_generator_config(inst));
+            }
+        }
+    };
 
-            // Per-param driver + envelope arrays (shared builder). Effects
-            // resolve a modulation row's param_id through
-            // `param_id_to_value_index` so user-tail bindings light up too.
-            let m = build_card_modulation(fx, n, |id| fx.param_id_to_value_index(id));
-            let has_drv = m.driver_active.iter().any(|&b| b);
-            let has_env = m.envelope_active.iter().any(|&b| b);
-            let has_abl = params.iter().any(|p| p.ableton_display.is_some());
-            let has_graph_mod = fx.graph.is_some();
-
-            Some(ParamCardConfig {
-                kind: ParamCardKind::Effect,
-                effect_index: i,
-                effect_id: fx.id.clone(),
-                name: card_preset_name(fx.effect_type(), |i| {
-                    manifold_core::preset_type_registry::display_name(i).to_string()
-                }),
-                enabled: fx.enabled,
-                collapsed: fx.collapsed,
-                supports_envelopes: true,
-                string_params: Vec::new(),
-                layer_id: None,
-                params,
-                has_drv,
-                has_env,
-                has_abl,
-                has_graph_mod,
-                driver_active: m.driver_active,
-                envelope_active: m.envelope_active,
-                trim_min: m.trim_min,
-                trim_max: m.trim_max,
-                target_norm: m.target_norm,
-                env_attack: m.env_attack,
-                env_decay: m.env_decay,
-                env_sustain: m.env_sustain,
-                env_release: m.env_release,
-                env_mode: m.env_mode,
-                env_random_jump: m.env_random_jump,
-                env_range_min: m.env_range_min,
-                env_range_max: m.env_range_max,
-                driver_beat_div_idx: m.driver_beat_div_idx,
-                driver_waveform_idx: m.driver_waveform_idx,
-                driver_reversed: m.driver_reversed,
-                driver_dotted: m.driver_dotted,
-                driver_triplet: m.driver_triplet,
-            })
+    // ── Shared: ParamInfo construction + id->index lookup ──
+    // Card position == value index for both kinds (effect static prefix then
+    // user tail; generator graph/registry order), so the same map drives
+    // build_card_modulation that `param_id_to_value_index` would for effects.
+    let mut id_to_index = ahash::AHashMap::with_capacity(rows.len());
+    let params: Vec<ParamInfo> = rows
+        .iter()
+        .enumerate()
+        .map(|(pi, row)| {
+            id_to_index.insert(row.id.clone(), pi);
+            let osc_address = match osc_scope {
+                OscScope::Master => {
+                    manifold_core::preset_definition_registry::get_osc_address(preset_type, pi)
+                }
+                OscScope::Layer(lid) => {
+                    manifold_core::preset_definition_registry::get_osc_address_for_layer(
+                        preset_type,
+                        lid,
+                        pi,
+                    )
+                }
+            };
+            let abl_mapping = inst.ableton_mappings.as_ref().and_then(|mappings| {
+                if row.id.is_empty() {
+                    return None;
+                }
+                mappings.iter().find(|m| m.param_id == row.id)
+            });
+            let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
+                macro_name: mapping.address.macro_name.clone(),
+                track_name: mapping.address.track_name.clone(),
+                device_name: mapping.address.device_name.clone(),
+                status: mapping.status,
+                inverted: mapping.inverted,
+            });
+            let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+            ParamInfo {
+                param_id: std::borrow::Cow::Owned(row.id.clone()),
+                name: row.name.clone(),
+                min: row.min,
+                max: row.max,
+                default: row.default,
+                whole_numbers: row.whole_numbers,
+                is_angle: row.is_angle,
+                exposed: row.exposed,
+                is_toggle: row.is_toggle,
+                is_trigger: row.is_trigger,
+                value_labels: row.value_labels.clone(),
+                osc_address,
+                ableton_display,
+                ableton_range,
+                mappable: true,
+            }
         })
-        .collect()
+        .collect();
+    let n = params.len();
+
+    let m = build_card_modulation(inst, n, |id| id_to_index.get(id).copied());
+
+    // String params are a generator-only surface (text inputs, font dropdowns),
+    // sourced from the registry def.
+    let string_params: Vec<ParamCardStringInfo> = match kind {
+        PresetKind::Generator => reg_def
+            .as_deref()
+            .map(|def| {
+                def.string_param_defs
+                    .iter()
+                    .map(|sp_def| {
+                        let value = clip_string_params
+                            .and_then(|m| m.get(sp_def.key))
+                            .cloned()
+                            .unwrap_or_else(|| sp_def.default_value.to_string());
+                        ParamCardStringInfo {
+                            name: sp_def.name.to_string(),
+                            key: sp_def.key.to_string(),
+                            value,
+                            use_dropdown: sp_def.use_dropdown,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        PresetKind::Effect => Vec::new(),
+    };
+
+    let has_drv = m.driver_active.iter().any(|&b| b);
+    let has_env = m.envelope_active.iter().any(|&b| b);
+    let has_abl = params.iter().any(|p| p.ableton_display.is_some());
+    let (card_kind, effect_id, enabled, collapsed, has_graph_mod) = match kind {
+        PresetKind::Effect => (
+            ParamCardKind::Effect,
+            inst.id.clone(),
+            inst.enabled,
+            inst.collapsed,
+            inst.graph.is_some(),
+        ),
+        PresetKind::Generator => (
+            ParamCardKind::Generator,
+            manifold_core::EffectId::new(""),
+            true,
+            false,
+            false,
+        ),
+    };
+
+    Some(ParamCardConfig {
+        kind: card_kind,
+        effect_index,
+        effect_id,
+        name: card_preset_name(preset_type, |i| {
+            manifold_core::preset_type_registry::display_name(i).to_string()
+        }),
+        enabled,
+        collapsed,
+        supports_envelopes: true,
+        string_params,
+        layer_id: None,
+        params,
+        has_drv,
+        has_env,
+        has_abl,
+        has_graph_mod,
+        driver_active: m.driver_active,
+        envelope_active: m.envelope_active,
+        trim_min: m.trim_min,
+        trim_max: m.trim_max,
+        target_norm: m.target_norm,
+        env_attack: m.env_attack,
+        env_decay: m.env_decay,
+        env_sustain: m.env_sustain,
+        env_release: m.env_release,
+        env_mode: m.env_mode,
+        env_random_jump: m.env_random_jump,
+        env_range_min: m.env_range_min,
+        env_range_max: m.env_range_max,
+        driver_beat_div_idx: m.driver_beat_div_idx,
+        driver_waveform_idx: m.driver_waveform_idx,
+        driver_reversed: m.driver_reversed,
+        driver_dotted: m.driver_dotted,
+        driver_triplet: m.driver_triplet,
+    })
 }
 
 /// Map a base BeatDivision to its button index (0-10).
@@ -1608,291 +1735,25 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
     }
 }
 
-/// Convert a `PresetInstance` into a [`ParamCardConfig`] for the UI.
-///
-/// When the layer has a per-instance `generator_graph`, the function
-/// walks the graph's `preset_metadata.params` to source the outer-card
-/// slider list — that's where both bundled and user-added bindings
-/// live (approach A in `docs/EFFECT_GENERATOR_CARD_UNIFICATION.md`).
-/// Without a graph (legacy non-graph-backed generators), it falls
-/// back to the static `preset_definition_registry::generator` def.
+/// Thin adapter: build the generator card config via the unified
+/// [`preset_to_config`]. The generator branch always yields a config (a real
+/// one, or the empty fallback when no param source resolves), so the `expect`
+/// never fires.
 fn gen_params_to_config(
     gp: &manifold_core::effects::PresetInstance,
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
 ) -> ParamCardConfig {
-    let reg_def = manifold_core::preset_definition_registry::try_get(gp.generator_type());
-    let graph_meta = generator_graph.and_then(|g| g.preset_metadata.as_ref());
-
-    // Resolve the canonical slider list:
-    // - If the layer carries a per-instance graph WITH metadata, use
-    //   its `params` (includes user-added entries at the tail).
-    // - Otherwise fall back to the registry (legacy / non-graph-backed
-    //   generators).
-    // The `id_to_index` map for driver/envelope/Ableton id resolution
-    // is built from the same source so user-added ids resolve.
-    enum Source<'a> {
-        Graph(&'a Vec<manifold_core::effect_graph_def::ParamSpecDef>),
-        Registry(&'a manifold_core::preset_def::PresetDef),
-    }
-    let source = match (graph_meta, reg_def.as_deref()) {
-        (Some(m), _) if !m.params.is_empty() => Source::Graph(&m.params),
-        (_, Some(d)) => Source::Registry(d),
-        _ => {
-            return ParamCardConfig {
-                kind: ParamCardKind::Generator,
-                name: gp.generator_type().to_string(),
-                collapsed: false,
-                effect_index: 0,
-                effect_id: manifold_core::EffectId::new(""),
-                enabled: true,
-                supports_envelopes: true,
-                has_drv: false,
-                has_env: false,
-                has_abl: false,
-                has_graph_mod: false,
-                layer_id: None,
-                params: vec![],
-                string_params: vec![],
-                driver_active: vec![],
-                envelope_active: vec![],
-                trim_min: vec![],
-                trim_max: vec![],
-                target_norm: vec![],
-                env_attack: vec![],
-                env_decay: vec![],
-                env_sustain: vec![],
-                env_release: vec![],
-                env_mode: vec![],
-                env_random_jump: vec![],
-                env_range_min: vec![],
-                env_range_max: vec![],
-                driver_beat_div_idx: vec![],
-                driver_waveform_idx: vec![],
-                driver_reversed: vec![],
-                driver_dotted: vec![],
-                driver_triplet: vec![],
-            };
-        }
-    };
-
-    // Build the param info list + an id→index lookup table. The graph
-    // path knows about user-added entries; the registry path is
-    // static-only.
-    let (params, id_to_index): (Vec<ParamInfo>, ahash::AHashMap<String, usize>) =
-        match source {
-            Source::Graph(graph_params) => {
-                let mut id_to_index =
-                    ahash::AHashMap::with_capacity(graph_params.len());
-                let infos: Vec<ParamInfo> = graph_params
-                    .iter()
-                    .enumerate()
-                    .map(|(pi, pd)| {
-                        id_to_index.insert(pd.id.clone(), pi);
-                        let osc_address =
-                            manifold_core::preset_definition_registry::get_osc_address_for_layer(
-                                gp.generator_type(),
-                                layer_id,
-                                pi,
-                            );
-                        let abl_mapping = gp.ableton_mappings.as_ref().and_then(|mappings| {
-                            if pd.id.is_empty() {
-                                return None;
-                            }
-                            mappings.iter().find(|m| m.param_id == pd.id)
-                        });
-                        let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
-                            macro_name: mapping.address.macro_name.clone(),
-                            track_name: mapping.address.track_name.clone(),
-                            device_name: mapping.address.device_name.clone(),
-                            status: mapping.status,
-                            inverted: mapping.inverted,
-                        });
-                        let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-                        // Generator params aren't special: the card slider's
-                        // range + label come straight from the preset's
-                        // `ParamSpecDef` (`pd`). A recalibration edits that spec in
-                        // the layer's `generator_graph` override (so `pd` reflects
-                        // it), and a fork rewrites the registry def the same way.
-                        // There is no per-instance note anymore.
-                        let (slider_min, slider_max) = (pd.min, pd.max);
-                        let slider_name = pd.name.clone();
-                        ParamInfo {
-                            param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                            name: slider_name,
-                            min: slider_min,
-                            max: slider_max,
-                            default: pd.default_value,
-                            whole_numbers: pd.whole_numbers,
-                            // Generator-tier angle degree display is a
-                            // follow-up: the graph-metadata param has no
-                            // angle hint yet, so radians would show here.
-                            is_angle: false,
-                            // Generators carry `exposed` since the ParamSlot
-                            // storage unification; the graph-metadata params
-                            // are all visible sliders today.
-                            exposed: true,
-                            is_toggle: pd.is_toggle,
-                            is_trigger: pd.is_trigger,
-                            value_labels: if pd.value_labels.is_empty() {
-                                None
-                            } else {
-                                Some(pd.value_labels.clone())
-                            },
-                            osc_address,
-                            ableton_display,
-                            ableton_range,
-                            // Generator params are now remappable too: the
-                            // mapping drawer edits the param's reshape on the
-                            // layer's generator_graph override, so the
-                            // Author-card chevron shows on every exposed
-                            // generator row.
-                            mappable: true,
-                        }
-                    })
-                    .collect();
-                (infos, id_to_index)
-            }
-            Source::Registry(def) => {
-                let mut id_to_index =
-                    ahash::AHashMap::with_capacity(def.param_defs.len());
-                let infos: Vec<ParamInfo> = def
-                    .param_defs
-                    .iter()
-                    .enumerate()
-                    .map(|(pi, pd)| {
-                        id_to_index.insert(pd.id.clone(), pi);
-                        let osc_address =
-                            manifold_core::preset_definition_registry::get_osc_address_for_layer(
-                                gp.generator_type(),
-                                layer_id,
-                                pi,
-                            );
-                        let abl_mapping = gp.ableton_mappings.as_ref().and_then(|mappings| {
-                            if pd.id.is_empty() {
-                                return None;
-                            }
-                            mappings.iter().find(|m| m.param_id == pd.id)
-                        });
-                        let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
-                            macro_name: mapping.address.macro_name.clone(),
-                            track_name: mapping.address.track_name.clone(),
-                            device_name: mapping.address.device_name.clone(),
-                            status: mapping.status,
-                            inverted: mapping.inverted,
-                        });
-                        let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-                        // Generator params aren't special: the card slider's
-                        // range + label come straight from the preset's
-                        // `ParamSpecDef` (`pd`). A recalibration edits that spec in
-                        // the layer's `generator_graph` override (so `pd` reflects
-                        // it), and a fork rewrites the registry def the same way.
-                        // There is no per-instance note anymore.
-                        let (slider_min, slider_max) = (pd.min, pd.max);
-                        let slider_name = pd.name.clone();
-                        ParamInfo {
-                            param_id: std::borrow::Cow::Owned(pd.id.clone()),
-                            name: slider_name,
-                            min: slider_min,
-                            max: slider_max,
-                            default: pd.default_value,
-                            whole_numbers: pd.whole_numbers,
-                            // Generator-tier angle degree display is a
-                            // follow-up: the graph-metadata param has no
-                            // angle hint yet, so radians would show here.
-                            is_angle: false,
-                            exposed: true,
-                            is_toggle: pd.is_toggle,
-                            is_trigger: pd.is_trigger,
-                            value_labels: pd.value_labels.clone(),
-                            osc_address,
-                            ableton_display,
-                            ableton_range,
-                            // Generator params are now remappable too: the
-                            // mapping drawer edits the param's reshape on the
-                            // layer's generator_graph override, so the
-                            // Author-card chevron shows on every exposed
-                            // generator row.
-                            mappable: true,
-                        }
-                    })
-                    .collect();
-                (infos, id_to_index)
-            }
-        };
-    let n = params.len();
-
-    // Per-param driver + envelope arrays (shared builder). The generator
-    // resolves a modulation row's param_id through the `id_to_index` built
-    // above against the chosen source (graph metadata when present, registry
-    // otherwise), so user-added ids resolve.
-    let m = build_card_modulation(gp, n, |id| id_to_index.get(id).copied());
-
-    // String param defs → populate with current clip values. Source
-    // remains the registry — string params are a Rust-side concept
-    // (text inputs, font dropdowns) without a graph-metadata
-    // equivalent yet.
-    let string_params: Vec<ParamCardStringInfo> = reg_def
-        .map(|def| {
-            def.string_param_defs
-                .iter()
-                .map(|sp_def| {
-                    let value = clip_string_params
-                        .and_then(|m| m.get(sp_def.key))
-                        .cloned()
-                        .unwrap_or_else(|| sp_def.default_value.to_string());
-                    ParamCardStringInfo {
-                        name: sp_def.name.to_string(),
-                        key: sp_def.key.to_string(),
-                        value,
-                        use_dropdown: sp_def.use_dropdown,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    ParamCardConfig {
-        kind: ParamCardKind::Generator,
-        name: card_preset_name(gp.generator_type(), |i| {
-            manifold_core::preset_type_registry::display_name(i).to_string()
-        }),
-        // Effect-only fields carry defaults — the generator card ignores
-        // them (no enabled toggle, no badges, no per-card graph-mod tint).
-        // `layer_id` is supplied separately by the inspector via
-        // `set_layer_id`; 7b will fold it in here.
-        collapsed: false,
-        effect_index: 0,
-        effect_id: manifold_core::EffectId::new(""),
-        enabled: true,
-        supports_envelopes: true,
-        has_drv: false,
-        has_env: false,
-        has_abl: false,
-        has_graph_mod: false,
-        layer_id: None,
-        params,
-        string_params,
-        driver_active: m.driver_active,
-        envelope_active: m.envelope_active,
-        trim_min: m.trim_min,
-        trim_max: m.trim_max,
-        target_norm: m.target_norm,
-        env_attack: m.env_attack,
-        env_decay: m.env_decay,
-        env_sustain: m.env_sustain,
-        env_release: m.env_release,
-        env_mode: m.env_mode,
-        env_random_jump: m.env_random_jump,
-        env_range_min: m.env_range_min,
-        env_range_max: m.env_range_max,
-        driver_beat_div_idx: m.driver_beat_div_idx,
-        driver_waveform_idx: m.driver_waveform_idx,
-        driver_reversed: m.driver_reversed,
-        driver_dotted: m.driver_dotted,
-        driver_triplet: m.driver_triplet,
-    }
+    preset_to_config(
+        gp,
+        manifold_core::preset_def::PresetKind::Generator,
+        0,
+        OscScope::Layer(layer_id),
+        clip_string_params,
+        generator_graph,
+    )
+    .expect("generator preset_to_config always yields a config")
 }
 
 /// Build a human-readable description for a macro mapping target.
