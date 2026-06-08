@@ -206,8 +206,8 @@ impl GeneratorRegistry {
 /// — without it, the runtime would render with every inner-node
 /// param pinned at its JSON default while the editor canvas still
 /// shows correct routings (silent mismatch). The
-/// `content_thread::active_generator_graph_snapshot` path mirrors
-/// this graft on the snapshot side so both surfaces resolve to the
+/// `content_thread::graph_snapshot` path mirrors this graft on the
+/// snapshot side (generator branch) so both surfaces resolve to the
 /// same set of bindings.
 pub fn graft_preset_metadata_from_bundle(
     def: &mut manifold_core::effect_graph_def::EffectGraphDef,

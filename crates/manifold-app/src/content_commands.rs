@@ -81,15 +81,13 @@ impl ContentThread {
             ContentCommand::Shutdown => return true,
 
             ContentCommand::WatchEffectGraph(effect_id) => {
-                self.watched_graph_effect = effect_id;
-                // Only one canvas active at a time.
-                self.watched_graph_generator_layer = None;
+                // One unified watched target; only one canvas active at a time.
+                self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
                 // Switching what's watched invalidates any node preview.
                 self.preview_graph_node = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
-                self.watched_graph_generator_layer = layer_id;
-                self.watched_graph_effect = None;
+                self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
                 self.preview_graph_node = None;
             }
             ContentCommand::SetGraphPreviewNode(node_id) => {
@@ -99,7 +97,9 @@ impl ContentThread {
                 self.node_preview_normalize = on;
             }
             ContentCommand::DumpGraphOutputs => {
-                if let Some(effect_id) = self.watched_graph_effect.clone() {
+                if let Some(manifold_core::GraphTarget::Effect(effect_id)) =
+                    self.watched_graph_target.clone()
+                {
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())

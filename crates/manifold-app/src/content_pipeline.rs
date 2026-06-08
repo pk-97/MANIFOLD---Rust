@@ -1696,7 +1696,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// compositor's `graph_snapshot_for`, which walks the live
     /// processors and returns the first matching one's
     /// `graph_snapshot()`. Per-card divergence is handled higher up in
-    /// [`ContentThread::active_graph_snapshot`].
+    /// [`ContentThread::graph_snapshot`].
     pub fn graph_snapshot_for(
         &self,
         type_id: &manifold_core::PresetTypeId,

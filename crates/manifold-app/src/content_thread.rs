@@ -30,15 +30,25 @@ use crate::content_pipeline::ContentPipeline;
 use crate::content_state::ContentState;
 use crate::frame_timer::FrameTimer;
 
-/// Cache entry for the watched generator layer's editor-canvas snapshot.
+/// Cache entry for the watched editor-canvas snapshot (effect OR generator).
 /// Holds the snapshot inside an `Arc` so the per-frame
 /// `ContentState::active_graph_snapshot` field can clone the refcount
-/// (no deep copy). Invalidated when either the layer id or the layer's
-/// `generator_graph_version` changes — i.e. on watch swap or
-/// graph-editor edit landing on the watched layer.
-pub struct CachedGeneratorGraphSnapshot {
-    pub layer_id: manifold_core::LayerId,
+/// (no deep copy). At most one entry — only one canvas is visible at a time.
+///
+/// Invalidated when any of the snapshot's inputs change:
+/// - `target` — the watched instance changed (canvas swap).
+/// - `preset_type` — the instance's preset type changed in place
+///   (effect/generator type swap via the picker while watched).
+/// - `version` — the instance's `graph_version` bumped (a graph-editor edit
+///   landed on it).
+/// - `fingerprint` — the embedded-preset catalog overlay was reinstalled
+///   (a fork or recalibrate), which can change the compositor-sourced
+///   routings / default graph even when `version` didn't move.
+pub struct CachedGraphSnapshot {
+    pub target: manifold_core::GraphTarget,
+    pub preset_type: manifold_core::PresetTypeId,
     pub version: u32,
+    pub fingerprint: u64,
     pub snapshot: Arc<manifold_renderer::node_graph::GraphSnapshot>,
 }
 
@@ -114,33 +124,23 @@ pub struct ContentThread {
     /// default for its type. `None` means the editor isn't focused on
     /// any effect — canvas stays empty until the user clicks a cog.
     /// Phase 2 of per-card divergence — see `docs/NODE_GRAPH_SYSTEM.md`.
-    pub watched_graph_effect: Option<manifold_core::EffectId>,
-    /// Generator-side counterpart of `watched_graph_effect`. When
-    /// `Some`, the snapshot path returns the layer's generator graph
-    /// (sourced from the bundled JSON preset for the generator type).
-    /// Mutually exclusive in practice — setting one clears the other,
-    /// because only one editor canvas is visible at a time.
-    pub watched_graph_generator_layer: Option<manifold_core::LayerId>,
+    pub watched_graph_target: Option<manifold_core::GraphTarget>,
     /// Node the editor is previewing within the watched effect/generator, if
-    /// any. Combined with `watched_graph_effect` / `watched_graph_generator_layer`
-    /// each frame to drive the per-node output capture. `None` = no preview.
+    /// any. Combined with `watched_graph_target` each frame to drive the
+    /// per-node output capture. `None` = no preview.
     pub preview_graph_node: Option<manifold_core::NodeId>,
     /// Whether the node-output preview applies auto-gain/normalization. On by
     /// default; toggled from the editor's preview pane. Pushed to the pipeline
     /// each frame. Node preview only — never affects the live render.
     pub node_preview_normalize: bool,
-    /// Cached editor-canvas snapshot for the watched generator layer.
+    /// Cached editor-canvas snapshot for the watched effect or generator.
     ///
-    /// Built lazily by [`Self::active_generator_graph_snapshot`] and
-    /// invalidated when `(LayerId, generator_graph_version)` changes
-    /// (on layer switch or a graph-editor edit landing on the watched
-    /// layer). Avoids the per-content-tick re-parse of the bundled
-    /// preset JSON that the non-cached path used to do every state
-    /// push the editor was open. Cache holds at most one entry: only
-    /// one canvas is visible at a time so a larger map would just be
-    /// empty.
-    pub cached_generator_graph_snapshot:
-        Option<CachedGeneratorGraphSnapshot>,
+    /// Built lazily by [`Self::graph_snapshot`] and invalidated per the
+    /// key documented on [`CachedGraphSnapshot`]. Avoids the per-content-tick
+    /// rebuild (re-parse of the bundled preset JSON / compositor lookup) the
+    /// non-cached paths used to do every state push the editor was open.
+    /// Holds at most one entry: only one canvas is visible at a time.
+    pub cached_graph_snapshot: Option<CachedGraphSnapshot>,
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
@@ -645,14 +645,15 @@ impl ContentThread {
         // Forward the authoring-time node-output preview request to the
         // pipeline. Effect and generator are mutually exclusive (only one
         // editor canvas is watched at a time); the inactive one is cleared.
-        let effect_preview = self
-            .watched_graph_effect
-            .as_ref()
-            .map(|eid| (eid.clone(), self.preview_graph_node.clone()));
-        let generator_preview = self
-            .watched_graph_generator_layer
-            .as_ref()
-            .map(|lid| (lid.clone(), self.preview_graph_node.clone()));
+        let (effect_preview, generator_preview) = match &self.watched_graph_target {
+            Some(manifold_core::GraphTarget::Effect(eid)) => {
+                (Some((eid.clone(), self.preview_graph_node.clone())), None)
+            }
+            Some(manifold_core::GraphTarget::Generator(lid)) => {
+                (None, Some((lid.clone(), self.preview_graph_node.clone())))
+            }
+            None => (None, None),
+        };
         self.content_pipeline
             .set_node_preview_request(effect_preview);
         self.content_pipeline
@@ -1035,23 +1036,11 @@ impl ContentThread {
         // returns a plain `GraphSnapshot` (cheap to construct, no
         // cache needed); generator path returns a cached `Arc` clone
         // (avoids re-parsing the bundled JSON every state push when
-        // the canvas is open). Effect wins when both are watched —
-        // they're mutually exclusive in practice but the order here
-        // matches the pre-cache behaviour. Sequencing matters for
-        // the borrow checker: the effect call uses `&self`, so it
-        // has to complete before the generator call takes `&mut self`.
-        let effect_snap = self
-            .watched_graph_effect
-            .as_ref()
-            .and_then(|eid| self.active_graph_snapshot(eid))
-            .map(Arc::new);
-        let active_graph_snapshot_arc = if effect_snap.is_some() {
-            effect_snap
-        } else if let Some(layer_id) = self.watched_graph_generator_layer.clone() {
-            self.active_generator_graph_snapshot(&layer_id)
-        } else {
-            None
-        };
+        // the canvas is open). One target, one snapshot path (fork #10).
+        let active_graph_snapshot_arc = self
+            .watched_graph_target
+            .clone()
+            .and_then(|t| self.graph_snapshot(&t));
 
         let state = ContentState {
             current_beat: self.engine.current_beat(),
@@ -1215,141 +1204,134 @@ impl ContentThread {
         }
     }
 
-    /// Build the editor canvas's graph snapshot for the currently
-    /// watched effect instance. Two paths:
+    /// Build (or return cached) the editor canvas's graph snapshot for the
+    /// currently-watched preset instance — effect or generator (fork #10).
     ///
-    /// 1. The project's `PresetInstance` has `graph: Some(def)` → build
-    ///    the snapshot directly from the def (renders what the user
-    ///    saved, not what the runtime singleton is currently doing).
-    /// 2. The instance has `graph: None` → fall through to the
-    ///    type-keyed compositor lookup, which returns the snapshot of
-    ///    the catalog-default runtime graph.
+    /// Two paths per kind, mirrored:
+    /// - The instance has `graph: Some(def)` → build directly from the
+    ///   per-instance override (renders what the user saved). Effects fill
+    ///   `outer_routings` from the compositor (the outer→inner map is static
+    ///   per type); generators project routings from the override's own
+    ///   (bundle-grafted) `preset_metadata`, which also captures user-added
+    ///   bindings.
+    /// - The instance has `graph: None` → the type-keyed view: effects use the
+    ///   compositor's `graph_snapshot_for`, generators the unified
+    ///   `LoadedPresetView` via `snapshot_for_view` (#4 gave generators views).
     ///
-    /// Returns `None` if the EffectId no longer resolves (e.g., the
-    /// user deleted the effect after opening the editor) — the canvas
-    /// treats `None` as "no active graph".
-    fn active_graph_snapshot(
-        &self,
-        effect_id: &manifold_core::EffectId,
-    ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
-        let project = self.engine.project()?;
-        let instance = project.find_effect_by_id(effect_id)?;
-        if let Some(def) = instance.graph.as_ref() {
-            // Per-card override: `from_def` constructs a snapshot
-            // from the serialized graph but has no access to the
-            // live effect, so its outer_routings come out empty.
-            // The catalog routings are still authoritative (the
-            // outer→inner mapping is static per effect type), so
-            // ask the compositor to fill them in here.
-            let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(def)?;
-            snap.outer_routings = self
-                .content_pipeline
-                .outer_routings_for(instance.effect_type());
-            Some(snap)
-        } else {
-            self.content_pipeline
-                .graph_snapshot_for(instance.effect_type())
-        }
-    }
-
-    /// Generator-side counterpart of [`Self::active_graph_snapshot`].
-    /// Returns the editor canvas's snapshot for the currently-watched
-    /// layer's generator as a refcount-clone of a cached `Arc`.
-    ///
-    /// Cache is invalidated when either:
-    ///   - The watched layer id changes (user switched canvases).
-    ///   - The layer's `generator_graph_version` changes (a
-    ///     graph-editor edit landed on this layer).
-    ///
-    /// On miss, rebuilds the snapshot: clones the override
-    /// `EffectGraphDef` (or parses the bundled JSON for a pristine
-    /// layer), grafts `preset_metadata` back from the bundle if the
-    /// override lost it, runs `GraphSnapshot::from_def`, and
-    /// populates `outer_routings` from the preset bindings. The
-    /// rebuild itself is the same work the non-cached path did every
-    /// state push; caching collapses that to once-per-edit.
-    ///
-    /// Returns `None` if the layer no longer resolves, has no
-    /// generator assigned, or the assigned generator type has no
-    /// JSON preset (e.g., a legacy Rust-only generator).
-    fn active_generator_graph_snapshot(
+    /// Cached behind `cached_graph_snapshot`, keyed by (target, preset_type,
+    /// graph_version, catalog fingerprint) so the rebuild runs once per edit,
+    /// not once per content tick. Returns `None` if the target no longer
+    /// resolves, the generator has no type, or the type has no JSON preset.
+    fn graph_snapshot(
         &mut self,
-        layer_id: &manifold_core::LayerId,
+        target: &manifold_core::GraphTarget,
     ) -> Option<Arc<manifold_renderer::node_graph::GraphSnapshot>> {
+        use manifold_core::GraphTarget;
+        let fingerprint = self.embedded_presets_fingerprint;
         let project = self.engine.project()?;
-        let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
-        let gen_type = layer.generator_type();
-        if gen_type.is_none() {
-            return None;
-        }
-        let current_version = layer.generator_graph_version();
 
-        // Cache hit: same layer + same version → return the cached
-        // Arc clone, no parse / build work.
-        if let Some(cache) = self.cached_generator_graph_snapshot.as_ref()
-            && &cache.layer_id == layer_id
-            && cache.version == current_version
+        // Resolve the instance's preset type + graph version for the cache key.
+        let (preset_type, version) = match target {
+            GraphTarget::Effect(eid) => {
+                let inst = project.find_effect_by_id(eid)?;
+                (inst.effect_type().clone(), inst.graph_version)
+            }
+            GraphTarget::Generator(lid) => {
+                let (_, layer) = project.timeline.find_layer_by_id(lid)?;
+                let gp = layer.gen_params()?;
+                if gp.generator_type().is_none() {
+                    return None;
+                }
+                (gp.generator_type().clone(), gp.graph_version)
+            }
+        };
+
+        // Cache hit: identical target / type / version / catalog → clone Arc.
+        if let Some(cache) = self.cached_graph_snapshot.as_ref()
+            && &cache.target == target
+            && cache.preset_type == preset_type
+            && cache.version == version
+            && cache.fingerprint == fingerprint
         {
             return Some(Arc::clone(&cache.snapshot));
         }
-        // Prefer the layer's per-instance override (where the
-        // ToggleNodeParamExposeCommand writes its exposure state) when
-        // it's populated. Falls back to the bundled JSON preset for a
-        // pristine layer that hasn't been edited yet. `preset_metadata`
-        // from the bundled JSON is grafted onto the override if the
-        // override lost it during edits — same canonical helper the
-        // runtime path uses, so editor canvas and live render resolve
-        // to the same bindings set.
-        let snap = if let Some(override_def) = layer.generator_graph() {
-            // Per-instance override: exposure state lives on the layer's
-            // graph, not the bundled view, so build from the override
-            // (grafting bundled metadata back if edits dropped it) and
-            // project routings from the override def's own metadata — the
-            // same projection `outer_routings_from_view` does, over `d`.
-            let mut d = override_def.clone();
-            manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
-                &mut d, gen_type,
-            );
-            let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&d)?;
-            if let Some(meta) = d.preset_metadata.as_ref() {
-                use manifold_core::effect_graph_def::BindingTarget;
-                use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
-                let handle_by_id: std::collections::HashMap<&str, &str> = d
-                    .nodes
-                    .iter()
-                    .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
-                    .collect();
-                snap.outer_routings = meta
-                    .bindings
-                    .iter()
-                    .filter_map(|b| match &b.target {
-                        BindingTarget::Node { node_id, param } => {
-                            let handle = handle_by_id.get(node_id.as_str())?;
-                            Some(OuterParamRouting {
-                                outer_label: b.label.clone(),
-                                outer_param_id: b.id.clone(),
-                                node_handle: handle.to_string(),
-                                inner_param: param.clone(),
-                                source: OuterParamSource::Static,
-                            })
-                        }
-                        BindingTarget::Composite { .. } => None,
-                    })
-                    .collect();
+
+        // Cache miss: rebuild the snapshot for this kind.
+        let snap = match target {
+            GraphTarget::Effect(eid) => {
+                let instance = project.find_effect_by_id(eid)?;
+                if let Some(def) = instance.graph.as_ref() {
+                    // Per-card override: `from_def` has no live effect, so its
+                    // outer_routings come out empty. The compositor's per-type
+                    // routings are authoritative — fill them in here.
+                    let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(def)?;
+                    snap.outer_routings = self
+                        .content_pipeline
+                        .outer_routings_for(instance.effect_type());
+                    snap
+                } else {
+                    self.content_pipeline
+                        .graph_snapshot_for(instance.effect_type())?
+                }
             }
-            snap
-        } else {
-            // Pristine layer: the unified LoadedPresetView. Generators now
-            // get views (#4), so this is the exact path effects take in
-            // `active_graph_snapshot` — `snapshot_for_view` does
-            // `from_def(canonical_def)` + `outer_routings_from_view`.
-            let view = manifold_renderer::node_graph::loaded_preset_view_by_id(gen_type)?;
-            manifold_renderer::node_graph::snapshot_for_view(view)?
+            GraphTarget::Generator(lid) => {
+                let (_, layer) = project.timeline.find_layer_by_id(lid)?;
+                let gen_type = layer.generator_type();
+                if let Some(override_def) = layer.generator_graph() {
+                    // Per-instance override: exposure state lives on the
+                    // layer's graph, so build from the override (grafting
+                    // bundled metadata back if edits dropped it) and project
+                    // routings from the override def's own metadata — captures
+                    // user-added bindings the compositor's type view wouldn't.
+                    let mut d = override_def.clone();
+                    manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
+                        &mut d, gen_type,
+                    );
+                    let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&d)?;
+                    if let Some(meta) = d.preset_metadata.as_ref() {
+                        use manifold_core::effect_graph_def::BindingTarget;
+                        use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+                        let handle_by_id: std::collections::HashMap<&str, &str> = d
+                            .nodes
+                            .iter()
+                            .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
+                            .collect();
+                        snap.outer_routings = meta
+                            .bindings
+                            .iter()
+                            .filter_map(|b| match &b.target {
+                                BindingTarget::Node { node_id, param } => {
+                                    let handle = handle_by_id.get(node_id.as_str())?;
+                                    Some(OuterParamRouting {
+                                        outer_label: b.label.clone(),
+                                        outer_param_id: b.id.clone(),
+                                        node_handle: handle.to_string(),
+                                        inner_param: param.clone(),
+                                        source: OuterParamSource::Static,
+                                    })
+                                }
+                                BindingTarget::Composite { .. } => None,
+                            })
+                            .collect();
+                    }
+                    snap
+                } else {
+                    // Pristine layer: the unified LoadedPresetView. Generators
+                    // got views in #4, so this mirrors the effect pristine path
+                    // — `snapshot_for_view` does `from_def(canonical_def)` +
+                    // `outer_routings_from_view`.
+                    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(gen_type)?;
+                    manifold_renderer::node_graph::snapshot_for_view(view)?
+                }
+            }
         };
+
         let arc = Arc::new(snap);
-        self.cached_generator_graph_snapshot = Some(CachedGeneratorGraphSnapshot {
-            layer_id: layer_id.clone(),
-            version: current_version,
+        self.cached_graph_snapshot = Some(CachedGraphSnapshot {
+            target: target.clone(),
+            preset_type,
+            version,
+            fingerprint,
             snapshot: Arc::clone(&arc),
         });
         Some(arc)
