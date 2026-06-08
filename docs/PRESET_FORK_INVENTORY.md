@@ -210,11 +210,31 @@ not a fix.
   re-checked in this audit.
 - The "fall out" dependency claim above is reasoning, not a proven build result.
 
-## Remaining Phase-4 UI (separate from the forks above; backend already built)
+## Phase-4 UI (Batch G)
 
-- Picker lists project `embedded_presets` (browser_popup.rs).
-- Duplicate/Make-unique action (PanelAction → ContentCommand → `ForkPresetCommand`;
-  `source_def` via `loaded_preset_view_by_id(...).canonical_def` for pristine
-  effects). Integration map in `PRESET_INSTANCE_COLLAPSE_PLAN.md` §"DEFERRED Phase 4 UI".
-- Export/import menu (`rfd` + `manifold_io::preset_file`).
-- (Variant header label — DONE, commit 6cf72f32.)
+- ✅ **Make-unique** — generator card right-click → "Make Unique" forks the
+  layer's generator into a project-embedded preset and retargets it via
+  `ForkPresetCommand` (`source_def` = diverged graph else
+  `loaded_preset_view_by_id(...).canonical_def`). Commit on this branch.
+- ✅ **Export/import menu** — generator card "Export Preset…" / "Import
+  Preset…" via `rfd` + `manifold_io::preset_file`; import retargets through the
+  shared `ForkPresetCommand`. Commit on this branch.
+- ✅ Variant header label — commit `6cf72f32`.
+- 🔧 **Picker lists project `embedded_presets`** (browser_popup.rs) — the one
+  remaining item, and the heaviest: the picker opens in `ui_root` (no `Project`
+  handle), so it needs a new **change-gated ContentState snapshot** of the
+  project's embedded presets (Arc, rebuilt only on `embedded_presets_fingerprint`
+  change — no per-frame alloc on the state push) plus a **picker
+  selection-model change** (Effect/Generator items are registry-index-keyed;
+  embedded presets aren't in the startup-static `preset_type_registry::REGISTRY`,
+  so selection must carry `type_id` for them and `AddEffect`/`GenType` resolve
+  by id). Touches the per-frame state push + the browser picker — best landed in
+  a session with the running app to confirm the list renders and selection adds
+  the right preset. Make-unique/import already register embedded presets and
+  retarget instances, so a forked variant is fully usable today; this item is
+  purely *browsing* the embedded library to add a fresh instance.
+
+  Effect-side make-unique/export/import is wired generator-only so far because
+  only the generator card carries a right-click context menu; effects expose
+  only the param-label menu (mapping). Adding an effect-card context menu is the
+  effect-side affordance for these three actions.
