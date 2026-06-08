@@ -66,13 +66,8 @@ pub(crate) enum ActiveInspectorDrag {
         clip_id: manifold_core::ClipId,
         value: f32,
     },
-    EffectParam {
-        effect_id: manifold_core::EffectId,
-        param_id: manifold_core::effects::ParamId,
-        value: f32,
-    },
-    GenParam {
-        layer_id: LayerId,
+    Param {
+        target: manifold_core::GraphTarget,
         param_id: manifold_core::effects::ParamId,
         value: f32,
     },
@@ -103,34 +98,18 @@ impl ActiveInspectorDrag {
                     clip.loop_duration_beats = manifold_core::Beats::from_f32(*value);
                 }
             }
-            Self::EffectParam {
-                effect_id,
+            Self::Param {
+                target,
                 param_id,
                 value,
             } => {
-                if let Some(effect) = project.find_effect_by_id_mut(effect_id)
-                    && let Some(slot) = effect.param_id_to_value_index(param_id.as_ref())
-                    && slot < effect.param_values.len()
-                {
-                    effect.param_values[slot].value = *value;
-                }
-            }
-            Self::GenParam {
-                layer_id,
-                param_id,
-                value,
-            } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-                    && let Some(gp) = layer.gen_params_mut()
-                    && let Some(slot) =
-                        manifold_core::preset_definition_registry::param_id_to_index(
-                            gp.generator_type(),
-                            param_id.as_ref(),
-                        )
-                    && slot < gp.param_values.len()
-                {
-                    gp.param_values[slot].value = *value;
-                }
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(slot) = inst.param_id_to_value_index(param_id.as_ref())
+                        && slot < inst.param_values.len()
+                    {
+                        inst.param_values[slot].value = *value;
+                    }
+                });
             }
         }
     }

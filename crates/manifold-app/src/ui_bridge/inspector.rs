@@ -777,90 +777,78 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::ParamSnapshot(GraphParamTarget::Effect(fx_idx), param_id) => {
-            let tab = effective_tab;
-            let eid = super::resolve_effect_id(
-                editor_target,
-                tab,
-                active_layer,
-                selection,
-                project,
-                *fx_idx,
-            );
-            if let Some(eid) = eid
-                && let Some(fx) = project.find_effect_by_id(&eid)
-                && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
+        PanelAction::ParamSnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let val = fx.get_base_param(slot);
-                *drag_snapshot = Some(val);
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EffectParam {
-                    effect_id: eid,
-                    param_id: param_id.clone(),
-                    value: val,
-                });
+                let val = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.param_id_to_value_index(param_id.as_ref())
+                            .map(|slot| inst.get_base_param(slot))
+                    })
+                    .flatten();
+                if let Some(val) = val {
+                    *drag_snapshot = Some(val);
+                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
+                        target,
+                        param_id: param_id.clone(),
+                        value: val,
+                    });
+                }
             }
             DispatchResult::handled()
         }
-        PanelAction::ParamChanged(GraphParamTarget::Effect(fx_idx), param_id, val) => {
-            let tab = effective_tab;
-            if let Some(eid) = super::resolve_effect_id(
-                editor_target,
-                tab,
-                active_layer,
-                selection,
-                project,
-                *fx_idx,
-            ) {
-                if let Some(fx) = project.find_effect_by_id_mut(&eid)
-                    && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
-                {
-                    fx.set_base_param(slot, *val);
-                }
-                if let Some(crate::app::ActiveInspectorDrag::EffectParam { value, .. }) =
+        PanelAction::ParamChanged(gpt, param_id, val) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                project.with_preset_graph_mut(&target, |inst| {
+                    if let Some(slot) = inst.param_id_to_value_index(param_id.as_ref()) {
+                        inst.set_base_param(slot, *val);
+                    }
+                });
+                if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
                     active_inspector_drag
                 {
                     *value = *val;
                 }
                 let pid = param_id.clone();
                 let v = *val;
+                let t = target.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some(fx) = p.find_effect_by_id_mut(&eid)
-                            && let Some(slot) = fx.param_id_to_value_index(pid.as_ref())
-                        {
-                            fx.set_base_param(slot, v);
-                        }
+                        p.with_preset_graph_mut(&t, |inst| {
+                            if let Some(slot) = inst.param_id_to_value_index(pid.as_ref()) {
+                                inst.set_base_param(slot, v);
+                            }
+                        });
                     })),
                 );
             }
             DispatchResult::handled()
         }
-        PanelAction::ParamCommit(GraphParamTarget::Effect(fx_idx), param_id) => {
-            if let Some(old_val) = drag_snapshot.take() {
-                let tab = effective_tab;
-                let eid = super::resolve_effect_id(
-                    editor_target,
-                    tab,
-                    active_layer,
-                    selection,
-                    project,
-                    *fx_idx,
-                );
-                if let Some(eid) = eid
-                    && let Some(fx) = project.find_effect_by_id(&eid)
-                    && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
+        PanelAction::ParamCommit(gpt, param_id) => {
+            if let Some(old_val) = drag_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let new_val = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.param_id_to_value_index(param_id.as_ref())
+                            .map(|slot| inst.get_base_param(slot))
+                    })
+                    .flatten();
+                if let Some(new_val) = new_val
+                    && (old_val - new_val).abs() > f32::EPSILON
                 {
-                    let new_val = fx.get_base_param(slot);
-                    if (old_val - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeGraphParamCommand::new(
-                            manifold_core::GraphTarget::Effect(eid),
-                            param_id.clone(),
-                            old_val,
-                            new_val,
-                        );
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
+                    let cmd = ChangeGraphParamCommand::new(
+                        target,
+                        param_id.clone(),
+                        old_val,
+                        new_val,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             *active_inspector_drag = None;
@@ -1506,81 +1494,6 @@ pub(super) fn dispatch_inspector(
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
-        PanelAction::ParamSnapshot(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(slot) = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()))
-                && let Some(gp) = layer.gen_params()
-            {
-                let val = gp.get_base_param(slot);
-                *drag_snapshot = Some(val);
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::GenParam {
-                    layer_id: layer.layer_id.clone(),
-                    param_id: param_id.clone(),
-                    value: val,
-                });
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ParamChanged(GraphParamTarget::Generator, param_id, val) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                    let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
-                    if let Some(slot) = slot
-                        && let Some(gp) = layer.gen_params_mut()
-                    {
-                        gp.set_base_param(slot, *val);
-                    }
-                }
-                if let Some(crate::app::ActiveInspectorDrag::GenParam { value, .. }) =
-                    active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let pid = param_id.clone();
-                let v = *val;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                            let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(pid.as_ref()));
-                            if let Some(slot) = slot
-                                && let Some(gp) = layer.gen_params_mut()
-                            {
-                                gp.set_base_param(slot, v);
-                            }
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ParamCommit(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(old_val) = drag_snapshot.take()
-                && let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(slot) = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()))
-                && let Some(gp) = layer.gen_params()
-            {
-                let new_val = gp.get_base_param(slot);
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeGraphParamCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        param_id.clone(),
-                        old_val,
-                        new_val,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
         PanelAction::GenParamToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
