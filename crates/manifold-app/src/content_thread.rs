@@ -960,8 +960,8 @@ impl ContentThread {
         // without bumping data_version — UI needs live modulated values).
         // Include Ableton as a modulation source. Bridge apply() runs after this
         // state push (same frame), so we use last frame's flag — on the following
-        // frame, evaluate_modulation will have already reset param_values from the
-        // updated base_param_values, so the snapshot will contain Ableton values.
+        // frame, evaluate_modulation will have already reset each slot's value
+        // from its updated base, so the snapshot will contain Ableton values.
         let modulation_active = tick_result.modulation_active || self.ableton_active_last_frame;
 
         // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse

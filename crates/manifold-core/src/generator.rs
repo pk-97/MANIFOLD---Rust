@@ -48,8 +48,9 @@ mod tests {
     /// (simulating a project saved before the type grew more params).
     fn gen_with_params(gt: PresetTypeId, values: Vec<f32>) -> PresetInstance {
         let mut state = PresetInstance::new_generator(gt);
+        // ParamSlot::exposed seeds base = value; mark base tracked (fork #16).
         state.param_values = values.iter().map(|v| ParamSlot::exposed(*v)).collect();
-        state.base_param_values = Some(values);
+        state.base_tracked = true;
         state
     }
 
@@ -77,11 +78,11 @@ mod tests {
             );
         }
 
-        let base = state.base_param_values.as_ref().unwrap();
-        assert_eq!(base.len(), target_count);
-        assert_eq!(base[0], 1.5);
-        assert_eq!(base[1], 2.5);
-        assert_eq!(base[2], 3.5);
+        assert!(state.base_tracked);
+        assert_eq!(state.param_values.len(), target_count);
+        assert_eq!(state.param_values[0].base, 1.5);
+        assert_eq!(state.param_values[1].base, 2.5);
+        assert_eq!(state.param_values[2].base, 3.5);
     }
 
     #[test]
@@ -113,12 +114,12 @@ mod tests {
         state.set_base_param(1, 0.75);
 
         assert_eq!(state.param_values[1].value, 0.75, "write landed on bundled slot");
-        assert_eq!(state.base_param_values.as_ref().unwrap()[1], 0.75);
+        assert_eq!(state.param_values[1].base, 0.75);
 
         state.set_base_param(2, 0.42);
         assert_eq!(state.param_values.len(), 3, "param_values auto-extended");
         assert_eq!(state.param_values[2].value, 0.42, "tail write landed");
-        assert_eq!(state.base_param_values.as_ref().unwrap()[2], 0.42);
+        assert_eq!(state.param_values[2].base, 0.42);
     }
 
     #[test]

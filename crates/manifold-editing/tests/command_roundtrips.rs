@@ -721,7 +721,7 @@ fn change_effect_param_undo_roundtrip() {
     {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
-        fx.base_param_values = Some(vec![0.5, 0.3]);
+        fx.base_tracked = true; // slots already carry base = value (fork #16)
         project.settings.master_effects.push(fx);
     }
 
@@ -762,7 +762,7 @@ fn change_effect_param_unknown_id_is_no_op() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
-    fx.base_param_values = Some(vec![0.5, 0.3]);
+    fx.base_tracked = true; // slots already carry base = value (fork #16)
     project.settings.master_effects.push(fx);
 
     let effect_id = project.settings.master_effects[0].id.clone();
@@ -799,7 +799,7 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
-    fx.base_param_values = Some(vec![0.5, 0.3]);
+    fx.base_tracked = true; // slots already carry base = value (fork #16)
     fx.append_user_binding(UserParamBinding {
         id: "user.uv.translate.1".to_string(),
         label: "Translate".to_string(),
@@ -1502,7 +1502,7 @@ fn expose_effect_param_command_undo_roundtrip() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
-    fx.base_param_values = Some(vec![0.5, 1.0]);
+    fx.base_tracked = true; // slots already carry base = value (fork #16)
     project.settings.master_effects.push(fx);
 
     let effect_id = project.settings.master_effects[0].id.clone();
@@ -1533,7 +1533,10 @@ fn expose_effect_param_command_undo_roundtrip() {
             ParamSlot::exposed(0.0)
         ]
     );
-    assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.5, 1.0, 0.0]);
+    assert_eq!(
+        fx.param_values.iter().map(|s| s.base).collect::<Vec<_>>(),
+        vec![0.5, 1.0, 0.0]
+    );
 
     cmd.undo(&mut project);
     let fx = &project.settings.master_effects[0];
@@ -1542,7 +1545,10 @@ fn expose_effect_param_command_undo_roundtrip() {
         fx.param_values,
         vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)]
     );
-    assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.5, 1.0]);
+    assert_eq!(
+        fx.param_values.iter().map(|s| s.base).collect::<Vec<_>>(),
+        vec![0.5, 1.0]
+    );
 
     // Re-execute (redo) yields the same binding id (deterministic
     // generator: binding list is empty after undo, so we land on
@@ -1562,7 +1568,7 @@ fn expose_already_exposed_is_idempotent_noop() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
-    fx.base_param_values = Some(vec![0.5, 1.0]);
+    fx.base_tracked = true; // slots already carry base = value (fork #16)
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
@@ -1609,7 +1615,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
     fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
-    fx.base_param_values = Some(vec![0.5, 1.0]);
+    fx.base_tracked = true; // slots already carry base = value (fork #16)
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
@@ -1627,7 +1633,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     });
     // Drag the slider — user-tail at index 2 (n_static=2 + j=0) changed.
     fx.param_values[2].value = 0.42;
-    fx.base_param_values.as_mut().unwrap()[2] = 0.42;
+    fx.param_values[2].base = 0.42;
     project.settings.master_effects.push(fx);
 
     let effect_id = project.settings.master_effects[0].id.clone();
@@ -1656,7 +1662,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     // Slot value restored — including the dragged 0.42, NOT the binding default.
     assert!((fx.param_values[2].value - 0.42).abs() < f32::EPSILON);
     assert!(
-        (fx.base_param_values.as_ref().unwrap()[2] - 0.42).abs() < f32::EPSILON,
+        (fx.param_values[2].base - 0.42).abs() < f32::EPSILON,
         "base value also restored"
     );
 }

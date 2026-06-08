@@ -2602,7 +2602,8 @@ mod tests {
                 manifold_core::effects::ParamSlot::exposed(0.0),
                 manifold_core::effects::ParamSlot::exposed(1.0),
             ];
-            gp.base_param_values = Some(vec![0.0, 1.0]);
+            // ParamSlot::exposed seeds base = value; mark base tracked (fork #16).
+            gp.base_tracked = true;
         }
 
         // Expose `render.animate` — has no preset binding, so the
@@ -2855,7 +2856,7 @@ mod tests {
                 manifold_core::effects::ParamSlot::exposed(0.0),
                 manifold_core::effects::ParamSlot::exposed(0.75),
             ]; // bundled `shape` + user-added `animate`
-            gp.base_param_values = Some(vec![0.0, 0.75]);
+            gp.base_tracked = true;
             // Attach a driver + envelope on the user-added id — they
             // should get pruned on unexpose and restored on undo.
             gp.drivers = Some(vec![ParameterDriver {

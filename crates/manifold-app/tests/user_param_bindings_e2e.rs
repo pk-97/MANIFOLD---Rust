@@ -178,9 +178,9 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
         .expect("user id resolves after reload");
     assert_eq!(value_idx, 2);
     assert!((fx.param_values[value_idx].value - 0.42).abs() < f32::EPSILON);
-    // base_param_values matches.
-    let base = fx.base_param_values.as_ref().expect("base values present");
-    assert!((base[value_idx] - 0.42).abs() < f32::EPSILON);
+    // base (folded into the slot, fork #16) matches.
+    assert!(fx.base_tracked, "base values present");
+    assert!((fx.param_values[value_idx].base - 0.42).abs() < f32::EPSILON);
 
     // 8. The driver is intact and references the user id.
     let drivers = fx.drivers.as_ref().expect("drivers present");

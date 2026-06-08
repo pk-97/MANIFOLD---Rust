@@ -419,7 +419,17 @@ pub fn apply_card_reshape(
 /// footgun of separate `Vec<f32>` + `Vec<bool>` collections.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParamSlot {
+    /// Effective (post-modulation) value — what the renderer reads.
     pub value: f32,
+    /// User-intended base (pre-modulation) value. Modulation reads `base`,
+    /// computes the effective, and writes it to `value`; `reset_param_effectives`
+    /// copies `base` back into `value` each frame before re-applying modulation.
+    /// Folded in from the former parallel `base_param_values: Option<Vec<f32>>`
+    /// (fork #16) — riding the slot eliminates the length-sync footgun. Whether
+    /// base is *tracked* (emitted to the wire) is the per-instance
+    /// `PresetInstance.base_tracked` bit; until tracked, `get_base_param` falls
+    /// through to `value`, so a stale `base` here is never observed.
+    pub base: f32,
     pub exposed: bool,
 }
 
@@ -427,17 +437,20 @@ impl Default for ParamSlot {
     fn default() -> Self {
         Self {
             value: 0.0,
+            base: 0.0,
             exposed: true,
         }
     }
 }
 
 impl ParamSlot {
-    /// Convenience constructor for an exposed slot with the given value.
+    /// Convenience constructor for an exposed slot with the given value
+    /// (base seeded to the same value).
     #[inline]
     pub const fn exposed(value: f32) -> Self {
         Self {
             value,
+            base: value,
             exposed: true,
         }
     }
@@ -471,31 +484,21 @@ impl<'de> Deserialize<'de> for ParamSlot {
             }
 
             fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<ParamSlot, E> {
-                Ok(ParamSlot {
-                    value: v as f32,
-                    exposed: true,
-                })
+                // base seeded to value; the separate baseParamValues array (when
+                // present) overwrites base after the slots are built.
+                Ok(ParamSlot::exposed(v as f32))
             }
 
             fn visit_f32<E: serde::de::Error>(self, v: f32) -> Result<ParamSlot, E> {
-                Ok(ParamSlot {
-                    value: v,
-                    exposed: true,
-                })
+                Ok(ParamSlot::exposed(v))
             }
 
             fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<ParamSlot, E> {
-                Ok(ParamSlot {
-                    value: v as f32,
-                    exposed: true,
-                })
+                Ok(ParamSlot::exposed(v as f32))
             }
 
             fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ParamSlot, E> {
-                Ok(ParamSlot {
-                    value: v as f32,
-                    exposed: true,
-                })
+                Ok(ParamSlot::exposed(v as f32))
             }
 
             fn visit_map<M>(self, mut map: M) -> Result<ParamSlot, M::Error>
@@ -513,8 +516,10 @@ impl<'de> Deserialize<'de> for ParamSlot {
                         }
                     }
                 }
+                let v = value.unwrap_or(0.0);
                 Ok(ParamSlot {
-                    value: value.unwrap_or(0.0),
+                    value: v,
+                    base: v,
                     exposed: exposed.unwrap_or(true),
                 })
             }
@@ -536,8 +541,10 @@ impl<'de> Deserialize<'de> for ParamSlot {
 ///   `ParamSlot` deserializer handles the bare-vs-object distinction
 ///   per-element. On save, V1.3+ canonical Map form is emitted when
 ///   the effect's registry def is available; otherwise positional Array.
-/// - `baseParamValues` stays as `Vec<f32>` (modulation tracking only —
-///   exposure isn't meaningful for the pre-modulation snapshot).
+/// - `baseParamValues` stays a `Vec<f32>` *on the wire* (modulation tracking
+///   only — exposure isn't meaningful for the pre-modulation snapshot). In
+///   memory it's folded into `ParamSlot.base` (fork #16); the wire round-trips
+///   byte-identically, emitted iff `base_tracked`.
 ///
 /// In-memory storage stays positional (`Vec<ParamSlot>`) — the hot
 /// path reads/writes by index. The Map form only exists on the wire.
@@ -572,7 +579,16 @@ pub struct PresetInstance {
     /// [`Self::param_id_to_value_index`]; that helper is the single
     /// tier-aware lookup the rest of the codebase relies on.
     pub param_values: Vec<ParamSlot>,
-    pub base_param_values: Option<Vec<f32>>,
+    /// Whether the pre-modulation base (now `ParamSlot.base`) is *tracked* —
+    /// the single presence bit that replaces the former
+    /// `base_param_values: Option<Vec<f32>>` (fork #16). Set on load when the
+    /// JSON carried `baseParamValues`, and by any base write
+    /// (`set_base_param` / `reset_param_effectives` / `init_defaults_for_type`).
+    /// While `false`, `get_base_param` falls through to the effective value, so
+    /// per-slot `base` is allowed to be stale; the field is also the
+    /// serialize-time gate that keeps `baseParamValues` byte-identical (emitted
+    /// iff tracked). Not serialized; derived on load.
+    pub base_tracked: bool,
     pub drivers: Option<Vec<ParameterDriver>>,
     /// Per-instance ADSR/Random envelopes, keyed by `param_id`. Envelope-home
     /// unification: both effects and generators store their envelopes here (the
@@ -1081,11 +1097,12 @@ impl Serialize for PresetInstance {
             return self.serialize_as_generator(serializer);
         }
 
-        // `param_values` always emits; `base_param_values` is optional.
-        // Other optional fields use the same `skip_if_none` policy as
-        // the previous derive(Serialize) impl.
+        // `param_values` always emits; `baseParamValues` is emitted iff base is
+        // tracked (the former `base_param_values.is_some()` gate). Other optional
+        // fields use the same `skip_if_none` policy as the previous
+        // derive(Serialize) impl.
         let mut field_count = 5; // id, effectType, enabled, collapsed, paramValues
-        if self.base_param_values.is_some() {
+        if self.base_tracked {
             field_count += 1;
         }
         if self.drivers.is_some() {
@@ -1137,11 +1154,13 @@ impl Serialize for PresetInstance {
                 user_binding_ids: &user_binding_ids,
             },
         )?;
-        if let Some(base) = &self.base_param_values {
+        if self.base_tracked {
+            // Reconstruct the wire's flat base array from each slot's `base`.
+            let base: Vec<f32> = self.param_values.iter().map(|s| s.base).collect();
             s.serialize_field(
                 "baseParamValues",
                 &BaseParamValuesSer {
-                    values: base,
+                    values: &base,
                     effect_type: &self.effect_type,
                     user_binding_ids: &user_binding_ids,
                 },
@@ -1193,7 +1212,7 @@ impl PresetInstance {
         use serde::ser::SerializeStruct;
 
         let mut field_count = 2; // generatorType + paramValues
-        if self.base_param_values.is_some() {
+        if self.base_tracked {
             field_count += 1;
         }
         if self.drivers.is_some() {
@@ -1221,11 +1240,12 @@ impl PresetInstance {
                 gen_type: &self.effect_type,
             },
         )?;
-        if let Some(base) = &self.base_param_values {
+        if self.base_tracked {
+            let base: Vec<f32> = self.param_values.iter().map(|s| s.base).collect();
             s.serialize_field(
                 "baseParamValues",
                 &GenParamValuesSer {
-                    values: base,
+                    values: &base,
                     gen_type: &self.effect_type,
                 },
             )?;
@@ -1397,13 +1417,21 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // The Map → positional fold runs before `align_to_definition`, so
         // registry-known but user-tail-empty cases land at zero and align
         // fills user-binding defaults.
-        let param_values = raw
+        let mut param_values = raw
             .param_values
             .map(|w| w.into_positional(&raw.effect_type, &user_binding_ids, &user_defaults))
             .unwrap_or_default();
-        let base_param_values = raw
+        // Fold the wire's separate `baseParamValues` into each slot's `base`
+        // (fork #16). Present → tracked; absent → base stays seeded to value.
+        let base_tracked = raw.base_param_values.is_some();
+        if let Some(base) = raw
             .base_param_values
-            .map(|w| w.into_positional_base(&raw.effect_type, &user_binding_ids, &user_defaults));
+            .map(|w| w.into_positional_base(&raw.effect_type, &user_binding_ids, &user_defaults))
+        {
+            for (slot, b) in param_values.iter_mut().zip(base.iter()) {
+                slot.base = *b;
+            }
+        }
 
         Ok(PresetInstance {
             kind: crate::preset_def::PresetKind::Effect,
@@ -1412,7 +1440,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             enabled: raw.enabled,
             collapsed: raw.collapsed,
             param_values,
-            base_param_values,
+            base_tracked,
             drivers: raw.drivers,
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
@@ -1462,13 +1490,20 @@ struct GeneratorInstanceRaw {
 
 impl GeneratorInstanceRaw {
     fn into_instance(self) -> PresetInstance {
-        let param_values = self
+        let mut param_values = self
             .param_values
             .map(|w| w.into_positional_for_generator(&self.generator_type))
             .unwrap_or_default();
-        let base_param_values = self
+        // Fold the wire's separate `baseParamValues` into each slot's `base`.
+        let base_tracked = self.base_param_values.is_some();
+        if let Some(base) = self
             .base_param_values
-            .map(|w| w.into_positional_for_generator(&self.generator_type));
+            .map(|w| w.into_positional_for_generator(&self.generator_type))
+        {
+            for (slot, b) in param_values.iter_mut().zip(base.iter()) {
+                slot.base = *b;
+            }
+        }
         PresetInstance {
             kind: crate::preset_def::PresetKind::Generator,
             id: generate_effect_id(),
@@ -1476,7 +1511,7 @@ impl GeneratorInstanceRaw {
             enabled: true,
             collapsed: false,
             param_values,
-            base_param_values,
+            base_tracked,
             drivers: self.drivers,
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
@@ -1573,7 +1608,7 @@ impl PresetInstance {
             enabled: true,
             collapsed: false,
             param_values: Vec::new(),
-            base_param_values: None,
+            base_tracked: false,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -1600,7 +1635,7 @@ impl PresetInstance {
             enabled: true,
             collapsed: false,
             param_values: Vec::new(),
-            base_param_values: None,
+            base_tracked: false,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -1702,12 +1737,14 @@ impl PresetInstance {
 
     /// Read the user-set base value (before modulation). Unity lines 104-110.
     pub fn get_base_param(&self, index: usize) -> f32 {
-        if let Some(base) = &self.base_param_values
-            && index < base.len()
+        // While base isn't tracked, `ParamSlot.base` may be stale (an effective
+        // write via `set_param` doesn't touch it), so fall through to the
+        // effective value — exactly the former `base_param_values: None` behavior.
+        if self.base_tracked
+            && let Some(slot) = self.param_values.get(index)
         {
-            return base[index];
+            return slot.base;
         }
-        // Fall through to effective for backward compat
         self.get_param(index)
     }
 
@@ -1729,35 +1766,29 @@ impl PresetInstance {
         while self.param_values.len() <= index {
             self.param_values.push(ParamSlot::default());
         }
-        if let Some(base) = &mut self.base_param_values {
-            while base.len() <= index {
-                base.push(0.0);
-            }
-            base[index] = value;
-        }
+        // Setting base also sets the effective; modulation later overrides value.
+        self.param_values[index].base = value;
         self.param_values[index].value = value;
     }
 
     /// Reset effective param values from base values.
     pub fn reset_param_effectives(&mut self) {
         self.ensure_base_values();
-        if let Some(base) = &self.base_param_values {
-            let len = self.param_values.len().min(base.len());
-            for (i, &b) in base.iter().enumerate().take(len) {
-                self.param_values[i].value = b;
-            }
+        for slot in &mut self.param_values {
+            slot.value = slot.base;
         }
     }
 
-    /// Lazy migration: create baseParamValues from paramValues if missing.
+    /// Begin tracking base: capture the current effective values as base (when
+    /// not already tracked) so subsequent modulation reads a stable pre-mod
+    /// value. Replaces the former lazy `Option<Vec<f32>>` create; per-slot base
+    /// removes the length-sync the old version had to re-derive on mismatch.
     pub fn ensure_base_values(&mut self) {
-        if self.base_param_values.is_none()
-            || self
-                .base_param_values
-                .as_ref()
-                .is_some_and(|b| b.len() != self.param_values.len())
-        {
-            self.base_param_values = Some(self.param_values.iter().map(|p| p.value).collect());
+        if !self.base_tracked {
+            for slot in &mut self.param_values {
+                slot.base = slot.value;
+            }
+            self.base_tracked = true;
         }
     }
 
@@ -2053,10 +2084,8 @@ impl PresetInstance {
 
         // Reshape (range / curve / invert) is carried on the `ParamSpecDef`
         // pushed above — the preset is the single source. No per-instance note.
+        // base rides the slot now (fork #16), so one push covers value + base.
         self.param_values.push(ParamSlot::exposed(default_v));
-        if let Some(base) = self.base_param_values.as_mut() {
-            base.push(default_v);
-        }
     }
 
     /// Remove a user-exposed binding by id and drop its `param_values`
@@ -2094,12 +2123,8 @@ impl PresetInstance {
         }
 
         if value_idx < self.param_values.len() {
+            // Removing the slot removes its base too (fork #16).
             self.param_values.remove(value_idx);
-        }
-        if let Some(base) = self.base_param_values.as_mut()
-            && value_idx < base.len()
-        {
-            base.remove(value_idx);
         }
         Some(removed)
     }
@@ -2203,14 +2228,12 @@ impl PresetInstance {
         // (`static_param_count`) prefix — kind-aware so generators restore at
         // the right slot too.
         let value_idx = self.static_param_count() + position;
+        // The restored `slot_value` carries its own `base` now (fork #16), so a
+        // single insert restores value + base together.
         if value_idx <= self.param_values.len() {
             self.param_values.insert(value_idx, slot_value);
         } else {
             self.param_values.push(slot_value);
-        }
-        if let Some(base) = self.base_param_values.as_mut() {
-            let bidx = value_idx.min(base.len());
-            base.insert(bidx, slot_value.value);
         }
     }
 
@@ -2250,17 +2273,9 @@ impl PresetInstance {
                 old[12],                 // Lock → Lock (was index 12)
                 ParamSlot::exposed(0.5), // EdgeFollow default (Face was discrete toggle, not transferable)
             ];
+            // base rides each slot now (fork #16), so the reorder above carries
+            // base alongside value; the new EdgeFollow slot seeds base = 0.5.
             self.param_values = migrated;
-            // Migrate base values too
-            if let Some(ref base) = self.base_param_values
-                && base.len() == 14
-            {
-                let migrated_base = vec![
-                    base[0], base[1], base[2], base[3], base[4], base[7], base[8], base[9],
-                    base[10], base[11], base[12], 0.5,
-                ];
-                self.base_param_values = Some(migrated_base);
-            }
         }
 
         // Snapshot the user-added binding defaults up front (declaration
@@ -2342,35 +2357,11 @@ impl PresetInstance {
                     .copied()
                     .unwrap_or_else(|| ParamSlot::exposed(user_defaults[j]));
             }
+            // base rides each ParamSlot now (fork #16): the copies + padded
+            // `ParamSlot::exposed(default)` slots above already carry the
+            // aligned base, so the former parallel `aligned_base` rebuild is
+            // gone (and with it the length-sync footgun this fork removes).
             self.param_values = aligned;
-
-            if let Some(ref base) = self.base_param_values {
-                let old_base_total = base.len();
-                let base_static_copy = old_base_total.min(static_target);
-                let base_user_tail_now: Vec<f32> = if old_base_total > static_target {
-                    base[static_target..].to_vec()
-                } else {
-                    Vec::new()
-                };
-
-                let mut aligned_base = vec![0.0f32; target];
-                aligned_base[..base_static_copy].copy_from_slice(&base[..base_static_copy]);
-                for (i, slot) in aligned_base
-                    .iter_mut()
-                    .enumerate()
-                    .take(static_target)
-                    .skip(base_static_copy)
-                {
-                    *slot = static_defaults.get(i).copied().unwrap_or(0.0);
-                }
-                for j in 0..n_user {
-                    aligned_base[static_target + j] = base_user_tail_now
-                        .get(j)
-                        .copied()
-                        .unwrap_or(user_defaults[j]);
-                }
-                self.base_param_values = Some(aligned_base);
-            }
         }
     }
 
@@ -2400,17 +2391,11 @@ impl PresetInstance {
         if self.param_values.len() < min_target {
             self.param_values
                 .reserve(min_target - self.param_values.len());
+            // Each padded slot seeds base = default (fork #16), so the former
+            // parallel base pad is gone.
             for i in self.param_values.len()..min_target {
                 self.param_values
                     .push(ParamSlot::exposed(def.param_defs[i].default_value));
-            }
-        }
-        if let Some(base) = &mut self.base_param_values
-            && base.len() < min_target
-        {
-            base.reserve(min_target - base.len());
-            for i in base.len()..min_target {
-                base.push(def.param_defs[i].default_value);
             }
         }
     }
@@ -2443,10 +2428,6 @@ impl PresetInstance {
             return;
         }
         self.ensure_base_values();
-        let base = match &self.base_param_values {
-            Some(b) => b,
-            None => return,
-        };
         let def = crate::preset_definition_registry::try_get(&self.effect_type);
         let id_to_index = def.as_ref().map(|d| &d.id_to_index);
 
@@ -2458,8 +2439,8 @@ impl PresetInstance {
                 let Some(&idx) = id_to_index.and_then(|m| m.get(driver.param_id.as_ref())) else {
                     continue;
                 };
-                if idx < self.param_values.len() && idx < base.len() {
-                    self.param_values[idx].value = base[idx];
+                if let Some(slot) = self.param_values.get_mut(idx) {
+                    slot.value = slot.base;
                 }
             }
         }
@@ -2471,8 +2452,8 @@ impl PresetInstance {
                 let Some(&idx) = id_to_index.and_then(|m| m.get(env.param_id.as_ref())) else {
                     continue;
                 };
-                if idx < self.param_values.len() && idx < base.len() {
-                    self.param_values[idx].value = base[idx];
+                if let Some(slot) = self.param_values.get_mut(idx) {
+                    slot.value = slot.base;
                 }
             }
         }
@@ -2499,13 +2480,14 @@ impl PresetInstance {
     pub fn init_defaults_for_type(&mut self, gen_type: PresetTypeId) {
         if let Some(def) = crate::preset_definition_registry::try_get(&gen_type) {
             self.effect_type = gen_type;
+            // ParamSlot::exposed seeds base = default; the instance now tracks
+            // base (the former `base_param_values = Some(..)`).
             self.param_values = def
                 .param_defs
                 .iter()
                 .map(|pd| ParamSlot::exposed(pd.default_value))
                 .collect();
-            self.base_param_values =
-                Some(def.param_defs.iter().map(|pd| pd.default_value).collect());
+            self.base_tracked = true;
         }
     }
 
@@ -2515,14 +2497,14 @@ impl PresetInstance {
         self.init_defaults_for_type(gt);
     }
 
-    /// Snapshot current base param values (for undo).
+    /// Snapshot current base param values (for undo). When base is tracked,
+    /// snapshots each slot's `base`; otherwise the effective value (the former
+    /// `base_param_values: None` fall-through).
     pub fn snapshot_params(&self) -> Vec<f32> {
-        if let Some(base) = &self.base_param_values {
-            base.clone()
-        } else if !self.param_values.is_empty() {
-            self.param_values.iter().map(|s| s.value).collect()
+        if self.base_tracked {
+            self.param_values.iter().map(|s| s.base).collect()
         } else {
-            Vec::new()
+            self.param_values.iter().map(|s| s.value).collect()
         }
     }
 
@@ -2549,8 +2531,9 @@ impl PresetInstance {
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
         self.effect_type = gen_type;
+        // ParamSlot::exposed seeds base = value; the snapshot is the base.
         self.param_values = params.iter().map(|v| ParamSlot::exposed(*v)).collect();
-        self.base_param_values = Some(params);
+        self.base_tracked = true;
         if let Some(d) = &mut self.drivers {
             d.clear();
         }
@@ -3558,8 +3541,10 @@ mod tests {
         assert!((fx.param_values[4].value - 1.5).abs() < f32::EPSILON);
         // Legacy bare-f32 wire format → exposed defaults to true.
         assert!(fx.param_values.iter().all(|p| p.exposed));
-        assert!(fx.base_param_values.is_some());
-        assert_eq!(fx.base_param_values.as_ref().unwrap().len(), 9);
+        // baseParamValues present → base tracked, folded into each slot's base.
+        assert!(fx.base_tracked);
+        assert_eq!(fx.param_values.len(), 9);
+        assert!((fx.param_values[4].base - 1.5).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -3595,7 +3580,7 @@ mod tests {
                 ParamSlot::exposed(0.2),
                 ParamSlot::exposed(0.3),
             ],
-            base_param_values: None,
+            base_tracked: false,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -3649,14 +3634,16 @@ mod tests {
             param_values: vec![
                 ParamSlot {
                     value: 0.1,
+                    base: 0.1,
                     exposed: true,
                 },
                 ParamSlot {
                     value: 0.2,
+                    base: 0.2,
                     exposed: false,
                 },
             ],
-            base_param_values: None,
+            base_tracked: false,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -3934,7 +3921,12 @@ mod tests {
             fx.param_values,
             vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.25)]
         );
-        assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.7, 0.25]);
+        // base rides each slot now (fork #16).
+        assert!(fx.base_tracked);
+        assert_eq!(
+            fx.param_values.iter().map(|s| s.base).collect::<Vec<_>>(),
+            vec![0.7, 0.25]
+        );
         // The binding now lives in the graph (the single storage list).
         assert_eq!(fx.user_param_count(), 1);
     }
@@ -3945,8 +3937,10 @@ mod tests {
         fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
-        fx.param_values[1].value = 0.3;
-        fx.param_values[2].value = 0.6;
+        // A real slider edit sets base + value together (fork #16); set both so
+        // the surviving slot is coherent after compaction.
+        fx.set_base_param(1, 0.3);
+        fx.set_base_param(2, 0.6);
 
         let removed = fx.remove_user_binding_by_id("user.a.b.1");
         assert!(removed.is_some());

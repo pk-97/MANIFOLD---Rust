@@ -297,14 +297,10 @@ impl Project {
                 let coerced = slot.value.round() as i32;
                 if let Some(&(_, to)) = value_aliases.iter().find(|(from, _)| *from == coerced) {
                     slot.value = to as f32;
-                    // Keep base value in sync so a later
-                    // `reset_param_effectives` doesn't wipe the
-                    // migration back to the pre-migration value.
-                    if let Some(base) = fx.base_param_values.as_mut()
-                        && let Some(b) = base.get_mut(slot_idx)
-                    {
-                        *b = to as f32;
-                    }
+                    // Keep base in sync so a later `reset_param_effectives`
+                    // doesn't wipe the migration back. base rides the slot now
+                    // (fork #16), so this is the same slot we just wrote.
+                    slot.base = to as f32;
                 }
             }
         }

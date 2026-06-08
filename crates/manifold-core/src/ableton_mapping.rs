@@ -57,7 +57,7 @@ pub enum AbletonMappingStatus {
 /// Mapping from an Ableton rack macro to a MANIFOLD parameter.
 ///
 /// Stored alongside `drivers` on `PresetInstance` and `PresetInstance`.
-/// Replace mode: when active, the Ableton value overrides `base_param_values`.
+/// Replace mode: when active, the Ableton value overrides each slot's `base`.
 ///
 /// Address shape: [`AbletonParamMapping::param_id`] is the canonical
 /// MANIFOLD-side mapping key, mirroring [`crate::effects::ParameterDriver`].

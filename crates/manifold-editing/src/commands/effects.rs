@@ -417,8 +417,10 @@ enum ReverseState {
     /// modulation surface the user had configured.
     Unexposed {
         binding: UserParamBinding,
+        /// The removed slot, carrying both its effective `value` and
+        /// pre-modulation `base` (fork #16) so undo reinstates the exact
+        /// snapshot with a single `restore_user_binding_at`.
         slot_value: ParamSlot,
-        slot_base_value: Option<f32>,
         position: usize,
         /// Drivers pruned from `PresetInstance.drivers` because their
         /// `param_id` matched the removed binding's id.
@@ -509,15 +511,11 @@ impl Command for ToggleEffectParamExposeCommand {
                 // Read the current slot values BEFORE removal so undo
                 // can reinstate them.
                 let value_idx = effect.param_id_to_value_index(&user_param_id);
+                // The copied slot carries its `base` too (fork #16), so undo
+                // reinstates the exact pre-modulation snapshot in one insert.
                 let slot_value = value_idx
                     .and_then(|i| effect.param_values.get(i).copied())
                     .unwrap_or(ParamSlot::exposed(meta.default_value));
-                let slot_base_value = value_idx.and_then(|i| {
-                    effect
-                        .base_param_values
-                        .as_ref()
-                        .and_then(|b| b.get(i).copied())
-                });
                 // Prune effect-local modulation references that targeted
                 // this binding. After the binding goes away its id stops
                 // resolving anywhere, so the driver / Ableton row would
@@ -582,7 +580,6 @@ impl Command for ToggleEffectParamExposeCommand {
                 ReverseState::Unexposed {
                     binding,
                     slot_value,
-                    slot_base_value,
                     position,
                     removed_drivers,
                     removed_ableton_mappings,
@@ -604,7 +601,6 @@ impl Command for ToggleEffectParamExposeCommand {
                 ReverseState::Unexposed {
                     binding,
                     slot_value,
-                    slot_base_value,
                     position,
                     removed_drivers,
                     removed_ableton_mappings,
@@ -614,20 +610,10 @@ impl Command for ToggleEffectParamExposeCommand {
                     // slot positions stay stable for any other addressing
                     // (drivers, Ableton mappings) that referenced the
                     // user_param_id by string.
-                    let binding_id = binding.id.clone();
-                    let restore_slot = slot_value;
-                    effect.restore_user_binding_at(binding, position, restore_slot);
-                    if let Some(value_idx) = effect.param_id_to_value_index(&binding_id) {
-                        // `restore_user_binding_at` seeded base from the
-                        // value slot; override with the captured base if
-                        // present so the pre-modulation snapshot is exact.
-                        if let (Some(base), Some(base_v)) =
-                            (effect.base_param_values.as_mut(), slot_base_value)
-                            && value_idx < base.len()
-                        {
-                            base[value_idx] = base_v;
-                        }
-                    }
+                    // The restored slot carries its own `base` (fork #16), so
+                    // restore_user_binding_at reinstates the exact pre-modulation
+                    // snapshot — no separate base override needed.
+                    effect.restore_user_binding_at(binding, position, slot_value);
                     // Restore the drivers / Ableton mappings that
                     // execute() pruned. Their `param_id` still points
                     // at the just-reinserted binding's id, so they'll
