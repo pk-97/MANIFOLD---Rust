@@ -1610,6 +1610,39 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
+        PanelAction::MakeGeneratorUnique => {
+            // Phase-4 "make unique": fork the active layer's generator into a
+            // project-embedded preset and retarget the layer to it. source_def
+            // is the per-instance diverged graph if present, else the catalog
+            // canonical def from the loaded preset view (pristine generator).
+            use manifold_core::preset_def::PresetKind;
+            use manifold_editing::commands::preset::ForkPresetCommand;
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params()
+                && !gp.generator_type().is_none()
+            {
+                let layer_id = layer.layer_id.clone();
+                let gen_type = gp.generator_type().clone();
+                let source_def = gp.graph.clone().or_else(|| {
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(&gen_type)
+                        .map(|v| v.canonical_def.clone())
+                });
+                if let Some(source_def) = source_def {
+                    let cmd = ForkPresetCommand::new(
+                        manifold_core::GraphTarget::Generator(layer_id),
+                        PresetKind::Generator,
+                        source_def,
+                    );
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::structural()
+        }
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),

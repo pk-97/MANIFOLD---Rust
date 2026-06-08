@@ -470,6 +470,10 @@ pub enum PanelAction {
     OpenGeneratorGraphEditor,
     CopyGenerator,
     PasteGenerator,
+    /// Fork the active layer's generator into a project-embedded preset and
+    /// retarget the layer to it (Phase-4 "make unique"), so a per-instance
+    /// recalibration becomes a named, shareable variant.
+    MakeGeneratorUnique,
 
     // Macros panel collapse
     MacrosCollapseToggle,

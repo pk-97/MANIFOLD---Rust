@@ -213,6 +213,7 @@ pub fn dispatch(
         | PanelAction::GenCardRightClicked
         | PanelAction::CopyGenerator
         | PanelAction::PasteGenerator
+        | PanelAction::MakeGeneratorUnique
         | PanelAction::MacrosCollapseToggle
         | PanelAction::MacroSnapshot(_)
         | PanelAction::MacroChanged(..)

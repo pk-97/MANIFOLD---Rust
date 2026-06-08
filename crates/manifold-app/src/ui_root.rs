@@ -1349,6 +1349,7 @@ impl UIRoot {
                 if self.gen_clipboard.has_content() {
                     items.push(DropdownItem::new("Paste Generator"));
                 }
+                items.push(DropdownItem::new("Make Unique"));
                 self.dropdown_context = Some(DropdownContext::GenCardContext);
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -1469,11 +1470,16 @@ impl UIRoot {
                         .map(|name| PanelAction::SetAudioInputDevice(name.clone()))
                 }
             }
-            DropdownContext::GenCardContext => match index {
-                0 => Some(PanelAction::CopyGenerator),
-                1 => Some(PanelAction::PasteGenerator),
-                _ => None,
-            },
+            DropdownContext::GenCardContext => {
+                // Label-matched: "Paste Generator" is conditional, so item
+                // indices shift — match the label, not a fixed position.
+                match self.dropdown.item_label(index) {
+                    Some("Copy Generator") => Some(PanelAction::CopyGenerator),
+                    Some("Paste Generator") => Some(PanelAction::PasteGenerator),
+                    Some("Make Unique") => Some(PanelAction::MakeGeneratorUnique),
+                    _ => None,
+                }
+            }
             DropdownContext::ParamContext(gpt, param_id, _default_val) => {
                 if index < manifold_core::MACRO_COUNT {
                     Some(PanelAction::MapParamToMacro(gpt, param_id, index))
