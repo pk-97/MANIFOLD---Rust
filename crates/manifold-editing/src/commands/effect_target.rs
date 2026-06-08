@@ -67,3 +67,16 @@ pub enum DriverTarget {
     Effect { effect_id: EffectId },
     GeneratorParam { layer_id: LayerId },
 }
+
+impl From<&manifold_core::GraphTarget> for DriverTarget {
+    fn from(t: &manifold_core::GraphTarget) -> Self {
+        match t {
+            manifold_core::GraphTarget::Effect(eid) => DriverTarget::Effect {
+                effect_id: eid.clone(),
+            },
+            manifold_core::GraphTarget::Generator(lid) => DriverTarget::GeneratorParam {
+                layer_id: lid.clone(),
+            },
+        }
+    }
+}

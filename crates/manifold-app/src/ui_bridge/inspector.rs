@@ -856,38 +856,35 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Effect modulation ──────────────────────────────────────
-        PanelAction::DriverToggle(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let Some(effect_id) =
-                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
+        PanelAction::DriverToggle(gpt, param_id) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             else {
                 return DispatchResult::structural();
             };
-            // Read the driver state off the SAME instance the command targets, by
-            // id — never `effects[ei]` from ambient context — so an editor-card
-            // driver edit can't split (command->watched effect, di->some other).
-            if let Some(fx) = project.find_effect_by_id(&effect_id) {
-                let driver_target = DriverTarget::Effect {
-                    effect_id: effect_id.clone(),
-                };
-                let driver_idx = fx.drivers.as_ref().and_then(|ds| {
-                    ds.iter().position(|d| d.param_id == *param_id)
-                });
-                if let Some(di) = driver_idx {
-                    let old = fx.drivers.as_ref().unwrap()[di].enabled;
-                    let cmd = ToggleDriverEnabledCommand::new(driver_target, di, old, !old);
-                    {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                    }
+            // Read the driver state off the SAME instance the command targets,
+            // by target — never an ambient row index — so an editor-card driver
+            // edit can't split (command -> watched instance, di -> another).
+            let Some((existing, base_value)) = project.with_preset_graph_mut(&target, |inst| {
+                let existing = inst
+                    .drivers
+                    .as_ref()
+                    .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
+                    .map(|di| (di, inst.drivers.as_ref().unwrap()[di].enabled));
+                let base_value = inst
+                    .param_id_to_value_index(param_id.as_ref())
+                    .and_then(|slot| inst.param_values.get(slot))
+                    .map(|p| p.value)
+                    .unwrap_or(0.0);
+                (existing, base_value)
+            }) else {
+                return DispatchResult::structural();
+            };
+            let driver_target = DriverTarget::from(&target);
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                if let Some((di, old)) = existing {
+                    Box::new(ToggleDriverEnabledCommand::new(driver_target, di, old, !old))
                 } else {
-                    let base_value = fx
-                        .param_id_to_value_index(param_id.as_ref())
-                        .and_then(|slot| fx.param_values.get(slot))
-                        .map(|p| p.value)
-                        .unwrap_or(0.0);
                     let driver = ParameterDriver {
                         param_id: param_id.clone(),
                         beat_division: BeatDivision::Quarter,
@@ -901,15 +898,10 @@ pub(super) fn dispatch_inspector(
                         legacy_param_index: None,
                         is_paused_by_user: false,
                     };
-                    let cmd = AddDriverCommand::new(driver_target, driver);
-                    {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                    }
-                }
-            }
+                    Box::new(AddDriverCommand::new(driver_target, driver))
+                };
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
         PanelAction::EnvelopeToggle(GraphParamTarget::Effect(ei), param_id) => {
@@ -1546,57 +1538,6 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         // ── Gen modulation ─────────────────────────────────────────
-        PanelAction::DriverToggle(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                let layer_id = active_layer.clone().unwrap_or_default();
-                let target = DriverTarget::GeneratorParam { layer_id };
-                if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                    let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
-                    let Some(gp) = layer.gen_params() else {
-                        return DispatchResult::handled();
-                    };
-                    let driver_idx = gp.drivers.as_ref().and_then(|ds| {
-                        ds.iter().position(|d| d.param_id == *param_id)
-                    });
-                    if let Some(di) = driver_idx {
-                        let old = gp.drivers.as_ref().unwrap()[di].enabled;
-                        let cmd = ToggleDriverEnabledCommand::new(target, di, old, !old);
-                        {
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(project);
-                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                        }
-                    } else {
-                        let base_value = slot
-                            .and_then(|s| gp.param_values.get(s).map(|p| p.value))
-                            .unwrap_or(0.0);
-                        let driver = ParameterDriver {
-                            param_id: param_id.clone(),
-                            beat_division: BeatDivision::Quarter,
-                            waveform: DriverWaveform::Sine,
-                            enabled: true,
-                            phase: 0.0,
-                            base_value,
-                            trim_min: 0.0,
-                            trim_max: 1.0,
-                            reversed: false,
-                            legacy_param_index: None,
-                            is_paused_by_user: false,
-                        };
-                        let cmd = AddDriverCommand::new(target, driver);
-                        {
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(project);
-                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                        }
-                    }
-                }
-            }
-            DispatchResult::structural()
-        }
         PanelAction::EnvelopeToggle(GraphParamTarget::Generator, param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
