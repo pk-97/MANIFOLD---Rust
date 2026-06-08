@@ -29,24 +29,29 @@ documented pre-existing in-flight-decomp fail, proven orthogonal.
 | #4 LoadedPresetView | ✅ DONE | `36d2242f` (A4) |
 | #6 duplicate accessors | ✅ DONE | `aca6a87d` (B1) |
 | #7 modulation walk | ✅ DONE | `d63c60ca` (C) |
-| #8 UI dispatch arms | 🔧 IN PROGRESS | `aa119f72`+`0161a0b1` (resolver + the 4 param-value arms incl. snap-back + `ActiveInspectorDrag` unified). Remaining: the modulation/env/trim/target/env-range arms (pure DRY via `DriverTarget::from(GraphTarget)` + `with_preset_graph_mut`), the 2 behavioral asymmetries (EnvModeToggle `last_elapsed`, EnvRandomJumpToggle `enabled` filter), the 2 Ableton arms, and the `ui_root` DropdownContext/ParamLabelRightClick pair. |
-| #9 state-sync config builders | ⬜ TODO | |
-| #10 editor snapshot entries | ⬜ TODO | |
-| #11 Ableton dispatch | ⬜ TODO | |
-| #12 persistence migration | ⬜ TODO | |
+| #8 UI dispatch arms | ✅ DONE | `aa119f72`+`0161a0b1` (resolver + param-value arms + `ActiveInspectorDrag`), `79905d63` (all modulation/env/trim/target/env-range arms via `graph_env_dual_edit`/`graph_driver_dual_edit` + `with_preset_graph_mut`; the 2 asymmetries fixed — EnvModeToggle re-seeds `last_elapsed` on both kinds, EnvRandomJumpToggle matches param_id only; the 2 Ableton arms; the `ui_root` DropdownContext/ParamLabelRightClick pair + the 3 downstream Map/Unmap/OpenAbletonPicker action pairs). Grep: 0 paired `PanelAction::*(GraphParamTarget::Generator)` arms remain. |
+| #9 state-sync config builders | ✅ DONE | `42b1f55a` (one `preset_to_config`; `effects_to_configs`/`gen_params_to_config` are thin adapters) |
+| #10 editor snapshot entries | ✅ DONE | `662db82b` (one `graph_snapshot(&GraphTarget)`; one `CachedGraphSnapshot`; one `watched_graph_target`) |
+| #11 Ableton dispatch | ✅ DONE | `a160f3b6` (one `Project::find_preset_instance` locate behind every per-target Ableton accessor) |
+| #12 persistence migration | ✅ DONE | `686f759e` (one `for_each_preset_instance` walk over effects + gen_params) |
 | #13 version accessors | ✅ KEPT (not a fork): `Layer::generator_graph_version` reads the layer's singleton generator's `graph_version` field; there is no effect-Layer equivalent (effects are a `Vec`, not a singleton on the layer), so nothing to unify. | — |
-| #14 skip-mode (generator gap) | ⬜ TODO | |
-| #15 string-bindings (effect gap) | ⬜ TODO | |
-| #16 base_param_values residue | ⬜ TODO (B2 — serialization-gated) | |
+| #14 skip-mode (generator gap) | ✅ DONE | `ad843985` (generator render loop honors `SkipMode` via the shared `is_skipped_for`; transparent frame when gated) |
+| #15 string-bindings (effect gap) | ✅ DONE | `ad843985` (effect chain `try_build` resolves `PresetMetadata.string_bindings` against the splice node_map + seeds defaults) |
+| #16 base_param_values residue | ✅ DONE | `2d04de6a` (folded into `ParamSlot.base` + `base_tracked` bit; wire byte-identical, golden io round-trip green) |
 
-**Note on #8 remaining + the UI batches (#9/#10):** these are
-behaviorally-already-consistent (the snap-back and param resolution are
-fixed at the source), so what's left is largely DRY of the inspector
-dispatch + state-sync + snapshots. They are UI-layer and cannot be verified
-headlessly — `cargo check`/`clippy`/grep gate the collapse, but the editor
-canvas behavior (live drag, modulation config, generator snapshot) needs a
-running app to confirm. The two EnvModeToggle/EnvRandomJumpToggle
-asymmetries are the only genuine behavioral fixes left in #8.
+**All 16 forks collapsed (2026-06-08).** Headless verification: workspace
+`cargo check --all-targets` + `clippy -D warnings` clean; core/editing/io/
+playback full suite green (exit 0) incl. the golden Liveschool io round-trip
+(base wire byte-identical). Adversarial grep: 0 paired
+`PanelAction::*(GraphParamTarget::*)` dispatch arms; no `set_param_base`/
+`get_param_base`/`resolve_gen_param_slot`/`evaluate_gen_param_envelopes`/
+`effect_type_registry`/`generator_type_registry`/`active_generator_graph_snapshot`
+symbols survive; the only `GraphParamTarget::Generator` uses left are the single
+resolver + two kind-specific picker-context reads (dispatch unified). The
+remaining UI-layer behaviors (editor live drag, modulation config, generator
+snapshot) compile/clippy/grep-clean but want a running app for visual confirm;
+the one renderer execute failure (`WireframeDepthGraph` first-frame) is the
+documented pre-existing in-flight-decomp fail, orthogonal to this work.
 
 ## How to finish — continuation recipe (post-compaction handoff)
 
