@@ -681,6 +681,12 @@ impl PresetRuntime {
         let mut prev_node: NodeInstanceId = source_node;
         let mut prev_out_port: &'static str = "out";
 
+        // String outer-card bindings accumulated across every effect in the
+        // chain (parity with the generator Generate path). Effects can expose
+        // String params (font family, text mode) exactly as generators do;
+        // resolved per-effect against its splice `node_map` below.
+        let mut chain_string_bindings: Vec<StringBindingResolution> = Vec::new();
+
         // Tracks the active partial-wet-dry group (if any). When set,
         // `pre_group` is the (node, port) feeding into the group's
         // first effect (the dry path's fan-out source).
@@ -862,6 +868,28 @@ impl PresetRuntime {
                 .iter()
                 .filter_map(|(_, id)| graph.get_node(*id).map(|inst| (inst.node_id.clone(), *id)))
                 .collect();
+            // String outer-card bindings for this effect, resolved against its
+            // splice node_map (parity with the generator path's
+            // `string_bindings`). A String param can't ride the float `apply`
+            // loop, so these are applied separately (defaults seeded at build).
+            // No shipping effect declares any today (Vec stays empty), so this
+            // is inert until one does.
+            if let Some(meta) = view.canonical_def.preset_metadata.as_ref() {
+                for b in &meta.string_bindings {
+                    if let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } =
+                        &b.target
+                        && let Some((_, inst_id)) =
+                            node_map.iter().find(|(nid, _)| nid == node_id)
+                    {
+                        chain_string_bindings.push(StringBindingResolution {
+                            target_node: *inst_id,
+                            target_param: param.clone(),
+                            source_key: b.id.clone(),
+                            default: b.default_value.clone(),
+                        });
+                    }
+                }
+            }
             // Group → producer map for the node-output preview, derived from
             // the same pre-flatten def that was just spliced (`splice_def`) so
             // its group containers and producers carry the same stable NodeIds
@@ -1125,7 +1153,7 @@ impl PresetRuntime {
 
         let topology_hash = compute_topology_hash(effects, groups, width, height, preview_effect);
 
-        Some(Self {
+        let mut runtime = Self {
             graph,
             plan,
             executor: Executor::new(Box::new(backend)),
@@ -1144,9 +1172,14 @@ impl PresetRuntime {
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
             type_id: None,
             target_format: None,
-            string_bindings: Vec::new(),
+            string_bindings: chain_string_bindings,
             param_slot_scratch: Vec::new(),
-        })
+        };
+        // Seed each String binding's declared default into its inner node, the
+        // same one-shot the generator path does at construction (a no-op when
+        // no effect in the chain declares any).
+        runtime.apply_string_defaults();
+        Some(runtime)
     }
 
     /// Structured errors produced by `try_build` and per-frame `run`.
