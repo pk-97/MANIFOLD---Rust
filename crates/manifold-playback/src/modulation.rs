@@ -384,7 +384,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
 
     // Master effect drivers
     for fx in project.settings.master_effects.iter_mut() {
-        if evaluate_effect_drivers(fx, current_beat) {
+        if evaluate_instance_drivers(fx, current_beat) {
             any_driven = true;
         }
     }
@@ -397,48 +397,19 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
         // Layer effect drivers
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
-                if evaluate_effect_drivers(fx, current_beat) {
+                if evaluate_instance_drivers(fx, current_beat) {
                     any_driven = true;
                 }
             }
         }
 
-        // Generator param drivers
-        if layer.layer_type == LayerType::Generator
-            && let Some(gp) = layer.gen_params_mut()
+        // Generator param drivers — same path effect drivers take (also picks
+        // up user-tail driver bindings that the former inline id_to_index walk
+        // missed).
+        if let Some(gp) = layer.gen_params_mut()
+            && evaluate_instance_drivers(gp, current_beat)
         {
-            let gen_type = gp.generator_type();
-            let gen_def = match preset_definition_registry::try_get(gen_type) {
-                Some(d) => d,
-                None => continue,
-            };
-            let gen_defs = &gen_def.param_defs;
-
-            if let Some(drivers) = &gp.drivers {
-                // Collect driver evaluation results to avoid borrow conflict
-                let results: Vec<(usize, f32)> = drivers
-                    .iter()
-                    .filter(|d| d.enabled && !d.is_paused_by_user)
-                    .filter_map(|driver| {
-                        let &idx = gen_def.id_to_index.get(driver.param_id.as_ref())?;
-                        if idx >= gen_defs.len() {
-                            return None;
-                        }
-                        let pd = &gen_defs[idx];
-                        let value = driver_target_value(driver, current_beat, pd.min, pd.max);
-                        Some((idx, value))
-                    })
-                    .collect();
-
-                if !results.is_empty() {
-                    any_driven = true;
-                    for (idx, value) in results {
-                        if idx < gp.param_values.len() {
-                            gp.param_values[idx].value = value;
-                        }
-                    }
-                }
-            }
+            any_driven = true;
         }
     }
 
@@ -447,7 +418,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
 
 /// Evaluate all drivers on a single PresetInstance. Returns true if any driver was active.
 /// Port of C# ParameterDriverManager.EvaluateEffectDrivers().
-fn evaluate_effect_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bool {
+fn evaluate_instance_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bool {
     if !fx.enabled {
         return false;
     }
@@ -516,58 +487,27 @@ pub fn evaluate_all_envelopes(
             .copied()
             .unwrap_or((Beats(-1.0), Beats::ZERO));
 
-        let Some(effects) = layer.effects.as_mut() else {
-            continue;
-        };
-        for fx in effects.iter_mut() {
-            if !fx.enabled {
-                continue;
-            }
-            let Some(def) = preset_definition_registry::try_get(fx.effect_type()) else {
-                continue;
-            };
-            if apply_instance_envelopes(fx, &def, active_elapsed, active_duration) {
-                any_modulated = true;
+        // Layer effects.
+        if let Some(effects) = layer.effects.as_mut() {
+            for fx in effects.iter_mut() {
+                if !fx.enabled {
+                    continue;
+                }
+                let Some(def) = preset_definition_registry::try_get(fx.effect_type()) else {
+                    continue;
+                };
+                if apply_instance_envelopes(fx, &def, active_elapsed, active_duration) {
+                    any_modulated = true;
+                }
             }
         }
-    }
 
-    any_modulated
-}
-
-// =====================================================================
-// Phase 4: Evaluate generator param envelopes
-// Port of C# EnvelopeEvaluator.EvaluateGenParamEnvelopes()
-// =====================================================================
-
-/// Evaluate envelopes (ADSR and Random) on generator layer parameters.
-/// Returns true if any envelope was active (compositor should be marked dirty).
-///
-/// Generator envelopes already lived on the instance (`gp.envelopes`); this is
-/// now the same walk the effect pass uses — see [`apply_instance_envelopes`].
-pub fn evaluate_gen_param_envelopes(
-    project: &mut Project,
-    active_clip_timing: &[(Beats, Beats)],
-) -> bool {
-    let mut any_modulated = false;
-
-    for (li, layer) in project.timeline.layers.iter_mut().enumerate() {
-        if layer.layer_type != LayerType::Generator {
-            continue;
-        }
-
-        let (active_elapsed, active_duration) = active_clip_timing
-            .get(li)
-            .copied()
-            .unwrap_or((Beats(-1.0), Beats::ZERO));
-
-        let Some(gp) = layer.gen_params_mut() else {
-            continue;
-        };
-        let Some(def) = preset_definition_registry::try_get(gp.generator_type()) else {
-            continue;
-        };
-        if apply_instance_envelopes(gp, &def, active_elapsed, active_duration) {
+        // Generator instance (the layer's singleton gen_params) — the same
+        // walk, no separate generator pass.
+        if let Some(gp) = layer.gen_params_mut()
+            && let Some(def) = preset_definition_registry::try_get(gp.generator_type())
+            && apply_instance_envelopes(gp, &def, active_elapsed, active_duration)
+        {
             any_modulated = true;
         }
     }
@@ -597,13 +537,12 @@ pub fn evaluate_modulation(
     // Avoids O(total_clips) scan in each envelope function.
     compute_active_clip_timing(&project.timeline.layers, current_beat, timing_scratch);
 
-    // Phase 3: Evaluate clip/layer ADSR envelopes (additive on top of drivers)
+    // Phase 3: Evaluate clip/layer/generator ADSR envelopes (additive on top
+    // of drivers). One walk visits every layer's effects AND its generator
+    // instance — see evaluate_all_envelopes.
     let any_enveloped = evaluate_all_envelopes(project, timing_scratch);
 
-    // Phase 4: Evaluate generator param ADSR envelopes
-    let any_gen_enveloped = evaluate_gen_param_envelopes(project, timing_scratch);
-
-    any_driven || any_enveloped || any_gen_enveloped
+    any_driven || any_enveloped
 }
 
 /// Per-layer active clip timing: (elapsed, duration).
@@ -888,7 +827,7 @@ mod tests {
         let mut project = project_with(layer);
 
         let timing = vec![(Beats(2.0), Beats(8.0))];
-        let modulated = evaluate_gen_param_envelopes(&mut project, &timing);
+        let modulated = evaluate_all_envelopes(&mut project, &timing);
 
         assert!(modulated);
         let gp = project.timeline.layers[0].gen_params().unwrap();
@@ -912,7 +851,7 @@ mod tests {
         let mut project = project_with(layer);
 
         let timing = vec![(Beats(2.0), Beats(8.0))];
-        assert!(!evaluate_gen_param_envelopes(&mut project, &timing));
+        assert!(!evaluate_all_envelopes(&mut project, &timing));
         let gp = project.timeline.layers[0].gen_params().unwrap();
         assert_eq!(gp.param_values[0].value, 0.0);
     }
@@ -924,6 +863,6 @@ mod tests {
         let layer = layer_with_one_effect();
         let mut project = project_with(layer);
         let timing = vec![(Beats(2.0), Beats(8.0))];
-        assert!(!evaluate_gen_param_envelopes(&mut project, &timing));
+        assert!(!evaluate_all_envelopes(&mut project, &timing));
     }
 }
