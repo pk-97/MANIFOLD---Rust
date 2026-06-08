@@ -11,6 +11,43 @@ Definition of **done** here is behavioral, not "it compiles": *a generator and a
 effect run the same code path for a given action, provable by grep showing no
 `GraphParamTarget::Generator` / effect-vs-generator-registry fork remaining.*
 
+## Progress (2026-06-08, branch `preset-collapse-phase5`)
+
+Every commit below is on the branch, pushed, and gated: `cargo check
+--workspace --all-targets` + `clippy -D warnings` clean, and the headless
+suites green (core 222 / io 37 incl. the golden Liveschool round-trip /
+editing 13 / playback 81), plus the renderer generator sweep for A3/A4. The
+one renderer failure (`WireframeDepthGraph` first-frame execute) is the
+documented pre-existing in-flight-decomp fail, proven orthogonal.
+
+| Fork | Status | Commit(s) |
+|---|---|---|
+| #1 definition store | ✅ DONE | `26dc2b02` (A1) |
+| #5 param-id→slot snap-back | ✅ DONE (fixed at source + re-validated at UI dispatch) | `26dc2b02` (A1), `aa119f72` (D #8 ParamRightClick) |
+| #2 type/picker registry | ✅ DONE | `edec3102` (A2) |
+| #3 bundled loader | ✅ DONE | `dbdc88ef` (A3) |
+| #4 LoadedPresetView | ✅ DONE | `36d2242f` (A4) |
+| #6 duplicate accessors | ✅ DONE | `aca6a87d` (B1) |
+| #7 modulation walk | ✅ DONE | `d63c60ca` (C) |
+| #8 UI dispatch arms | 🔧 IN PROGRESS | `aa119f72`+`0161a0b1` (resolver + the 4 param-value arms incl. snap-back + `ActiveInspectorDrag` unified). Remaining: the modulation/env/trim/target/env-range arms (pure DRY via `DriverTarget::from(GraphTarget)` + `with_preset_graph_mut`), the 2 behavioral asymmetries (EnvModeToggle `last_elapsed`, EnvRandomJumpToggle `enabled` filter), the 2 Ableton arms, and the `ui_root` DropdownContext/ParamLabelRightClick pair. |
+| #9 state-sync config builders | ⬜ TODO | |
+| #10 editor snapshot entries | ⬜ TODO | |
+| #11 Ableton dispatch | ⬜ TODO | |
+| #12 persistence migration | ⬜ TODO | |
+| #13 version accessors | ✅ KEPT (not a fork): `Layer::generator_graph_version` reads the layer's singleton generator's `graph_version` field; there is no effect-Layer equivalent (effects are a `Vec`, not a singleton on the layer), so nothing to unify. | — |
+| #14 skip-mode (generator gap) | ⬜ TODO | |
+| #15 string-bindings (effect gap) | ⬜ TODO | |
+| #16 base_param_values residue | ⬜ TODO (B2 — serialization-gated) | |
+
+**Note on #8 remaining + the UI batches (#9/#10):** these are
+behaviorally-already-consistent (the snap-back and param resolution are
+fixed at the source), so what's left is largely DRY of the inspector
+dispatch + state-sync + snapshots. They are UI-layer and cannot be verified
+headlessly — `cargo check`/`clippy`/grep gate the collapse, but the editor
+canvas behavior (live drag, modulation config, generator snapshot) needs a
+running app to confirm. The two EnvModeToggle/EnvRandomJumpToggle
+asymmetries are the only genuine behavioral fixes left in #8.
+
 ## Already unified (verified)
 
 | Layer | Evidence |
