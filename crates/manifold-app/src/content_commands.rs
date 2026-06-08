@@ -10,49 +10,28 @@ use crate::content_command::ContentCommand;
 use crate::content_thread::ContentThread;
 
 /// Look up the existing Ableton mapping for a target (for undo snapshot).
+/// The three host variants route through the shared
+/// [`Project::ableton_param_mappings`] locate; `MacroSlot` keeps its own arm
+/// (single mapping, not a per-param vec).
 fn get_existing_mapping(
     project: &manifold_core::project::Project,
     target: &manifold_core::ableton_mapping::AbletonMappingTarget,
 ) -> Option<manifold_core::ableton_mapping::AbletonParamMapping> {
     use manifold_core::ableton_mapping::AbletonMappingTarget;
-    match target {
-        AbletonMappingTarget::MasterEffect {
-            effect_type,
-            param_id,
-        } => project
-            .settings
-            .master_effects
-            .iter()
-            .find(|f| f.effect_type() == effect_type)
-            .and_then(|fx| fx.ableton_mappings.as_ref())
-            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-            .cloned(),
-        AbletonMappingTarget::LayerEffect {
-            layer_id,
-            effect_type,
-            param_id,
-        } => project
-            .timeline
-            .find_layer_by_id(layer_id.as_str())
-            .and_then(|(_, l)| l.effects.as_ref())
-            .and_then(|es| es.iter().find(|f| f.effect_type() == effect_type))
-            .and_then(|fx| fx.ableton_mappings.as_ref())
-            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-            .cloned(),
-        AbletonMappingTarget::GenParam { layer_id, param_id } => project
-            .timeline
-            .find_layer_by_id(layer_id.as_str())
-            .and_then(|(_, l)| l.gen_params())
-            .and_then(|gp| gp.ableton_mappings.as_ref())
-            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-            .cloned(),
-        AbletonMappingTarget::MacroSlot { slot_index } => project
+    if let AbletonMappingTarget::MacroSlot { slot_index } = target {
+        return project
             .settings
             .macro_bank
             .slots
             .get(*slot_index)
-            .and_then(|s| s.ableton_mapping.clone()),
+            .and_then(|s| s.ableton_mapping.clone());
     }
+    let param_id = target.param_id()?;
+    project
+        .ableton_param_mappings(target)
+        .and_then(|opt| opt.as_ref())
+        .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+        .cloned()
 }
 
 impl ContentThread {

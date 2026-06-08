@@ -848,45 +848,12 @@ impl AbletonBridge {
         param_index: usize,
         value: f32,
     ) {
-        match target {
-            AbletonMappingTarget::MasterEffect {
-                effect_type,
-                param_id: _,
-            } => {
-                if let Some(fx) = project
-                    .settings
-                    .master_effects
-                    .iter_mut()
-                    .find(|f| f.effect_type() == effect_type)
-                {
-                    fx.set_base_param(param_index, value);
-                }
-            }
-            AbletonMappingTarget::LayerEffect {
-                layer_id,
-                effect_type,
-                param_id: _,
-            } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                    && let Some(effects) = &mut layer.effects
-                    && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
-                {
-                    fx.set_base_param(param_index, value);
-                }
-            }
-            AbletonMappingTarget::GenParam {
-                layer_id,
-                param_id: _,
-            } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                    && let Some(gp) = layer.gen_params_mut()
-                {
-                    gp.set_base_param(param_index, value);
-                }
-            }
-            AbletonMappingTarget::MacroSlot { slot_index } => {
-                manifold_core::macro_bank::MacroBank::apply_macro(project, *slot_index, value);
-            }
+        // MacroSlot routes to the macro bank; the three host variants all
+        // locate their PresetInstance through the shared dispatch.
+        if let AbletonMappingTarget::MacroSlot { slot_index } = target {
+            manifold_core::macro_bank::MacroBank::apply_macro(project, *slot_index, value);
+        } else if let Some(fx) = project.find_preset_instance_mut(target) {
+            fx.set_base_param(param_index, value);
         }
     }
 

@@ -920,27 +920,24 @@ impl Project {
         }
     }
 
-    /// The `&mut Option<Vec<AbletonParamMapping>>` an Ableton mapping
-    /// target's per-param mappings live in, located the way the Ableton
-    /// bridge addresses hosts — by `effect_type` within master / a layer,
-    /// or a layer's generator. `None` if the host doesn't resolve.
-    ///
-    /// `MacroSlot` is intentionally NOT handled here: a macro slot stores a
-    /// single `Option<AbletonParamMapping>`, not a per-param vec, so its
-    /// call sites keep their own arm. Shared by the editing commands and the
-    /// live bridge so the master/layer/generator locate-fork exists once.
-    pub fn ableton_param_mappings_mut(
+    /// The `&mut PresetInstance` an Ableton mapping target addresses —
+    /// located the way the Ableton bridge addresses hosts: by `effect_type`
+    /// within master / a layer, or a layer's generator. `None` for
+    /// `MacroSlot` (a macro slot is not a preset instance) or an unresolved
+    /// host. This is the single master/layer/generator locate-fork: every
+    /// per-target Ableton accessor (the mappings vec, live value writes)
+    /// routes through here so the dispatch is written exactly once.
+    pub fn find_preset_instance_mut(
         &mut self,
         target: &crate::ableton_mapping::AbletonMappingTarget,
-    ) -> Option<&mut Option<Vec<crate::ableton_mapping::AbletonParamMapping>>> {
+    ) -> Option<&mut crate::effects::PresetInstance> {
         use crate::ableton_mapping::AbletonMappingTarget as T;
         match target {
             T::MasterEffect { effect_type, .. } => self
                 .settings
                 .master_effects
                 .iter_mut()
-                .find(|f| f.effect_type() == effect_type)
-                .map(|fx| &mut fx.ableton_mappings),
+                .find(|f| f.effect_type() == effect_type),
             T::LayerEffect {
                 layer_id,
                 effect_type,
@@ -949,15 +946,64 @@ impl Project {
                 .timeline
                 .find_layer_by_id_mut(layer_id.as_str())
                 .and_then(|(_, layer)| layer.effects.as_mut())
-                .and_then(|effects| effects.iter_mut().find(|f| f.effect_type() == effect_type))
-                .map(|fx| &mut fx.ableton_mappings),
+                .and_then(|effects| effects.iter_mut().find(|f| f.effect_type() == effect_type)),
             T::GenParam { layer_id, .. } => self
                 .timeline
                 .find_layer_by_id_mut(layer_id.as_str())
-                .and_then(|(_, layer)| layer.gen_params_mut())
-                .map(|gp| &mut gp.ableton_mappings),
+                .and_then(|(_, layer)| layer.gen_params_mut()),
             T::MacroSlot { .. } => None,
         }
+    }
+
+    /// Const twin of [`Self::find_preset_instance_mut`].
+    pub fn find_preset_instance(
+        &self,
+        target: &crate::ableton_mapping::AbletonMappingTarget,
+    ) -> Option<&crate::effects::PresetInstance> {
+        use crate::ableton_mapping::AbletonMappingTarget as T;
+        match target {
+            T::MasterEffect { effect_type, .. } => self
+                .settings
+                .master_effects
+                .iter()
+                .find(|f| f.effect_type() == effect_type),
+            T::LayerEffect {
+                layer_id,
+                effect_type,
+                ..
+            } => self
+                .timeline
+                .find_layer_by_id(layer_id.as_str())
+                .and_then(|(_, layer)| layer.effects.as_ref())
+                .and_then(|effects| effects.iter().find(|f| f.effect_type() == effect_type)),
+            T::GenParam { layer_id, .. } => self
+                .timeline
+                .find_layer_by_id(layer_id.as_str())
+                .and_then(|(_, layer)| layer.gen_params()),
+            T::MacroSlot { .. } => None,
+        }
+    }
+
+    /// The `&mut Option<Vec<AbletonParamMapping>>` an Ableton mapping
+    /// target's per-param mappings live in. Thin projection of
+    /// [`Self::find_preset_instance_mut`]; `None` for `MacroSlot` (single
+    /// mapping, not a per-param vec — its call sites keep their own arm) or
+    /// an unresolved host.
+    pub fn ableton_param_mappings_mut(
+        &mut self,
+        target: &crate::ableton_mapping::AbletonMappingTarget,
+    ) -> Option<&mut Option<Vec<crate::ableton_mapping::AbletonParamMapping>>> {
+        self.find_preset_instance_mut(target)
+            .map(|fx| &mut fx.ableton_mappings)
+    }
+
+    /// Const twin of [`Self::ableton_param_mappings_mut`].
+    pub fn ableton_param_mappings(
+        &self,
+        target: &crate::ableton_mapping::AbletonMappingTarget,
+    ) -> Option<&Option<Vec<crate::ableton_mapping::AbletonParamMapping>>> {
+        self.find_preset_instance(target)
+            .map(|fx| &fx.ableton_mappings)
     }
 
     /// Port of Unity Project.ImportedPercussionClipPlacements property.
