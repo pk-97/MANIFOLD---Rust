@@ -75,8 +75,7 @@ pub enum DropdownContext {
     MasterExitPath,           // LED exit path dropdown
     ClkDevice,                // MIDI clock device selection
     GenCardContext,           // right-click on generator card header
-    EffectParamContext(InspectorTab, usize, manifold_core::effects::ParamId, f32), // tab, fx_idx, param_id, default_val
-    GenParamContext(manifold_core::effects::ParamId, f32), // param_id, default_val
+    ParamContext(GraphParamTarget, manifold_core::effects::ParamId, f32), // gpt, param_id, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
     AudioInputDevice,         // audio input device selection for live recording
@@ -1261,8 +1260,7 @@ impl UIRoot {
                 );
                 true
             }
-            PanelAction::ParamLabelRightClick(GraphParamTarget::Effect(fx_idx), param_id) => {
-                let tab = self.inspector.last_effect_tab();
+            PanelAction::ParamLabelRightClick(gpt, param_id) => {
                 let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
@@ -1285,52 +1283,23 @@ impl UIRoot {
                 } else {
                     items.push(DropdownItem::disabled("Ableton not connected"));
                 }
-                // "Remove Ableton Mapping" when param is already mapped
-                let is_ableton_mapped =
-                    self.inspector
-                        .is_effect_ableton_mapped(tab, *fx_idx, param_id.as_ref());
-                if is_ableton_mapped {
-                    items.push(DropdownItem::new("Remove Ableton Mapping"));
-                }
-                self.dropdown_context = Some(DropdownContext::EffectParamContext(
-                    tab,
-                    *fx_idx,
-                    param_id.clone(),
-                    0.0,
-                ));
-                self.dropdown
-                    .open_context(items, right_click_pos, &mut self.tree);
-                true
-            }
-            PanelAction::ParamLabelRightClick(GraphParamTarget::Generator, param_id) => {
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
-                for i in 0..manifold_core::MACRO_COUNT {
-                    let label = {
-                        let slot = &self.macro_labels[i];
-                        if slot.is_empty() {
-                            format!("Map to Macro {}", i + 1)
-                        } else {
-                            format!("Map to Macro {} ({})", i + 1, slot)
-                        }
-                    };
-                    items.push(DropdownItem::new(&label));
-                }
-                // Ableton picker entry
-                if let Some(last) = items.last_mut() {
-                    last.separator_after = true;
-                }
-                let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
-                if ableton_connected {
-                    items.push(DropdownItem::new("Map to Ableton Macro…"));
-                } else {
-                    items.push(DropdownItem::disabled("Ableton not connected"));
-                }
-                let is_ableton_mapped = self.inspector.is_gen_ableton_mapped(param_id.as_ref());
+                // "Remove Ableton Mapping" when param is already mapped — the
+                // only kind-specific read; the menu + context are unified.
+                let is_ableton_mapped = match gpt {
+                    GraphParamTarget::Effect(fx_idx) => self.inspector.is_effect_ableton_mapped(
+                        self.inspector.last_effect_tab(),
+                        *fx_idx,
+                        param_id.as_ref(),
+                    ),
+                    GraphParamTarget::Generator => {
+                        self.inspector.is_gen_ableton_mapped(param_id.as_ref())
+                    }
+                };
                 if is_ableton_mapped {
                     items.push(DropdownItem::new("Remove Ableton Mapping"));
                 }
                 self.dropdown_context =
-                    Some(DropdownContext::GenParamContext(param_id.clone(), 0.0));
+                    Some(DropdownContext::ParamContext(*gpt, param_id.clone(), 0.0));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
@@ -1385,26 +1354,20 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::OpenAbletonPickerForEffect(tab, fx_idx, param_id) => {
+            PanelAction::OpenAbletonPickerForParam(gpt, param_id) => {
                 use manifold_ui::panels::ableton_picker::AbletonPickerContext;
                 if let Some(session) = &self.ableton_session {
-                    self.ableton_picker_context = Some(AbletonPickerContext::EffectParam {
-                        tab: *tab,
-                        fx_idx: *fx_idx,
-                        param_id: param_id.clone(),
-                    });
-                    self.ableton_picker
-                        .open(build_picker_session(session), right_click_pos);
-                    self.overlay_dirty = true;
-                    self.ableton_rediscovery_needed = true;
-                }
-                true
-            }
-            PanelAction::OpenAbletonPickerForGen(param_id) => {
-                use manifold_ui::panels::ableton_picker::AbletonPickerContext;
-                if let Some(session) = &self.ableton_session {
-                    self.ableton_picker_context = Some(AbletonPickerContext::GenParam {
-                        param_id: param_id.clone(),
+                    // The picker-selection context stays kind-specific (its
+                    // selection handler still forks); derive it from `gpt`.
+                    self.ableton_picker_context = Some(match gpt {
+                        GraphParamTarget::Effect(fx_idx) => AbletonPickerContext::EffectParam {
+                            tab: self.inspector.last_effect_tab(),
+                            fx_idx: *fx_idx,
+                            param_id: param_id.clone(),
+                        },
+                        GraphParamTarget::Generator => AbletonPickerContext::GenParam {
+                            param_id: param_id.clone(),
+                        },
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
@@ -1511,31 +1474,16 @@ impl UIRoot {
                 1 => Some(PanelAction::PasteGenerator),
                 _ => None,
             },
-            DropdownContext::EffectParamContext(tab, fx_idx, param_id, _default_val) => {
+            DropdownContext::ParamContext(gpt, param_id, _default_val) => {
                 if index < manifold_core::MACRO_COUNT {
-                    Some(PanelAction::MapEffectParamToMacro(
-                        tab, fx_idx, param_id, index,
-                    ))
+                    Some(PanelAction::MapParamToMacro(gpt, param_id, index))
                 } else if index == manifold_core::MACRO_COUNT {
                     // "Map to Ableton Macro…" (only reached if Ableton connected — item is
                     // disabled otherwise and won't fire Selected).
-                    Some(PanelAction::OpenAbletonPickerForEffect(
-                        tab, fx_idx, param_id,
-                    ))
+                    Some(PanelAction::OpenAbletonPickerForParam(gpt, param_id))
                 } else if index == manifold_core::MACRO_COUNT + 1 {
                     // "Remove Ableton Mapping" (only present when param is mapped)
-                    Some(PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_id))
-                } else {
-                    None
-                }
-            }
-            DropdownContext::GenParamContext(param_id, _default_val) => {
-                if index < manifold_core::MACRO_COUNT {
-                    Some(PanelAction::MapGenParamToMacro(param_id, index))
-                } else if index == manifold_core::MACRO_COUNT {
-                    Some(PanelAction::OpenAbletonPickerForGen(param_id))
-                } else if index == manifold_core::MACRO_COUNT + 1 {
-                    Some(PanelAction::UnmapGenParamAbleton(param_id))
+                    Some(PanelAction::UnmapParamAbleton(gpt, param_id))
                 } else {
                     None
                 }

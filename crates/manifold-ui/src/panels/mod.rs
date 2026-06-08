@@ -485,10 +485,9 @@ pub enum PanelAction {
     // Macro mapping (from context menu on param right-click). Param
     // is addressed by `ParamId`, macro slot by positional index
     // (macros are a fixed 8-slot bank).
-    MapEffectParamToMacro(InspectorTab, usize, manifold_core::effects::ParamId, usize), // tab, fx_idx, param_id, macro_idx
-    MapGenParamToMacro(manifold_core::effects::ParamId, usize), // param_id, macro_idx
-    UnmapMacro(usize, usize),                                   // macro_idx, mapping_idx
-    ClearMacroMappings(usize),                                  // macro_idx
+    MapParamToMacro(GraphParamTarget, manifold_core::effects::ParamId, usize), // gpt, param_id, macro_idx
+    UnmapMacro(usize, usize),                                                  // macro_idx, mapping_idx
+    ClearMacroMappings(usize),                                                 // macro_idx
 
     // Param label right-click → opens "Map to Macro" / "Map from Ableton" context menu
     ParamLabelRightClick(GraphParamTarget, manifold_core::effects::ParamId),
@@ -504,12 +503,9 @@ pub enum PanelAction {
         manifold_core::effects::ParamId,
         manifold_core::ableton_mapping::AbletonMacroAddress,
     ), // param_id, address
-    UnmapEffectParamAbleton(InspectorTab, usize, manifold_core::effects::ParamId), // tab, fx_idx, param_id
-    UnmapGenParamAbleton(manifold_core::effects::ParamId),                         // param_id
-    /// Open the Ableton picker popup for an effect parameter.
-    OpenAbletonPickerForEffect(InspectorTab, usize, manifold_core::effects::ParamId), // tab, fx_idx, param_id
-    /// Open the Ableton picker popup for a generator parameter.
-    OpenAbletonPickerForGen(manifold_core::effects::ParamId), // param_id
+    UnmapParamAbleton(GraphParamTarget, manifold_core::effects::ParamId), // gpt, param_id
+    /// Open the Ableton picker popup for a param (effect or generator).
+    OpenAbletonPickerForParam(GraphParamTarget, manifold_core::effects::ParamId), // gpt, param_id
     /// Ableton mapping for macro slots.
     MapMacroToAbleton(usize, manifold_core::ableton_mapping::AbletonMacroAddress),
     UnmapMacroAbleton(usize),

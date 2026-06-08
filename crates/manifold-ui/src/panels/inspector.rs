@@ -1318,7 +1318,7 @@ impl InspectorCompositePanel {
     fn route_right_click(&mut self, node_id: u32) -> Vec<PanelAction> {
         if let Some(target) = self.find_target_for_node(node_id) {
             // Right-click also targets a sub-panel — keep last_effect_tab in sync
-            // so dispatch routes UnmapEffectParamAbleton etc. to the correct list.
+            // so dispatch routes UnmapParamAbleton etc. to the correct list.
             self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_right_click(node_id),

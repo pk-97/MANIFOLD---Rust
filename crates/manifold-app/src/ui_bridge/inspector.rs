@@ -25,88 +25,91 @@ use manifold_editing::commands::settings::{
 use manifold_ui::{DriverConfigAction, GraphParamTarget, InspectorTab, PanelAction};
 
 use super::DispatchResult;
-use super::{resolve_effects_mut, resolve_effects_read, resolve_effects_ref};
+use super::{resolve_effects_mut, resolve_effects_read};
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
-/// The stable `EffectId` for an effect-targeted envelope action, or `None`
-/// for non-Layer tabs. Envelope-home unification: an effect's envelopes ride
-/// on its `PresetInstance` (addressed by id), keyed by `param_id`. Master and
-/// clip effect envelopes have no clip-timing source and stay inert, so the
-/// inspector only creates/edits envelopes on **layer** effects — matching the
-/// pre-unification behavior where envelopes were layer-scoped.
-fn effect_env_id(
-    tab: InspectorTab,
-    project: &Project,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-    ei: usize,
-) -> Option<manifold_core::EffectId> {
-    if !matches!(tab, InspectorTab::Layer) {
-        return None;
-    }
-    resolve_effects_ref(tab, project, active_layer, selection)
-        .and_then(|e| e.get(ei))
-        .map(|fx| fx.id.clone())
-}
-
-/// Apply `edit` to the envelope matched by `param_id` on effect `id`, in both
-/// the local UI project and the content thread (the next snapshot must not
-/// stomp the live tweak). Edits the existing envelope only — no create. Used by
-/// the non-undoable live-drag envelope arms.
-fn effect_env_dual_edit<F>(
+/// Apply `edit` to the envelope matched by `param_id` on `target`, in both the
+/// local UI project and the content thread (the next snapshot must not stomp
+/// the live tweak). Edits the existing envelope only — no create. The unified
+/// non-undoable live-drag envelope helper, for effects and generators alike:
+/// the kind fork lives entirely inside `with_preset_graph_mut`.
+fn graph_env_dual_edit<F>(
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
-    id: manifold_core::EffectId,
+    target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
     edit: F,
 ) where
     F: Fn(&mut ParamEnvelope) + Clone + Send + 'static,
 {
     use crate::content_command::ContentCommand;
-    if let Some(fx) = project.find_effect_by_id_mut(&id)
-        && let Some(env) = fx
+    project.with_preset_graph_mut(target, |inst| {
+        if let Some(env) = inst
             .envelopes
             .as_mut()
             .and_then(|es| es.iter_mut().find(|e| e.param_id == param_id))
-    {
-        edit(env);
-    }
+        {
+            edit(env);
+        }
+    });
     let edit2 = edit.clone();
     let pid = param_id.clone();
+    let t = target.clone();
     ContentCommand::send(
         content_tx,
         ContentCommand::MutateProject(Box::new(move |p| {
-            if let Some(fx) = p.find_effect_by_id_mut(&id)
-                && let Some(env) = fx
+            p.with_preset_graph_mut(&t, |inst| {
+                if let Some(env) = inst
                     .envelopes
                     .as_mut()
                     .and_then(|es| es.iter_mut().find(|e| e.param_id == pid))
-            {
-                edit2(env);
-            }
+                {
+                    edit2(env);
+                }
+            });
         })),
     );
 }
 
-/// `(EffectId, env_index)` for an effect-targeted envelope addressed by
-/// `param_id` — the addressing the undoable `ChangeEnvelope*` commands need.
-fn effect_env_index(
-    tab: InspectorTab,
-    project: &Project,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-    ei: usize,
-    param_id: &manifold_core::effects::ParamId,
-) -> Option<(manifold_core::EffectId, usize)> {
-    let id = effect_env_id(tab, project, active_layer, selection, ei)?;
-    let idx = project
-        .find_effect_by_id(&id)?
-        .envelopes
-        .as_ref()?
-        .iter()
-        .position(|e| e.param_id == *param_id)?;
-    Some((id, idx))
+/// Driver twin of [`graph_env_dual_edit`]: apply `edit` to the driver matched
+/// by `param_id` on `target`, locally and on the content thread.
+fn graph_driver_dual_edit<F>(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    target: &manifold_core::GraphTarget,
+    param_id: manifold_core::effects::ParamId,
+    edit: F,
+) where
+    F: Fn(&mut ParameterDriver) + Clone + Send + 'static,
+{
+    use crate::content_command::ContentCommand;
+    project.with_preset_graph_mut(target, |inst| {
+        if let Some(driver) = inst
+            .drivers
+            .as_mut()
+            .and_then(|ds| ds.iter_mut().find(|d| d.param_id == param_id))
+        {
+            edit(driver);
+        }
+    });
+    let edit2 = edit.clone();
+    let pid = param_id.clone();
+    let t = target.clone();
+    ContentCommand::send(
+        content_tx,
+        ContentCommand::MutateProject(Box::new(move |p| {
+            p.with_preset_graph_mut(&t, |inst| {
+                if let Some(driver) = inst
+                    .drivers
+                    .as_mut()
+                    .and_then(|ds| ds.iter_mut().find(|d| d.param_id == pid))
+                {
+                    edit2(driver);
+                }
+            });
+        })),
+    );
 }
 
 /// Resolve a `GraphParamTarget` (the card's effect-row index or generator
@@ -134,6 +137,105 @@ fn resolve_graph_target(
             Some(manifold_core::GraphTarget::Generator(lid))
         }
     }
+}
+
+/// The `AbletonMappingTarget` for a resolved param `target` on `tab`, so the
+/// Ableton trim/invert arms route through the shared
+/// `Project::ableton_param_mappings_mut` locate-fork (effects addressed by
+/// `effect_type` within master/layer — first match — generators by layer).
+/// `None` for the clip tab (no clip-scoped Ableton mappings).
+fn ableton_mapping_target(
+    target: &manifold_core::GraphTarget,
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    project: &Project,
+    param_id: &manifold_core::effects::ParamId,
+) -> Option<manifold_core::ableton_mapping::AbletonMappingTarget> {
+    use manifold_core::ableton_mapping::AbletonMappingTarget as T;
+    match target {
+        manifold_core::GraphTarget::Effect(eid) => {
+            let effect_type = project.find_effect_by_id(eid)?.effect_type().clone();
+            match tab {
+                InspectorTab::Master => Some(T::MasterEffect {
+                    effect_type,
+                    param_id: param_id.clone(),
+                }),
+                InspectorTab::Layer => Some(T::LayerEffect {
+                    layer_id: active_layer.clone()?,
+                    effect_type,
+                    param_id: param_id.clone(),
+                }),
+                InspectorTab::Clip => None,
+            }
+        }
+        manifold_core::GraphTarget::Generator(lid) => Some(T::GenParam {
+            layer_id: lid.clone(),
+            param_id: param_id.clone(),
+        }),
+    }
+}
+
+/// The `MacroMappingTarget` for a resolved param `target` on `tab` (macro
+/// twin of [`ableton_mapping_target`]). Unlike the Ableton variant the macro
+/// path treats the `Clip` tab as a layer mapping (with a first-layer
+/// fallback), matching the pre-unification macro arm.
+fn macro_mapping_target(
+    target: &manifold_core::GraphTarget,
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    project: &Project,
+    param_id: &manifold_core::effects::ParamId,
+) -> Option<manifold_core::MacroMappingTarget> {
+    use manifold_core::MacroMappingTarget as T;
+    match target {
+        manifold_core::GraphTarget::Effect(eid) => {
+            let effect_type = project.find_effect_by_id(eid)?.effect_type().clone();
+            match tab {
+                InspectorTab::Master => Some(T::MasterEffect {
+                    effect_type,
+                    param_id: param_id.clone(),
+                }),
+                InspectorTab::Layer | InspectorTab::Clip => {
+                    let layer_id = active_layer.clone().unwrap_or_else(|| {
+                        project
+                            .timeline
+                            .layers
+                            .first()
+                            .map(|l| l.layer_id.clone())
+                            .unwrap_or_default()
+                    });
+                    Some(T::LayerEffect {
+                        layer_id,
+                        effect_type,
+                        param_id: param_id.clone(),
+                    })
+                }
+            }
+        }
+        manifold_core::GraphTarget::Generator(lid) => Some(T::GenParam {
+            layer_id: lid.clone(),
+            param_id: param_id.clone(),
+        }),
+    }
+}
+
+/// The `(min, max)` range for `param_id` on `inst`, graph-authority-first:
+/// the per-instance graph `preset_metadata` (where graph-backed presets —
+/// notably generators — carry their authoritative ranges) takes precedence
+/// over the registry, falling back to [`PresetInstance::resolve_param`] (and
+/// `(0.0, 1.0)` if unresolved). Unifies the old per-kind range lookups.
+fn resolve_param_range(inst: &PresetInstance, param_id: &str) -> (f32, f32) {
+    if let Some(spec) = inst
+        .graph
+        .as_ref()
+        .and_then(|g| g.preset_metadata.as_ref())
+        .and_then(|m| m.params.iter().find(|p| p.id == param_id))
+    {
+        return (spec.min, spec.max);
+    }
+    inst.resolve_param(param_id)
+        .map(|r| (r.min, r.max))
+        .unwrap_or((0.0, 1.0))
 }
 
 pub(super) fn dispatch_inspector(
@@ -904,135 +1006,121 @@ pub(super) fn dispatch_inspector(
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-        PanelAction::EnvelopeToggle(GraphParamTarget::Effect(ei), param_id) => {
-            // Envelope-home unification: the envelope lives on the effect
-            // instance (keyed by param_id). Toggle the existing one's
-            // `enabled`, or create a fresh enabled envelope. Layer-only.
-            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
-                let pid = param_id.clone();
-                let toggle = move |p: &mut Project| {
-                    if let Some(fx) = p.find_effect_by_id_mut(&id) {
-                        let envs = fx.envelopes_mut();
-                        if let Some(idx) = envs.iter().position(|e| e.param_id == pid) {
-                            envs[idx].enabled = !envs[idx].enabled;
-                        } else {
-                            envs.push(ParamEnvelope::new(pid.clone()));
-                        }
+        PanelAction::EnvelopeToggle(gpt, param_id) => {
+            // Envelope-home unification: the envelope rides on the resolved
+            // instance (keyed by param_id) for effects and generators alike.
+            // Toggle the existing one's `enabled`, or create a fresh enabled
+            // envelope. Effects are clip-timed, so only layer effects get
+            // envelopes (master/clip have no trigger — the button is inert
+            // there); generators are layer-scoped, always permitted.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let env_allowed = match &target {
+                    manifold_core::GraphTarget::Generator(_) => true,
+                    manifold_core::GraphTarget::Effect(_) => {
+                        matches!(effective_tab, InspectorTab::Layer)
                     }
                 };
-                toggle(project);
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(toggle)),
-                );
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::DriverConfig(GraphParamTarget::Effect(ei), param_id, cfg) => {
-            let tab = effective_tab;
-            let Some(effect_id) =
-                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
-            else {
-                return DispatchResult::handled();
-            };
-            let target = DriverTarget::Effect {
-                effect_id: effect_id.clone(),
-            };
-            if let Some(fx) = project.find_effect_by_id(&effect_id)
-                && let Some(di) = fx
-                    .drivers
-                    .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
-            {
-                let driver = &fx.drivers.as_ref().unwrap()[di];
-                match cfg {
-                    DriverConfigAction::BeatDiv(idx) => {
-                        if let Some(new_div) = BeatDivision::from_button_index(*idx) {
-                            let cmd = ChangeDriverBeatDivCommand::new(
-                                target,
-                                di,
-                                driver.beat_division,
-                                new_div,
-                            );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                if env_allowed {
+                    let pid = param_id.clone();
+                    let toggle = move |p: &mut Project| {
+                        p.with_preset_graph_mut(&target, |inst| {
+                            let envs = inst.envelopes.get_or_insert_with(Vec::new);
+                            if let Some(idx) = envs.iter().position(|e| e.param_id == pid) {
+                                envs[idx].enabled = !envs[idx].enabled;
+                            } else {
+                                envs.push(ParamEnvelope::new(pid.clone()));
                             }
-                        }
-                    }
-                    DriverConfigAction::Wave(idx) => {
-                        if let Some(new_wave) = DriverWaveform::from_index(*idx) {
-                            let cmd = ChangeDriverWaveformCommand::new(
-                                target,
-                                di,
-                                driver.waveform,
-                                new_wave,
-                            );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                            }
-                        }
-                    }
-                    DriverConfigAction::Dot => {
-                        if let Some(new_div) = driver.beat_division.toggle_dotted() {
-                            let cmd = ChangeDriverBeatDivCommand::new(
-                                target,
-                                di,
-                                driver.beat_division,
-                                new_div,
-                            );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                            }
-                        }
-                    }
-                    DriverConfigAction::Triplet => {
-                        if let Some(new_div) = driver.beat_division.toggle_triplet() {
-                            let cmd = ChangeDriverBeatDivCommand::new(
-                                target,
-                                di,
-                                driver.beat_division,
-                                new_div,
-                            );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                            }
-                        }
-                    }
-                    DriverConfigAction::Reverse => {
-                        let cmd = ToggleDriverReversedCommand::new(
-                            target,
-                            di,
-                            driver.reversed,
-                            !driver.reversed,
-                        );
-                        {
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(project);
-                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                        }
-                    }
+                        });
+                    };
+                    toggle(project);
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::MutateProject(Box::new(toggle)),
+                    );
                 }
             }
             DispatchResult::structural()
         }
-        PanelAction::EnvParamChanged(GraphParamTarget::Effect(ei), param_id, param, val) => {
-            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
+        PanelAction::DriverConfig(gpt, param_id, cfg) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            let driver_target = DriverTarget::from(&target);
+            // Read the driver's current config off the same instance the
+            // command targets (by GraphTarget), so an editor-card edit can't
+            // split command vs row index.
+            let info = project
+                .with_preset_graph_mut(&target, |inst| {
+                    inst.drivers
+                        .as_ref()
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
+                        .map(|di| {
+                            let d = &inst.drivers.as_ref().unwrap()[di];
+                            (di, d.beat_division, d.waveform, d.reversed)
+                        })
+                })
+                .flatten();
+            if let Some((di, beat_division, waveform, reversed)) = info {
+                type BoxedCmd = Box<dyn manifold_editing::command::Command + Send>;
+                let cmd: Option<BoxedCmd> = match cfg {
+                    DriverConfigAction::BeatDiv(idx) => BeatDivision::from_button_index(*idx)
+                        .map(|new_div| {
+                            Box::new(ChangeDriverBeatDivCommand::new(
+                                driver_target,
+                                di,
+                                beat_division,
+                                new_div,
+                            )) as BoxedCmd
+                        }),
+                    DriverConfigAction::Wave(idx) => DriverWaveform::from_index(*idx).map(|new_wave| {
+                        Box::new(ChangeDriverWaveformCommand::new(
+                            driver_target,
+                            di,
+                            waveform,
+                            new_wave,
+                        )) as BoxedCmd
+                    }),
+                    DriverConfigAction::Dot => beat_division.toggle_dotted().map(|new_div| {
+                        Box::new(ChangeDriverBeatDivCommand::new(
+                            driver_target,
+                            di,
+                            beat_division,
+                            new_div,
+                        )) as BoxedCmd
+                    }),
+                    DriverConfigAction::Triplet => beat_division.toggle_triplet().map(|new_div| {
+                        Box::new(ChangeDriverBeatDivCommand::new(
+                            driver_target,
+                            di,
+                            beat_division,
+                            new_div,
+                        )) as BoxedCmd
+                    }),
+                    DriverConfigAction::Reverse => Some(Box::new(ToggleDriverReversedCommand::new(
+                        driver_target,
+                        di,
+                        reversed,
+                        !reversed,
+                    )) as BoxedCmd),
+                };
+                if let Some(mut boxed) = cmd {
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EnvParamChanged(gpt, param_id, param, val) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
                 let p = *param;
                 let v = *val;
-                effect_env_dual_edit(project, content_tx, id, param_id.clone(), move |env| {
+                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     match p {
                         manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
                         manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
@@ -1043,43 +1131,25 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::TrimChanged(GraphParamTarget::Effect(ei), param_id, min, max) => {
-            let tab = effective_tab;
-            let Some(effect_id) =
-                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei)
-            else {
-                return DispatchResult::handled();
-            };
-            if let Some(fx) = project.find_effect_by_id_mut(&effect_id)
-                && let Some(driver) = fx
-                    .drivers_mut()
-                    .iter_mut()
-                    .find(|d| d.param_id == *param_id)
+        PanelAction::TrimChanged(gpt, param_id, min, max) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                driver.trim_min = *min;
-                driver.trim_max = *max;
+                let mn = *min;
+                let mx = *max;
+                graph_driver_dual_edit(project, content_tx, &target, param_id.clone(), move |d| {
+                    d.trim_min = mn;
+                    d.trim_max = mx;
+                });
             }
-            let pid = param_id.clone();
-            let mn = *min;
-            let mx = *max;
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    if let Some(fx) = p.find_effect_by_id_mut(&effect_id)
-                        && let Some(driver) =
-                            fx.drivers_mut().iter_mut().find(|d| d.param_id == pid)
-                    {
-                        driver.trim_min = mn;
-                        driver.trim_max = mx;
-                    }
-                })),
-            );
             DispatchResult::handled()
         }
-        PanelAction::TargetChanged(GraphParamTarget::Effect(ei), param_id, norm) => {
-            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
+        PanelAction::TargetChanged(gpt, param_id, norm) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
                 let n = *norm;
-                effect_env_dual_edit(project, content_tx, id, param_id.clone(), move |env| {
+                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     env.target_normalized = n;
                 });
             }
@@ -1087,173 +1157,220 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Modulation undo: snapshot/commit ────────────────────────
-        PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let effect_id =
-                super::resolve_effect_id(editor_target, tab, active_layer, selection, project, *ei);
-            if let Some(eid) = effect_id
-                && let Some(fx) = project.find_effect_by_id(&eid)
-                && let Some(driver) = fx
-                    .drivers
-                    .as_ref()
-                    .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
+        PanelAction::TrimSnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                *trim_snapshot = Some((driver.trim_min, driver.trim_max));
+                let trim = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.drivers
+                            .as_ref()
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
+                            .map(|d| (d.trim_min, d.trim_max))
+                    })
+                    .flatten();
+                if let Some(trim) = trim {
+                    *trim_snapshot = Some(trim);
+                }
             }
             DispatchResult::handled()
         }
-        PanelAction::TrimCommit(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some((old_min, old_max)) = trim_snapshot.take() {
-                let tab = effective_tab;
-                let effect_id = super::resolve_effect_id(
-                    editor_target,
-                    tab,
-                    active_layer,
-                    selection,
-                    project,
-                    *ei,
-                );
-                if let Some(eid) = effect_id
-                    && let Some(fx) = project.find_effect_by_id(&eid)
-                    && let Some(di) = fx
-                        .drivers
-                        .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
+        PanelAction::TrimCommit(gpt, param_id) => {
+            if let Some((old_min, old_max)) = trim_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let info = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.drivers
+                            .as_ref()
+                            .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
+                            .map(|di| {
+                                let d = &inst.drivers.as_ref().unwrap()[di];
+                                (di, d.trim_min, d.trim_max)
+                            })
+                    })
+                    .flatten();
+                if let Some((di, new_min, new_max)) = info
+                    && ((old_min - new_min).abs() > f32::EPSILON
+                        || (old_max - new_max).abs() > f32::EPSILON)
                 {
-                    let driver = &fx.drivers.as_ref().unwrap()[di];
-                    let new_min = driver.trim_min;
-                    let new_max = driver.trim_max;
-                    if (old_min - new_min).abs() > f32::EPSILON
-                        || (old_max - new_max).abs() > f32::EPSILON
-                    {
-                        let target = DriverTarget::Effect { effect_id: eid };
-                        let cmd =
-                            ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
+                    let cmd = ChangeTrimCommand::new(
+                        DriverTarget::from(&target),
+                        di,
+                        old_min,
+                        old_max,
+                        new_min,
+                        new_max,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), param_id) => {
-            let tab = effective_tab;
-            let env_owner =
-                effect_env_id(tab, project, active_layer, selection, *ei)
-                    .and_then(|id| project.find_effect_by_id(&id));
-            if let Some(fx) = env_owner {
-                let envs: &[ParamEnvelope] = fx.envelopes.as_deref().unwrap_or(&[]);
-                if let Some(env) = envs.iter().find(|e| e.param_id == *param_id) {
-                    *target_snapshot = Some(env.target_normalized);
-                }
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::TargetCommit(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some(old_target) = target_snapshot.take()
-                && let Some((effect_id, env_idx)) =
-                    effect_env_index(effective_tab, project, active_layer, selection, *ei, param_id)
-                && let Some(env) = project
-                    .find_effect_by_id(&effect_id)
-                    .and_then(|fx| fx.envelopes.as_ref())
-                    .and_then(|es| es.get(env_idx))
-                && (old_target - env.target_normalized).abs() > f32::EPSILON
+        PanelAction::TargetSnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let cmd = ChangeEnvelopeTargetCommand::new(
-                    manifold_core::GraphTarget::Effect(effect_id),
-                    env_idx,
-                    old_target,
-                    env.target_normalized,
-                );
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                let t = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                            .map(|e| e.target_normalized)
+                    })
+                    .flatten();
+                if let Some(t) = t {
+                    *target_snapshot = Some(t);
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::TargetCommit(gpt, param_id) => {
+            if let Some(old_target) = target_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let info = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                            .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].target_normalized))
+                    })
+                    .flatten();
+                if let Some((env_idx, new_t)) = info
+                    && (old_target - new_t).abs() > f32::EPSILON
+                {
+                    let cmd =
+                        ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EnvRangeChanged(GraphParamTarget::Effect(ei), param_id, rmin, rmax) => {
-            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
+        PanelAction::EnvRangeChanged(gpt, param_id, rmin, rmax) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
                 let rm = *rmin;
                 let rx = *rmax;
-                effect_env_dual_edit(project, content_tx, id, param_id.clone(), move |env| {
+                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     env.range_min = rm;
                     env.range_max = rx;
                 });
             }
             DispatchResult::handled()
         }
-        PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), param_id) => {
-            let env_owner = effect_env_id(effective_tab, project, active_layer, selection, *ei)
-                .and_then(|id| project.find_effect_by_id(&id));
-            if let Some(fx) = env_owner {
-                let envs: &[ParamEnvelope] = fx.envelopes.as_deref().unwrap_or(&[]);
-                if let Some(env) = envs.iter().find(|e| e.param_id == *param_id) {
-                    *range_snapshot = Some((env.range_min, env.range_max));
+        PanelAction::EnvRangeSnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let range = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                            .map(|e| (e.range_min, e.range_max))
+                    })
+                    .flatten();
+                if let Some(range) = range {
+                    *range_snapshot = Some(range);
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::EnvRangeCommit(GraphParamTarget::Effect(ei), param_id) => {
+        PanelAction::EnvRangeCommit(gpt, param_id) => {
             if let Some((old_min, old_max)) = range_snapshot.take()
-                && let Some((effect_id, env_idx)) =
-                    effect_env_index(effective_tab, project, active_layer, selection, *ei, param_id)
-                && let Some(env) = project
-                    .find_effect_by_id(&effect_id)
-                    .and_then(|fx| fx.envelopes.as_ref())
-                    .and_then(|es| es.get(env_idx))
-                && ((old_min - env.range_min).abs() > f32::EPSILON
-                    || (old_max - env.range_max).abs() > f32::EPSILON)
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let cmd = ChangeEnvelopeRangeCommand::new(
-                    manifold_core::GraphTarget::Effect(effect_id),
-                    env_idx,
-                    old_min,
-                    old_max,
-                    env.range_min,
-                    env.range_max,
-                );
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                let info = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                            .map(|idx| {
+                                let e = &inst.envelopes.as_ref().unwrap()[idx];
+                                (idx, e.range_min, e.range_max)
+                            })
+                    })
+                    .flatten();
+                if let Some((env_idx, new_min, new_max)) = info
+                    && ((old_min - new_min).abs() > f32::EPSILON
+                        || (old_max - new_max).abs() > f32::EPSILON)
+                {
+                    let cmd = ChangeEnvelopeRangeCommand::new(
+                        target,
+                        env_idx,
+                        old_min,
+                        old_max,
+                        new_min,
+                        new_max,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), param_id) => {
-            let env_owner = effect_env_id(effective_tab, project, active_layer, selection, *ei)
-                .and_then(|id| project.find_effect_by_id(&id));
-            if let Some(fx) = env_owner {
-                let envs: &[ParamEnvelope] = fx.envelopes.as_deref().unwrap_or(&[]);
-                if let Some(env) = envs.iter().find(|e| e.param_id == *param_id) {
-                    *adsr_snapshot = Some((
-                        env.attack_beats,
-                        env.decay_beats,
-                        env.sustain_level,
-                        env.release_beats,
-                    ));
+        PanelAction::EnvParamSnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let adsr = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                            .map(|e| {
+                                (
+                                    e.attack_beats,
+                                    e.decay_beats,
+                                    e.sustain_level,
+                                    e.release_beats,
+                                )
+                            })
+                    })
+                    .flatten();
+                if let Some(adsr) = adsr {
+                    *adsr_snapshot = Some(adsr);
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::EnvParamCommit(GraphParamTarget::Effect(ei), param_id) => {
+        PanelAction::EnvParamCommit(gpt, param_id) => {
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
-                && let Some((effect_id, env_idx)) =
-                    effect_env_index(effective_tab, project, active_layer, selection, *ei, param_id)
-                && let Some(env) = project
-                    .find_effect_by_id(&effect_id)
-                    .and_then(|fx| fx.envelopes.as_ref())
-                    .and_then(|es| es.get(env_idx))
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let (na, nd, ns, nr) = (
-                    env.attack_beats,
-                    env.decay_beats,
-                    env.sustain_level,
-                    env.release_beats,
-                );
-                if (old_a - na).abs() > f32::EPSILON
-                    || (old_d - nd).abs() > f32::EPSILON
-                    || (old_s - ns).abs() > f32::EPSILON
-                    || (old_r - nr).abs() > f32::EPSILON
+                let info = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                            .map(|idx| {
+                                let e = &inst.envelopes.as_ref().unwrap()[idx];
+                                (
+                                    idx,
+                                    e.attack_beats,
+                                    e.decay_beats,
+                                    e.sustain_level,
+                                    e.release_beats,
+                                )
+                            })
+                    })
+                    .flatten();
+                if let Some((env_idx, na, nd, ns, nr)) = info
+                    && ((old_a - na).abs() > f32::EPSILON
+                        || (old_d - nd).abs() > f32::EPSILON
+                        || (old_s - ns).abs() > f32::EPSILON
+                        || (old_r - nr).abs() > f32::EPSILON)
                 {
                     let cmd = ChangeEnvelopeADSRCommand::new(
-                        manifold_core::GraphTarget::Effect(effect_id),
+                        target,
                         env_idx,
                         old_a,
                         old_d,
@@ -1272,9 +1389,15 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Envelope mode toggles ──────────────────────────────────
-        PanelAction::EnvModeToggle(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
-                effect_env_dual_edit(project, content_tx, id, param_id.clone(), |env| {
+        PanelAction::EnvModeToggle(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                // Unified across effects + generators via graph_env_dual_edit:
+                // the closure runs identically on the local UI project and the
+                // content thread, so the `last_elapsed = -1.0` re-seed now
+                // happens on BOTH (the generator path used to skip it locally).
+                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), |env| {
                     use manifold_core::effects::EnvelopeMode;
                     env.mode = match env.mode {
                         EnvelopeMode::Adsr => EnvelopeMode::Random,
@@ -1288,9 +1411,13 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EnvRandomJumpToggle(GraphParamTarget::Effect(ei), param_id) => {
-            if let Some(id) = effect_env_id(effective_tab, project, active_layer, selection, *ei) {
-                effect_env_dual_edit(project, content_tx, id, param_id.clone(), |env| {
+        PanelAction::EnvRandomJumpToggle(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                // Matches the envelope by param_id only (the generator twin
+                // used to also require `enabled`; unified to the effect rule).
+                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), |env| {
                     env.random_jump = !env.random_jump;
                 });
             }
@@ -1537,525 +1664,6 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        // ── Gen modulation ─────────────────────────────────────────
-        PanelAction::EnvelopeToggle(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                && let Some(gp) = layer.gen_params_mut()
-            {
-                let envs = gp.envelopes.get_or_insert_with(Vec::new);
-                let env_idx = envs.iter().position(|e| e.param_id == *param_id);
-                if let Some(idx) = env_idx {
-                    envs[idx].enabled = !envs[idx].enabled;
-                } else {
-                    envs.push(ParamEnvelope::new(param_id.clone()));
-                }
-            }
-            let pid = param_id.clone();
-            let layer_id = active_layer.clone().unwrap_or_default();
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                        && let Some(gp) = layer.gen_params_mut()
-                    {
-                        let envs = gp.envelopes.get_or_insert_with(Vec::new);
-                        let env_idx = envs.iter().position(|e| e.param_id == pid);
-                        if let Some(idx) = env_idx {
-                            envs[idx].enabled = !envs[idx].enabled;
-                        } else {
-                            envs.push(ParamEnvelope::new(pid));
-                        }
-                    }
-                })),
-            );
-            DispatchResult::structural()
-        }
-        PanelAction::DriverConfig(GraphParamTarget::Generator, param_id, cfg) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                let layer_id = active_layer.clone().unwrap_or_default();
-                let target = DriverTarget::GeneratorParam { layer_id };
-                if let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = layer.gen_params()
-                    && let Some(di) = gp
-                        .drivers
-                        .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
-                {
-                    let driver = &gp.drivers.as_ref().unwrap()[di];
-                    match cfg {
-                        DriverConfigAction::BeatDiv(idx) => {
-                            if let Some(new_div) = BeatDivision::from_button_index(*idx) {
-                                let cmd = ChangeDriverBeatDivCommand::new(
-                                    target,
-                                    di,
-                                    driver.beat_division,
-                                    new_div,
-                                );
-                                {
-                                    let mut boxed: Box<
-                                        dyn manifold_editing::command::Command + Send,
-                                    > = Box::new(cmd);
-                                    boxed.execute(project);
-                                    ContentCommand::send(
-                                        content_tx,
-                                        ContentCommand::Execute(boxed),
-                                    );
-                                }
-                            }
-                        }
-                        DriverConfigAction::Wave(idx) => {
-                            if let Some(new_wave) = DriverWaveform::from_index(*idx) {
-                                let cmd = ChangeDriverWaveformCommand::new(
-                                    target,
-                                    di,
-                                    driver.waveform,
-                                    new_wave,
-                                );
-                                {
-                                    let mut boxed: Box<
-                                        dyn manifold_editing::command::Command + Send,
-                                    > = Box::new(cmd);
-                                    boxed.execute(project);
-                                    ContentCommand::send(
-                                        content_tx,
-                                        ContentCommand::Execute(boxed),
-                                    );
-                                }
-                            }
-                        }
-                        DriverConfigAction::Dot => {
-                            if let Some(new_div) = driver.beat_division.toggle_dotted() {
-                                let cmd = ChangeDriverBeatDivCommand::new(
-                                    target,
-                                    di,
-                                    driver.beat_division,
-                                    new_div,
-                                );
-                                {
-                                    let mut boxed: Box<
-                                        dyn manifold_editing::command::Command + Send,
-                                    > = Box::new(cmd);
-                                    boxed.execute(project);
-                                    ContentCommand::send(
-                                        content_tx,
-                                        ContentCommand::Execute(boxed),
-                                    );
-                                }
-                            }
-                        }
-                        DriverConfigAction::Triplet => {
-                            if let Some(new_div) = driver.beat_division.toggle_triplet() {
-                                let cmd = ChangeDriverBeatDivCommand::new(
-                                    target,
-                                    di,
-                                    driver.beat_division,
-                                    new_div,
-                                );
-                                {
-                                    let mut boxed: Box<
-                                        dyn manifold_editing::command::Command + Send,
-                                    > = Box::new(cmd);
-                                    boxed.execute(project);
-                                    ContentCommand::send(
-                                        content_tx,
-                                        ContentCommand::Execute(boxed),
-                                    );
-                                }
-                            }
-                        }
-                        DriverConfigAction::Reverse => {
-                            let cmd = ToggleDriverReversedCommand::new(
-                                target,
-                                di,
-                                driver.reversed,
-                                !driver.reversed,
-                            );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                            }
-                        }
-                    }
-                }
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::EnvParamChanged(GraphParamTarget::Generator, param_id, param, val) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = layer.gen_params_mut()
-                    && let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.iter_mut().find(|e| e.param_id == *param_id)
-                {
-                    match param {
-                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
-                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
-                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
-                        manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
-                    }
-                }
-                let pid = param_id.clone();
-                let p = *param;
-                let v = *val;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |proj| {
-                        if let Some((_, layer)) = proj.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                        {
-                            match p {
-                                manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
-                                manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
-                                manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
-                                manifold_ui::EnvelopeParam::Release => env.release_beats = v,
-                            }
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::TrimChanged(GraphParamTarget::Generator, param_id, min, max) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = layer.gen_params_mut()
-                    && let Some(drivers) = &mut gp.drivers
-                    && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == *param_id)
-                {
-                    driver.trim_min = *min;
-                    driver.trim_max = *max;
-                }
-                let pid = param_id.clone();
-                let mn = *min;
-                let mx = *max;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(drivers) = &mut gp.drivers
-                            && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == pid)
-                        {
-                            driver.trim_min = mn;
-                            driver.trim_max = mx;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::TargetChanged(GraphParamTarget::Generator, param_id, norm) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = layer.gen_params_mut()
-                    && let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.iter_mut().find(|e| e.param_id == *param_id)
-                {
-                    env.target_normalized = *norm;
-                }
-                let pid = param_id.clone();
-                let n = *norm;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                        {
-                            env.target_normalized = n;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-
-        // ── Generator modulation undo: snapshot/commit ──────────────
-        PanelAction::TrimSnapshot(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(driver) = gp
-                    .drivers
-                    .as_ref()
-                    .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
-            {
-                *trim_snapshot = Some((driver.trim_min, driver.trim_max));
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::TrimCommit(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some((old_min, old_max)) = trim_snapshot.take()
-                && let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(di) = gp
-                    .drivers
-                    .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
-            {
-                let driver = &gp.drivers.as_ref().unwrap()[di];
-                let new_min = driver.trim_min;
-                let new_max = driver.trim_max;
-                if (old_min - new_min).abs() > f32::EPSILON
-                    || (old_max - new_max).abs() > f32::EPSILON
-                {
-                    let layer_id = active_layer.clone().unwrap_or_default();
-                    let target = DriverTarget::GeneratorParam { layer_id };
-                    let cmd =
-                        ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        PanelAction::TargetSnapshot(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_id == *param_id)
-            {
-                *target_snapshot = Some(env.target_normalized);
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::TargetCommit(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(old_target) = target_snapshot.take()
-                && let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_id == *param_id)
-            {
-                let env = &envs[env_idx];
-                if (old_target - env.target_normalized).abs() > f32::EPSILON {
-                    let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeEnvelopeTargetCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        env_idx,
-                        old_target,
-                        env.target_normalized,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        PanelAction::EnvRangeChanged(GraphParamTarget::Generator, param_id, rmin, rmax) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = layer.gen_params_mut()
-                    && let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.iter_mut().find(|e| e.param_id == *param_id)
-                {
-                    env.range_min = *rmin;
-                    env.range_max = *rmax;
-                }
-                let pid = param_id.clone();
-                let rm = *rmin;
-                let rx = *rmax;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                        {
-                            env.range_min = rm;
-                            env.range_max = rx;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::EnvRangeSnapshot(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_id == *param_id)
-            {
-                *range_snapshot = Some((env.range_min, env.range_max));
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::EnvRangeCommit(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some((old_min, old_max)) = range_snapshot.take()
-                && let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_id == *param_id)
-            {
-                let env = &envs[env_idx];
-                if (old_min - env.range_min).abs() > f32::EPSILON
-                    || (old_max - env.range_max).abs() > f32::EPSILON
-                {
-                    let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeEnvelopeRangeCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        env_idx,
-                        old_min,
-                        old_max,
-                        env.range_min,
-                        env.range_max,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        PanelAction::EnvParamSnapshot(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_id == *param_id)
-            {
-                *adsr_snapshot = Some((
-                    env.attack_beats,
-                    env.decay_beats,
-                    env.sustain_level,
-                    env.release_beats,
-                ));
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::EnvParamCommit(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
-                && let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_id == *param_id)
-            {
-                let env = &envs[env_idx];
-                let changed = (old_a - env.attack_beats).abs() > f32::EPSILON
-                    || (old_d - env.decay_beats).abs() > f32::EPSILON
-                    || (old_s - env.sustain_level).abs() > f32::EPSILON
-                    || (old_r - env.release_beats).abs() > f32::EPSILON;
-                if changed {
-                    let layer_id = layer.layer_id.clone();
-                    let cmd = ChangeEnvelopeADSRCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        env_idx,
-                        old_a,
-                        old_d,
-                        old_s,
-                        old_r,
-                        env.attack_beats,
-                        env.decay_beats,
-                        env.sustain_level,
-                        env.release_beats,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
-        PanelAction::EnvModeToggle(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(idx)
-                && let Some(gp) = layer.gen_params_mut()
-                && let Some(envs) = &mut gp.envelopes
-                && let Some(env) = envs
-                    .iter_mut()
-                    .find(|e| e.param_id == *param_id && e.enabled)
-            {
-                use manifold_core::effects::EnvelopeMode;
-                env.mode = match env.mode {
-                    EnvelopeMode::Adsr => EnvelopeMode::Random,
-                    EnvelopeMode::Random => EnvelopeMode::Adsr,
-                };
-                env.was_clip_active = false;
-                env.walk_value = -1.0;
-                let new_mode = env.mode;
-                let pid = param_id.clone();
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs
-                                .iter_mut()
-                                .find(|e| e.param_id == pid && e.enabled)
-                        {
-                            env.mode = new_mode;
-                            env.was_clip_active = false;
-                            env.walk_value = -1.0;
-                            env.last_elapsed = -1.0;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::EnvRandomJumpToggle(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(idx)
-                && let Some(gp) = layer.gen_params_mut()
-                && let Some(envs) = &mut gp.envelopes
-                && let Some(env) = envs
-                    .iter_mut()
-                    .find(|e| e.param_id == *param_id && e.enabled)
-            {
-                env.random_jump = !env.random_jump;
-                let new_jump = env.random_jump;
-                let pid = param_id.clone();
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs
-                                .iter_mut()
-                                .find(|e| e.param_id == pid && e.enabled)
-                        {
-                            env.random_jump = new_jump;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::structural()
-        }
 
         PanelAction::AddEffect(tab, effect_type_idx) => {
             use manifold_core::effects::PresetInstance;
@@ -2119,52 +1727,19 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Macro mapping ─────────────────────────────────────────
-        PanelAction::MapEffectParamToMacro(tab, fx_idx, param_id, macro_idx) => {
-            use manifold_core::{MacroCurve, MacroMapping, MacroMappingTarget};
-            let tab = *tab;
-            let fx_idx = *fx_idx;
+        PanelAction::MapParamToMacro(gpt, param_id, macro_idx) => {
+            use manifold_core::{MacroCurve, MacroMapping};
             let macro_idx = *macro_idx;
-
-            // Resolve effect type and build mapping target
-            let (effects_ref, _target) =
-                resolve_effects_read(tab, project, active_layer, selection);
-            if let Some(effects) = effects_ref
-                && let Some(fx) = effects.get(fx_idx)
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some(mapping_target) =
+                    macro_mapping_target(&target, effective_tab, active_layer, project, param_id)
             {
-                let effect_type = fx.effect_type().clone();
-
-                // Param range. `resolve_param` walks both tiers
-                // (static registry + user-tail bindings) and returns
-                // the matching (min, max). Falls back to (0, 1) when
-                // the id doesn't resolve — same as the previous
-                // open-coded form.
-                let (min, max) = fx
-                    .resolve_param(param_id.as_ref())
-                    .map(|r| (r.min, r.max))
+                // Graph-authority-first range so a generator's (or graph-backed
+                // effect's) true slider range isn't squashed to the registry's.
+                let (min, max) = project
+                    .with_preset_graph_mut(&target, |inst| resolve_param_range(inst, param_id.as_ref()))
                     .unwrap_or((0.0, 1.0));
-
-                let mapping_target = match tab {
-                    InspectorTab::Master => MacroMappingTarget::MasterEffect {
-                        effect_type,
-                        param_id: param_id.clone(),
-                    },
-                    InspectorTab::Layer | InspectorTab::Clip => {
-                        let layer_id = active_layer.clone().unwrap_or_else(|| {
-                            project
-                                .timeline
-                                .layers
-                                .first()
-                                .map(|l| l.layer_id.clone())
-                                .unwrap_or_default()
-                        });
-                        MacroMappingTarget::LayerEffect {
-                            layer_id,
-                            effect_type,
-                            param_id: param_id.clone(),
-                        }
-                    }
-                };
-
                 let mapping = MacroMapping {
                     target: mapping_target,
                     range_min: min,
@@ -2172,64 +1747,6 @@ pub(super) fn dispatch_inspector(
                     curve: MacroCurve::Linear,
                     legacy_param_index: None,
                 };
-
-                project.settings.macro_bank.slots[macro_idx]
-                    .mappings
-                    .push(mapping.clone());
-                let mi = macro_idx;
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        p.settings.macro_bank.slots[mi].mappings.push(mapping);
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::MapGenParamToMacro(param_id, macro_idx) => {
-            use manifold_core::{MacroCurve, MacroMapping, MacroMappingTarget};
-            let macro_idx = *macro_idx;
-
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-            {
-                let layer_id = layer.layer_id.clone();
-
-                // Tier-aware (min, max) lookup: prefer the layer's
-                // graph metadata, fall back to registry. User-added
-                // bindings live only on the graph; the registry-only
-                // lookup would yield (0.0, 1.0) and silently squash
-                // the slider's true range.
-                let (min, max) = if let Some(graph) = layer.generator_graph()
-                    && let Some(meta) = graph.preset_metadata.as_ref()
-                    && let Some(spec) = meta.params.iter().find(|p| p.id == *param_id)
-                {
-                    (spec.min, spec.max)
-                } else {
-                    manifold_core::preset_definition_registry::param_id_to_index(
-                        gp.generator_type(),
-                        param_id.as_ref(),
-                    )
-                    .and_then(|slot| {
-                        manifold_core::preset_definition_registry::try_get(gp.generator_type())
-                            .and_then(|def| def.param_defs.get(slot).map(|pd| (pd.min, pd.max)))
-                    })
-                    .unwrap_or((0.0, 1.0))
-                };
-
-                let mapping = MacroMapping {
-                    target: MacroMappingTarget::GenParam {
-                        layer_id,
-                        param_id: param_id.clone(),
-                    },
-                    range_min: min,
-                    range_max: max,
-                    curve: MacroCurve::Linear,
-                    legacy_param_index: None,
-                };
-
                 project.settings.macro_bank.slots[macro_idx]
                     .mappings
                     .push(mapping.clone());
@@ -2341,52 +1858,18 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_id) => {
-            use manifold_core::ableton_mapping::AbletonMappingTarget;
-            let tab = *tab;
-            let fx_idx = *fx_idx;
-            let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
-            if let Some(effects) = effects_ref
-                && let Some(fx) = effects.get(fx_idx)
+        PanelAction::UnmapParamAbleton(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some(mapping_target) =
+                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
             {
-                let effect_type = fx.effect_type().clone();
-                let target = match tab {
-                    InspectorTab::Master => AbletonMappingTarget::MasterEffect {
-                        effect_type,
-                        param_id: param_id.clone(),
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::AbletonUnmapParam {
+                        target: mapping_target,
                     },
-                    InspectorTab::Layer | InspectorTab::Clip => {
-                        let layer_id = active_layer.clone().unwrap_or_else(|| {
-                            project
-                                .timeline
-                                .layers
-                                .first()
-                                .map(|l| l.layer_id.clone())
-                                .unwrap_or_default()
-                        });
-                        AbletonMappingTarget::LayerEffect {
-                            layer_id,
-                            effect_type,
-                            param_id: param_id.clone(),
-                        }
-                    }
-                };
-                ContentCommand::send(content_tx, ContentCommand::AbletonUnmapParam { target });
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::UnmapGenParamAbleton(param_id) => {
-            use manifold_core::ableton_mapping::AbletonMappingTarget;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && layer.gen_params().is_some()
-            {
-                let target = AbletonMappingTarget::GenParam {
-                    layer_id: layer.layer_id.clone(),
-                    param_id: param_id.clone(),
-                };
-                ContentCommand::send(content_tx, ContentCommand::AbletonUnmapParam { target });
+                );
             }
             DispatchResult::handled()
         }
@@ -2417,68 +1900,33 @@ pub(super) fn dispatch_inspector(
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
         // Ableton trim handles — update range_min/range_max on the mapping.
-        PanelAction::AbletonTrimChanged(GraphParamTarget::Effect(fx_idx), param_id, min, max) => {
-            let tab = effective_tab;
+        PanelAction::AbletonTrimChanged(gpt, param_id, min, max) => {
             let min = *min;
             let max = *max;
-            let fx_idx = *fx_idx;
-            // Update local project
-            let effect_type = match tab {
-                InspectorTab::Master => {
-                    let fx = project.settings.master_effects.get_mut(fx_idx);
-                    if let Some(fx) = fx
-                        && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                    {
-                        m.range_min = min;
-                        m.range_max = max;
-                    }
-                    project
-                        .settings
-                        .master_effects
-                        .get(fx_idx)
-                        .map(|f| f.effect_type().clone())
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some(mapping_target) =
+                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+            {
+                // Local edit + content sync both route through the shared
+                // locate-fork, so they can't split (effects locate by
+                // effect_type — first match — on both sides now).
+                if let Some(ms) = project
+                    .ableton_param_mappings_mut(&mapping_target)
+                    .and_then(|opt| opt.as_mut())
+                    && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
+                {
+                    m.range_min = min;
+                    m.range_max = max;
                 }
-                InspectorTab::Layer => {
-                    let layer_idx = super::resolve_active_layer_index(active_layer, project);
-                    if let Some(li) = layer_idx
-                        && let Some(layer) = project.timeline.layers.get_mut(li)
-                        && let Some(effects) = &mut layer.effects
-                        && let Some(fx) = effects.get_mut(fx_idx)
-                        && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                    {
-                        m.range_min = min;
-                        m.range_max = max;
-                    }
-                    layer_idx
-                        .and_then(|li| project.timeline.layers.get(li))
-                        .and_then(|l| l.effects.as_ref())
-                        .and_then(|e| e.get(fx_idx))
-                        .map(|f| f.effect_type().clone())
-                }
-                InspectorTab::Clip => None,
-            };
-            // Sync to content thread
-            let layer_id = active_layer.clone();
-            if let Some(et) = effect_type {
-                let pid_for_content = param_id.clone();
+                let mt = mapping_target.clone();
+                let pid = param_id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
-                        let effects: Option<&mut Vec<_>> = match tab {
-                            InspectorTab::Master => Some(&mut p.settings.master_effects),
-                            InspectorTab::Clip => None,
-                            InspectorTab::Layer => layer_id.as_ref().and_then(|lid| {
-                                p.timeline
-                                    .find_layer_by_id_mut(lid.as_str())
-                                    .and_then(|(_, l)| l.effects.as_mut())
-                            }),
-                        };
-                        if let Some(effects) = effects
-                            && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == &et)
-                            && let Some(ms) = &mut fx.ableton_mappings
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid_for_content)
+                        if let Some(ms) =
+                            p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
+                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                         {
                             m.range_min = min;
                             m.range_max = max;
@@ -2490,37 +1938,6 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AbletonTrimSnapshot(..) | PanelAction::AbletonTrimCommit(..) => {
             // Trim snapshots/commits for undo are deferred to a future iteration.
-            DispatchResult::handled()
-        }
-
-        PanelAction::AbletonTrimChanged(GraphParamTarget::Generator, param_id, min, max) => {
-            let min = *min;
-            let max = *max;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                && let Some(gp) = layer.gen_params_mut()
-                && let Some(mappings) = &mut gp.ableton_mappings
-                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == *param_id)
-            {
-                m.range_min = min;
-                m.range_max = max;
-                let layer_id = layer.layer_id.clone();
-                let pid_for_content = param_id.clone();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str())
-                            && let Some(gp) = layer.gen_params_mut()
-                            && let Some(ms) = &mut gp.ableton_mappings
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid_for_content)
-                        {
-                            m.range_min = min;
-                            m.range_max = max;
-                        }
-                    })),
-                );
-            }
             DispatchResult::handled()
         }
 
@@ -2551,97 +1968,33 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(fx_idx), param_id) => {
-            let tab = effective_tab;
-            let fx_idx = *fx_idx;
-            let effect_type = match tab {
-                InspectorTab::Master => {
-                    let fx = project.settings.master_effects.get_mut(fx_idx);
-                    if let Some(fx) = fx
-                        && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                    {
-                        m.inverted = !m.inverted;
-                    }
-                    project
-                        .settings
-                        .master_effects
-                        .get(fx_idx)
-                        .map(|f| f.effect_type().clone())
+        PanelAction::AbletonInvertToggle(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some(mapping_target) =
+                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+            {
+                if let Some(ms) = project
+                    .ableton_param_mappings_mut(&mapping_target)
+                    .and_then(|opt| opt.as_mut())
+                    && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
+                {
+                    m.inverted = !m.inverted;
                 }
-                InspectorTab::Layer => {
-                    let layer_idx = super::resolve_active_layer_index(active_layer, project);
-                    if let Some(li) = layer_idx
-                        && let Some(layer) = project.timeline.layers.get_mut(li)
-                        && let Some(effects) = &mut layer.effects
-                        && let Some(fx) = effects.get_mut(fx_idx)
-                        && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                    {
-                        m.inverted = !m.inverted;
-                    }
-                    layer_idx
-                        .and_then(|li| project.timeline.layers.get(li))
-                        .and_then(|l| l.effects.as_ref())
-                        .and_then(|e| e.get(fx_idx))
-                        .map(|f| f.effect_type().clone())
-                }
-                InspectorTab::Clip => None,
-            };
-            let layer_id = active_layer.clone();
-            if let Some(et) = effect_type {
-                let pid_for_content = param_id.clone();
+                let mt = mapping_target.clone();
+                let pid = param_id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
-                        let effects: Option<&mut Vec<_>> = match tab {
-                            InspectorTab::Master => Some(&mut p.settings.master_effects),
-                            InspectorTab::Clip => None,
-                            InspectorTab::Layer => layer_id.as_ref().and_then(|lid| {
-                                p.timeline
-                                    .find_layer_by_id_mut(lid.as_str())
-                                    .and_then(|(_, l)| l.effects.as_mut())
-                            }),
-                        };
-                        if let Some(effects) = effects
-                            && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == &et)
-                            && let Some(ms) = &mut fx.ableton_mappings
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid_for_content)
+                        if let Some(ms) =
+                            p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
+                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                         {
                             m.inverted = !m.inverted;
                         }
                     })),
                 );
             }
-            DispatchResult::structural()
-        }
-
-        PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                && let Some(gp) = layer.gen_params_mut()
-                && let Some(mappings) = &mut gp.ableton_mappings
-                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == *param_id)
-            {
-                m.inverted = !m.inverted;
-            }
-            let layer_id = active_layer.clone();
-            let pid = param_id.clone();
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    if let Some((_, layer)) = layer_id
-                        .as_ref()
-                        .and_then(|lid| p.timeline.find_layer_by_id_mut(lid.as_str()))
-                        && let Some(gp) = layer.gen_params_mut()
-                        && let Some(mappings) = &mut gp.ableton_mappings
-                        && let Some(m) = mappings.iter_mut().find(|m| m.param_id == pid)
-                    {
-                        m.inverted = !m.inverted;
-                    }
-                })),
-            );
             DispatchResult::structural()
         }
 
