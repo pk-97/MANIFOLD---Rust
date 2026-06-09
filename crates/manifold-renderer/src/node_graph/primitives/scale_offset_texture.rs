@@ -63,9 +63,28 @@ crate::primitive! {
     aliases: ["scale offset", "remap", "multiply add", "re-range"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/scale_offset_texture_body.wgsl"),
+    extra_fields: {
+        // fp32-output opt-in (see gradient_central_diff): full-precision
+        // intermediate inside a feedback loop so fused == unfused.
+        output_format_override: Option<manifold_gpu::GpuTextureFormat> = None,
+    },
 }
 
 impl Primitive for ScaleOffsetTexture {
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        if port == "out" {
+            self.output_format_override
+        } else {
+            None
+        }
+    }
+
+    fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
+        if port == "out" {
+            self.output_format_override = Some(format);
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let scale = match ctx.inputs.scalar("scale") {
             Some(ParamValue::Float(f)) => f,
@@ -91,8 +110,11 @@ impl Primitive for ScaleOffsetTexture {
         let (w, h) = (out_tex.width, out_tex.height);
 
         let gpu = ctx.gpu_encoder();
+        let out_fmt = self
+            .output_format_override
+            .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
                 .expect("node.scale_offset_texture standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,

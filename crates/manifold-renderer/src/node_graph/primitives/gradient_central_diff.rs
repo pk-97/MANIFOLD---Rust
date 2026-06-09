@@ -86,10 +86,32 @@ crate::primitive! {
     input_access: [Gather],
     extra_fields: {
         repeat_sampler: Option<manifold_gpu::GpuSampler> = None,
+        // fp32-output opt-in: an `outputFormats` override (rgba32float) lands here
+        // so this atom can serve as a FULL-PRECISION intermediate inside a chaotic
+        // feedback loop (FluidSim flow field) — letting the unfused editor store
+        // exactly and the fused kernel keep f32 registers, so fused == unfused.
+        output_format_override: Option<manifold_gpu::GpuTextureFormat> = None,
     },
 }
 
 impl Primitive for GradientCentralDiff {
+    /// Report the fp32 override so the build's `outputFormats` audit accepts it and
+    /// the executor allocates the output at this format (see [`set_output_format`]).
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        if port == "out" {
+            self.output_format_override
+        } else {
+            None
+        }
+    }
+
+    /// Store an `outputFormats` override (rgba16float default / rgba32float opt-in).
+    fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
+        if port == "out" {
+            self.output_format_override = Some(format);
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let channel = match ctx.params.get("channel") {
             Some(ParamValue::Enum(v)) => (*v).min(3),
@@ -119,6 +141,12 @@ impl Primitive for GradientCentralDiff {
         }
 
         let gpu = ctx.gpu_encoder();
+        // Generate the kernel at the output's declared format (f16 default, fp32
+        // when overridden) so the standalone dst binding matches the texture the
+        // executor allocated — the fp32-intermediate path for in-loop fusion.
+        let out_fmt = self
+            .output_format_override
+            .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: `in` is a Gather input (4-neighbour central
             // difference). Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3);
@@ -126,7 +154,7 @@ impl Primitive for GradientCentralDiff {
             // (the sampler below carries the address mode).
             // gradient_central_diff.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                &crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
                     .expect("node.gradient_central_diff standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
                 "node.gradient_central_diff",

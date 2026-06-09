@@ -60,6 +60,11 @@ crate::primitive! {
     aliases: ["rotate vector", "turn", "rotate flow"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/rotate_vec2_by_angle_body.wgsl"),
+    extra_fields: {
+        // fp32-output opt-in (see gradient_central_diff): full-precision
+        // intermediate/output inside a feedback loop so fused == unfused.
+        output_format_override: Option<manifold_gpu::GpuTextureFormat> = None,
+    },
 }
 
 // Type-ID alias so saved projects referencing the legacy
@@ -76,6 +81,20 @@ inventory::submit! {
 }
 
 impl Primitive for RotateVec2ByAngle {
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        if port == "out" {
+            self.output_format_override
+        } else {
+            None
+        }
+    }
+
+    fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
+        if port == "out" {
+            self.output_format_override = Some(format);
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let angle = ctx.scalar_or_param("angle", std::f32::consts::FRAC_PI_2);
 
@@ -91,12 +110,15 @@ impl Primitive for RotateVec2ByAngle {
         }
 
         let gpu = ctx.gpu_encoder();
+        let out_fmt = self
+            .output_format_override
+            .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Pointwise. Generated kernel binds uniform(0)/tex(1)/samp(2)/dst(3);
             // the body computes cos/sin from `angle`. rotate_vec2_by_angle.wgsl is
             // the parity oracle.
             gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                &crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
                     .expect("node.rotate_vec2_by_angle standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
                 "node.rotate_vec2_by_angle",

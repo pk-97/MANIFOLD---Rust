@@ -443,6 +443,27 @@ pub(crate) struct FusedDef {
 /// [`external_is_inplace_loop`]).
 const ARRAY_FEEDBACK_TYPE_ID: &str = "node.array_feedback";
 
+/// The WGSL storage-format token the unfused executor allocates a TEXTURE
+/// member's output at — its `outputFormats` fp32 override (`"rgba32float"`) else
+/// the `"rgba16float"` working default. When this member is a region OUTPUT, the
+/// fused codegen declares its `dst` at this format, so a fused region honours an
+/// fp32 output the same way the unfused chain does — the dst half of
+/// full-precision in-loop fusion. Buffer members have no texture output → default.
+fn resolve_output_storage(
+    doc_node: &EffectGraphNode,
+    node: &dyn crate::node_graph::effect_node::EffectNode,
+) -> &'static str {
+    let tex_out = node
+        .outputs()
+        .iter()
+        .find(|o| matches!(o.ty, PortType::Texture2D))
+        .map(|o| o.name);
+    match tex_out.and_then(|name| doc_node.output_formats.get(name)) {
+        Some(s) if s.contains("32float") => "rgba32float",
+        _ => "rgba16float",
+    }
+}
+
 /// Trace a single-output BUFFER region's output back through its members'
 /// `aliased_array_io` chain to the external input it ultimately writes IN PLACE.
 /// Returns that external index, or `None` if the region isn't a clean in-place
@@ -607,6 +628,7 @@ pub(crate) fn fuse_canonical_def(
                 node_outputs: leak_ports(node.outputs()),
                 node_includes: node.wgsl_includes(),
                 derived_uniforms: node.derived_uniforms(),
+                output_storage: resolve_output_storage(doc_node, node.as_ref()),
             });
         }
         // In-place gate: if the region's output threads (through aliased members)

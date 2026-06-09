@@ -1324,6 +1324,22 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
          no such wire means the derived-uniform region never fused (vacuous pass)"
     );
 
+    // The fp32 in-loop path must actually fire too: a fused texture region inside
+    // the feedback loop (the pointwise flow-field atoms scale → rotate) declares
+    // an rgba32float `dst`. If this is absent, the fp32 atoms stayed excluded and
+    // the bit-exact result below would be vacuous (everything in-loop unfused).
+    let has_fp32_texture_fusion = fused_def.nodes.iter().any(|n| {
+        n.type_id == "node.wgsl_compute"
+            && n.wgsl_source
+                .as_deref()
+                .is_some_and(|src| src.contains("texture_storage_2d<rgba32float, write>"))
+    });
+    assert!(
+        has_fp32_texture_fusion,
+        "FluidSim must fuse the fp32 pointwise flow-field atoms (rgba32float dst) — \
+         absent means the fp32 in-loop path didn't fire (vacuous bit-exact pass)"
+    );
+
     let ctx = |t: f64| PresetContext {
         time: t,
         beat: t * 2.0,

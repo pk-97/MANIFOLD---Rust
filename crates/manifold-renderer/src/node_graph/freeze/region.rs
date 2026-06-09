@@ -407,20 +407,32 @@ fn classify_node(
     }
 
     // Feedback-loop exclusion (TEXTURE atoms only — buffer atoms were dispatched
-    // above and are exempt). A texture atom inside a feedback loop must NOT fuse.
-    // Fusing keeps intermediates in f32 registers, but the unfused editor stores
-    // them through the atom's HARD-CODED rgba16float output and rounds to f16. The
-    // two can't be reconciled: the GPU rounds a register differently than a texture
-    // write (so a fused-side f16 round doesn't match), and the curated atoms can't
-    // switch to fp32 (their shader format is compiled-in). For an ordinary effect
-    // that f16-vs-f32 gap is invisible, but a chaotic feedback sim (FluidSim's flow
-    // field, OilyFluid) amplifies it — and since the editor renders unfused and the
-    // stage renders fused, the look would shift the moment the editor closes. So we
-    // keep in-loop texture atoms unfused: editor and stage then run them
-    // identically. Buffer atoms stay fused — their f32 register threading is
-    // already bit-exact and their in-place feedback fusion is preserved.
+    // above and are exempt). A texture atom inside a feedback loop fuses ONLY at
+    // full precision. The hazard: fusing keeps intermediates in f32 registers, but
+    // the unfused editor stores each through its output texture and rounds to that
+    // format. At f16 the two can't be reconciled — the GPU rounds a register
+    // differently than an f16 texture write (a fused-side f16 round doesn't match) —
+    // so a chaotic feedback sim (FluidSim flow field, OilyFluid) amplifies the gap,
+    // and since the editor renders unfused and the stage renders fused, the look
+    // would shift when the editor closes. At fp32 (`outputFormats: rgba32float`)
+    // there is NO rounding: the unfused store is exact, matching the fused register,
+    // so fused == unfused and the atom fuses freely (the codegen emits an fp32 dst,
+    // and the fused kernel keeps the intermediates in registers — so fp32 costs the
+    // unfused editor a little memory and the stage nothing). An f16 in-loop texture
+    // atom stays a boundary; an fp32 one is allowed through. Buffer atoms are
+    // exempt: their f32 register threading is already bit-exact.
     if node_on_cycle(node.id, def) {
-        return NodeClass::Boundary;
+        let output_is_fp32 = node.output_formats.values().any(|s| s.contains("32float"));
+        // A GATHER atom samples a bound texture through a sampler whose address
+        // mode (e.g. wrap_mode=Repeat for a toroidal fluid) the fused region can't
+        // yet reproduce — the fused `samp` is the default clamp — so a gathered
+        // in-loop atom diverges at the edges even at fp32. Keep gathers unfused in
+        // loops; the fp32 fast path is for the POINTWISE in-loop atoms (scale,
+        // rotate, …) that thread a register and need no sampler.
+        let is_gather = n.input_access().iter().any(|a| a.is_gather());
+        if !output_is_fp32 || is_gather {
+            return NodeClass::Boundary;
+        }
     }
 
     // Final gate: the body must produce a kernel the PLAIN pipeline compiler

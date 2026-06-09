@@ -197,6 +197,47 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
 }
 
+/// WGSL storage-texture format token for the formats a texture kernel can declare
+/// as a write target. `None` for anything else (the standalone path only supports
+/// the f16 working default + fp32 opt-in for precision-sensitive feedback loops).
+pub fn wgsl_storage_token(fmt: manifold_gpu::GpuTextureFormat) -> Option<&'static str> {
+    use manifold_gpu::GpuTextureFormat as F;
+    match fmt {
+        F::Rgba16Float => Some("rgba16float"),
+        F::Rgba32Float => Some("rgba32float"),
+        _ => None,
+    }
+}
+
+/// Like [`standalone_for_spec`] but emits the output storage texture at `fmt`
+/// instead of the hardcoded rgba16float. The unfused side of FULL-PRECISION
+/// in-loop fusion: a texture atom inside a chaotic feedback loop can declare an
+/// fp32 output (via `outputFormats`), and then the editor (unfused) stores its
+/// intermediates exactly — matching the fused kernel's f32 registers, so fused ==
+/// unfused. A targeted replace of the single dst binding token is safe: input
+/// textures are `texture_2d<f32>` (no storage format), so `<rgba16float, write>`
+/// appears only on the output. Non-fp32 (incl. the f16 default) returns unchanged.
+pub fn standalone_for_spec_fmt<P: crate::node_graph::primitive::PrimitiveSpec>(
+    fmt: manifold_gpu::GpuTextureFormat,
+) -> Result<String, CodegenError> {
+    let wgsl = standalone_for_spec::<P>()?;
+    let Some(token) = wgsl_storage_token(fmt) else {
+        return Ok(wgsl); // unknown / unsupported → leave the f16 default
+    };
+    if token == "rgba16float" {
+        return Ok(wgsl);
+    }
+    Ok(wgsl
+        .replace(
+            "texture_storage_2d<rgba16float, write>",
+            &format!("texture_storage_2d<{token}, write>"),
+        )
+        .replace(
+            "texture_storage_3d<rgba16float, write>",
+            &format!("texture_storage_3d<{token}, write>"),
+        ))
+}
+
 /// Generate the standalone `cs_main` kernel for one atom. `body` is the atom's
 /// `wgsl_body` fragment (defines `fn body(...)` plus any helpers, verbatim).
 ///
@@ -1074,6 +1115,16 @@ pub struct RegionNode<'a> {
     /// the fused kernel reads the same frame value the unfused atom would. Empty
     /// for atoms with no frame-derived uniforms (and the texture path).
     pub derived_uniforms: &'static [&'static str],
+    /// TEXTURE members only: the WGSL storage-format token the unfused executor
+    /// allocates this member's output texture at — `"rgba16float"` (working
+    /// default) or `"rgba32float"` (an `outputFormats` fp32 override). When this
+    /// member is a region OUTPUT, the fused codegen declares its `dst` storage
+    /// texture at this format so the fused kernel writes the same precision the
+    /// unfused chain would — the dst half of full-precision in-loop fusion.
+    /// Intermediate members keep their format only for completeness (the fused
+    /// kernel threads them as f32 registers — no texture). Defaults to
+    /// `"rgba16float"`; the buffer path ignores it.
+    pub output_storage: &'static str,
 }
 
 /// A maximal fusable region: nodes in topo order, the external inputs they read,
@@ -1591,20 +1642,31 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // store ever lands on an unallocated output (which would early-return the whole
     // `WgslCompute` dispatch). All outputs are coincident (same canvas), so any one
     // gives the dispatch dims.
+    // Each output texture is declared at ITS member's storage format (the
+    // `outputFormats` fp32 override else rgba16float) so a fused region honours an
+    // fp32 output exactly as the unfused chain would — full-precision in-loop
+    // fusion. Falls back to rgba16float if the output id isn't a member (defensive).
+    let out_storage = |out_id: NodeInstanceId| -> &'static str {
+        index_of(out_id)
+            .map(|j| region.nodes[j].output_storage)
+            .unwrap_or("rgba16float")
+    };
     let multi_output = region.outputs.len() > 1;
     if multi_output {
-        for k in 0..region.outputs.len() {
+        for (k, &out_id) in region.outputs.iter().enumerate() {
             writeln!(
                 out,
-                "@group(0) @binding({}) var dst_{k}: texture_storage_2d<rgba16float, write>;",
-                next_binding + k
+                "@group(0) @binding({}) var dst_{k}: texture_storage_2d<{}, write>;",
+                next_binding + k,
+                out_storage(out_id)
             )
             .unwrap();
         }
     } else {
         writeln!(
             out,
-            "@group(0) @binding({next_binding}) var dst: texture_storage_2d<rgba16float, write>;"
+            "@group(0) @binding({next_binding}) var dst: texture_storage_2d<{}, write>;",
+            out_storage(region.outputs[0])
         )
         .unwrap();
     }
@@ -1885,6 +1947,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1897,6 +1960,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
             ],
             num_external_inputs: 1,
@@ -1940,6 +2004,7 @@ mod gpu_tests {
             node_outputs: J::OUTPUTS,
             node_includes: J::WGSL_INCLUDES,
             derived_uniforms: J::DERIVED_UNIFORMS,
+            output_storage: "rgba16float",
         };
         let region = FusionRegion {
             nodes: vec![mk(0, InputSource::External(0)), mk(1, InputSource::Node(id(0)))],
@@ -1998,6 +2063,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
                 RegionNode {
                     node_id: id(1),
@@ -2010,6 +2076,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
             ],
             num_external_inputs: 1,
@@ -2052,6 +2119,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
                 RegionNode {
                     node_id: id(1),
@@ -2064,6 +2132,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
                 RegionNode {
                     node_id: id(2),
@@ -2076,6 +2145,7 @@ mod gpu_tests {
                     node_outputs: &[],
                     node_includes: &[],
                     derived_uniforms: &[],
+                    output_storage: "rgba16float",
                 },
             ],
             num_external_inputs: 1,
@@ -2270,13 +2340,13 @@ mod gpu_tests {
         // atom types' consts.
         let region = FusionRegion {
             nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float" },
             ],
             num_external_inputs: 1,
             outputs: vec![id(6)],
