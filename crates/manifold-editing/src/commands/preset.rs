@@ -27,20 +27,48 @@ pub struct ForkPresetCommand {
     target: GraphTarget,
     kind: PresetKind,
     source_def: EffectGraphDef,
+    /// Re-seed the instance's `param_values` from `source_def`'s defaults after
+    /// retargeting. False for Make Unique (the instance already runs this
+    /// preset, so its values line up — keep them). True for Import, whose def
+    /// has a *different* param structure: the old positional values no longer
+    /// match the new bindings, so they must be replaced by the imported
+    /// defaults (which also applies the imported preset's saved values).
+    reseed_values: bool,
     /// Captured on first execute so undo restores the pre-fork preset id.
     old_type: Option<PresetTypeId>,
+    /// Pre-fork `param_values`, captured on first execute when `reseed_values`
+    /// is set so undo restores them (Make Unique never touches them).
+    old_param_values: Option<Vec<manifold_core::effects::ParamSlot>>,
     /// The created embedded preset (with its minted id), captured on first
     /// execute so redo re-inserts the SAME preset deterministically.
     forked: Option<EmbeddedPreset>,
 }
 
 impl ForkPresetCommand {
+    /// Make Unique: fork in place and keep the instance's current values.
     pub fn new(target: GraphTarget, kind: PresetKind, source_def: EffectGraphDef) -> Self {
         Self {
             target,
             kind,
             source_def,
+            reseed_values: false,
             old_type: None,
+            old_param_values: None,
+            forked: None,
+        }
+    }
+
+    /// Import: fork from a loaded `.manifoldpreset` def and re-seed the
+    /// instance's `param_values` from it, replacing the prior (differently
+    /// structured) values with the imported preset's saved ones.
+    pub fn importing(target: GraphTarget, kind: PresetKind, source_def: EffectGraphDef) -> Self {
+        Self {
+            target,
+            kind,
+            source_def,
+            reseed_values: true,
+            old_type: None,
+            old_param_values: None,
             forked: None,
         }
     }
@@ -73,9 +101,20 @@ impl Command for ForkPresetCommand {
         }
         let fp = self.forked.clone().expect("forked set above");
         let new_id = fp.id().cloned();
-        project.upsert_embedded_preset(fp);
+        project.upsert_embedded_preset(fp.clone());
         if let Some(id) = new_id {
             project.set_instance_preset_id(&self.target, id);
+        }
+        // Import re-seeds values from the (differently structured) imported def.
+        // Capture the pre-fork values once for undo, then apply the imported
+        // defaults. Make Unique skips this — its values already line up.
+        if self.reseed_values
+            && let Some(inst) = project.preset_instance_mut(&self.target)
+        {
+            if self.old_param_values.is_none() {
+                self.old_param_values = Some(inst.param_values.clone());
+            }
+            inst.reseed_param_values_from_def(&fp.def);
         }
     }
 
@@ -87,6 +126,11 @@ impl Command for ForkPresetCommand {
         }
         if let Some(old) = self.old_type.clone() {
             project.set_instance_preset_id(&self.target, old);
+        }
+        if let Some(vals) = self.old_param_values.clone()
+            && let Some(inst) = project.preset_instance_mut(&self.target)
+        {
+            inst.param_values = vals;
         }
     }
 
@@ -246,6 +290,44 @@ mod tests {
         // Redo reuses the same minted id.
         cmd.execute(&mut project);
         assert_eq!(project.instance_preset_id(&target).as_ref(), Some(&new_id));
+    }
+
+    #[test]
+    fn import_reseeds_param_values_from_def_and_undo_restores() {
+        use manifold_core::effects::ParamSlot;
+
+        let mut project = Project::default();
+        let mut fx = manifold_core::effects::PresetInstance::new(PresetTypeId::OILY_FLUID);
+        // Prior card state: one value the user had dialed in. The imported
+        // preset has a *different* saved default, so a correct import must
+        // replace this, not keep it (the source of the black-render bug).
+        fx.param_values = vec![ParamSlot::exposed(0.9)];
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id.clone());
+
+        // Imported def carries a saved default of 2.0 for "speed".
+        let mut cmd = ForkPresetCommand::importing(
+            target.clone(),
+            PresetKind::Generator,
+            def_with_param("OilyFluid", "speed", 2.0, 8.0),
+        );
+        cmd.execute(&mut project);
+
+        let inst = project.preset_instance(&target).expect("instance");
+        assert_eq!(
+            inst.param_values,
+            vec![ParamSlot::exposed(2.0)],
+            "import must re-seed param_values from the imported def's defaults",
+        );
+
+        cmd.undo(&mut project);
+        let inst = project.preset_instance(&target).expect("instance");
+        assert_eq!(
+            inst.param_values,
+            vec![ParamSlot::exposed(0.9)],
+            "undo must restore the pre-import param_values",
+        );
     }
 
     #[test]

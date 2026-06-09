@@ -2365,6 +2365,48 @@ impl PresetInstance {
         }
     }
 
+    /// Snapshot this instance's current base (pre-modulation) param values into
+    /// `def`'s preset metadata as the new defaults, so the def becomes a frozen
+    /// copy of the configured card rather than a stock template. This is what
+    /// makes Make Unique / Export carry the look you set: `param_values` is the
+    /// live instrument and stays on the instance, but the def now defaults to
+    /// the same values, so a later add/import/load reproduces them through the
+    /// normal defaults path. Matched by param id; a metadata param the instance
+    /// doesn't expose keeps its existing default. No-op without metadata.
+    pub fn snapshot_values_into_def(&self, def: &mut EffectGraphDef) {
+        let Some(meta) = def.preset_metadata.as_mut() else {
+            return;
+        };
+        for p in meta.params.iter_mut() {
+            if let Some(idx) = self.param_id_to_value_index(&p.id) {
+                p.default_value = self.get_base_param(idx);
+            }
+        }
+        for b in meta.bindings.iter_mut() {
+            if let Some(idx) = self.param_id_to_value_index(&b.id) {
+                b.default_value = self.get_base_param(idx);
+            }
+        }
+    }
+
+    /// Replace `param_values` with fresh exposed slots seeded from `def`'s
+    /// preset metadata defaults (in declaration order — the same layout the
+    /// registry produces). Used when retargeting to an *imported* preset, whose
+    /// param structure differs from the instance's prior one: the old positional
+    /// `param_values` no longer line up with the new bindings, so reusing them
+    /// feeds garbage (or zero) into the graph. Re-seeding from the def both
+    /// applies the imported preset's saved values and restores correct
+    /// alignment. No-op without metadata.
+    pub fn reseed_param_values_from_def(&mut self, def: &EffectGraphDef) {
+        if let Some(meta) = def.preset_metadata.as_ref() {
+            self.param_values = meta
+                .params
+                .iter()
+                .map(|p| ParamSlot::exposed(p.default_value))
+                .collect();
+        }
+    }
+
     /// Get the drivers list, creating it if None.
     pub fn drivers_mut(&mut self) -> &mut Vec<ParameterDriver> {
         if self.drivers.is_none() {
@@ -4045,6 +4087,49 @@ mod tests {
         assert_eq!(fx.user_binding_index("user.a.b.1"), Some(0));
         assert_eq!(fx.user_binding_index("user.c.d.1"), Some(1));
         assert_eq!(fx.user_binding_index("user.nope.1"), None);
+    }
+
+    #[test]
+    fn snapshot_values_into_def_bakes_current_base_as_default() {
+        // Make Unique / Export must freeze the card's current values into the
+        // def as its new defaults, so the preset reproduces the look later.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
+        assert!(fx.set_base_param_by_id("user.a.b.1", 0.83));
+
+        let mut def = fx.graph.clone().expect("graph carries metadata");
+        fx.snapshot_values_into_def(&mut def);
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let p = meta.params.iter().find(|p| p.id == "user.a.b.1").unwrap();
+        assert_eq!(
+            p.default_value, 0.83,
+            "current base value becomes the def's param default"
+        );
+        let b = meta.bindings.iter().find(|b| b.id == "user.a.b.1").unwrap();
+        assert_eq!(b.default_value, 0.83, "the binding default tracks it too");
+    }
+
+    #[test]
+    fn reseed_param_values_from_def_replaces_values_with_def_defaults() {
+        // Import retargets to a def with a different param structure; the old
+        // positional values can't carry over, so reseed rebuilds them from the
+        // def's defaults (declaration order, all exposed).
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.param_values = vec![ParamSlot::exposed(0.1), ParamSlot::exposed(0.2)];
+
+        let mut donor = PresetInstance::new(PresetTypeId::BLOOM);
+        donor.append_user_binding(sample_user_binding("user.x.y.1", "x", "y"));
+        assert!(donor.set_base_param_by_id("user.x.y.1", 0.55));
+        let mut def = donor.graph.clone().expect("graph carries metadata");
+        donor.snapshot_values_into_def(&mut def);
+
+        fx.reseed_param_values_from_def(&def);
+        assert_eq!(
+            fx.param_values,
+            vec![ParamSlot::exposed(0.55)],
+            "reseed rebuilds param_values from the def's (snapshotted) defaults",
+        );
     }
 
     #[test]

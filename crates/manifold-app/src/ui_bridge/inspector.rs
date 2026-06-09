@@ -253,10 +253,15 @@ fn preset_source_def(
 )> {
     let inst = project.preset_instance(target)?;
     let preset_id = inst.effect_type().clone();
-    let def = inst.graph.clone().or_else(|| {
+    let mut def = inst.graph.clone().or_else(|| {
         manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
             .map(|v| v.canonical_def.clone())
     })?;
+    // Snapshot the card's current slider values into the def's defaults so Make
+    // Unique / Export freeze the configured look rather than the stock template.
+    // The live values stay on the instance (the performance surface); this only
+    // makes the def reproduce them on a later add/import/load.
+    inst.snapshot_values_into_def(&mut def);
     Some((def, preset_id))
 }
 
@@ -1697,7 +1702,7 @@ pub(super) fn dispatch_inspector(
                 match manifold_io::preset_file::import_preset(&path) {
                     Ok(def) => {
                         let cmd =
-                            ForkPresetCommand::new(target.clone(), target.preset_kind(), def);
+                            ForkPresetCommand::importing(target.clone(), target.preset_kind(), def);
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
                         boxed.execute(project);

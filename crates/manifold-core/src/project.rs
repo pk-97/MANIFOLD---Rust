@@ -806,6 +806,24 @@ impl Project {
         }
     }
 
+    /// Mutable variant of [`Self::preset_instance`]. Resolves the effect or
+    /// generator instance behind a [`GraphTarget`] for in-place edits (e.g.
+    /// re-seeding `param_values` after a fork/import retarget).
+    pub fn preset_instance_mut(
+        &mut self,
+        target: &crate::GraphTarget,
+    ) -> Option<&mut crate::effects::PresetInstance> {
+        match target {
+            crate::GraphTarget::Effect(eid) => self.find_effect_by_id_mut(eid),
+            crate::GraphTarget::Generator(lid) => self
+                .timeline
+                .layers
+                .iter_mut()
+                .find(|l| &l.layer_id == lid)
+                .and_then(|l| l.gen_params_mut()),
+        }
+    }
+
     /// Insert (or replace by id) a project-embedded preset.
     pub fn upsert_embedded_preset(&mut self, preset: EmbeddedPreset) {
         let id = preset.id().cloned();
