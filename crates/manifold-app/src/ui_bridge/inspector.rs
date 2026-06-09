@@ -238,6 +238,28 @@ fn resolve_param_range(inst: &PresetInstance, param_id: &str) -> (f32, f32) {
         .unwrap_or((0.0, 1.0))
 }
 
+/// The preset graph def to fork or export for a resolved `target`: the
+/// per-instance diverged graph if the instance carries one, else the catalog
+/// canonical def from the loaded preset view. Paired with the current preset
+/// id (the export filename stem). One path for both kinds — the fork / export
+/// dispatch arms resolve a `GraphTarget` (effect or generator) and hand it
+/// here, so make-unique / export behave identically on either card.
+fn preset_source_def(
+    target: &manifold_core::GraphTarget,
+    project: &Project,
+) -> Option<(
+    manifold_core::effect_graph_def::EffectGraphDef,
+    manifold_core::PresetTypeId,
+)> {
+    let inst = project.preset_instance(target)?;
+    let preset_id = inst.effect_type().clone();
+    let def = inst.graph.clone().or_else(|| {
+        manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
+            .map(|v| v.canonical_def.clone())
+    })?;
+    Some((def, preset_id))
+}
+
 pub(super) fn dispatch_inspector(
     action: &PanelAction,
     project: &mut Project,
@@ -1564,8 +1586,9 @@ pub(super) fn dispatch_inspector(
             ui.inspector.clear_effect_selection(&mut ui.tree);
             DispatchResult::handled()
         }
-        PanelAction::GenCardRightClicked => {
-            // Handled by UIRoot::try_open_dropdown — should not reach dispatch
+        PanelAction::CardRightClicked(_) => {
+            // Handled by UIRoot::try_open_dropdown (opens the card context menu)
+            // — should not reach dispatch.
             DispatchResult::handled()
         }
         PanelAction::CopyGenerator => {
@@ -1610,96 +1633,77 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::MakeGeneratorUnique => {
-            // Phase-4 "make unique": fork the active layer's generator into a
-            // project-embedded preset and retarget the layer to it. source_def
-            // is the per-instance diverged graph if present, else the catalog
-            // canonical def from the loaded preset view (pristine generator).
-            use manifold_core::preset_def::PresetKind;
+        PanelAction::MakePresetUnique(gpt) => {
+            // Fork the targeted preset (effect OR generator) into a
+            // project-embedded copy and retarget the instance to it. One path
+            // for both kinds: resolve the GraphTarget, take its source def
+            // (diverged per-instance graph else catalog canonical), fork via
+            // the shared command keyed off `target.preset_kind()`.
             use manifold_editing::commands::preset::ForkPresetCommand;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && !gp.generator_type().is_none()
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some((source_def, _)) = preset_source_def(&target, project)
             {
-                let layer_id = layer.layer_id.clone();
-                let gen_type = gp.generator_type().clone();
-                let source_def = gp.graph.clone().or_else(|| {
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(&gen_type)
-                        .map(|v| v.canonical_def.clone())
-                });
-                if let Some(source_def) = source_def {
-                    let cmd = ForkPresetCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        PresetKind::Generator,
-                        source_def,
-                    );
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
+                let cmd = ForkPresetCommand::new(target.clone(), target.preset_kind(), source_def);
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }
-        PanelAction::ExportGeneratorPreset => {
-            // Phase-4 export: write the active generator's preset graph to a
-            // .json via a native save dialog. Def is the diverged per-instance
-            // graph if present, else the catalog canonical def.
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && !gp.generator_type().is_none()
+        PanelAction::ExportPreset(gpt) => {
+            // Export the targeted preset's graph to a .json via a native save
+            // dialog. Source def is the diverged per-instance graph else the
+            // catalog canonical; the preset id is the filename stem.
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some((def, preset_id)) = preset_source_def(&target, project)
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("MANIFOLD Preset", &["json"])
+                    .set_file_name(format!("{}.json", preset_id.as_str()))
+                    .save_file()
+                && let Err(e) = manifold_io::preset_file::export_preset(&def, &path)
             {
-                let gen_type = gp.generator_type().clone();
-                let def = gp.graph.clone().or_else(|| {
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(&gen_type)
-                        .map(|v| v.canonical_def.clone())
-                });
-                if let Some(def) = def
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("MANIFOLD Preset", &["json"])
-                        .set_file_name(format!("{}.json", gen_type.as_str()))
-                        .save_file()
-                    && let Err(e) = manifold_io::preset_file::export_preset(&def, &path)
-                {
-                    log::error!("[preset] export failed: {e}");
-                }
+                log::error!("[preset] export failed: {e}");
             }
             DispatchResult::handled()
         }
-        PanelAction::ImportGeneratorPreset => {
-            // Phase-4 import: load a .json preset and retarget the active
-            // generator to it (registered as a project-embedded preset via the
-            // shared fork command, so it rides undo + the overlay refresh).
-            use manifold_core::preset_def::PresetKind;
+        PanelAction::ImportPreset(gpt) => {
+            // Import a .json preset and retarget the targeted instance to it
+            // (registered as a project-embedded preset via the shared fork
+            // command, so it rides undo + the overlay refresh).
             use manifold_editing::commands::preset::ForkPresetCommand;
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && layer.gen_params().is_some()
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some(path) = rfd::FileDialog::new()
+                .add_filter("MANIFOLD Preset", &["json"])
+                .pick_file()
             {
-                let layer_id = layer.layer_id.clone();
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("MANIFOLD Preset", &["json"])
-                    .pick_file()
-                {
-                    match manifold_io::preset_file::import_preset(&path) {
-                        Ok(def) => {
-                            let cmd = ForkPresetCommand::new(
-                                manifold_core::GraphTarget::Generator(layer_id),
-                                PresetKind::Generator,
-                                def,
-                            );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(project);
-                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                        }
-                        Err(e) => log::error!("[preset] import failed: {e}"),
+                match manifold_io::preset_file::import_preset(&path) {
+                    Ok(def) => {
+                        let cmd =
+                            ForkPresetCommand::new(target.clone(), target.preset_kind(), def);
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     }
+                    Err(e) => log::error!("[preset] import failed: {e}"),
                 }
             }
             DispatchResult::structural()

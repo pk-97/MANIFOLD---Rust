@@ -74,7 +74,7 @@ pub enum DropdownContext {
     LayerContext(usize),      // right-click on layer header: layer_index
     MasterExitPath,           // LED exit path dropdown
     ClkDevice,                // MIDI clock device selection
-    GenCardContext,           // right-click on generator card header
+    CardContext(GraphParamTarget), // right-click on a preset card header (effect or generator)
     ParamContext(GraphParamTarget, manifold_core::effects::ParamId, f32), // gpt, param_id, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
@@ -1335,15 +1335,22 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::GenCardRightClicked => {
-                let mut items = vec![DropdownItem::new("Copy Generator")];
-                if self.gen_clipboard.has_content() {
-                    items.push(DropdownItem::new("Paste Generator"));
+            PanelAction::CardRightClicked(gpt) => {
+                // Generators carry Copy/Paste (their own clipboard); both kinds
+                // share Make Unique / Export / Import. The menu CONTENTS differ
+                // per kind by design (the legitimately-divergent shell); the
+                // fork actions + their dispatch are one path keyed by `gpt`.
+                let mut items = Vec::new();
+                if matches!(gpt, GraphParamTarget::Generator) {
+                    items.push(DropdownItem::new("Copy Generator"));
+                    if self.gen_clipboard.has_content() {
+                        items.push(DropdownItem::new("Paste Generator"));
+                    }
                 }
                 items.push(DropdownItem::new("Make Unique"));
                 items.push(DropdownItem::new("Export Preset…"));
                 items.push(DropdownItem::new("Import Preset…"));
-                self.dropdown_context = Some(DropdownContext::GenCardContext);
+                self.dropdown_context = Some(DropdownContext::CardContext(*gpt));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
@@ -1458,15 +1465,17 @@ impl UIRoot {
                         .map(|name| PanelAction::SetAudioInputDevice(name.clone()))
                 }
             }
-            DropdownContext::GenCardContext => {
-                // Label-matched: "Paste Generator" is conditional, so item
-                // indices shift — match the label, not a fixed position.
+            DropdownContext::CardContext(gpt) => {
+                // Label-matched: Copy/Paste are generator-only + conditional, so
+                // item indices shift — match the label, not a fixed position.
+                // Make Unique / Export / Import carry the card's target so the
+                // dispatch runs one path for effects and generators.
                 match self.dropdown.item_label(index) {
                     Some("Copy Generator") => Some(PanelAction::CopyGenerator),
                     Some("Paste Generator") => Some(PanelAction::PasteGenerator),
-                    Some("Make Unique") => Some(PanelAction::MakeGeneratorUnique),
-                    Some("Export Preset\u{2026}") => Some(PanelAction::ExportGeneratorPreset),
-                    Some("Import Preset\u{2026}") => Some(PanelAction::ImportGeneratorPreset),
+                    Some("Make Unique") => Some(PanelAction::MakePresetUnique(gpt)),
+                    Some("Export Preset\u{2026}") => Some(PanelAction::ExportPreset(gpt)),
+                    Some("Import Preset\u{2026}") => Some(PanelAction::ImportPreset(gpt)),
                     _ => None,
                 }
             }

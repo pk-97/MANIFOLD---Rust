@@ -47,4 +47,15 @@ impl GraphTarget {
             Self::Generator(lid) => format!("generator/{}", lid.as_str()),
         }
     }
+
+    /// The [`PresetKind`](crate::preset_def::PresetKind) this target addresses
+    /// (`Effect` / `Generator` map one-to-one). Lets the fork / export flow tag
+    /// the embedded-preset machinery from the target alone — one path for both
+    /// kinds rather than a caller branching on host type.
+    pub fn preset_kind(&self) -> crate::preset_def::PresetKind {
+        match self {
+            Self::Effect(_) => crate::preset_def::PresetKind::Effect,
+            Self::Generator(_) => crate::preset_def::PresetKind::Generator,
+        }
+    }
 }

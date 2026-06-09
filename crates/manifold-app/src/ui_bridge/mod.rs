@@ -210,12 +210,12 @@ pub fn dispatch(
         | PanelAction::GenStringParamSelected(..)
         | PanelAction::GenCollapseToggle
         | PanelAction::GenCardClicked
-        | PanelAction::GenCardRightClicked
+        | PanelAction::CardRightClicked(..)
         | PanelAction::CopyGenerator
         | PanelAction::PasteGenerator
-        | PanelAction::MakeGeneratorUnique
-        | PanelAction::ExportGeneratorPreset
-        | PanelAction::ImportGeneratorPreset
+        | PanelAction::MakePresetUnique(..)
+        | PanelAction::ExportPreset(..)
+        | PanelAction::ImportPreset(..)
         | PanelAction::MacrosCollapseToggle
         | PanelAction::MacroSnapshot(_)
         | PanelAction::MacroChanged(..)

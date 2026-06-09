@@ -784,6 +784,28 @@ impl Project {
         }
     }
 
+    /// The [`PresetInstance`](crate::effects::PresetInstance) a
+    /// [`GraphTarget`] resolves to — const twin of
+    /// [`Self::with_preset_graph_mut`]. Effect by stable
+    /// [`EffectId`](crate::id::EffectId); generator by its host layer's
+    /// `gen_params`. `None` if the target doesn't resolve. The single const
+    /// locate behind read-side per-target accessors (e.g. resolving a preset's
+    /// graph def for fork / export).
+    pub fn preset_instance(
+        &self,
+        target: &crate::GraphTarget,
+    ) -> Option<&crate::effects::PresetInstance> {
+        match target {
+            crate::GraphTarget::Effect(eid) => self.find_effect_by_id(eid),
+            crate::GraphTarget::Generator(lid) => self
+                .timeline
+                .layers
+                .iter()
+                .find(|l| &l.layer_id == lid)
+                .and_then(|l| l.gen_params()),
+        }
+    }
+
     /// Insert (or replace by id) a project-embedded preset.
     pub fn upsert_embedded_preset(&mut self, preset: EmbeddedPreset) {
         let id = preset.id().cloned();

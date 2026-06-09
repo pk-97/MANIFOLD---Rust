@@ -461,7 +461,6 @@ pub enum PanelAction {
     // Generator card actions
     GenCollapseToggle,
     GenCardClicked,
-    GenCardRightClicked,
     /// User clicked the "open graph editor" affordance on the
     /// generator card header. Mirror of
     /// [`PanelAction::OpenGraphEditor`] for effects — the host opens
@@ -470,16 +469,23 @@ pub enum PanelAction {
     OpenGeneratorGraphEditor,
     CopyGenerator,
     PasteGenerator,
-    /// Fork the active layer's generator into a project-embedded preset and
-    /// retarget the layer to it (Phase-4 "make unique"), so a per-instance
-    /// recalibration becomes a named, shareable variant.
-    MakeGeneratorUnique,
-    /// Export the active layer's generator preset to a `.json` file (Phase-4;
-    /// opens a native save dialog, writes via `manifold_io::preset_file`).
-    ExportGeneratorPreset,
+
+    // Card context menu + fork-preset actions (effect OR generator, addressed
+    // by the unified GraphParamTarget). The card-right-click opens a context
+    // menu whose CONTENTS may differ per kind (generators add Copy/Paste), but
+    // the fork / export / import actions and their dispatch are one path.
+    /// Right-click on a preset card header → open its context menu.
+    CardRightClicked(GraphParamTarget),
+    /// Fork the targeted preset into a project-embedded copy and retarget the
+    /// instance to it ("make unique"), so a per-instance recalibration becomes
+    /// a named, shareable variant.
+    MakePresetUnique(GraphParamTarget),
+    /// Export the targeted preset's graph to a `.json` file (native save dialog,
+    /// writes via `manifold_io::preset_file`).
+    ExportPreset(GraphParamTarget),
     /// Import a `.json` preset file as a project-embedded preset and retarget
-    /// the active layer to it (Phase-4; native open dialog).
-    ImportGeneratorPreset,
+    /// the targeted instance to it (native open dialog).
+    ImportPreset(GraphParamTarget),
 
     // Macros panel collapse
     MacrosCollapseToggle,

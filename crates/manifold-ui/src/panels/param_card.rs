@@ -2795,19 +2795,31 @@ impl ParamCardPanel {
                 }
             }
         }
+        // Header / card-body right-click → open the card context menu (make
+        // unique / export / import). The same affordance the generator card
+        // carries, emitted with this card's effect target so the dispatch runs
+        // one path keyed by GraphParamTarget.
+        let id = node_id as i32;
+        if id == self.header_bg_id
+            || id == self.name_label_id
+            || id == self.border_id
+            || id == self.inner_bg_id
+        {
+            return vec![PanelAction::CardRightClicked(GraphParamTarget::Effect(ei))];
+        }
         Vec::new()
     }
 
     fn handle_right_click_generator(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
 
-        // Header right-click → context menu for copy/paste
+        // Header right-click → context menu (copy/paste + make unique/export/import)
         if id == self.header_bg_id
             || id == self.name_label_id
             || id == self.border_id
             || id == self.inner_bg_id
         {
-            return vec![PanelAction::GenCardRightClicked];
+            return vec![PanelAction::CardRightClicked(GraphParamTarget::Generator)];
         }
 
         for (pi, slider) in self.slider_ids.iter().enumerate() {
