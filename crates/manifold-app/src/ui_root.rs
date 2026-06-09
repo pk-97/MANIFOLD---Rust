@@ -699,18 +699,9 @@ impl UIRoot {
                                 if let Some(ctx) = self.ableton_picker_context.take() {
                                     use manifold_ui::panels::ableton_picker::AbletonPickerContext;
                                     match ctx {
-                                        AbletonPickerContext::EffectParam {
-                                            tab,
-                                            fx_idx,
-                                            param_id,
-                                        } => {
-                                            actions.push(PanelAction::MapEffectParamToAbleton(
-                                                tab, fx_idx, param_id, addr,
-                                            ));
-                                        }
-                                        AbletonPickerContext::GenParam { param_id } => {
-                                            actions.push(PanelAction::MapGenParamToAbleton(
-                                                param_id, addr,
+                                        AbletonPickerContext::Param { gpt, param_id } => {
+                                            actions.push(PanelAction::MapParamToAbleton(
+                                                gpt, param_id, addr,
                                             ));
                                         }
                                         AbletonPickerContext::MacroSlot { slot_idx } => {
@@ -1360,17 +1351,12 @@ impl UIRoot {
             PanelAction::OpenAbletonPickerForParam(gpt, param_id) => {
                 use manifold_ui::panels::ableton_picker::AbletonPickerContext;
                 if let Some(session) = &self.ableton_session {
-                    // The picker-selection context stays kind-specific (its
-                    // selection handler still forks); derive it from `gpt`.
-                    self.ableton_picker_context = Some(match gpt {
-                        GraphParamTarget::Effect(fx_idx) => AbletonPickerContext::EffectParam {
-                            tab: self.inspector.last_effect_tab(),
-                            fx_idx: *fx_idx,
-                            param_id: param_id.clone(),
-                        },
-                        GraphParamTarget::Generator => AbletonPickerContext::GenParam {
-                            param_id: param_id.clone(),
-                        },
+                    // Carry the unified target straight through. The mapping
+                    // target + inspector tab are resolved at dispatch time, the
+                    // same path the unmap action uses — no kind fork here.
+                    self.ableton_picker_context = Some(AbletonPickerContext::Param {
+                        gpt: *gpt,
+                        param_id: param_id.clone(),
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);

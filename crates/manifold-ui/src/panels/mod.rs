@@ -502,17 +502,14 @@ pub enum PanelAction {
     // Param label right-click → opens "Map to Macro" / "Map from Ableton" context menu
     ParamLabelRightClick(GraphParamTarget, manifold_core::effects::ParamId),
 
-    // Ableton mapping (from context menu on param right-click)
-    MapEffectParamToAbleton(
-        InspectorTab,
-        usize,
+    // Ableton mapping (from context menu on param right-click). Map + unmap
+    // both address the param by the unified `GraphParamTarget`; the dispatch
+    // resolves the `AbletonMappingTarget` through the one shared helper.
+    MapParamToAbleton(
+        GraphParamTarget,
         manifold_core::effects::ParamId,
         manifold_core::ableton_mapping::AbletonMacroAddress,
-    ), // tab, fx_idx, param_id, address
-    MapGenParamToAbleton(
-        manifold_core::effects::ParamId,
-        manifold_core::ableton_mapping::AbletonMacroAddress,
-    ), // param_id, address
+    ), // gpt, param_id, address
     UnmapParamAbleton(GraphParamTarget, manifold_core::effects::ParamId), // gpt, param_id
     /// Open the Ableton picker popup for a param (effect or generator).
     OpenAbletonPickerForParam(GraphParamTarget, manifold_core::effects::ParamId), // gpt, param_id

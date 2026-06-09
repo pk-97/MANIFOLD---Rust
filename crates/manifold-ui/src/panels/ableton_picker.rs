@@ -103,12 +103,14 @@ pub enum AbletonPickerAction {
 /// because those identities ARE structural positions.
 #[derive(Debug, Clone)]
 pub enum AbletonPickerContext {
-    EffectParam {
-        tab: super::InspectorTab,
-        fx_idx: usize,
-        param_id: manifold_core::effects::ParamId,
-    },
-    GenParam {
+    /// A preset param (effect or generator), addressed by the unified
+    /// [`GraphParamTarget`](super::GraphParamTarget). The mapping target +
+    /// inspector tab are resolved at dispatch time — the SAME path the
+    /// `UnmapParamAbleton` action uses — so the context carries only identity,
+    /// not a pre-resolved tab/index. This is what keeps map and unmap on one
+    /// code path instead of two parallel effect/generator arms.
+    Param {
+        gpt: super::GraphParamTarget,
         param_id: manifold_core::effects::ParamId,
     },
     MacroSlot {
