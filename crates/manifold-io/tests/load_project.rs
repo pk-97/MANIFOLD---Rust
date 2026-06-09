@@ -324,6 +324,45 @@ fn load_burn_v4_project() {
     assert_eq!(project.timeline.total_clip_count(), 34);
 }
 
+/// A generator running a per-instance graph override carries its preset id
+/// twice: on the instance (`generator_type`) and in the graph's
+/// `preset_metadata.id`. GraphTestsV4 was saved with those desynced — the
+/// Fluid Sim 3D graph names `FluidSimulation3D`, but the instance reported
+/// `None`, which blanked the generator card in the inspector. Post-load
+/// reconciliation must mirror the graph id back onto the instance.
+#[test]
+fn graphtestsv4_reconciles_desynced_generator_identity() {
+    use manifold_core::PresetTypeId;
+    let path = fixture_path("GraphTestsV4.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).expect("Failed to load GraphTestsV4.manifold");
+
+    let gen_layer = project
+        .timeline
+        .layers
+        .iter()
+        .find(|l| l.layer_type == manifold_core::types::LayerType::Generator)
+        .expect("project has a generator layer");
+
+    // The graph still names FluidSimulation3D...
+    assert_eq!(
+        gen_layer
+            .generator_graph()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .map(|m| m.id.clone()),
+        Some(PresetTypeId::new("FluidSimulation3D")),
+    );
+    // ...and after load the instance's type id agrees (no longer NONE), so the
+    // inspector gate (`generator_type != NONE`) now surfaces the card.
+    assert_eq!(
+        *gen_layer.generator_type(),
+        PresetTypeId::new("FluidSimulation3D"),
+    );
+}
+
 #[test]
 fn load_waypoints_large_project() {
     let path = fixture_path("WAYPOINTS.manifold");

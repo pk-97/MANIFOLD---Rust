@@ -150,7 +150,25 @@ pub fn run_post_load_validation(project: &mut Project) {
         }
     }
 
-    // Step 9: Repair pre-existing clip overlaps.
+    // Step 9.5: Reconcile generator identity. A generator running a
+    // per-instance graph override carries its preset id twice — on the
+    // instance (`generator_type`) and in the graph's `preset_metadata.id`.
+    // Files saved while those desynced (graph names a real preset, instance
+    // reports `None`) render fine but blank the inspector card and drop OSC
+    // addressing. Mirror the graph's id back onto the instance.
+    let mut reconciled = 0usize;
+    for layer in &mut project.timeline.layers {
+        if layer.reconcile_generator_identity() {
+            reconciled += 1;
+        }
+    }
+    if reconciled > 0 {
+        log::info!(
+            "[Loader] Reconciled {reconciled} generator(s) whose type id desynced from their graph"
+        );
+    }
+
+    // Step 10: Repair pre-existing clip overlaps.
     // Projects saved before overlap enforcement was added to all mutation paths
     // may contain overlapping clips. Remove the shorter clip in each collision.
     repair_overlapping_clips(project);

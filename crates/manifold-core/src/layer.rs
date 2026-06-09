@@ -702,6 +702,44 @@ impl Layer {
         }
     }
 
+    /// Reconcile a generator's identity with its own graph.
+    ///
+    /// A generator carries its preset identity in two places: the instance's
+    /// `generator_type` (the `effect_type` field) and, when it runs a
+    /// per-instance graph override, that graph's `preset_metadata.id`. These
+    /// must agree. When they desync — the graph metadata names a real preset
+    /// (e.g. `FluidSimulation3D`) but `generator_type` is `NONE` — the
+    /// generator still renders fine (the renderer reads the graph directly),
+    /// but every type-keyed consumer breaks: the inspector blanks the
+    /// generator card, OSC addressing drops, and the picker shows no
+    /// selection. Mirror the graph's id back onto the instance so the two
+    /// sources agree. Returns `true` if it changed anything.
+    ///
+    /// Run on load to repair files saved while the identity was desynced.
+    pub fn reconcile_generator_identity(&mut self) -> bool {
+        if self.layer_type != LayerType::Generator {
+            return false;
+        }
+        let Some(gp) = self.gen_params.as_mut() else {
+            return false;
+        };
+        if *gp.generator_type() != PresetTypeId::NONE {
+            return false;
+        }
+        let graph_id = gp
+            .graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .map(|m| m.id.clone())
+            .filter(|id| *id != PresetTypeId::NONE && !id.as_str().is_empty());
+        if let Some(id) = graph_id {
+            gp.set_preset_id(id);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Restore generator state from snapshot.
     /// Unity Layer.cs lines 561-567.
     pub fn restore_generator_state(
@@ -957,5 +995,72 @@ mod tests {
         // restore_clip is raw — overlaps remain (used for undo).
         assert_eq!(layer.clips.len(), 2);
         assert!(layer.has_overlapping_clips());
+    }
+
+    /// Build a generator layer whose per-instance graph names `graph_id` but
+    /// whose `generator_type` is left `NONE` — the desynced-identity state a
+    /// few project files were saved in.
+    fn desynced_generator(graph_id: PresetTypeId) -> Layer {
+        use crate::effect_graph_def::{EffectGraphDef, PresetMetadata};
+        let mut layer = Layer::new_generator("Gen".into(), PresetTypeId::NONE, 0);
+        let gp = layer.gen_params_mut().unwrap();
+        gp.graph = Some(EffectGraphDef {
+            version: 1,
+            name: Some("Fluid Sim 3D".into()),
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: graph_id,
+                display_name: "Fluid Sim 3D".into(),
+                category: String::new(),
+                osc_prefix: String::new(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![],
+                bindings: vec![],
+                skip_mode: Default::default(),
+                param_aliases: vec![],
+                value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
+            }),
+            nodes: vec![],
+            wires: vec![],
+        });
+        layer
+    }
+
+    #[test]
+    fn reconcile_generator_identity_backfills_from_graph() {
+        let mut layer = desynced_generator(PresetTypeId::new("FluidSimulation3D"));
+        assert_eq!(*layer.generator_type(), PresetTypeId::NONE);
+        assert!(layer.reconcile_generator_identity());
+        assert_eq!(
+            *layer.generator_type(),
+            PresetTypeId::new("FluidSimulation3D")
+        );
+        // Idempotent: a second pass is a no-op.
+        assert!(!layer.reconcile_generator_identity());
+    }
+
+    #[test]
+    fn reconcile_leaves_typed_generator_untouched() {
+        let mut layer =
+            Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
+        assert!(!layer.reconcile_generator_identity());
+        assert_eq!(*layer.generator_type(), PresetTypeId::new("Plasma"));
+    }
+
+    #[test]
+    fn reconcile_ignores_graph_without_metadata_id() {
+        let mut layer = desynced_generator(PresetTypeId::NONE);
+        assert!(!layer.reconcile_generator_identity());
+        assert_eq!(*layer.generator_type(), PresetTypeId::NONE);
+    }
+
+    #[test]
+    fn reconcile_ignores_non_generator_layers() {
+        let mut layer = Layer::new("Video".into(), LayerType::Video, 0);
+        assert!(!layer.reconcile_generator_identity());
     }
 }
