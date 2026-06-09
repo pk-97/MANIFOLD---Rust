@@ -114,14 +114,19 @@ crate::primitive! {
     role: Source,
     aliases: ["spawn from image", "seed from texture", "image particles"],
     extra_fields: {
-        // place_main pipeline. The macro-allocated `pipeline` field
-        // holds the compact_main pipeline.
+        // The macro-allocated `pipeline` field holds count_main; these hold
+        // the other three entry points of the deterministic four-pass compaction.
+        scan_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        compact_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         place_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
-        // Scratch buffers for the two-pass exact-placement design.
+        // Scratch buffers for the deterministic exact-placement design.
         bright_list: Option<GpuBuffer> = None,
         counter: Option<GpuBuffer> = None,
-        // Cached mask dims (width, height). Reallocate bright_list when
-        // these change so capacity always covers every mask texel.
+        // Per-256-texel-block scratch: bright count (after count_main),
+        // rewritten in place to each block's base offset (after scan_main).
+        block_data: Option<GpuBuffer> = None,
+        // Cached mask dims (width, height). Reallocate bright_list /
+        // block_data when these change so capacity always covers the mask.
         cached_mask_dims: (u32, u32) = (0, 0)
     },
 }
@@ -153,15 +158,17 @@ impl Primitive for SeedParticlesFromTexture {
 
         // Lazy-allocate scratch buffers. Realloc when mask dims change so
         // bright_list capacity always covers worst-case (every texel
-        // bright). Counter is always 4 bytes; we allocate it alongside
-        // for symmetric lifetime.
+        // bright) and block_data covers every 256-texel block. Counter is
+        // always 4 bytes; allocated alongside for symmetric lifetime.
         let needs_alloc = self.bright_list.is_none()
             || self.cached_mask_dims != (mask_width, mask_height);
         if needs_alloc {
             let total_texels = u64::from(mask_width) * u64::from(mask_height);
             let list_bytes = total_texels.max(1) * 8; // vec2<f32> stride
+            let num_blocks = total_texels.max(1).div_ceil(256);
             self.bright_list = Some(gpu.device.create_buffer(list_bytes));
             self.counter = Some(gpu.device.create_buffer(4));
+            self.block_data = Some(gpu.device.create_buffer(num_blocks * 4));
             self.cached_mask_dims = (mask_width, mask_height);
         }
         let bright_list = self
@@ -169,15 +176,31 @@ impl Primitive for SeedParticlesFromTexture {
             .as_ref()
             .expect("bright_list just allocated");
         let counter = self.counter.as_ref().expect("counter just allocated");
+        let block_data = self.block_data.as_ref().expect("block_data just allocated");
         let list_capacity = (bright_list.size / 8) as u32;
+        let total_texels = mask_width * mask_height;
+        let num_blocks = total_texels.div_ceil(256);
 
-        // Lazy-compile pipelines (compact_main → self.pipeline,
-        // place_main → self.place_pipeline). Both entry points live in
-        // the same WGSL source.
+        // Lazy-compile the four entry points (count → scan → compact →
+        // place), all in the same WGSL source. `self.pipeline` holds count_main.
         const SHADER_SRC: &str =
             include_str!("shaders/seed_particles_from_texture.wgsl");
         if self.pipeline.is_none() {
             self.pipeline = Some(gpu.device.create_compute_pipeline(
+                SHADER_SRC,
+                "count_main",
+                "node.seed_particles_from_texture.count",
+            ));
+        }
+        if self.scan_pipeline.is_none() {
+            self.scan_pipeline = Some(gpu.device.create_compute_pipeline(
+                SHADER_SRC,
+                "scan_main",
+                "node.seed_particles_from_texture.scan",
+            ));
+        }
+        if self.compact_pipeline.is_none() {
+            self.compact_pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,
                 "compact_main",
                 "node.seed_particles_from_texture.compact",
@@ -193,7 +216,9 @@ impl Primitive for SeedParticlesFromTexture {
         if self.sampler.is_none() {
             self.sampler = Some(gpu.device.create_sampler(&GpuSamplerDesc::default()));
         }
-        let compact_pipeline = self.pipeline.as_ref().expect("just inserted");
+        let count_pipeline = self.pipeline.as_ref().expect("just inserted");
+        let scan_pipeline = self.scan_pipeline.as_ref().expect("just inserted");
+        let compact_pipeline = self.compact_pipeline.as_ref().expect("just inserted");
         let place_pipeline = self.place_pipeline.as_ref().expect("just inserted");
 
         let uniforms = SeedFromTextureUniforms {
@@ -207,14 +232,11 @@ impl Primitive for SeedParticlesFromTexture {
             _pad: 0,
         };
 
-        // 1. Zero the counter via blit. Switching encoder type (compute
-        //    → blit → compute) also acts as a hazard barrier so the
-        //    compact pass reads `counter == 0` rather than whatever the
-        //    previous frame's place pass left in it.
-        gpu.native_enc.clear_buffer(counter);
-
-        // 2. Compact pass — scan mask, append bright UVs.
-        let compact_bindings = [
+        // Full binding set — each pass references only the subset it needs
+        // (count: params/mask/block_data; scan: params/counter/block_data;
+        // compact: params/mask/bright_list/block_data; place: particles/
+        // params/bright_list/counter). Binding everything keeps one array.
+        let bindings = [
             GpuBinding::Buffer {
                 binding: 0,
                 buffer: out_buf,
@@ -238,24 +260,46 @@ impl Primitive for SeedParticlesFromTexture {
                 buffer: counter,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: block_data,
+                offset: 0,
+            },
         ];
-        gpu.native_enc.dispatch_compute(
-            compact_pipeline,
-            &compact_bindings,
-            [mask_width.div_ceil(16), mask_height.div_ceil(16), 1],
-            "node.seed_particles_from_texture.compact",
-        );
 
-        // 3. Buffer-scope memory barrier — without this, the GPU may
-        //    overlap the compact pass's writes to (counter, bright_list)
-        //    with the place pass's reads of the same, and particles
-        //    sample stale/partial state.
+        // 1. Count bright texels per 256-texel block (deterministic, no atomics).
+        gpu.native_enc.dispatch_compute(
+            count_pipeline,
+            &bindings,
+            [num_blocks.div_ceil(64), 1, 1],
+            "node.seed_particles_from_texture.count",
+        );
+        // Each pass reads what the previous wrote — barrier between every stage.
         gpu.native_enc.compute_memory_barrier_buffers();
 
-        // 4. Place pass — assign each particle a UV from bright_list.
+        // 2. Exclusive prefix sum of block counts → base offsets + grand total.
+        gpu.native_enc.dispatch_compute(
+            scan_pipeline,
+            &bindings,
+            [1, 1, 1],
+            "node.seed_particles_from_texture.scan",
+        );
+        gpu.native_enc.compute_memory_barrier_buffers();
+
+        // 3. Compact — append bright UVs at each block's base offset, in scan
+        //    order, so bright_list is canonical (race-free) every run.
+        gpu.native_enc.dispatch_compute(
+            compact_pipeline,
+            &bindings,
+            [num_blocks.div_ceil(64), 1, 1],
+            "node.seed_particles_from_texture.compact",
+        );
+        gpu.native_enc.compute_memory_barrier_buffers();
+
+        // 4. Place — assign each particle a UV from bright_list (round-robin).
         gpu.native_enc.dispatch_compute(
             place_pipeline,
-            &compact_bindings,
+            &bindings,
             [active_count.div_ceil(256), 1, 1],
             "node.seed_particles_from_texture.place",
         );

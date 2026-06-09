@@ -1,13 +1,26 @@
 // node.seed_particles_from_texture — exact-placement particle seeding
 // from a Texture2D density mask.
 //
-// Two-pass dispatch:
-//   compact_main : scan the mask, atomically append every bright texel's
-//                  UV (R > 0.1) into `bright_list`. Single global counter
-//                  tracks the list length.
-//   place_main   : for each particle i, assign it `bright_list[i mod
-//                  count]` with a small sub-texel hash-jitter so multiple
-//                  particles per bright pixel don't visually stack.
+// DETERMINISTIC stream compaction (four-pass dispatch). The list of bright
+// texels must come out in a canonical, race-free order — particle i maps to
+// bright_list[i mod count], and everything downstream that is keyed by the
+// particle index (the sub-texel jitter here, node.anti_clump_particles'
+// hash(i, frame) kick) would otherwise be paired with a DIFFERENT texel every
+// run. In a chaotic feedback sim that scrambles the trajectories and the same
+// clip renders differently each trigger. A single global `atomicAdd` slot is
+// arrival-order, i.e. non-deterministic, so we compact via an explicit prefix
+// sum over fixed 256-texel blocks instead — the block bases are summed in scan
+// order, so bright_list ends up in exact row-major texel order every time.
+//
+//   count_main   : per 256-texel block, count its bright texels (R > 0.1).
+//                  No atomics — one thread per block walks its own block.
+//   scan_main    : single thread, exclusive prefix sum of the block counts
+//                  in place → each block's base offset; total → counter.
+//   compact_main : per block, walk its texels in scan order and append each
+//                  bright UV at the block's base offset, incrementing locally.
+//   place_main   : for each particle i, assign bright_list[i mod count] with a
+//                  small sub-texel hash-jitter so multiple particles per bright
+//                  pixel don't visually stack.
 //
 // Guarantees: every active particle ends up alive on a bright texel (no
 // rejection-sampling dead-particle failure modes). If active_count >
@@ -45,8 +58,12 @@ struct Particle {
 @group(0) @binding(2) var mask: texture_2d<f32>;
 @group(0) @binding(3) var<storage, read_write> bright_list: array<vec2<f32>>;
 @group(0) @binding(4) var<storage, read_write> counter: atomic<u32>;
+// Per-block scratch: bright-texel count per 256-texel block (count_main),
+// rewritten in place to each block's exclusive base offset (scan_main).
+@group(0) @binding(5) var<storage, read_write> block_data: array<u32>;
 
 const THRESHOLD: f32 = 0.1;
+const BLOCK: u32 = 256u;
 
 fn wang_hash(seed_in: u32) -> u32 {
     var seed = seed_in;
@@ -62,18 +79,79 @@ fn hash_float(seed: u32) -> f32 {
     return f32(wang_hash(seed)) / 4294967296.0;
 }
 
-@compute @workgroup_size(16, 16)
-fn compact_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tex_width || id.y >= params.tex_height {
+// Bright test for the linear texel index `lin` (row-major over the mask).
+fn is_bright(lin: u32) -> bool {
+    let x = lin % params.tex_width;
+    let y = lin / params.tex_width;
+    let v = textureLoad(mask, vec2<i32>(i32(x), i32(y)), 0).r;
+    return v > THRESHOLD;
+}
+
+fn num_blocks() -> u32 {
+    let total = params.tex_width * params.tex_height;
+    return (total + BLOCK - 1u) / BLOCK;
+}
+
+// Pass 1 — count bright texels in each 256-texel block. One thread per block,
+// no atomics: a direct write to block_data[block], deterministic by construction.
+@compute @workgroup_size(64)
+fn count_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let block = id.x;
+    if block >= num_blocks() {
         return;
     }
-    let v = textureLoad(mask, vec2<i32>(i32(id.x), i32(id.y)), 0).r;
-    if v > THRESHOLD {
-        let idx = atomicAdd(&counter, 1u);
-        if idx < params.list_capacity {
-            let uv = (vec2<f32>(f32(id.x), f32(id.y)) + vec2<f32>(0.5))
-                / vec2<f32>(f32(params.tex_width), f32(params.tex_height));
-            bright_list[idx] = uv;
+    let total = params.tex_width * params.tex_height;
+    let start = block * BLOCK;
+    let end = min(start + BLOCK, total);
+    var c = 0u;
+    for (var lin = start; lin < end; lin = lin + 1u) {
+        if is_bright(lin) {
+            c = c + 1u;
+        }
+    }
+    block_data[block] = c;
+}
+
+// Pass 2 — exclusive prefix sum of the block counts, single thread. Rewrites
+// block_data[b] from "count of block b" to "base offset of block b", and
+// stores the grand total into counter for place_main. Sequential, so the
+// in-place read-then-overwrite is safe.
+@compute @workgroup_size(1)
+fn scan_main() {
+    let nblocks = num_blocks();
+    var acc = 0u;
+    for (var b = 0u; b < nblocks; b = b + 1u) {
+        let c = block_data[b];
+        block_data[b] = acc;
+        acc = acc + c;
+    }
+    atomicStore(&counter, acc);
+}
+
+// Pass 3 — compact. One thread per block: walk the block's texels in scan
+// order and append each bright UV starting at the block's base offset. Because
+// the bases were summed in block order and each block writes its texels in
+// linear order, bright_list comes out in exact row-major order every run.
+@compute @workgroup_size(64)
+fn compact_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let block = id.x;
+    if block >= num_blocks() {
+        return;
+    }
+    let total = params.tex_width * params.tex_height;
+    let start = block * BLOCK;
+    let end = min(start + BLOCK, total);
+    var slot = block_data[block];
+    for (var lin = start; lin < end; lin = lin + 1u) {
+        if is_bright(lin) {
+            if slot < params.list_capacity {
+                let x = lin % params.tex_width;
+                let y = lin / params.tex_width;
+                let uv = (vec2<f32>(f32(x), f32(y)) + vec2<f32>(0.5))
+                    / vec2<f32>(f32(params.tex_width), f32(params.tex_height));
+                bright_list[slot] = uv;
+            }
+            slot = slot + 1u;
         }
     }
 }

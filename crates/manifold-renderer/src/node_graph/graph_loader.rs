@@ -956,12 +956,24 @@ fn pre_allocate_array_buffers(
 
         let aliased_pairs = node_inst.node.aliased_array_io();
         let canvas_sized_outputs = node_inst.node.canvas_sized_array_outputs();
+        let atomic_outputs = node_inst.node.atomic_outputs();
         let (canvas_w, canvas_h) = Backend::canvas_dims(backend as &dyn Backend);
 
         for (port_name, res_id) in &step.outputs {
             let Some(PortType::Array(layout)) = plan.resource_type(*res_id) else {
                 continue;
             };
+
+            // Atomic-accumulator outputs (e.g. node.scatter_particles' u32 grid)
+            // are read-modify-written: the downstream node.resolve_accumulator
+            // reads then zeros the buffer, so the buffer's contract is that it
+            // STARTS at zero. Metal's create_buffer* does not zero-init, so a
+            // fresh allocation would let frame 0 resolve the splat on top of
+            // uninitialized VRAM — garbage that, in a feedback sim, amplifies
+            // into run-to-run non-determinism (see the FluidSimulation
+            // determinism guard in freeze::proof). Zero it once here so the
+            // clear-after-read contract holds from the first frame.
+            let needs_zero_init = atomic_outputs.contains(port_name);
 
             // Aliased in/out pairs (stateful array sims) — route the
             // output's resource id to the input's slot. No new
@@ -1007,6 +1019,9 @@ fn pre_allocate_array_buffers(
                 let capacity = (canvas_w as u64) * (canvas_h as u64);
                 let bytes = capacity * layout.item_size as u64;
                 let buffer = device.create_buffer_shared(bytes);
+                if needs_zero_init {
+                    buffer.zero_fill();
+                }
                 backend.pre_bind_array(*res_id, buffer);
                 continue;
             }
@@ -1033,6 +1048,9 @@ fn pre_allocate_array_buffers(
                 continue;
             }
             let buffer = device.create_buffer_shared(bytes);
+            if needs_zero_init {
+                buffer.zero_fill();
+            }
             backend.pre_bind_array(*res_id, buffer);
         }
     }

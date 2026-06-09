@@ -1255,6 +1255,92 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     );
 }
 
+/// Determinism guard for the FluidSimulation feedback sim. Rendering the SAME
+/// canonical preset twice from fresh state, with an identical frame sequence,
+/// must produce the SAME final image. It did NOT before the storage-layer
+/// zero-init fix: scatter atomic-adds into a `u32` accumulator that
+/// `node.resolve_accumulator` clears *after* reading, so the accumulator must
+/// start at zero — but the pool handed it freshly-`create_buffer_shared`'d VRAM,
+/// which Metal does not zero. Frame 0 therefore resolved the splat ON TOP OF
+/// uninitialized garbage into the density texture, which feeds back into
+/// `node.anti_clump_particles.strength_modulator`; the chaotic sim then amplified
+/// that frame-0 difference permanently, so two runs that allocated different VRAM
+/// diverged (~14% of pixels). The fix zero-inits atomic-accumulator buffers at
+/// allocation (graph_loader `pre_allocate_resources`), which is also what makes
+/// the render-diff a VALID fusion oracle for the buffer-chain fusion work — a
+/// non-deterministic render can't be its own ground truth.
+///
+/// This is show-correctness, not just a test fixture: a non-deterministic sim
+/// means the same clip looks different every time it's triggered live.
+#[test]
+fn fluidsim_renders_deterministically_from_fresh_state() {
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_runtime::PresetRuntime;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("FluidSimulation"),
+    )
+    .expect("FluidSimulation preset bundled");
+    let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
+
+    let ctx = |t: f64| PresetContext {
+        time: t,
+        beat: t * 2.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    // Warm the feedback loop a handful of frames so any frame-0 divergence has
+    // time to amplify through the density→force→position loop, then capture.
+    let render = |def: EffectGraphDef| -> RenderTarget {
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+            .expect("FluidSimulation builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-determinism");
+        for i in 0..8u32 {
+            let mut enc = device.create_encoder("freeze-fluid");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+        target
+    };
+
+    let run_a = render(canonical.clone());
+    let run_b = render(canonical);
+
+    let differ = TextureDiff::new(&device);
+    // Identical inputs → bit-exact output. Allow a hair of tolerance only for
+    // f16 ULP noise, but the over_count must be ~0 — a garbage-seeded run blows
+    // way past this (~14% of pixels diverge by up to 0.83).
+    let r = differ.compare(&device, &run_a.texture, &run_b.texture, 1.0e-3, 1.0e-2);
+    assert!(
+        r.passes(0.002) && r.over_count < 64,
+        "FluidSimulation must render deterministically from fresh state: \
+         max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Render an effect graph whose bound output is at a REDUCED resolution
 /// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as
 /// [`render_graph`] but the output target — and the copy-out — are sized to the

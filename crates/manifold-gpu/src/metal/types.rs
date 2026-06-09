@@ -105,6 +105,27 @@ impl GpuBuffer {
         }
     }
 
+    /// Zero every byte of a shared-memory buffer in place (CPU memset, no
+    /// allocation). Metal's `newBufferWithLength` does NOT zero-initialize, so
+    /// any buffer whose first GPU use READS it (an atomic accumulator cleared
+    /// after read, a scratch buffer summed into) must be zeroed once at
+    /// allocation or it reads uninitialized VRAM. Shared-only — private buffers
+    /// have no mapped pointer; zero those via the encoder's `clear_buffer` blit.
+    ///
+    /// # Panics
+    /// If the buffer is not shared-memory (no mapped pointer).
+    pub fn zero_fill(&self) {
+        let ptr = self
+            .mapped_ptr
+            .expect("zero_fill() requires a shared-memory buffer");
+        // SAFETY: `ptr` is the buffer's mapped base, valid for `size` bytes by
+        // construction; no GPU work has touched the buffer yet (called at
+        // allocation), so there is no concurrent access.
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, self.size as usize);
+        }
+    }
+
     /// Raw Metal buffer reference.
     pub fn raw(&self) -> &ProtocolObject<dyn MTLBuffer> {
         &self.raw
