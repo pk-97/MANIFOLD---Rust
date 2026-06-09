@@ -39,9 +39,31 @@ pub const FINAL_OUTPUT_TYPE_ID: &str = "system.final_output";
 /// Stable type ID for [`GeneratorInput`].
 pub const GENERATOR_INPUT_TYPE_ID: &str = "system.generator_input";
 
-const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 7] = [
+const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
     NodePort {
         name: "time",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    // Frame-normalized timestep: `delta_seconds * 60`, i.e. 1.0 at 60fps. This
+    // is the timestep particle integrators want (motion stays real-time-
+    // consistent regardless of actual frame rate) — the same value the loose
+    // atoms compute as `dt_scaled` in their run(). Sourced from the frame clock
+    // (not a host param) so a FUSED kernel wired to this matches the unfused
+    // chain bit-for-bit. The buffer-fusion installer wires member `dt_scaled`
+    // fields here.
+    NodePort {
+        name: "frame_delta",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Output,
+        required: false,
+    },
+    // Integer frame counter as f32 (exact below ~16M frames ≈ 3 days at 60fps).
+    // Drives per-frame hash reseeding (anti-clump, diffusion). Sourced from the
+    // frame clock for the same fused/unfused parity reason as `frame_delta`.
+    NodePort {
+        name: "frame_count",
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -259,11 +281,14 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
 /// host's per-frame timing + trigger state as scalar outputs that
 /// generator primitives can wire into.
 ///
-/// Five scalar outputs (`time`, `beat`, `aspect`, `trigger_count`,
-/// `anim_progress`), each driven by a same-named float parameter. The
-/// host updates the params each frame via the standard
-/// [`Graph::set_param`](crate::node_graph::Graph::set_param) path;
-/// `evaluate` reads them and writes to the matching output slots.
+/// Nine scalar outputs. Seven (`time`, `beat`, `aspect`, `trigger_count`,
+/// `anim_progress`, `output_width`, `output_height`) are each driven by a
+/// same-named float parameter the host updates each frame via the standard
+/// [`Graph::set_param`](crate::node_graph::Graph::set_param) path; `evaluate`
+/// reads them and writes the matching output slots. Two (`frame_delta`,
+/// `frame_count`) are read straight from the frame clock (`ctx.time`) instead —
+/// they have no host param — so a fused particle kernel wired to them is
+/// bit-identical to the unfused chain, whose atoms read the same `ctx.time`.
 ///
 /// Using params instead of internal mutable state means there's no
 /// downcast or `as_any_mut` plumbing — the host updates the node
@@ -325,6 +350,17 @@ impl EffectNode for GeneratorInput {
             .set_scalar("output_width", ParamValue::Float(output_width));
         ctx.outputs
             .set_scalar("output_height", ParamValue::Float(output_height));
+        // Frame-clock-sourced (not host params): these must match exactly what
+        // the standalone particle atoms read in their run() so a fused kernel
+        // wired here is bit-identical to the unfused chain. `frame_delta` is the
+        // ×60 frame-normalized timestep euler/radial-burst call `dt_scaled`;
+        // `frame_count` is the integer counter anti-clump/diffusion reseed on.
+        let frame_delta = ctx.time.delta.0 as f32 * 60.0;
+        let frame_count = ctx.time.frame_count as f32;
+        ctx.outputs
+            .set_scalar("frame_delta", ParamValue::Float(frame_delta));
+        ctx.outputs
+            .set_scalar("frame_count", ParamValue::Float(frame_count));
     }
 }
 
@@ -400,16 +436,18 @@ mod tests {
     }
 
     #[test]
-    fn generator_input_declares_seven_scalar_outputs() {
+    fn generator_input_declares_nine_scalar_outputs() {
         let g = GeneratorInput::new();
         assert_eq!(g.inputs().len(), 0);
         let outs = g.outputs();
-        assert_eq!(outs.len(), 7);
+        assert_eq!(outs.len(), 9);
         let names: Vec<&str> = outs.iter().map(|p| p.name).collect();
         assert_eq!(
             names,
             vec![
                 "time",
+                "frame_delta",
+                "frame_count",
                 "beat",
                 "aspect",
                 "trigger_count",
@@ -421,6 +459,21 @@ mod tests {
         for out in outs {
             assert_eq!(out.ty, PortType::Scalar(ScalarType::F32));
         }
+    }
+
+    /// frame_delta / frame_count are frame-CLOCK-sourced (not host params), so
+    /// they have no matching param entry — the output count exceeds the param
+    /// count by exactly those two. Guards the fused/unfused parity contract:
+    /// these must track ctx.time, never a host-settable value.
+    #[test]
+    fn frame_delta_and_frame_count_are_clock_sourced_not_params() {
+        let g = GeneratorInput::new();
+        let out_names: Vec<&str> = g.outputs().iter().map(|p| p.name).collect();
+        let param_names: Vec<&str> = g.parameters().iter().map(|p| p.name).collect();
+        assert!(out_names.contains(&"frame_delta"));
+        assert!(out_names.contains(&"frame_count"));
+        assert!(!param_names.contains(&"frame_delta"));
+        assert!(!param_names.contains(&"frame_count"));
     }
 
     #[test]
