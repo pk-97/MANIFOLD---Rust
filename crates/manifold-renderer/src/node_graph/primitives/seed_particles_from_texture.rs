@@ -60,6 +60,13 @@ crate::primitive! {
         output_width: ScalarF32 optional,
         output_height: ScalarF32 optional,
         frame_seed: ScalarF32 optional,
+        // Optional execution gate: when wired, the seed only RECOMPUTES on this
+        // value's integer edges (+ the first frame). Wire it from the SAME trigger
+        // that drives the downstream node.array_feedback's reset (e.g.
+        // system.generator_input.trigger_count) — array_feedback adopts the seed
+        // only on alloc/reset, so between resets the four-pass compaction is pure
+        // waste. Unwired → recompute every frame (direct per-frame seeding).
+        reset_trigger: ScalarF32 optional,
     },
     outputs: {
         particles: Array(Particle),
@@ -127,7 +134,11 @@ crate::primitive! {
         block_data: Option<GpuBuffer> = None,
         // Cached mask dims (width, height). Reallocate bright_list /
         // block_data when these change so capacity always covers the mask.
-        cached_mask_dims: (u32, u32) = (0, 0)
+        cached_mask_dims: (u32, u32) = (0, 0),
+        // Last observed `reset_trigger` integer, for edge-gated recompute. `None`
+        // until the first frame (which always recomputes); after that the seed
+        // skips its dispatches when the trigger hasn't advanced.
+        last_reset_trigger: Option<i32> = None
     },
 }
 
@@ -140,6 +151,23 @@ impl Primitive for SeedParticlesFromTexture {
         let output_width = ctx.scalar_or_param("output_width", 1920.0);
         let output_height = ctx.scalar_or_param("output_height", 1080.0);
         let frame_seed = ctx.scalar_or_param("frame_seed", 0.0).round() as u32;
+
+        // Execution gate (see the `reset_trigger` input): when wired, recompute the
+        // seed only on the trigger's integer edges (+ the first frame). The output
+        // is adopted by node.array_feedback only on alloc/reset, so between resets
+        // the four-pass compaction below is pure waste — skip it, the persistent
+        // output buffer still holds the last seed. Unwired → never gates (every
+        // frame recomputes, the direct per-frame seeding path). Cheap edge check
+        // before any allocation or dispatch.
+        if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
+            let current = v.round() as i32;
+            // `None` (first frame) ≠ Some(current) ⇒ edge ⇒ compute.
+            let edge = self.last_reset_trigger != Some(current);
+            self.last_reset_trigger = Some(current);
+            if !edge {
+                return;
+            }
+        }
 
         let Some(mask) = ctx.inputs.texture_2d("mask") else {
             return;
@@ -368,5 +396,45 @@ mod tests {
         let prim = SeedParticlesFromTexture::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.seed_particles_from_texture");
+    }
+
+    #[test]
+    fn declares_optional_reset_trigger_gate_input() {
+        use crate::node_graph::ports::{PortType, ScalarType};
+        let rt = SeedParticlesFromTexture::INPUTS
+            .iter()
+            .find(|p| p.name == "reset_trigger")
+            .expect("reset_trigger input");
+        assert_eq!(rt.ty, PortType::Scalar(ScalarType::F32));
+        assert!(!rt.required, "reset_trigger is optional (unwired ⇒ recompute every frame)");
+    }
+
+    /// The gate only saves work if the preset actually wires a trigger into it.
+    /// FluidSimulation routes the clip-trigger counter into seed_spawn.reset_trigger,
+    /// so the four-pass compaction runs only on a reset edge, not every frame. Guards
+    /// against the wire being dropped (which would silently revert to per-frame work).
+    #[test]
+    fn fluidsim_wires_a_trigger_into_the_seed_reset_trigger() {
+        use manifold_core::effect_graph_def::EffectGraphDef;
+        let json = crate::node_graph::bundled_presets::bundled_preset_json(
+            &manifold_core::PresetTypeId::new("FluidSimulation"),
+        )
+        .expect("FluidSimulation bundled");
+        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("FluidSimulation flattens");
+        let seed = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.seed_particles_from_texture")
+            .expect("FluidSim has a seed node");
+        let wired = flat
+            .wires
+            .iter()
+            .any(|w| w.to_node == seed.id && w.to_port == "reset_trigger");
+        assert!(
+            wired,
+            "FluidSim must wire a trigger into the seed's reset_trigger, else the seed \
+             recomputes its 4-pass compaction every frame instead of only on reset"
+        );
     }
 }

@@ -1811,6 +1811,12 @@
             "fromPort": "particles",
             "toNode": 4,
             "toPort": "particles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "triggerCount",
+            "toNode": 3,
+            "toPort": "reset_trigger"
           }
         ]
       }
