@@ -872,6 +872,10 @@ pub struct RevertEffectGraphCommand {
     /// effect/generator was already on the catalog default, `Some(def)`
     /// if it had an override that this command cleared.
     previous: Option<Option<EffectGraphDef>>,
+    /// Automation orphaned by the revert — drivers / Ableton maps / envelopes
+    /// that were hung on user-added params the cleared graph carried. Captured
+    /// for undo; empty when the graph had no such params.
+    removed_automation: manifold_core::effects::RemovedAutomation,
 }
 
 impl RevertEffectGraphCommand {
@@ -879,18 +883,29 @@ impl RevertEffectGraphCommand {
         Self {
             target,
             previous: None,
+            removed_automation: Default::default(),
         }
     }
 }
 
 impl Command for RevertEffectGraphCommand {
     fn execute(&mut self, project: &mut Project) {
-        if self.previous.is_none() {
+        let first = self.previous.is_none();
+        if first {
             // First execute: capture and clear.
             self.previous = take_target_graph(project, &self.target);
         } else {
             // Re-execute (after undo): clear without re-capturing.
             install_target_graph(project, &self.target, None);
+        }
+        // The graph (and any user-added bindings it carried) is gone, so
+        // automation that targeted those params no longer resolves. Sweep it,
+        // capturing the rows once so undo can re-attach them with the graph.
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            let pruned = inst.prune_orphaned_automation();
+            if first {
+                self.removed_automation = pruned;
+            }
         }
     }
 
@@ -899,6 +914,10 @@ impl Command for RevertEffectGraphCommand {
             return;
         };
         install_target_graph(project, &self.target, prev);
+        let restored = std::mem::take(&mut self.removed_automation);
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            inst.restore_automation(restored);
+        }
     }
 
     fn description(&self) -> &str {
@@ -2268,6 +2287,51 @@ mod tests {
             fx.param_values,
             vec![ParamSlot::exposed(0.5)],
             "value slot restored"
+        );
+    }
+
+    #[test]
+    fn revert_prunes_orphaned_automation_and_undo_restores() {
+        let (mut project, id) = project_with_one_master_effect();
+        {
+            let fx = project.find_effect_by_id_mut(&id).unwrap();
+            // A user-added binding (lives in the graph) with a driver hung on it.
+            fx.append_user_binding(manifold_core::effects::UserParamBinding {
+                id: "user.a.b.1".into(),
+                label: "B".into(),
+                node_id: manifold_core::NodeId::new("a"),
+                legacy_node_handle: None,
+                inner_param: "b".into(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.25,
+                convert: manifold_core::effects::ParamConvert::Float,
+                is_angle: false,
+                invert: false,
+                curve: Default::default(),
+                scale: 1.0,
+                offset: 0.0,
+            });
+            fx.create_driver(manifold_core::effects::ParamId::from("user.a.b.1"));
+            assert!(fx.find_driver("user.a.b.1").is_some());
+        }
+
+        let mut cmd = RevertEffectGraphCommand::new(GraphTarget::Effect(id.clone()));
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&id).unwrap();
+        assert!(fx.graph.is_none(), "graph reverted to catalog default");
+        assert!(
+            fx.find_driver("user.a.b.1").is_none(),
+            "driver orphaned by the revert is pruned"
+        );
+
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&id).unwrap();
+        assert!(fx.graph.is_some(), "graph restored");
+        assert!(
+            fx.find_driver("user.a.b.1").is_some(),
+            "the orphaned driver is re-attached on undo"
         );
     }
 

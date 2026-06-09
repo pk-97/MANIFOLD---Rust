@@ -2586,6 +2586,60 @@ impl PresetInstance {
         }
     }
 
+    /// Drop any driver / Ableton mapping / envelope whose `param_id` no longer
+    /// resolves to a live param on this instance, returning the removed rows for
+    /// undo. The integrity sweep for structural edits that wipe params without
+    /// going through the precise per-param prune — e.g. a Revert that clears the
+    /// graph (and with it the user-added bindings automation was hung on). Rows
+    /// are keyed by id and order-independent, so the restore just re-appends.
+    pub fn prune_orphaned_automation(&mut self) -> RemovedAutomation {
+        let mut orphans: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for d in self.drivers.iter().flatten() {
+            if self.param_id_to_value_index(&d.param_id).is_none() {
+                orphans.insert(d.param_id.to_string());
+            }
+        }
+        for m in self.ableton_mappings.iter().flatten() {
+            if self.param_id_to_value_index(&m.param_id).is_none() {
+                orphans.insert(m.param_id.to_string());
+            }
+        }
+        for e in self.envelopes.iter().flatten() {
+            if self.param_id_to_value_index(&e.param_id).is_none() {
+                orphans.insert(e.param_id.to_string());
+            }
+        }
+        if orphans.is_empty() {
+            return RemovedAutomation::default();
+        }
+        RemovedAutomation {
+            drivers: take_automation_by_ids(&mut self.drivers, &orphans, |d| &d.param_id),
+            ableton_mappings: take_automation_by_ids(&mut self.ableton_mappings, &orphans, |m| {
+                &m.param_id
+            }),
+            envelopes: take_automation_by_ids(&mut self.envelopes, &orphans, |e| &e.param_id),
+        }
+    }
+
+    /// Re-attach automation removed by [`Self::prune_orphaned_automation`]. The
+    /// undo half — append-restore, since automation rows carry no positional
+    /// meaning (they're keyed by `param_id`).
+    pub fn restore_automation(&mut self, removed: RemovedAutomation) {
+        if !removed.drivers.is_empty() {
+            self.drivers.get_or_insert_with(Vec::new).extend(removed.drivers);
+        }
+        if !removed.ableton_mappings.is_empty() {
+            self.ableton_mappings
+                .get_or_insert_with(Vec::new)
+                .extend(removed.ableton_mappings);
+        }
+        if !removed.envelopes.is_empty() {
+            self.envelopes
+                .get_or_insert_with(Vec::new)
+                .extend(removed.envelopes);
+        }
+    }
+
     /// Get the drivers list, creating it if None.
     pub fn drivers_mut(&mut self) -> &mut Vec<ParameterDriver> {
         if self.drivers.is_none() {
@@ -2609,6 +2663,41 @@ fn prune_automation_by_ids<T>(
             *opt = None;
         }
     }
+}
+
+/// Like [`prune_automation_by_ids`] but *captures* the removed rows (for undo)
+/// instead of dropping them, and matches against an owned id set.
+fn take_automation_by_ids<T>(
+    opt: &mut Option<Vec<T>>,
+    ids: &std::collections::HashSet<String>,
+    key: impl Fn(&T) -> &str,
+) -> Vec<T> {
+    let mut taken = Vec::new();
+    if let Some(v) = opt.as_mut() {
+        let mut i = 0;
+        while i < v.len() {
+            if ids.contains(key(&v[i])) {
+                taken.push(v.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        if v.is_empty() {
+            *opt = None;
+        }
+    }
+    taken
+}
+
+/// Automation rows (drivers / Ableton mappings / envelopes) removed because
+/// their `param_id` no longer resolved to a live param. Returned by
+/// [`PresetInstance::prune_orphaned_automation`] and restored by
+/// [`PresetInstance::restore_automation`] on undo.
+#[derive(Debug, Clone, Default)]
+pub struct RemovedAutomation {
+    drivers: Vec<ParameterDriver>,
+    ableton_mappings: Vec<crate::ableton_mapping::AbletonParamMapping>,
+    envelopes: Vec<ParamEnvelope>,
 }
 
 /// Implement ParamSource for PresetInstance.
@@ -4366,6 +4455,33 @@ mod tests {
         assert!(
             fx.find_envelope("user.blur.radius.1").is_some(),
             "envelope restored"
+        );
+    }
+
+    #[test]
+    fn prune_orphaned_automation_drops_unresolvable_then_restores() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b")); // resolves
+        fx.create_driver(ParamId::from("user.a.b.1")); // live
+        fx.create_driver(ParamId::from("user.gone.x.1")); // orphan — never bound
+        fx.envelopes = Some(vec![ParamEnvelope::new("user.gone.x.1")]); // orphan
+
+        let removed = fx.prune_orphaned_automation();
+        assert!(fx.find_driver("user.a.b.1").is_some(), "live driver kept");
+        assert!(fx.find_driver("user.gone.x.1").is_none(), "orphan driver pruned");
+        assert!(
+            fx.envelopes.is_none(),
+            "sole orphan envelope pruned, list collapses to None"
+        );
+
+        fx.restore_automation(removed);
+        assert!(
+            fx.find_driver("user.gone.x.1").is_some(),
+            "orphan driver restored on undo"
+        );
+        assert!(
+            fx.find_envelope("user.gone.x.1").is_some(),
+            "orphan envelope restored on undo"
         );
     }
 
