@@ -1496,7 +1496,146 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     );
 }
 
+/// Warm a generator preset's feedback loop for 8 frames and capture the final.
+fn render_generator_8_frames(
+    def: EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    device: &GpuDevice,
+    w: u32,
+    h: u32,
+) -> RenderTarget {
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_runtime::PresetRuntime;
+    let ctx = |t: f64| PresetContext {
+        time: t,
+        beat: t * 2.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    let mut g = PresetRuntime::from_def_with_device(def, registry, device, w, h, FMT)
+        .expect("preset builds");
+    let target = RenderTarget::new(device, w, h, FMT, "freeze-gen-fusion");
+    for i in 0..8u32 {
+        let mut enc = device.create_encoder("freeze-gen-fusion");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+        }
+        enc.commit_and_wait_completed();
+    }
+    target
+}
 
+/// Remove the `reset_trigger` wire feeding `seed_handle` — a `@reset_gated`
+/// kernel with that input unwired runs every frame (the gate is inert). Used to
+/// build the "ungated" baseline for the seed-gate equivalence proofs.
+fn strip_reset_wire(def: &mut EffectGraphDef, seed_handle: &str) {
+    let Some(id) = def
+        .nodes
+        .iter()
+        .find(|n| n.handle.as_deref() == Some(seed_handle))
+        .map(|n| n.id)
+    else {
+        return;
+    };
+    def.wires.retain(|w| !(w.to_node == id && w.to_port == "reset_trigger"));
+}
+
+/// A reset-gated in-place buffer seed must render IDENTICALLY whether gated
+/// (canonical) or ungated (seed runs every frame): the seed feeds array_feedback
+/// only on reset, which both hit on frame 0, so skipping the redundant re-seeds
+/// between resets changes nothing. Proves the gate is invisible AND that the
+/// aliased seed skips WITHOUT tripping the executor's stale-output guard (a
+/// regression there would panic this render). ParticleText: seed_alloc is
+/// OnceOnReset, so the buffer persists and the skip relies on real retention.
+#[test]
+fn particletext_seed_gate_matches_ungated() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let gated: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let seed_id = gated
+        .nodes
+        .iter()
+        .find(|n| n.handle.as_deref() == Some("seed_pattern"))
+        .map(|n| n.id)
+        .expect("seed_pattern node");
+    assert!(
+        gated.wires.iter().any(|w| w.to_node == seed_id && w.to_port == "reset_trigger"),
+        "ParticleText seed_pattern must carry a reset_trigger wire (else gate is vacuous)"
+    );
+    let mut ungated = gated.clone();
+    strip_reset_wire(&mut ungated, "seed_pattern");
+
+    let g = render_generator_8_frames(gated, &registry, &device, w, h);
+    let u = render_generator_8_frames(ungated, &registry, &device, w, h);
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &g.texture, &u.texture, 1.0e-3, 1.0e-2);
+    assert!(
+        r.passes(0.002) && r.over_count < 64,
+        "gated ParticleText seed must match ungated: max_abs={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// FluidSim3D twin of [`particletext_seed_gate_matches_ungated`]. Here seed_alloc
+/// is EveryFrame, so the gated skip relies on the order (seed_alloc writes, the
+/// gated seed_pattern re-dispatches only on reset) rather than buffer retention —
+/// still invisible because array_feedback reads the seed only on reset.
+#[test]
+fn fluidsim3d_seed_gate_matches_ungated() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("FluidSimulation3D"),
+    )
+    .expect("FluidSimulation3D bundled");
+    let gated: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let seed_id = gated
+        .nodes
+        .iter()
+        .find(|n| n.handle.as_deref() == Some("seed_pattern"))
+        .map(|n| n.id)
+        .expect("seed_pattern node");
+    assert!(
+        gated.wires.iter().any(|w| w.to_node == seed_id && w.to_port == "reset_trigger"),
+        "FluidSim3D seed_pattern must carry a reset_trigger wire (else gate is vacuous)"
+    );
+    let mut ungated = gated.clone();
+    strip_reset_wire(&mut ungated, "seed_pattern");
+
+    let g = render_generator_8_frames(gated, &registry, &device, w, h);
+    let u = render_generator_8_frames(ungated, &registry, &device, w, h);
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &g.texture, &u.texture, 1.0e-3, 1.0e-2);
+    assert!(
+        r.passes(0.002) && r.over_count < 64,
+        "gated FluidSim3D seed must match ungated: max_abs={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
 
 /// Render an effect graph whose bound output is at a REDUCED resolution
 /// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as

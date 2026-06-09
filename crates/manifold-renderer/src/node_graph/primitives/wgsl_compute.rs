@@ -1379,21 +1379,23 @@ impl EffectNode for WgslCompute {
         // output (a persistent pooled resource) keeps the last pattern, which the
         // equally-gated consumer ignores until the next reset. Unwired ⇒ every frame
         // (no behaviour change). Mirrors the gate on node.seed_particles_from_texture.
-        //
-        // SAFETY: skip ONLY a kernel with NO aliased array in/out. An
-        // `aliased_array_io` kernel mutates its input buffer in place, and the
-        // executor REQUIRES it to dispatch every frame (else its "aliased output not
-        // written ⇒ downstream reads stale data" guard panics). Such a kernel (the
-        // ParticleText / FluidSim3D in-place buffer seeds) can't be skip-gated until
-        // its seed buffer is a fresh write-only output; the gate stays inert there.
         if self.reset_gated
-            && self.aliased_pairs.is_empty()
             && let Some(ParamValue::Float(v)) = ctx.inputs.scalar(RESET_TRIGGER_PORT)
         {
             let current = v.round() as i32;
             let edge = self.last_reset_trigger != Some(current);
             self.last_reset_trigger = Some(current);
             if !edge {
+                // Skip the dispatch. If this kernel aliases an array in/out (an
+                // in-place buffer seed like ParticleText / FluidSim3D), mark the
+                // aliased output accessed so the executor's staleness guard accepts
+                // the skip: the @reset_gated contract is that the consumer reads the
+                // buffer only on reset, so last reset's retained content is exactly
+                // what it expects — intentional retention, NOT stale-as-bug. Harmless
+                // for a non-aliased kernel (the guard doesn't fire there anyway). The
+                // retention is real only if the aliased buffer persists between
+                // frames — pair this with `node.seed_particles seed_mode=OnceOnReset`.
+                ctx.mark_gpu_accessed();
                 return;
             }
         }
