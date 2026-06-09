@@ -56,19 +56,34 @@ framing. A read-every-site audit (not just grep — every `GraphTarget` / `Param
 ### Plan of attack (agreed 2026-06-09 — fix asymmetries with unified design, NOT bandaids)
 
 1. **Docs accuracy** (this section + the `PRESET_UNIFICATION_PLAN.md` banner +
-   `modulation.rs` stale comments). DONE in this commit.
+   `modulation.rs` stale comments). ✅ DONE.
 2. **Collapse the Ableton Map action** onto the shared `ableton_mapping_target` helper —
    one action path for map + unmap, the way the Unmap side already works. Not a parallel arm.
+   ✅ DONE (one `MapParamToAbleton(gpt, …)`; clip-tab effect map/unmap now consistent).
 3. **Unify the fork-preset surface:** make the actions kind-generic (one `MakePresetUnique`
    / `ExportPreset` / `ImportPreset` set routing through `GraphTarget`) and give the effect
    card the same right-click context-menu affordance the generator card has — so the feature
-   exists on both sides by construction, not by a copied generator arm.
-4. **Close the capability gaps** with the shared core: generator cards get the
-   proximity-zone trim/target hit-testing (lift the effect logic into the shared row path);
-   effect cards get string-param exposure (UI half of fork #15, whose runtime already landed).
-5. **Running-app items** (cannot verify headless): the embedded-presets picker
-   (`SetGenType(usize)` → `SetGenType(PresetTypeId)` + change-gated snapshot) and a smoke
-   pass over hot-reload + the dispatch collapse.
+   exists on both sides by construction, not by a copied generator arm. ✅ DONE (+ core
+   `GraphTarget::preset_kind()` / `Project::preset_instance()` primitives).
+4. **Close the capability gaps** with the shared core:
+   - ✅ DONE — generator cards get the proximity-zone trim/target hit-testing:
+     `handle_pointer_down` unified into one method via `param_target()`; generators inherit
+     the ~8px catch-zone by construction.
+   - ⛔ **DEFERRED (decided 2026-06-09) — effect string-param UI exposure.** Not a UI task:
+     string-param *values* are clip-scoped (`clip.string_params`; the runtime resolves a
+     `StringBindingResolution` as a key into that map). An effect on master/layer has no clip,
+     so there is no value home; the effect runtime only applies string *defaults* (#15). Making
+     it real needs new instance-scoped storage on `PresetInstance` + a runtime read + a save
+     migration + UI — a four-crate feature with **zero shipping consumers** (no effect declares
+     a string param). **Rationale for deferral (Peter, 2026-06-09): text is a generative
+     source — it belongs to generators/clips, not effects — so effects arguably should never
+     carry string params.** Revisit only if/when a concrete effect needs text; its real
+     per-instance-vs-per-clip requirement will settle the design then. Do not build speculatively.
+5. **Running-app items** (build done headless; behavioral confirmation is Peter's):
+   - ✅ BUILT — the embedded-presets picker (`SetGenType`/`AddEffect` now carry `PresetTypeId`;
+     `UIRoot.embedded_presets` fingerprint-gated snapshot; both pickers list embedded presets).
+   - ⏳ Peter's live smoke pass: picker populates + selection swaps the preset; the fork-preset
+     effect-card menu; generator proximity zone; hot-reload; the dispatch collapse.
 
 The card shell's two *build* methods (badges vs Change button, hierarchical vs flat
 parenting) are legitimately distinct and stay two methods — the goal is eliminating the
