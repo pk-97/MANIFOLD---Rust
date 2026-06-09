@@ -456,6 +456,33 @@ impl ParamSlot {
     }
 }
 
+/// Everything removed when an exposed card param is pruned from an instance:
+/// its `ParamSpecDef`, its `BindingDef`, its `param_values` slot, and any
+/// drivers / Ableton mappings / envelopes that referenced its id — plus the
+/// positions each occupied. Returned by
+/// [`PresetInstance::remove_exposures_for_node`] and handed back to
+/// [`PresetInstance::restore_exposures`] so an undo restores the pre-delete
+/// state byte-for-byte. Opaque to callers (the command stack just carries it).
+#[derive(Debug, Clone)]
+pub struct RemovedExposure {
+    /// Index in `preset_metadata.params` (where the spec lives). `None` for a
+    /// binding with no matching param spec (composite/fan-out).
+    meta_param_index: Option<usize>,
+    /// Index in `param_values` (where the value slot lives). Resolved tier-aware
+    /// via [`PresetInstance::param_id_to_value_index`], so it's correct whether
+    /// the param is a static-prefix slot or a user-tail one — which is NOT
+    /// generally the same as `meta_param_index`. `None` if the param has no slot.
+    value_index: Option<usize>,
+    /// Index in `preset_metadata.bindings`.
+    binding_index: usize,
+    spec: Option<crate::effect_graph_def::ParamSpecDef>,
+    binding: crate::effect_graph_def::BindingDef,
+    slot: Option<ParamSlot>,
+    drivers: Vec<ParameterDriver>,
+    ableton_mappings: Vec<crate::ableton_mapping::AbletonParamMapping>,
+    envelopes: Vec<ParamEnvelope>,
+}
+
 impl Serialize for ParamSlot {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -2407,12 +2434,180 @@ impl PresetInstance {
         }
     }
 
+    /// Remove every exposed card param bound to `node_id` — its binding, param
+    /// spec, value slot, and any drivers / Ableton mappings / envelopes that
+    /// referenced it — and return a capture for [`Self::restore_exposures`].
+    /// Empty (and a no-op) when nothing was bound to the node. Used when a graph
+    /// edit removes the node a slider drove, so the slider doesn't linger as a
+    /// dead control. Operates on the per-instance `graph.preset_metadata`, so
+    /// the caller must have lifted the graph first (the graph editor always has).
+    pub fn remove_exposures_for_node(&mut self, node_id: &NodeId) -> Vec<RemovedExposure> {
+        use crate::effect_graph_def::BindingTarget;
+        let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref()) else {
+            return Vec::new();
+        };
+        // Capture phase (immutable): everything we'll remove, with positions.
+        let mut captured: Vec<RemovedExposure> = Vec::new();
+        for (bi, b) in meta.bindings.iter().enumerate() {
+            let BindingTarget::Node { node_id: nid, .. } = &b.target else {
+                continue;
+            };
+            if nid != node_id {
+                continue;
+            }
+            let id = b.id.as_str();
+            let meta_param_index = meta.params.iter().position(|p| p.id == id);
+            let spec = meta_param_index.map(|i| meta.params[i].clone());
+            let value_index = self.param_id_to_value_index(id);
+            let slot = value_index.and_then(|i| self.param_values.get(i).copied());
+            let drivers = self
+                .drivers
+                .iter()
+                .flatten()
+                .filter(|d| d.param_id == id)
+                .cloned()
+                .collect();
+            let ableton_mappings = self
+                .ableton_mappings
+                .iter()
+                .flatten()
+                .filter(|m| m.param_id == id)
+                .cloned()
+                .collect();
+            let envelopes = self
+                .envelopes
+                .iter()
+                .flatten()
+                .filter(|e| e.param_id == id)
+                .cloned()
+                .collect();
+            captured.push(RemovedExposure {
+                meta_param_index,
+                value_index,
+                binding_index: bi,
+                spec,
+                binding: b.clone(),
+                slot,
+                drivers,
+                ableton_mappings,
+                envelopes,
+            });
+        }
+        if captured.is_empty() {
+            return captured;
+        }
+        let ids: std::collections::HashSet<&str> =
+            captured.iter().map(|c| c.binding.id.as_str()).collect();
+        // Remove metadata params + bindings by descending index (indices stay
+        // valid mid-loop). param_values uses the same indices as meta.params.
+        if let Some(meta) = self.graph.as_mut().and_then(|g| g.preset_metadata.as_mut()) {
+            let mut pidx: Vec<usize> =
+                captured.iter().filter_map(|c| c.meta_param_index).collect();
+            pidx.sort_unstable_by(|a, b| b.cmp(a));
+            for i in pidx {
+                if i < meta.params.len() {
+                    meta.params.remove(i);
+                }
+            }
+            let mut bidx: Vec<usize> = captured.iter().map(|c| c.binding_index).collect();
+            bidx.sort_unstable_by(|a, b| b.cmp(a));
+            for i in bidx {
+                if i < meta.bindings.len() {
+                    meta.bindings.remove(i);
+                }
+            }
+        }
+        let mut sidx: Vec<usize> = captured.iter().filter_map(|c| c.value_index).collect();
+        sidx.sort_unstable_by(|a, b| b.cmp(a));
+        for i in sidx {
+            if i < self.param_values.len() {
+                self.param_values.remove(i);
+            }
+        }
+        prune_automation_by_ids(&mut self.drivers, &ids, |d| &*d.param_id);
+        prune_automation_by_ids(&mut self.ableton_mappings, &ids, |m| &*m.param_id);
+        prune_automation_by_ids(&mut self.envelopes, &ids, |e| &*e.param_id);
+        captured
+    }
+
+    /// Re-insert exposures removed by [`Self::remove_exposures_for_node`] at
+    /// their original positions, restoring bindings, param specs, value slots,
+    /// and automation. The undo half — exact inverse of the removal.
+    pub fn restore_exposures(&mut self, removed: Vec<RemovedExposure>) {
+        if removed.is_empty() {
+            return;
+        }
+        // Insert in ascending original-index order so each lands where it was.
+        if let Some(meta) = self.graph.as_mut().and_then(|g| g.preset_metadata.as_mut()) {
+            let mut params: Vec<(usize, crate::effect_graph_def::ParamSpecDef)> = removed
+                .iter()
+                .filter_map(|r| Some((r.meta_param_index?, r.spec.clone()?)))
+                .collect();
+            params.sort_by_key(|(i, _)| *i);
+            for (i, spec) in params {
+                let i = i.min(meta.params.len());
+                meta.params.insert(i, spec);
+            }
+            let mut binds: Vec<(usize, crate::effect_graph_def::BindingDef)> = removed
+                .iter()
+                .map(|r| (r.binding_index, r.binding.clone()))
+                .collect();
+            binds.sort_by_key(|(i, _)| *i);
+            for (i, b) in binds {
+                let i = i.min(meta.bindings.len());
+                meta.bindings.insert(i, b);
+            }
+        }
+        let mut slots: Vec<(usize, ParamSlot)> = removed
+            .iter()
+            .filter_map(|r| Some((r.value_index?, r.slot?)))
+            .collect();
+        slots.sort_by_key(|(i, _)| *i);
+        for (i, s) in slots {
+            let i = i.min(self.param_values.len());
+            self.param_values.insert(i, s);
+        }
+        for r in &removed {
+            if !r.drivers.is_empty() {
+                self.drivers
+                    .get_or_insert_with(Vec::new)
+                    .extend(r.drivers.iter().cloned());
+            }
+            if !r.ableton_mappings.is_empty() {
+                self.ableton_mappings
+                    .get_or_insert_with(Vec::new)
+                    .extend(r.ableton_mappings.iter().cloned());
+            }
+            if !r.envelopes.is_empty() {
+                self.envelopes
+                    .get_or_insert_with(Vec::new)
+                    .extend(r.envelopes.iter().cloned());
+            }
+        }
+    }
+
     /// Get the drivers list, creating it if None.
     pub fn drivers_mut(&mut self) -> &mut Vec<ParameterDriver> {
         if self.drivers.is_none() {
             self.drivers = Some(Vec::new());
         }
         self.drivers.as_mut().unwrap()
+    }
+}
+
+/// Drop every element of an optional automation list whose key is in `ids`,
+/// collapsing the list to `None` when it empties. Shared by the three
+/// per-instance automation homes (drivers / Ableton mappings / envelopes).
+fn prune_automation_by_ids<T>(
+    opt: &mut Option<Vec<T>>,
+    ids: &std::collections::HashSet<&str>,
+    key: impl Fn(&T) -> &str,
+) {
+    if let Some(v) = opt.as_mut() {
+        v.retain(|t| !ids.contains(key(t)));
+        if v.is_empty() {
+            *opt = None;
+        }
     }
 }
 
@@ -4130,6 +4325,58 @@ mod tests {
             vec![ParamSlot::exposed(0.55)],
             "reseed rebuilds param_values from the def's (snapshotted) defaults",
         );
+    }
+
+    #[test]
+    fn remove_exposures_for_node_prunes_then_restores_round_trip() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        // Two exposed user params on different nodes; we delete node "blur".
+        fx.append_user_binding(sample_user_binding("user.blur.radius.1", "blur", "radius"));
+        fx.append_user_binding(sample_user_binding("user.other.x.1", "other", "x"));
+        assert!(fx.set_base_param_by_id("user.blur.radius.1", 0.66));
+        // Automation on the blur param — must be pruned with it, restored on undo.
+        fx.create_driver(ParamId::from("user.blur.radius.1"));
+        fx.envelopes = Some(vec![ParamEnvelope::new("user.blur.radius.1")]);
+
+        let pre_params = fx.param_values.clone();
+
+        let removed = fx.remove_exposures_for_node(&NodeId::new("blur"));
+        assert_eq!(removed.len(), 1, "one slider was bound to the deleted node");
+
+        // Slider, slot, driver, envelope all gone; the unrelated slider survives.
+        assert!(fx.param_id_to_value_index("user.blur.radius.1").is_none());
+        assert!(fx.find_driver("user.blur.radius.1").is_none());
+        assert!(
+            fx.envelopes.is_none(),
+            "pruning the last envelope collapses the list to None"
+        );
+        assert!(fx.param_id_to_value_index("user.other.x.1").is_some());
+
+        // Undo restores values, metadata, and automation.
+        fx.restore_exposures(removed);
+        assert_eq!(
+            fx.param_values, pre_params,
+            "value slots restored at their original positions"
+        );
+        assert!(
+            fx.param_id_to_value_index("user.blur.radius.1").is_some(),
+            "binding + param spec restored"
+        );
+        assert!(fx.find_driver("user.blur.radius.1").is_some(), "driver restored");
+        assert!(
+            fx.find_envelope("user.blur.radius.1").is_some(),
+            "envelope restored"
+        );
+    }
+
+    #[test]
+    fn remove_exposures_for_node_is_noop_when_nothing_bound() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.blur.radius.1", "blur", "radius"));
+        let before = fx.param_values.clone();
+        let removed = fx.remove_exposures_for_node(&NodeId::new("nonexistent"));
+        assert!(removed.is_empty(), "no binding targets that node");
+        assert_eq!(fx.param_values, before, "nothing changed");
     }
 
     #[test]

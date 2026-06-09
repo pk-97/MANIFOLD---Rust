@@ -200,6 +200,31 @@ impl Application {
         }
     }
 
+    /// Modal Yes/No confirm shown before deleting a graph node that backs card
+    /// sliders. Lists the controls the delete would remove so the choice is
+    /// informed. Returns true only on Yes. Blocking native dialog — fine for an
+    /// authoring-time action (same as the preset import/export dialogs); never
+    /// reached during performance.
+    fn confirm_remove_node_orphans(labels: &[String]) -> bool {
+        let n = labels.len();
+        let list = labels
+            .iter()
+            .map(|l| format!("  •  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let msg = format!(
+            "Deleting this node will also remove {n} card control{}:\n\n{list}\n\nThis can be undone.",
+            if n == 1 { "" } else { "s" },
+        );
+        rfd::MessageDialog::new()
+            .set_title("Remove node")
+            .set_description(msg)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .set_level(rfd::MessageLevel::Warning)
+            .show()
+            == rfd::MessageDialogResult::Yes
+    }
+
     /// Read the watched param's CURRENT (post-modulation) value — the number
     /// shown on the card slider — for the mapping popover's live dot. Reads the
     /// same `param_values` slot drivers / Ableton / envelopes write each frame,
@@ -1166,13 +1191,34 @@ impl Application {
                         self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
-                        let cmd = manifold_editing::commands::graph::RemoveGraphNodeCommand::new(
-                            eid.clone(),
-                            *node_id,
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        // Which card sliders would this delete orphan? Detect
+                        // against the live diverged graph if there is one, else
+                        // the catalog default. If any, confirm before deleting —
+                        // a node that backs card controls takes them with it.
+                        let orphaned = {
+                            let def = self
+                                .local_project
+                                .preset_instance(eid)
+                                .and_then(|i| i.graph.as_ref())
+                                .unwrap_or(default);
+                            manifold_editing::commands::graph::exposed_param_labels_for_node(
+                                def,
+                                &canvas_scope,
+                                *node_id,
+                            )
+                        };
+                        let proceed =
+                            orphaned.is_empty() || Self::confirm_remove_node_orphans(&orphaned);
+                        if proceed {
+                            let cmd =
+                                manifold_editing::commands::graph::RemoveGraphNodeCommand::new(
+                                    eid.clone(),
+                                    *node_id,
+                                    default.clone(),
+                                )
+                                .with_scope(canvas_scope.clone());
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
                     }
                     continue;
                 }

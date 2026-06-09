@@ -262,6 +262,10 @@ pub struct RemoveGraphNodeCommand {
     /// Reverse state. `None` before first execute; populated to the
     /// removed node + its incident wires on success.
     removed: Option<RemovedNode>,
+    /// Card sliders pruned because they were bound to the removed node
+    /// (binding + spec + value slot + automation). Empty when the node backed
+    /// no exposed params. Captured for undo; restored before the node is.
+    removed_exposures: Vec<manifold_core::effects::RemovedExposure>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +282,7 @@ impl RemoveGraphNodeCommand {
             catalog_default,
             scope_path: Vec::new(),
             removed: None,
+            removed_exposures: Vec::new(),
         }
     }
 
@@ -290,27 +295,38 @@ impl RemoveGraphNodeCommand {
 
 impl Command for RemoveGraphNodeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let node_id = self.node_id;
+        let node_u32 = self.node_id;
         let scope = self.scope_path.clone();
-        let removed =
-            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-                let node_pos = nodes.iter().position(|n| n.id == node_id)?;
-                let node = nodes.remove(node_pos);
-                let removed_wires: Vec<EffectGraphWire> = wires
-                    .iter()
-                    .filter(|w| w.from_node == node_id || w.to_node == node_id)
-                    .cloned()
-                    .collect();
-                wires.retain(|w| w.from_node != node_id && w.to_node != node_id);
-                Some(RemovedNode {
-                    node,
-                    wires: removed_wires,
-                })
+        let catalog_default = &self.catalog_default;
+        // One borrow of the instance: remove the node + wires, then prune any
+        // card sliders bound to it. Done together so the whole thing is one
+        // undoable unit and the slider can't outlive the node it drove.
+        let captured = project
+            .with_preset_graph_mut(&self.target, |inst| {
+                let removed = {
+                    let def = inst.graph.get_or_insert_with(|| catalog_default.clone());
+                    let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                    let node_pos = nodes.iter().position(|n| n.id == node_u32)?;
+                    let node = nodes.remove(node_pos);
+                    let removed_wires: Vec<EffectGraphWire> = wires
+                        .iter()
+                        .filter(|w| w.from_node == node_u32 || w.to_node == node_u32)
+                        .cloned()
+                        .collect();
+                    wires.retain(|w| w.from_node != node_u32 && w.to_node != node_u32);
+                    RemovedNode {
+                        node,
+                        wires: removed_wires,
+                    }
+                };
+                let removed_exposures = inst.remove_exposures_for_node(&removed.node.node_id);
+                inst.bump_graph_structure_version();
+                Some((removed, removed_exposures))
             })
             .flatten();
-        if removed.is_some() {
-            self.removed = removed;
+        if let Some((removed, removed_exposures)) = captured {
+            self.removed = Some(removed);
+            self.removed_exposures = removed_exposures;
         }
     }
 
@@ -319,17 +335,55 @@ impl Command for RemoveGraphNodeCommand {
             return;
         };
         let scope = self.scope_path.clone();
-        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+        let removed_exposures = std::mem::take(&mut self.removed_exposures);
+        project.with_preset_graph_mut(&self.target, move |inst| {
+            if let Some(def) = inst.graph.as_mut()
+                && let Some((nodes, wires)) =
+                    descend_level(&mut def.nodes, &mut def.wires, &scope)
+            {
                 nodes.push(removed.node);
                 wires.extend(removed.wires);
             }
+            inst.restore_exposures(removed_exposures);
+            inst.bump_graph_structure_version();
         });
     }
 
     fn description(&self) -> &str {
         "Remove Graph Node"
     }
+}
+
+/// Read-only: the display names of card sliders bound to the node whose runtime
+/// id is `node_u32` at `scope_path` in `def`. Drives the delete-confirm dialog
+/// (which sliders a node removal would take with it). Empty when the node backs
+/// no exposed params. Clones `def` to reuse [`descend_level`]'s mutable walk —
+/// a one-shot cost on a user-initiated delete, never a hot path.
+pub fn exposed_param_labels_for_node(
+    def: &EffectGraphDef,
+    scope_path: &[u32],
+    node_u32: u32,
+) -> Vec<String> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let mut def = def.clone();
+    let node_nid = {
+        let Some((nodes, _)) = descend_level(&mut def.nodes, &mut def.wires, scope_path) else {
+            return Vec::new();
+        };
+        match nodes.iter().find(|n| n.id == node_u32) {
+            Some(n) => n.node_id.clone(),
+            None => return Vec::new(),
+        }
+    };
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return Vec::new();
+    };
+    meta.bindings
+        .iter()
+        .filter(|b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == node_nid))
+        // Only bindings that surface as a card slider (have a param spec).
+        .filter_map(|b| meta.params.iter().find(|p| p.id == b.id).map(|p| p.name.clone()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2123,6 +2177,98 @@ mod tests {
         let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
         assert_eq!(def.nodes.len(), 4);
         assert_eq!(def.wires.len(), 4);
+    }
+
+    #[test]
+    fn remove_graph_node_prunes_bound_card_slider_and_undo_restores() {
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
+        };
+        use manifold_core::effects::ParamSlot;
+        use manifold_core::NodeId;
+
+        let (mut project, id) = project_with_one_master_effect();
+        // Diverged graph carrying a card slider bound to node 1 (uv_transform).
+        let mut def = mirror_catalog_default();
+        def.preset_metadata = Some(PresetMetadata {
+            id: PresetTypeId::new("Mirror"),
+            display_name: "Mirror".into(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: vec![ParamSpecDef {
+                id: "amount".into(),
+                name: "Amount".into(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.5,
+                whole_numbers: false,
+                is_toggle: false,
+                is_trigger: false,
+                value_labels: Vec::new(),
+                format_string: None,
+                osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
+            }],
+            bindings: vec![BindingDef {
+                id: "amount".into(),
+                label: "Amount".into(),
+                default_value: 0.5,
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("uv_transform"),
+                    param: "scale".into(),
+                },
+                convert: Default::default(),
+                user_added: true,
+                scale: 1.0,
+                offset: 0.0,
+            }],
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        {
+            let fx = project.find_effect_by_id_mut(&id).unwrap();
+            fx.graph = Some(def);
+            fx.param_values = vec![ParamSlot::exposed(0.5)];
+        }
+
+        let mut cmd = RemoveGraphNodeCommand::new(
+            GraphTarget::Effect(id.clone()),
+            1,
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&id).unwrap();
+        assert!(
+            fx.graph.as_ref().unwrap().nodes.iter().all(|n| n.id != 1),
+            "node deleted"
+        );
+        let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
+        assert!(meta.bindings.is_empty(), "bound slider's binding pruned");
+        assert!(meta.params.is_empty(), "bound slider's param spec pruned");
+        assert!(fx.param_values.is_empty(), "its value slot pruned");
+
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&id).unwrap();
+        assert!(
+            fx.graph.as_ref().unwrap().nodes.iter().any(|n| n.id == 1),
+            "node restored"
+        );
+        let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.bindings.len(), 1, "binding restored");
+        assert_eq!(meta.params.len(), 1, "param spec restored");
+        assert_eq!(
+            fx.param_values,
+            vec![ParamSlot::exposed(0.5)],
+            "value slot restored"
+        );
     }
 
     #[test]
