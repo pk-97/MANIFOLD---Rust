@@ -1340,6 +1340,25 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
          absent means the fp32 in-loop path didn't fire (vacuous bit-exact pass)"
     );
 
+    // Gather-sampler propagation must fire: the toroidal gradient (a `Gather` with
+    // wrap_mode=Repeat) now folds into the fused flow-field region, and the fused
+    // kernel binds a REPEAT sampler via the `// @sampler_address_mode: repeat`
+    // marker. Without it the gradient stayed a boundary (its old behaviour) and the
+    // bit-exact diff below would never exercise the wrapped-edge sampling that the
+    // propagation exists to keep identical fused-vs-unfused.
+    let has_repeat_gather_fusion = fused_def.nodes.iter().any(|n| {
+        n.type_id == "node.wgsl_compute"
+            && n.wgsl_source
+                .as_deref()
+                .is_some_and(|src| src.contains("@sampler_address_mode: repeat"))
+    });
+    assert!(
+        has_repeat_gather_fusion,
+        "FluidSim must fuse the toroidal gradient gather with a repeat sampler \
+         (// @sampler_address_mode: repeat marker) — absent means the in-loop gather \
+         stayed excluded, so the wrapped-edge sampling is untested"
+    );
+
     let ctx = |t: f64| PresetContext {
         time: t,
         beat: t * 2.0,
@@ -1476,6 +1495,8 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
         r.over_fraction()
     );
 }
+
+
 
 /// Render an effect graph whose bound output is at a REDUCED resolution
 /// (`out_w` × `out_h`), for multi-resolution fusion proofs. Same shape as

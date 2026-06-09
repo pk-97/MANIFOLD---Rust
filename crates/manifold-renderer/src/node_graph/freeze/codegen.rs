@@ -1153,6 +1153,16 @@ pub struct FusionRegion<'a> {
     /// the only correct choice for forward-produced regions like DigitalPlants).
     /// Single-output regions only; fan-out (`outputs.len() > 1`) stays fresh.
     pub in_place_alias: Option<usize>,
+    /// The address mode of the region's shared gather `samp` sampler, as a WGSL
+    /// marker token: `"clamp"` (default, `ClampToEdge` — byte-identical to the
+    /// historical fused sampler), `"repeat"`, or `"mirror"`. When a region folds
+    /// in a `Gather` atom that wraps (a toroidal fluid gradient), the install
+    /// pass resolves the members' agreed mode here, the codegen emits a
+    /// `// @sampler_address_mode: <token>` marker on the sampler binding, and
+    /// `node.wgsl_compute` creates the sampler at that mode — so a fused gather
+    /// samples its edges exactly like the unfused atom. The install pass only
+    /// admits gathers that agree on ONE mode, so a single token covers the region.
+    pub sampler_address_mode: &'static str,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -1631,7 +1641,22 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     }
     let mut next_binding = region.num_external_inputs + 1;
     if needs_sampler {
-        writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
+        // The shared gather sampler. A non-default address mode (a toroidal
+        // Repeat gradient) is carried as a marker `node.wgsl_compute` reads to
+        // create the sampler at that mode — WGSL has no address mode in the
+        // shader, so the runtime sampler descriptor needs this side channel. The
+        // default `"clamp"` emits no marker, keeping all-clamp regions (every
+        // shipped fusion to date) byte-identical to the prior codegen.
+        if region.sampler_address_mode == "clamp" {
+            writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
+        } else {
+            writeln!(
+                out,
+                "@group(0) @binding({next_binding}) var samp: sampler; // @sampler_address_mode: {}",
+                region.sampler_address_mode
+            )
+            .unwrap();
+        }
         next_binding += 1;
     }
     // Output storage texture(s). A single-output region keeps the binding named
@@ -1966,6 +1991,7 @@ mod gpu_tests {
             num_external_inputs: 1,
             outputs: vec![id(1)],
             in_place_alias: None,
+            sampler_address_mode: "clamp",
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -2011,6 +2037,7 @@ mod gpu_tests {
             num_external_inputs: 1,
             outputs: vec![id(1)],
             in_place_alias: None,
+            sampler_address_mode: "clamp",
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -2082,6 +2109,7 @@ mod gpu_tests {
             num_external_inputs: 1,
             outputs: vec![id(1)],
             in_place_alias: None,
+            sampler_address_mode: "clamp",
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -2151,6 +2179,7 @@ mod gpu_tests {
             num_external_inputs: 1,
             outputs: vec![id(1), id(2)],
             in_place_alias: None,
+            sampler_address_mode: "clamp",
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -2351,6 +2380,7 @@ mod gpu_tests {
             num_external_inputs: 1,
             outputs: vec![id(6)],
             in_place_alias: None,
+            sampler_address_mode: "clamp",
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

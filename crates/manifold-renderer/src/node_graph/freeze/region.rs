@@ -423,14 +423,18 @@ fn classify_node(
     // exempt: their f32 register threading is already bit-exact.
     if node_on_cycle(node.id, def) {
         let output_is_fp32 = node.output_formats.values().any(|s| s.contains("32float"));
-        // A GATHER atom samples a bound texture through a sampler whose address
-        // mode (e.g. wrap_mode=Repeat for a toroidal fluid) the fused region can't
-        // yet reproduce — the fused `samp` is the default clamp — so a gathered
-        // in-loop atom diverges at the edges even at fp32. Keep gathers unfused in
-        // loops; the fp32 fast path is for the POINTWISE in-loop atoms (scale,
-        // rotate, …) that thread a register and need no sampler.
-        let is_gather = n.input_access().iter().any(|a| a.is_gather());
-        if !output_is_fp32 || is_gather {
+        // An f16 in-loop texture atom stays a boundary (the unfused editor rounds
+        // each store to f16 while the fused kernel keeps f32 registers — a chaotic
+        // feedback sim amplifies the gap and the look would shift when the editor
+        // closes); an fp32 one fuses freely (the store is exact, so fused == unfused).
+        //
+        // A GATHER atom (e.g. the toroidal fluid gradient, wrap_mode=Repeat) is now
+        // admitted at fp32 too: the install pass resolves the region's agreed gather
+        // sampler mode and the fused kernel binds a sampler at that mode (a
+        // `// @sampler_address_mode` marker `node.wgsl_compute` reads), so a wrapped
+        // gather samples its edges identically fused or unfused. Earlier this stayed
+        // a boundary because the fused `samp` was hard-coded clamp.
+        if !output_is_fp32 {
             return NodeClass::Boundary;
         }
     }

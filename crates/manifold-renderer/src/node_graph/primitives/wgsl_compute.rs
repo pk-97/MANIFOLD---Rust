@@ -36,7 +36,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
 use ahash::{AHashMap, AHashSet};
-use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuTextureFormat};
+use manifold_gpu::{GpuAddressMode, GpuBinding, GpuComputePipeline, GpuSampler, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
@@ -126,6 +126,24 @@ pub struct WgslCompute {
     /// first storage texture output, falling back to the first array
     /// output. Settable via the `dispatch_port` extra field from JSON.
     dispatch_port: Option<String>,
+
+    /// Address mode for the lazily-created gather sampler. Default
+    /// `ClampToEdge` (matches `GpuSamplerDesc::default()` — the historical
+    /// behaviour for every hand-authored kernel). A FUSED region whose gather
+    /// member wraps (a toroidal fluid gradient) carries a
+    /// `// @sampler_address_mode: repeat` marker on its `samp` binding, parsed
+    /// in [`introspect`] into this field so the sampler is created at the same
+    /// mode the unfused atom uses — keeping fused == unfused at the edges.
+    sampler_address_mode: GpuAddressMode,
+    /// `true` when the source carries a `// @reset_gated` marker: the node
+    /// exposes a synthetic optional `reset_trigger` input and re-dispatches only
+    /// on that trigger's integer edges (an expensive generator-side kernel — the
+    /// editable seed pattern — whose output is consumed only on a clip reset).
+    /// Unwired / no marker ⇒ dispatches every frame (no behaviour change).
+    reset_gated: bool,
+    /// Last observed `reset_trigger` integer, for the `reset_gated` edge check.
+    /// `None` (first frame) differs from any value ⇒ the first frame dispatches.
+    last_reset_trigger: Option<i32>,
 
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
@@ -249,6 +267,9 @@ impl WgslCompute {
             _leaked_strings: Vec::new(),
             output_formats: AHashMap::new(),
             dispatch_port: None,
+            sampler_address_mode: GpuAddressMode::ClampToEdge,
+            reset_gated: false,
+            last_reset_trigger: None,
             pipeline: None,
             sampler: None,
             compiled_hash: None,
@@ -298,6 +319,14 @@ impl WgslCompute {
         // that no longer exists. JSON-driven override goes through a
         // separate setter (not implemented yet).
         self.dispatch_port = parsed.default_dispatch_port;
+        // A new source may change the gather sampler's address mode (a fused
+        // region carrying a repeat marker). Drop a cached sampler built at the
+        // old mode so it's recreated at the new one on the next dispatch.
+        if self.sampler_address_mode != parsed.sampler_address_mode {
+            self.sampler = None;
+        }
+        self.sampler_address_mode = parsed.sampler_address_mode;
+        self.reset_gated = parsed.reset_gated;
 
         // Rebuild leaked &'static views.
         self._leaked_strings.clear();
@@ -353,7 +382,13 @@ struct ParsedShader {
     aliased_pairs: Vec<(String, String)>,
     output_formats: AHashMap<String, GpuTextureFormat>,
     default_dispatch_port: Option<String>,
+    sampler_address_mode: GpuAddressMode,
+    reset_gated: bool,
 }
+
+/// The synthetic input port a `// @reset_gated` kernel exposes to receive its
+/// edge trigger (wired from the same clip-trigger count the gated consumer uses).
+const RESET_TRIGGER_PORT: &str = "reset_trigger";
 
 fn introspect(source: &str) -> Result<ParsedShader, String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
@@ -377,6 +412,8 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // write-only storage mode, so these are declared `read_write` but must NOT be
     // treated as aliased in/out — see `BindingKind::StorageArrayWriteOut`.
     let fused_outputs = extract_fused_outputs(source);
+    // `// @reset_gated`: the kernel re-dispatches only on a `reset_trigger` edge.
+    let reset_gated = source_has_reset_gated_marker(source);
 
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
@@ -644,6 +681,18 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         default_dispatch_port = first_array_out;
     }
 
+    // A `// @reset_gated` kernel gains a synthetic optional `reset_trigger` input
+    // (an f32 the caller wires from a clip-trigger count). Skip if the shader
+    // already declares a same-named member, so there's never a double port.
+    if reset_gated && !inputs.iter().any(|p| p.name == RESET_TRIGGER_PORT) {
+        inputs.push(NodePort {
+            name: RESET_TRIGGER_PORT,
+            ty: PortType::Scalar(ScalarType::F32),
+            kind: PortKind::Input,
+            required: false,
+        });
+    }
+
     Ok(ParsedShader {
         inputs,
         outputs,
@@ -654,6 +703,8 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         aliased_pairs,
         output_formats,
         default_dispatch_port,
+        sampler_address_mode: parse_sampler_address_mode(source),
+        reset_gated,
     })
 }
 
@@ -1077,6 +1128,41 @@ fn is_channel_skip_marker(comment: &str) -> bool {
 /// `// @channel_skip`: block comments stripped first, own-line marker, exact
 /// match (trailing text not accepted). The marker applies to the next storage
 /// global declaration line.
+/// Scan for a `// @sampler_address_mode: <token>` marker (emitted by the freeze
+/// compiler on a fused region's `samp` binding when its gather members wrap) and
+/// return the address mode to create the gather sampler at. Absent / unknown ⇒
+/// `ClampToEdge`, the default for every hand-authored kernel. WGSL carries no
+/// address mode in the shader, so this side channel is how a fused toroidal
+/// gradient gets a repeat sampler instead of the default clamp. Same comment
+/// conventions as `// @fused_output` (block comments stripped first; matches a
+/// trailing or own-line `// @sampler_address_mode: <token>`).
+fn parse_sampler_address_mode(source: &str) -> GpuAddressMode {
+    let stripped = strip_block_comments(source);
+    for line in stripped.lines() {
+        let (_, comment) = split_line_comment(line);
+        let Some(c) = comment else { continue };
+        let Some(token) = c.trim().strip_prefix("@sampler_address_mode:") else {
+            continue;
+        };
+        return match token.trim() {
+            "repeat" => GpuAddressMode::Repeat,
+            "mirror" => GpuAddressMode::MirrorRepeat,
+            _ => GpuAddressMode::ClampToEdge,
+        };
+    }
+    GpuAddressMode::ClampToEdge
+}
+
+/// Whether the source carries a `// @reset_gated` line-comment marker (own-line
+/// or trailing). Same conventions as the other markers: block comments stripped
+/// first, exact match. Drives the synthetic `reset_trigger` input + dispatch gate.
+fn source_has_reset_gated_marker(source: &str) -> bool {
+    let stripped = strip_block_comments(source);
+    stripped
+        .lines()
+        .any(|line| matches!(split_line_comment(line).1, Some(c) if c.trim() == "@reset_gated"))
+}
+
 fn extract_fused_outputs(source: &str) -> std::collections::HashSet<String> {
     let stripped = strip_block_comments(source);
     let mut set = std::collections::HashSet::new();
@@ -1286,6 +1372,32 @@ impl EffectNode for WgslCompute {
             return;
         }
 
+        // Reset gate (`// @reset_gated` marker → the synthetic `reset_trigger`
+        // input): an expensive generator-side kernel — the editable seed pattern —
+        // whose output is consumed only on a clip reset. When the trigger is wired,
+        // re-dispatch only on its integer edges (+ first frame); between resets the
+        // output (a persistent pooled resource) keeps the last pattern, which the
+        // equally-gated consumer ignores until the next reset. Unwired ⇒ every frame
+        // (no behaviour change). Mirrors the gate on node.seed_particles_from_texture.
+        //
+        // SAFETY: skip ONLY a kernel with NO aliased array in/out. An
+        // `aliased_array_io` kernel mutates its input buffer in place, and the
+        // executor REQUIRES it to dispatch every frame (else its "aliased output not
+        // written ⇒ downstream reads stale data" guard panics). Such a kernel (the
+        // ParticleText / FluidSim3D in-place buffer seeds) can't be skip-gated until
+        // its seed buffer is a fresh write-only output; the gate stays inert there.
+        if self.reset_gated
+            && self.aliased_pairs.is_empty()
+            && let Some(ParamValue::Float(v)) = ctx.inputs.scalar(RESET_TRIGGER_PORT)
+        {
+            let current = v.round() as i32;
+            let edge = self.last_reset_trigger != Some(current);
+            self.last_reset_trigger = Some(current);
+            if !edge {
+                return;
+            }
+        }
+
         // Compile (or recompile) the pipeline lazily on source change.
         let source_hash = hash_str(&self.source);
         if self.pipeline.is_none() || self.compiled_hash != Some(source_hash) {
@@ -1313,8 +1425,15 @@ impl EffectNode for WgslCompute {
             .any(|b| matches!(b.kind, BindingKind::Sampler));
         if needs_sampler && self.sampler.is_none() {
             let gpu = ctx.gpu_encoder();
-            self.sampler =
-                Some(gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
+            // Address mode from the `// @sampler_address_mode` marker (default
+            // clamp): a fused toroidal gather gets a repeat sampler so it samples
+            // its edges exactly like the unfused atom.
+            self.sampler = Some(gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                address_mode_u: self.sampler_address_mode,
+                address_mode_v: self.sampler_address_mode,
+                address_mode_w: self.sampler_address_mode,
+                ..Default::default()
+            }));
         }
 
         // Pack uniforms into the scratch buffer. Each non-pad member
@@ -1587,6 +1706,44 @@ mod tests {
         assert_eq!(
             node.output_format("output_tex"),
             Some(GpuTextureFormat::Rgba16Float)
+        );
+    }
+
+    #[test]
+    fn reset_gated_marker_exposes_synthetic_reset_trigger_input() {
+        // A `// @reset_gated` source gains an OPTIONAL `reset_trigger` input that
+        // edge-gates the dispatch (the seed-pattern pattern: cheap to skip between
+        // clip resets). Unmarked sources never get the port.
+        let gated = r#"// @reset_gated
+struct U { pattern: u32, };
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var density: texture_storage_2d<r32float, write>;
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    _ = u.pattern;
+    textureStore(density, vec2<i32>(id.xy), vec4<f32>(1.0));
+}
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(gated);
+        assert!(!node.compile_failed, "gated shader must parse");
+        assert!(node.reset_gated, "marker sets reset_gated");
+        let rt = node
+            .inputs
+            .iter()
+            .find(|p| p.name == "reset_trigger")
+            .expect("synthetic reset_trigger input present");
+        assert_eq!(rt.ty, PortType::Scalar(ScalarType::F32));
+        assert!(!rt.required, "reset_trigger is optional (unwired ⇒ every frame)");
+
+        // Same shader without the marker: no synthetic port, runs every frame.
+        let ungated = gated.replace("// @reset_gated\n", "");
+        let mut plain = WgslCompute::new();
+        plain.set_wgsl_source(&ungated);
+        assert!(!plain.reset_gated);
+        assert!(
+            !plain.inputs.iter().any(|p| p.name == "reset_trigger"),
+            "no marker ⇒ no reset_trigger port"
         );
     }
 

@@ -710,6 +710,23 @@ pub trait EffectNode: Send {
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
+    /// The sampler ADDRESS MODE a fused region must bind so this atom's
+    /// `Gather` inputs sample identically whether fused or standalone. The
+    /// freeze compiler folds a gather atom into a `node.wgsl_compute` kernel
+    /// that binds ONE shared sampler; that sampler's address mode has to match
+    /// the one this atom creates in its own `run()`, or the fused look diverges
+    /// at the texture edges (the fused kernel would sample clamp where the
+    /// standalone atom wraps). Default `ClampToEdge` — the historical fused
+    /// sampler, so every coincident / clamp-gather atom keeps it and all-clamp
+    /// regions stay byte-identical. A gather atom whose sampling WRAPS (a
+    /// toroidal fluid gradient, a seamless-tile warp) overrides this, reading
+    /// the same param its `run()` reads (e.g. `wrap_mode`). The fused region
+    /// only fuses gathers that agree on one mode (see the install pass), so
+    /// returning a non-default mode here is honoured directly.
+    fn fused_gather_sampler_mode(&self, _params: &ParamValues) -> manifold_gpu::GpuAddressMode {
+        manifold_gpu::GpuAddressMode::ClampToEdge
+    }
+
     /// If this node EMITS a [`Material`](crate::node_graph::material::Material)
     /// of a statically-known [`MaterialKind`], return it. The validator
     /// uses this to resolve a downstream renderer's

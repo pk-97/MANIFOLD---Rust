@@ -230,6 +230,19 @@ pub trait Primitive: PrimitiveSpec {
     /// state (the `node.wgsl_compute_*` family).
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
+    /// Sampler address mode for this atom's `Gather` inputs in a fused region —
+    /// mirror of
+    /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
+    /// Override on a gather atom whose sampling wraps (the toroidal fluid
+    /// gradient reads its `wrap_mode` param) so the fused region binds the same
+    /// sampler the standalone atom does. Default `ClampToEdge`.
+    fn fused_gather_sampler_mode(
+        &self,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> manifold_gpu::GpuAddressMode {
+        manifold_gpu::GpuAddressMode::ClampToEdge
+    }
+
     /// Mirror of
     /// [`EffectNode::output_dims`](crate::node_graph::effect_node::EffectNode::output_dims).
     /// Override on `node.downsample` (and any future `node.upsample`)
@@ -420,6 +433,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
         Primitive::set_output_format(self, port, format);
+    }
+    fn fused_gather_sampler_mode(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> manifold_gpu::GpuAddressMode {
+        Primitive::fused_gather_sampler_mode(self, params)
     }
     fn output_dims(
         &self,

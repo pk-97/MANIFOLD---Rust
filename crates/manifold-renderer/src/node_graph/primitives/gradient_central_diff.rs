@@ -112,6 +112,28 @@ impl Primitive for GradientCentralDiff {
         }
     }
 
+    /// `in` is a `Gather` (4-neighbour central difference), so a fused region
+    /// must bind the SAME sampler this atom would create standalone: a Repeat
+    /// (toroidal) sampler under `wrap_mode = Repeat`, else the default clamp.
+    /// Mirrors the `wrap_repeat` read in `run()` exactly — the fused flow field
+    /// (FluidSim) wraps, so without this the fused kernel clamps at the edges
+    /// and the look shifts from the unfused editor.
+    fn fused_gather_sampler_mode(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> manifold_gpu::GpuAddressMode {
+        let wrap_repeat = match params.get("wrap_mode") {
+            Some(ParamValue::Enum(v)) => *v == 1,
+            Some(ParamValue::Float(f)) => f.round() as u32 == 1,
+            _ => false,
+        };
+        if wrap_repeat {
+            manifold_gpu::GpuAddressMode::Repeat
+        } else {
+            manifold_gpu::GpuAddressMode::ClampToEdge
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let channel = match ctx.params.get("channel") {
             Some(ParamValue::Enum(v)) => (*v).min(3),

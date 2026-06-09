@@ -464,6 +464,49 @@ fn resolve_output_storage(
     }
 }
 
+/// The address-mode token (`"clamp"` / `"repeat"` / `"mirror"`) the fused
+/// region's single shared gather `samp` sampler must bind, or `None` when the
+/// region's `Gather` members disagree on a mode — one sampler can't serve two,
+/// so the caller leaves the card unfused (safe, just no speedup; conflicts don't
+/// occur in any shipped preset). A region with no gather members, or whose
+/// gathers all want the default clamp, returns `"clamp"` — no marker, the
+/// historical byte-identical sampler. Mirrors each gather atom's standalone
+/// sampler choice via [`EffectNode::fused_gather_sampler_mode`], fed the member's
+/// effective params (def override else atom default), so a `wrap_mode = Repeat`
+/// gradient resolves to a repeat sampler the toroidal flow field needs.
+fn resolve_gather_sampler_mode(
+    region: &Region,
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+) -> Option<&'static str> {
+    let mut mode: Option<manifold_gpu::GpuAddressMode> = None;
+    for member in &region.members {
+        if !member.input_access.iter().any(|a| a.is_gather()) {
+            continue; // no gather input — doesn't touch the sampler
+        }
+        let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
+        let node = registry.construct(&doc_node.type_id)?;
+        // Effective params as f32 (the gather-mode override reads its enum from a
+        // Float or Enum value); covers every scalar param the finder admits.
+        let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
+        for p in node.parameters() {
+            if let Some(v) = effective_param_f32(doc_node.params.get(p.name), &p.default) {
+                params.insert(p.name, ParamValue::Float(v));
+            }
+        }
+        let m = node.fused_gather_sampler_mode(&params);
+        match mode {
+            Some(existing) if existing != m => return None, // two gathers disagree
+            _ => mode = Some(m),
+        }
+    }
+    Some(match mode {
+        Some(manifold_gpu::GpuAddressMode::Repeat) => "repeat",
+        Some(manifold_gpu::GpuAddressMode::MirrorRepeat) => "mirror",
+        _ => "clamp",
+    })
+}
+
 /// Trace a single-output BUFFER region's output back through its members'
 /// `aliased_array_io` chain to the external input it ultimately writes IN PLACE.
 /// Returns that external index, or `None` if the region isn't a clean in-place
@@ -640,11 +683,17 @@ pub(crate) fn fuse_canonical_def(
         let in_place_alias = region_output_aliases_external(region, registry, def)
             .filter(|&e| external_is_inplace_loop(region, e, registry, def, &member_region));
 
+        // The region's shared gather sampler mode (clamp default; repeat for a
+        // toroidal gradient). `None` ⇒ two gather members want different modes ⇒
+        // leave the whole card unfused (a single `samp` can't serve both).
+        let sampler_address_mode = resolve_gather_sampler_mode(region, registry, def)?;
+
         let fusion_region = FusionRegion {
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
             outputs: region.outputs.iter().map(|&d| NodeInstanceId(d)).collect(),
             in_place_alias,
+            sampler_address_mode,
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline
