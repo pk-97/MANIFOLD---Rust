@@ -11,6 +11,70 @@ Definition of **done** here is behavioral, not "it compiles": *a generator and a
 effect run the same code path for a given action, provable by grep showing no
 `GraphParamTarget::Generator` / effect-vs-generator-registry fork remaining.*
 
+## 2026-06-09 full-tree audit — the corrected remaining-work picture
+
+The 16-fork progress table below is accurate: those enumerated dispatch / storage /
+spine forks ARE collapsed. But "all 16 done → nothing left" was an **incomplete**
+framing. A read-every-site audit (not just grep — every `GraphTarget` / `ParamCardKind`
+/ `*GenParam*` site opened and read) on 2026-06-09 found:
+
+- **One fork the grep sweep missed:** the Ableton **Map** action. `MapEffectParamToAbleton`
+  and `MapGenParamToAbleton` are two separate `PanelAction` variants with two dispatch
+  arms in `ui_bridge/inspector.rs` that rebuild the mapping target inline — duplicating
+  the shared `ableton_mapping_target` helper that the **Unmap** path (`UnmapParamAbleton`)
+  already routes through. Map was never collapsed; Unmap was. Real residual fork.
+
+- **The real remaining structural fork is the inspector card SHELL** in
+  `manifold-ui/src/panels/param_card.rs`: six paired `_effect` / `_generator` methods
+  (`build`, `sync_values`, `handle_click`, `handle_pointer_down`, `handle_right_click`,
+  `compute_height`). The per-param *row* is shared (`build_param_row`,
+  `match_param_row_click` → `RowClick`, `handle_drag`); the *shell* genuinely diverges
+  (effect: drag-handle + ABL/ENV/DRV/MOD badges + ON/OFF toggle + hierarchical parenting
+  + proximity-zone trim hit-testing; generator: Change button + toggle/trigger/string rows
+  + flat parenting). This shell fork is the **root cause** of the visible asymmetries:
+  - the make-unique / export / import right-click context menu exists on the **generator
+    card only** (effect `handle_right_click` has no header-menu arm);
+  - the fork-preset actions are generator-named (`MakeGeneratorUnique` /
+    `ExportGeneratorPreset` / `ImportGeneratorPreset`);
+  - effect cards have proximity-zone trim/target hit-testing the generator card lacks.
+
+- **Confirmed NOT forks** (read, verified identity-resolution → shared body): every
+  `GraphTarget::Effect/Generator` site (`Project::with_preset_graph_mut`,
+  `find_preset_instance(_mut)`, `set_instance_preset_id`, `fork_preset`;
+  `content_thread::graph_snapshot` — one function; `commands/graph.rs` expose/unexpose via
+  the shared `mirror_effect_side`; `app_render` reshape/seed/watched; `DriverTarget::From`;
+  the inspector `resolve_graph_target` / `ableton_mapping_target` / `macro_mapping_target`
+  helpers); the Ableton write-target collection (iterates storage homes, unified def lookup +
+  unified `find_preset_instance_mut` write); the OSC scheme (`/layer/{id}/{name}/{param}`,
+  no `/gen/` namespace). These 2-arm-locate then run one body — the enum is irreducible
+  host identity (effect by `EffectId`, generator by `LayerId`), not a behavior fork.
+
+- **Deliberate kept seams:** two disk-source inventory buckets
+  (`effect::PresetSource` / `generator::PresetSource`) so an effect preset can't land in
+  the generator store; the generator value-alias capability gap (empty table).
+
+### Plan of attack (agreed 2026-06-09 — fix asymmetries with unified design, NOT bandaids)
+
+1. **Docs accuracy** (this section + the `PRESET_UNIFICATION_PLAN.md` banner +
+   `modulation.rs` stale comments). DONE in this commit.
+2. **Collapse the Ableton Map action** onto the shared `ableton_mapping_target` helper —
+   one action path for map + unmap, the way the Unmap side already works. Not a parallel arm.
+3. **Unify the fork-preset surface:** make the actions kind-generic (one `MakePresetUnique`
+   / `ExportPreset` / `ImportPreset` set routing through `GraphTarget`) and give the effect
+   card the same right-click context-menu affordance the generator card has — so the feature
+   exists on both sides by construction, not by a copied generator arm.
+4. **Close the capability gaps** with the shared core: generator cards get the
+   proximity-zone trim/target hit-testing (lift the effect logic into the shared row path);
+   effect cards get string-param exposure (UI half of fork #15, whose runtime already landed).
+5. **Running-app items** (cannot verify headless): the embedded-presets picker
+   (`SetGenType(usize)` → `SetGenType(PresetTypeId)` + change-gated snapshot) and a smoke
+   pass over hot-reload + the dispatch collapse.
+
+The card shell's two *build* methods (badges vs Change button, hierarchical vs flat
+parenting) are legitimately distinct and stay two methods — the goal is eliminating the
+feature **asymmetry** (a feature living on one side only), not collapsing divergent shells
+for its own sake. Phase 7c stopped at the shell deliberately; that decision stands.
+
 ## Progress (2026-06-08, branch `preset-collapse-phase5`)
 
 Every commit below is on the branch, pushed, and gated: `cargo check

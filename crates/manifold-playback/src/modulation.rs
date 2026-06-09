@@ -5,9 +5,10 @@
 //! Execution order each frame (after SyncClipsToTime, before compositor):
 //!   1. reset_all_effectives(project)        — base → effective
 //!   2. evaluate_all_drivers(project, beat)   — LFO → effective
-//!   3. evaluate_all_envelopes(project, beat) — ADSR → effective (additive)
-//!   4. evaluate_gen_param_envelopes(project, beat) — gen ADSR → effective (additive)
-//!   5. If any_dirty → mark compositor dirty
+//!   3. evaluate_all_envelopes(project, beat) — ADSR → effective (additive);
+//!      one walk visits every layer's effects AND its generator instance
+//!      (the former separate `evaluate_gen_param_envelopes` pass is folded in)
+//!   4. If any_dirty → mark compositor dirty
 
 use manifold_core::Beats;
 use manifold_core::effects::{PresetInstance, EnvelopeMode, ParamEnvelope, ParameterDriver};
@@ -574,9 +575,10 @@ fn compute_active_clip_timing(
 // =====================================================================
 // Characterization tests for the per-frame envelope evaluators.
 //
-// These pin the *current* behavior of `evaluate_all_envelopes` (effect
-// targets) and `evaluate_gen_param_envelopes` (generator params) before the
-// envelope-home unification moves effect envelopes off `layer.envelopes`
+// These pin the *current* behavior of `evaluate_all_envelopes` — the single
+// walk that now visits both effect targets and generator params (the former
+// separate `evaluate_gen_param_envelopes` is folded in) — across the
+// envelope-home unification that moved effect envelopes off `layer.envelopes`
 // (keyed by `target_effect_type`) and onto each effect's own
 // `PresetInstance.envelopes`. The arithmetic (ADSR offset, random walk) is
 // invariant across that refactor; the effect-target *resolution* is the part
