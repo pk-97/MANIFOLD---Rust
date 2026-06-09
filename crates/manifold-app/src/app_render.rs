@@ -1062,7 +1062,6 @@ impl Application {
                             tab: manifold_ui::panels::InspectorTab::Master,
                             layer_id: None,
                             item_names: names,
-                            item_keys: Vec::new(),
                             item_categories: categories,
                             category_names: cat_names,
                             item_type_ids: type_ids,

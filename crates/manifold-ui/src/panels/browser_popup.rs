@@ -74,7 +74,11 @@ pub enum BrowserPopupAction {
     /// Selection carries the popup's context atomically — prevents temporal coupling
     /// where context could be read after close() clears it.
     Selected {
-        key: i32,
+        /// The chosen preset's stable type id (effect or generator), resolved
+        /// directly by the dispatch with no registry-index indirection — so
+        /// presets outside the startup-static registry (project-embedded /
+        /// forked) are selectable.
+        type_id: String,
         mode: BrowserPopupMode,
         tab: InspectorTab,
         layer_id: Option<LayerId>,
@@ -96,11 +100,11 @@ pub struct BrowserPopupRequest {
     /// For Generator mode: the layer whose generator type is being changed.
     pub layer_id: Option<LayerId>,
     pub item_names: Vec<String>,
-    pub item_keys: Vec<i32>,
     pub item_categories: Vec<String>,
     pub category_names: Vec<String>,
-    /// Node mode: the node `type_id` per item (parallel to `item_names`).
-    /// Empty for Effect/Generator mode, which select via `item_keys`.
+    /// The stable `type_id` per item (parallel to `item_names`), for every
+    /// mode. Effect / generator selection resolves the chosen preset by this
+    /// id; Node mode spawns it. This is the single selection key.
     pub item_type_ids: Vec<String>,
     /// Optional per-item search text (e.g. label plus descriptor aliases) the
     /// filter matches against instead of `item_names`. `None` keeps the
@@ -122,10 +126,9 @@ pub struct BrowserPopupPanel {
 
     // Source data
     item_names: Vec<String>,
-    item_keys: Vec<i32>,
     item_categories: Vec<String>,
     category_names: Vec<String>,
-    /// Node mode: parallel `type_id` per item; selection returns these.
+    /// Parallel `type_id` per item; selection returns these (all modes).
     item_type_ids: Vec<String>,
     /// Optional search text per item (label + aliases) the filter uses when
     /// present, so typing "gaussian" or "Blur TOP" finds node.blur.
@@ -179,7 +182,6 @@ impl BrowserPopupPanel {
             tab: InspectorTab::Master,
             layer_id: None,
             item_names: Vec::new(),
-            item_keys: Vec::new(),
             item_categories: Vec::new(),
             category_names: Vec::new(),
             item_type_ids: Vec::new(),
@@ -235,7 +237,6 @@ impl BrowserPopupPanel {
         self.tab = req.tab;
         self.layer_id = req.layer_id;
         self.item_names = req.item_names;
-        self.item_keys = req.item_keys;
         self.item_categories = req.item_categories;
         self.category_names = req.category_names;
         self.item_type_ids = req.item_type_ids;
@@ -253,7 +254,6 @@ impl BrowserPopupPanel {
         self.is_open = false;
         self.layer_id = None;
         self.item_names.clear();
-        self.item_keys.clear();
         self.item_categories.clear();
         self.category_names.clear();
         self.item_type_ids.clear();
@@ -680,7 +680,7 @@ impl BrowserPopupPanel {
                     }
                 } else {
                     BrowserPopupAction::Selected {
-                        key: self.item_keys[src_idx],
+                        type_id: self.item_type_ids.get(src_idx).cloned().unwrap_or_default(),
                         mode: self.mode,
                         tab: self.tab,
                         layer_id: self.layer_id.clone(),

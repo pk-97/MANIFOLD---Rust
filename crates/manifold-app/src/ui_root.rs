@@ -753,17 +753,22 @@ impl UIRoot {
                         if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
                             match bp_action {
                                 BrowserPopupAction::Selected {
-                                    key,
+                                    type_id,
                                     mode,
                                     tab,
                                     layer_id,
                                 } => match mode {
                                     BrowserPopupMode::Effect => {
-                                        actions.push(PanelAction::AddEffect(tab, key as usize));
+                                        actions.push(PanelAction::AddEffect(
+                                            tab,
+                                            manifold_core::PresetTypeId::from_string(type_id),
+                                        ));
                                     }
                                     BrowserPopupMode::Generator => {
-                                        actions
-                                            .push(PanelAction::SetGenType(layer_id, key as usize));
+                                        actions.push(PanelAction::SetGenType(
+                                            layer_id,
+                                            manifold_core::PresetTypeId::from_string(type_id),
+                                        ));
                                     }
                                     // Node mode is editor-window only; the
                                     // main-window popup never opens it.
@@ -1034,20 +1039,19 @@ impl UIRoot {
                 use manifold_ui::panels::browser_popup::*;
 
                 let available = preset_type_registry::available_of_kind(PresetKind::Effect);
-                let mut items: Vec<(String, i32, String)> = available
+                let mut items: Vec<(String, String, String)> = available
                     .iter()
-                    .enumerate()
-                    .map(|(i, reg)| {
+                    .map(|reg| {
                         (
                             reg.display_name.to_string(),
-                            i as i32,
+                            reg.id.as_str().to_string(),
                             reg.category.unwrap_or("").to_string(),
                         )
                     })
                     .collect();
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
-                let keys: Vec<i32> = items.iter().map(|i| i.1).collect();
+                let type_ids: Vec<String> = items.iter().map(|i| i.1.clone()).collect();
                 let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
 
                 // Unique category names
@@ -1063,10 +1067,9 @@ impl UIRoot {
                     tab: *tab,
                     layer_id: None,
                     item_names: names,
-                    item_keys: keys,
                     item_categories: categories,
                     category_names: cat_names,
-                    item_type_ids: Vec::new(),
+                    item_type_ids: type_ids,
                     item_search: None,
                     spawn_graph_pos: None,
                     paste_count: self.effect_clipboard_count,
@@ -1079,14 +1082,13 @@ impl UIRoot {
                 use manifold_ui::panels::browser_popup::*;
 
                 let available = preset_type_registry::available_of_kind(PresetKind::Generator);
-                let mut items: Vec<(String, i32)> = available
+                let mut items: Vec<(String, String)> = available
                     .iter()
-                    .enumerate()
-                    .map(|(i, reg)| (reg.display_name.to_string(), i as i32))
+                    .map(|reg| (reg.display_name.to_string(), reg.id.as_str().to_string()))
                     .collect();
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
-                let keys: Vec<i32> = items.iter().map(|i| i.1).collect();
+                let type_ids: Vec<String> = items.iter().map(|i| i.1.clone()).collect();
 
                 self.browser_popup
                     .set_screen_size(self.screen_width, self.screen_height);
@@ -1095,10 +1097,9 @@ impl UIRoot {
                     tab: InspectorTab::Layer,
                     layer_id: layer_id.clone(),
                     item_names: names,
-                    item_keys: keys,
                     item_categories: Vec::new(),
                     category_names: Vec::new(),
-                    item_type_ids: Vec::new(),
+                    item_type_ids: type_ids,
                     item_search: None,
                     spawn_graph_pos: None,
                     paste_count: 0,

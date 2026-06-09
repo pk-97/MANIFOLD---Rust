@@ -226,49 +226,48 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
-        PanelAction::SetGenType(opt_layer_id, gen_type_idx) => {
+        PanelAction::SetGenType(opt_layer_id, new_type) => {
             let resolved_idx = opt_layer_id
                 .as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
             if let Some(layer_idx) = resolved_idx {
-                let available = manifold_core::preset_type_registry::available_of_kind(
-                    manifold_core::preset_def::PresetKind::Generator,
-                );
                 let layer = &project.timeline.layers[layer_idx];
                 let old_type = layer
                     .gen_params()
                     .map(|gp| gp.generator_type().clone())
                     .unwrap_or(PresetTypeId::NONE);
-                if let Some(reg) = available.get(*gen_type_idx) {
-                    let new_type = reg.id.clone();
-                    if new_type != old_type {
-                        let old_params: Vec<f32> = layer
-                            .gen_params()
-                            .map(|gp| gp.param_values.iter().map(|s| s.value).collect())
-                            .unwrap_or_default();
-                        let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
-                        let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
-                        let layer_id = layer.layer_id.clone();
-                        let cmd =
-                            manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                                layer_id.clone(),
-                                old_type,
-                                new_type.clone(),
-                                old_params,
-                                old_drivers,
-                                old_envelopes,
-                            );
-                        {
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(project);
-                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                        }
-                        ContentCommand::send(
-                            content_tx,
-                            ContentCommand::GeneratorTypeChanged { layer_id, new_type },
+                // The action carries the chosen preset id directly (registry
+                // entries AND project-embedded presets), so no index lookup.
+                if *new_type != old_type {
+                    let old_params: Vec<f32> = layer
+                        .gen_params()
+                        .map(|gp| gp.param_values.iter().map(|s| s.value).collect())
+                        .unwrap_or_default();
+                    let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
+                    let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
+                    let layer_id = layer.layer_id.clone();
+                    let cmd =
+                        manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
+                            layer_id.clone(),
+                            old_type,
+                            new_type.clone(),
+                            old_params,
+                            old_drivers,
+                            old_envelopes,
                         );
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     }
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::GeneratorTypeChanged {
+                            layer_id,
+                            new_type: new_type.clone(),
+                        },
+                    );
                 }
             }
             DispatchResult::structural()

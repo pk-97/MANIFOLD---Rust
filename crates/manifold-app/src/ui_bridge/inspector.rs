@@ -1763,16 +1763,12 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AddEffect(tab, effect_type_idx) => {
+        PanelAction::AddEffect(tab, effect_type) => {
             use manifold_core::effects::PresetInstance;
-            use manifold_core::{preset_def::PresetKind, preset_type_registry};
-            let available = preset_type_registry::available_of_kind(PresetKind::Effect);
-            let Some(reg) = available.get(*effect_type_idx) else {
-                return DispatchResult::handled();
-            };
-            let effect_type = reg.id.clone();
-            let defaults = manifold_core::preset_definition_registry::get_defaults(&effect_type);
-            let mut effect = PresetInstance::new(effect_type);
+            // The action carries the chosen preset id directly (registry
+            // entries AND project-embedded presets), so no index lookup.
+            let defaults = manifold_core::preset_definition_registry::get_defaults(effect_type);
+            let mut effect = PresetInstance::new(effect_type.clone());
             effect.param_values = defaults;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let target = match tab {
