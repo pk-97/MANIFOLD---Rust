@@ -110,6 +110,15 @@ impl GpuBuffer {
         &self.raw
     }
 
+    /// Whether two handles refer to the SAME underlying Metal buffer object
+    /// (identity, not value/size equality). Mirrors the encoder's internal
+    /// `buffer_identity`. Used to detect aliased in/out wires — e.g. an
+    /// in-place particle feedback loop where `in` and `out` resolve to one
+    /// pre-bound buffer, so a frame-delay copy between them would be a no-op.
+    pub fn ptr_eq(&self, other: &GpuBuffer) -> bool {
+        (&*self.raw as *const _ as *const ()) == (&*other.raw as *const _ as *const ())
+    }
+
     pub fn size(&self) -> u64 {
         self.size
     }

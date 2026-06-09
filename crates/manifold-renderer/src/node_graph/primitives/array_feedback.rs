@@ -56,12 +56,15 @@ crate::primitive! {
     },
 }
 
-/// Per-instance persistent state. One `GpuBuffer` holding the
-/// previous frame's payload. Sized to match the wire on first
+/// Per-instance persistent state. Sized to match the wire on first
 /// alloc; reallocated if the wire's byte length changes (chain
 /// rebuild triggered by capacity-param change).
 struct ArrayFeedbackState {
-    prev: GpuBuffer,
+    /// Previous frame's payload — the copy-based 1-frame delay buffer.
+    /// `None` for an in-place feedback loop (`in` and `out` are the same
+    /// pre-bound buffer): no delay buffer is needed because the buffer
+    /// persists in place and already holds last frame's result.
+    prev: Option<GpuBuffer>,
     capacity_bytes: u64,
 }
 
@@ -123,12 +126,23 @@ impl Primitive for ArrayFeedback {
             return;
         }
 
+        // In-place loop fast path: when `in` and `out` resolve to the SAME
+        // pre-bound buffer — a particle sim whose chain mutates one buffer in
+        // place via `aliased_array_io` (FluidSim, FluidSim3D, ParticleText) —
+        // that buffer already persists across frames and holds last frame's
+        // result, so the prev<->out delay copies are redundant no-ops. We skip
+        // them entirely; only the first-frame seed and reset edges write,
+        // straight into `out`. This is the ~6 ms/frame the two copies cost on
+        // FluidSim's 512 MB particle buffer. For any non-in-place loop
+        // (`in` != `out`) the copy-based 1-frame delay below is kept verbatim.
+        let in_place = in_buf.ptr_eq(out_buf);
+
         let node_id = ctx.node_id;
         let owner_key = ctx.owner_key;
 
-        // Mark GPU access for the aliased-output contract check. This
-        // primitive dispatches buffer copies, so the executor's
-        // post-evaluate audit needs to see the flag.
+        // Mark GPU access for the aliased-output contract check. (No-op for
+        // this node — it doesn't declare `aliased_array_io` — but harmless and
+        // matches the texture sibling.)
         ctx.mark_gpu_accessed();
 
         // Split borrows: gpu / state are disjoint fields on ctx, so
@@ -148,36 +162,46 @@ impl Primitive for ArrayFeedback {
             None => true,
         };
         if needs_alloc {
-            let prev = gpu.device.create_buffer(size);
-            // Seed the persistent buffer on first allocation. When the
-            // optional `seed` input is wired, copy its contents (the
-            // bootstrap path for sims like FluidSim2D where the
-            // initial particle layout is meaningful — pattern, not
-            // zeros). When unwired, fall back to seeding from `in` so
-            // first-frame output isn't an uninitialised buffer.
-            let init_source = ctx.inputs.array("seed").unwrap_or(in_buf);
-            let copy_size = init_source.size.min(size);
-            if copy_size > 0 {
-                gpu.native_enc
-                    .copy_buffer_to_buffer(init_source, &prev, copy_size);
+            if in_place {
+                // The in-place buffer IS `out`; seed it directly. When `seed`
+                // is wired, copy its initial pattern (the bootstrap path for
+                // sims whose initial layout is meaningful); otherwise leave the
+                // pre-bound buffer as the allocator left it. No delay buffer.
+                if let Some(seed_buf) = ctx.inputs.array("seed") {
+                    let copy_size = seed_buf.size.min(size);
+                    if copy_size > 0 {
+                        gpu.native_enc.copy_buffer_to_buffer(seed_buf, out_buf, copy_size);
+                    }
+                }
+                store.insert(
+                    node_id,
+                    owner_key,
+                    ArrayFeedbackState { prev: None, capacity_bytes: size },
+                );
+            } else {
+                // Copy-delay path: own a persistent `prev` buffer. Seed from
+                // the wired `seed`, else fall back to `in` so first-frame
+                // output isn't an uninitialised buffer.
+                let prev = gpu.device.create_buffer(size);
+                let init_source = ctx.inputs.array("seed").unwrap_or(in_buf);
+                let copy_size = init_source.size.min(size);
+                if copy_size > 0 {
+                    gpu.native_enc.copy_buffer_to_buffer(init_source, &prev, copy_size);
+                }
+                store.insert(
+                    node_id,
+                    owner_key,
+                    ArrayFeedbackState { prev: Some(prev), capacity_bytes: size },
+                );
             }
-            store.insert(
-                node_id,
-                owner_key,
-                ArrayFeedbackState {
-                    prev,
-                    capacity_bytes: size,
-                },
-            );
         }
 
-        // Reset-on-trigger: if `reset_trigger` is wired and its
-        // integer value has advanced since last frame, copy `seed`
-        // into the state buffer before emitting. First observation
-        // arms without firing so the first-alloc seed (above) isn't
-        // immediately repeated. When `seed` is unwired the edge fires
-        // but there's nothing meaningful to reset from — degenerate
-        // no-op rather than copying the back-edge `in` over itself.
+        // Reset-on-trigger: if `reset_trigger` is wired and its integer value
+        // has advanced since last frame, re-seed before emitting. First
+        // observation arms without firing so the first-alloc seed isn't
+        // immediately repeated. The re-seed lands in `out` for the in-place
+        // loop, else in the prev buffer. When `seed` is unwired the edge fires
+        // but there's nothing meaningful to reset from — degenerate no-op.
         if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
             let current = v.round() as i32;
             let edge = match self.last_reset_trigger {
@@ -186,29 +210,32 @@ impl Primitive for ArrayFeedback {
             };
             self.last_reset_trigger = Some(current);
             if edge && let Some(seed_buf) = ctx.inputs.array("seed") {
-                let state_mut = store
-                    .get::<ArrayFeedbackState>(node_id, owner_key)
-                    .expect("alloc path inserts state above");
-                let copy_size = seed_buf.size.min(state_mut.capacity_bytes);
-                if copy_size > 0 {
-                    gpu.native_enc
-                        .copy_buffer_to_buffer(seed_buf, &state_mut.prev, copy_size);
+                if in_place {
+                    let copy_size = seed_buf.size.min(size);
+                    if copy_size > 0 {
+                        gpu.native_enc.copy_buffer_to_buffer(seed_buf, out_buf, copy_size);
+                    }
+                } else if let Some(state_mut) = store.get::<ArrayFeedbackState>(node_id, owner_key)
+                    && let Some(prev) = state_mut.prev.as_ref()
+                {
+                    let copy_size = seed_buf.size.min(state_mut.capacity_bytes);
+                    if copy_size > 0 {
+                        gpu.native_enc.copy_buffer_to_buffer(seed_buf, prev, copy_size);
+                    }
                 }
             }
         }
 
-        let state = store
-            .get::<ArrayFeedbackState>(node_id, owner_key)
-            .expect("just inserted above");
-
-        // Emit `out` ← state.prev. state.prev holds last frame's
-        // producer output (snapshotted by `late_capture` at end of
-        // the previous frame), or — on the alloc frame — the in_buf
-        // passthrough seed copy above, or — on a reset-trigger edge —
-        // a fresh copy of the wired `seed`. Gives a true 1-frame
-        // delay in steady state and a 1-frame reset on trigger.
-        gpu.native_enc
-            .copy_buffer_to_buffer(&state.prev, out_buf, size);
+        // Steady emit. In-place: nothing — `out` IS the persistent buffer and
+        // already holds last frame's result. Else: copy the delayed state out
+        // (state.prev holds last frame's producer output, snapshotted by
+        // `late_capture` at end of the previous frame).
+        if !in_place
+            && let Some(state) = store.get::<ArrayFeedbackState>(node_id, owner_key)
+            && let Some(prev) = state.prev.as_ref()
+        {
+            gpu.native_enc.copy_buffer_to_buffer(prev, out_buf, size);
+        }
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -237,12 +264,17 @@ impl Primitive for ArrayFeedback {
         let Some(state) = store.get::<ArrayFeedbackState>(node_id, owner_key) else {
             return;
         };
+        // In-place loop: `prev` is None — the buffer persisted in place during
+        // the frame, so there is nothing to snapshot. Only the copy-delay path
+        // captures this frame's producer output into the delay buffer.
+        let Some(prev) = state.prev.as_ref() else {
+            return;
+        };
         let size = in_buf.size.min(state.capacity_bytes);
         if size == 0 {
             return;
         }
-        gpu.native_enc
-            .copy_buffer_to_buffer(in_buf, &state.prev, size);
+        gpu.native_enc.copy_buffer_to_buffer(in_buf, prev, size);
     }
 }
 
