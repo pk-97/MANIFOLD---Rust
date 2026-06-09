@@ -112,6 +112,16 @@ impl ScrollDirty {
     }
 }
 
+/// A project-embedded ("forked") preset surfaced into the Add pickers. Carries
+/// only what the picker needs: the stable id to select by, the display name,
+/// and which picker (effect / generator) it belongs in.
+#[derive(Clone)]
+pub struct EmbeddedPresetItem {
+    pub kind: manifold_core::preset_def::PresetKind,
+    pub type_id: String,
+    pub display_name: String,
+}
+
 /// Owns all UI state for one window.
 pub struct UIRoot {
     // Core
@@ -129,6 +139,13 @@ pub struct UIRoot {
     pub dropdown: DropdownPanel,
     pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
+
+    /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
+    /// in sync with the content snapshot. Change-gated by
+    /// `embedded_presets_fingerprint` so the Vec rebuilds only when the embedded
+    /// set actually changes, not every frame.
+    pub embedded_presets: Vec<EmbeddedPresetItem>,
+    embedded_presets_fingerprint: u64,
 
     // Waveform panels (bitmap-rendered, not UITree-based)
     pub waveform_lane: WaveformLanePanel,
@@ -240,6 +257,8 @@ impl UIRoot {
             dropdown: DropdownPanel::new(),
             browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
+            embedded_presets: Vec::new(),
+            embedded_presets_fingerprint: 0,
             waveform_lane: WaveformLanePanel::new(),
             stem_lanes: StemLaneGroupPanel::new(),
             built: false,
@@ -655,6 +674,30 @@ impl UIRoot {
         self.dropdown.open(items, trigger, 120.0, &mut self.tree);
     }
 
+    /// Refresh the embedded-preset list surfaced into the Add pickers from the
+    /// project snapshot. Change-gated by the embedded-preset fingerprint so the
+    /// Vec rebuilds only when a fork / import / remove actually changed the set,
+    /// not every frame. Called from the per-frame UI sync before event routing.
+    pub fn sync_embedded_presets(&mut self, project: &manifold_core::project::Project) {
+        let fp = crate::project_io::embedded_presets_fingerprint(project);
+        if fp == self.embedded_presets_fingerprint {
+            return;
+        }
+        self.embedded_presets_fingerprint = fp;
+        self.embedded_presets = project
+            .embedded_presets
+            .iter()
+            .filter_map(|ep| {
+                let meta = ep.def.preset_metadata.as_ref()?;
+                Some(EmbeddedPresetItem {
+                    kind: ep.kind,
+                    type_id: meta.id.as_str().to_string(),
+                    display_name: meta.display_name.to_string(),
+                })
+            })
+            .collect();
+    }
+
     /// Drain events from the input system and route to panels.
     /// Returns all panel actions for the app layer to dispatch.
     pub fn process_events(&mut self) -> Vec<PanelAction> {
@@ -1049,16 +1092,28 @@ impl UIRoot {
                         )
                     })
                     .collect();
+                // Project-embedded ("forked") effects, grouped under "Project".
+                let embedded: Vec<(String, String, String)> = self
+                    .embedded_presets
+                    .iter()
+                    .filter(|e| matches!(e.kind, PresetKind::Effect))
+                    .map(|e| (e.display_name.clone(), e.type_id.clone(), "Project".to_string()))
+                    .collect();
+                let has_embedded = !embedded.is_empty();
+                items.extend(embedded);
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
                 let type_ids: Vec<String> = items.iter().map(|i| i.1.clone()).collect();
                 let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
 
-                // Unique category names
-                let cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
+                // Unique category names (+ "Project" when embedded effects exist).
+                let mut cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
                     .iter()
                     .map(|&c| c.to_string())
                     .collect();
+                if has_embedded {
+                    cat_names.push("Project".to_string());
+                }
 
                 self.browser_popup
                     .set_screen_size(self.screen_width, self.screen_height);
@@ -1086,6 +1141,13 @@ impl UIRoot {
                     .iter()
                     .map(|reg| (reg.display_name.to_string(), reg.id.as_str().to_string()))
                     .collect();
+                // Project-embedded ("forked") generators.
+                items.extend(
+                    self.embedded_presets
+                        .iter()
+                        .filter(|e| matches!(e.kind, PresetKind::Generator))
+                        .map(|e| (e.display_name.clone(), e.type_id.clone())),
+                );
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
                 let type_ids: Vec<String> = items.iter().map(|i| i.1.clone()).collect();

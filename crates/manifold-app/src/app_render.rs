@@ -562,6 +562,11 @@ impl Application {
         }
 
         // 2. Process UI events and dispatch actions
+        // Keep the Add-picker's embedded-preset list current (fingerprint-gated;
+        // rebuilds only when a fork/import/remove changed the set).
+        self.ws
+            .ui_root
+            .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
 
         // Editor LEFT-LANE CARD actions are collected separately so they can be
