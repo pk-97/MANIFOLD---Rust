@@ -68,7 +68,7 @@ pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
     NodeWire, ParamValues,
 };
-pub use execution::Executor;
+pub use execution::{Executor, StepProfile};
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use chain_spec::{SkipMode, SpliceResult, is_skipped_for, splice_def_into_chain};
 pub use graph::{Graph, NodeInstance, WireWalkMode};

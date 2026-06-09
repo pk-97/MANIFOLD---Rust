@@ -7,12 +7,13 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBlitOption, MTLCommandBuffer, MTLCommandEncoder,
-    MTLComputeCommandEncoder, MTLIndexType, MTLLoadAction, MTLOrigin, MTLPrimitiveType,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLScissorRect, MTLSize, MTLStoreAction,
-    MTLTexture, MTLTextureUsage, MTLViewport,
+    MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
+    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
+    MTLLoadAction, MTLOrigin, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
+    MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
 };
 
+use super::profiling::{self, ProfileState};
 use super::*;
 use crate::types::*;
 
@@ -94,6 +95,9 @@ pub struct GpuEncoder {
     pub(super) compute_cache: ComputeBindCache,
     pub(super) render_cache: RenderBindCache,
     pub(super) clear_pipelines: *const super::device::ClearPipelines,
+    /// Per-dispatch timestamp profiling state. `None` (the default) costs
+    /// one branch per dispatch; see [`Self::enable_dispatch_profiling`].
+    pub(crate) profile: Option<ProfileState>,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -154,6 +158,153 @@ impl GpuEncoder {
         }
     }
 
+    // ─── Per-dispatch timestamp profiling ────────────────────────────
+
+    /// Enable per-dispatch GPU timestamp profiling for this frame's command
+    /// buffer. Every compute dispatch gets its own encoder with start/end
+    /// timestamp samples; render and blit passes get boundary samples on
+    /// their pass descriptors. Retrieve results via
+    /// [`Self::commit_and_wait_profiled`]. The `device` is needed for the
+    /// CPU/GPU timestamp calibration pair.
+    pub fn enable_dispatch_profiling(&mut self, sampler: GpuTimestampSampler, device: &GpuDevice) {
+        let calib_start = profiling::sample_cpu_gpu(device.raw_device());
+        self.profile = Some(ProfileState {
+            sampler,
+            spans: Vec::new(),
+            tag: String::new(),
+            overflow: 0,
+            calib_start,
+        });
+    }
+
+    /// Set the attribution tag stamped onto subsequently profiled spans.
+    /// The host (graph executor) calls this per step so GPU spans can be
+    /// joined back to nodes. No-op when profiling is off.
+    pub fn set_profile_tag(&mut self, tag: &str) {
+        if let Some(p) = &mut self.profile {
+            p.tag.clear();
+            p.tag.push_str(tag);
+        }
+    }
+
+    /// Commit, wait for completion, and resolve the frame's profiled spans.
+    /// Works on an unprofiled encoder too (empty span list, total only).
+    pub fn commit_and_wait_profiled(mut self, device: &GpuDevice) -> GpuFrameProfile {
+        self.end_current();
+        self.cmd_buf.commit();
+        let total_ms = unsafe {
+            self.cmd_buf.waitUntilCompleted();
+            (self.cmd_buf.GPUEndTime() - self.cmd_buf.GPUStartTime()).max(0.0) * 1000.0
+        };
+        match self.profile.take() {
+            Some(state) => {
+                let calib_end = profiling::sample_cpu_gpu(device.raw_device());
+                profiling::resolve(&state, calib_end, total_ms)
+            }
+            None => GpuFrameProfile {
+                total_ms,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Profiled-mode compute encoder: ends the current encoder and opens a
+    /// fresh one whose stage boundaries write timestamp samples. Falls back
+    /// to the plain shared encoder when the sample buffer is full.
+    fn begin_profiled_compute(
+        &mut self,
+        label: &str,
+    ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
+        self.end_current();
+        let Some((start, end)) = self
+            .profile
+            .as_mut()
+            .and_then(|p| p.reserve(label, GpuWorkKind::Compute))
+        else {
+            return self.ensure_compute();
+        };
+        let sample_buffer = self
+            .profile
+            .as_ref()
+            .map(|p| p.sampler.buffer.clone())
+            .expect("profile state present");
+        let desc = MTLComputePassDescriptor::computePassDescriptor();
+        unsafe {
+            let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
+            att.setSampleBuffer(Some(&sample_buffer));
+            att.setStartOfEncoderSampleIndex(start);
+            att.setEndOfEncoderSampleIndex(end);
+        }
+        let enc = self
+            .cmd_buf
+            .computeCommandEncoderWithDescriptor(&desc)
+            .expect("computeCommandEncoderWithDescriptor failed");
+        self.state = EncoderState::Compute(enc.clone());
+        enc
+    }
+
+    /// Create a render encoder from `desc`, attaching boundary timestamp
+    /// samples when profiling. All render-pass creation routes through here.
+    fn make_render_encoder(
+        &mut self,
+        desc: &MTLRenderPassDescriptor,
+        label: &str,
+    ) -> Retained<ProtocolObject<dyn MTLRenderCommandEncoder>> {
+        if let Some((start, end)) = self
+            .profile
+            .as_mut()
+            .and_then(|p| p.reserve(label, GpuWorkKind::Render))
+        {
+            let sample_buffer = self
+                .profile
+                .as_ref()
+                .map(|p| p.sampler.buffer.clone())
+                .expect("profile state present");
+            unsafe {
+                let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
+                att.setSampleBuffer(Some(&sample_buffer));
+                att.setStartOfVertexSampleIndex(start);
+                att.setEndOfFragmentSampleIndex(end);
+            }
+        }
+        self.cmd_buf
+            .renderCommandEncoderWithDescriptor(desc)
+            .expect("renderCommandEncoderWithDescriptor failed")
+    }
+
+    /// Create a blit encoder, attaching boundary timestamp samples when
+    /// profiling. All blit-encoder creation routes through here.
+    fn make_blit_encoder(
+        &mut self,
+        label: &str,
+    ) -> Retained<ProtocolObject<dyn MTLBlitCommandEncoder>> {
+        if let Some((start, end)) = self
+            .profile
+            .as_mut()
+            .and_then(|p| p.reserve(label, GpuWorkKind::Blit))
+        {
+            let sample_buffer = self
+                .profile
+                .as_ref()
+                .map(|p| p.sampler.buffer.clone())
+                .expect("profile state present");
+            let desc = unsafe { MTLBlitPassDescriptor::blitPassDescriptor() };
+            unsafe {
+                let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
+                att.setSampleBuffer(Some(&sample_buffer));
+                att.setStartOfEncoderSampleIndex(start);
+                att.setEndOfEncoderSampleIndex(end);
+            }
+            return self
+                .cmd_buf
+                .blitCommandEncoderWithDescriptor(&desc)
+                .expect("blitCommandEncoderWithDescriptor failed");
+        }
+        self.cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed")
+    }
+
     /// Dispatch a compute shader.
     pub fn dispatch_compute(
         &mut self,
@@ -162,7 +313,11 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
-        let enc = self.ensure_compute();
+        let enc = if self.profile.is_some() {
+            self.begin_profiled_compute(label)
+        } else {
+            self.ensure_compute()
+        };
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setComputePipelineState(&pipeline.state);
@@ -359,10 +514,7 @@ impl GpuEncoder {
             });
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -404,10 +556,7 @@ impl GpuEncoder {
             });
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -462,10 +611,7 @@ impl GpuEncoder {
             });
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -520,10 +666,7 @@ impl GpuEncoder {
             });
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -586,10 +729,7 @@ impl GpuEncoder {
             depth.setClearDepth(1.0);
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -664,10 +804,7 @@ impl GpuEncoder {
             depth.setClearDepth(1.0);
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -737,10 +874,7 @@ impl GpuEncoder {
             });
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setRenderPipelineState(&pipeline.state);
@@ -812,10 +946,7 @@ impl GpuEncoder {
             });
         }
 
-        let enc = self
-            .cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .expect("renderCommandEncoderWithDescriptor failed");
+        let enc = self.make_render_encoder(&desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
             enc.setViewport(MTLViewport {
@@ -1107,10 +1238,7 @@ impl GpuEncoder {
                     alpha: a,
                 });
             }
-            let enc = self
-                .cmd_buf
-                .renderCommandEncoderWithDescriptor(&desc)
-                .expect("renderCommandEncoderWithDescriptor failed");
+            let enc = self.make_render_encoder(&desc, "clear_texture");
             enc.endEncoding();
         }
     }
@@ -1118,10 +1246,7 @@ impl GpuEncoder {
     /// Fill a buffer with zeros via blit encoder.
     pub fn clear_buffer(&mut self, buffer: &GpuBuffer) {
         self.end_current();
-        let enc = self
-            .cmd_buf
-            .blitCommandEncoder()
-            .expect("blitCommandEncoder failed");
+        let enc = self.make_blit_encoder("clear_buffer");
         unsafe {
             enc.fillBuffer_range_value(
                 &buffer.raw,
@@ -1139,10 +1264,7 @@ impl GpuEncoder {
     /// blit-encoder path.
     pub fn generate_mipmaps(&mut self, texture: &GpuTexture) {
         self.end_current();
-        let enc = self
-            .cmd_buf
-            .blitCommandEncoder()
-            .expect("blitCommandEncoder failed");
+        let enc = self.make_blit_encoder("generate_mipmaps");
         unsafe { enc.generateMipmapsForTexture(&texture.raw) };
         enc.endEncoding();
     }
@@ -1208,10 +1330,7 @@ impl GpuEncoder {
             dst.width, dst.height, dst.format, width, height, depth,
         );
         self.end_current();
-        let enc = self
-            .cmd_buf
-            .blitCommandEncoder()
-            .expect("blitCommandEncoder failed");
+        let enc = self.make_blit_encoder("copy_texture_to_texture");
         unsafe {
             enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
                 &src.raw,
@@ -1253,10 +1372,7 @@ impl GpuEncoder {
             dst.size,
         );
         self.end_current();
-        let enc = self
-            .cmd_buf
-            .blitCommandEncoder()
-            .expect("blitCommandEncoder failed");
+        let enc = self.make_blit_encoder("copy_buffer_to_buffer");
         unsafe {
             enc.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
                 &src.raw,
@@ -1297,10 +1413,7 @@ impl GpuEncoder {
             dst.size,
         );
         self.end_current();
-        let enc = self
-            .cmd_buf
-            .blitCommandEncoder()
-            .expect("blitCommandEncoder failed");
+        let enc = self.make_blit_encoder("copy_texture_to_buffer");
         unsafe {
             enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
                 &src.raw,
@@ -1351,10 +1464,7 @@ impl GpuEncoder {
             dst.size,
         );
         self.end_current();
-        let enc = self
-            .cmd_buf
-            .blitCommandEncoder()
-            .expect("blitCommandEncoder failed");
+        let enc = self.make_blit_encoder("copy_texture_3d_to_buffer");
         unsafe {
             enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
                 &src.raw,

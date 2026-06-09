@@ -144,6 +144,21 @@ impl GpuDevice {
         }
     }
 
+    /// Whether this device supports per-dispatch GPU timestamp profiling
+    /// (timestamp counter set + stage-boundary sampling). True on Apple
+    /// silicon.
+    pub fn supports_dispatch_profiling(&self) -> bool {
+        super::profiling::timestamp_counter_set(&self.device).is_some()
+    }
+
+    /// Create a reusable timestamp sampler with capacity for `max_spans`
+    /// profiled dispatches per frame. `None` if the device doesn't support
+    /// counter sampling. Attach to a frame's encoder via
+    /// [`GpuEncoder::enable_dispatch_profiling`].
+    pub fn create_timestamp_sampler(&self, max_spans: usize) -> Option<GpuTimestampSampler> {
+        super::profiling::create_sampler(&self.device, max_spans)
+    }
+
     /// Shared linear (bilinear) sampler with clamp-to-edge addressing,
     /// created once on first use. Use for sampling-based resize /
     /// downscale passes (`GpuEncoder::resize_sample`) so callers don't
@@ -987,6 +1002,7 @@ impl GpuDevice {
             compute_cache: super::encoder::ComputeBindCache::new(),
             render_cache: RenderBindCache::new(),
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
+            profile: None,
         }
     }
 

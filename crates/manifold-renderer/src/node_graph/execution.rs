@@ -143,6 +143,27 @@ pub struct Executor {
     /// `time[k]-time[k-1]` attributes to step `k`. Off by default — the live
     /// render path never sets it, so pruning behaves exactly as before.
     profile_force_all_live: bool,
+    /// Per-step attribution profiling: when on, the executor stamps a
+    /// `s{step_idx}` tag onto the GPU encoder before each node evaluates (so
+    /// counter-sampled GPU spans join back to steps) and records each step's
+    /// CPU encode cost in [`step_profiles`]. Off by default — one branch per
+    /// step on the live path.
+    profiling: bool,
+    /// `(step_idx, node, type_id, cpu_nanos)` per live step of the last
+    /// profiled frame. Cleared at frame start while [`profiling`] is on.
+    step_profiles: Vec<StepProfile>,
+}
+
+/// One step's CPU-side cost from a profiled frame: acquire + evaluate
+/// (= GPU command encoding) + scalar drains. GPU time lives in the
+/// command buffer's [`manifold_gpu::GpuFrameProfile`], joined by tag
+/// `s{step_idx}`.
+#[derive(Clone, Debug)]
+pub struct StepProfile {
+    pub step_idx: usize,
+    pub node: NodeInstanceId,
+    pub type_id: String,
+    pub cpu_nanos: u64,
 }
 
 impl Executor {
@@ -169,7 +190,21 @@ impl Executor {
             dump_array_resources: Vec::new(),
             preview_debug_last: None,
             profile_force_all_live: false,
+            profiling: false,
+            step_profiles: Vec::new(),
         }
+    }
+
+    /// Enable per-step attribution profiling (CPU encode cost + GPU span
+    /// tags). Pair with [`manifold_gpu::GpuEncoder::enable_dispatch_profiling`]
+    /// on the frame's encoder; read results via [`Self::take_step_profiles`].
+    pub fn set_profiling(&mut self, on: bool) {
+        self.profiling = on;
+    }
+
+    /// Drain the per-step CPU profiles recorded on the last profiled frame.
+    pub fn take_step_profiles(&mut self) -> Vec<StepProfile> {
+        std::mem::take(&mut self.step_profiles)
     }
 
     /// Profiling-only: when on, [`compute_live_steps`] marks every step live
@@ -498,6 +533,9 @@ impl Executor {
         self.preview_scalar_outputs.clear();
         self.dump_resources.clear();
         self.dump_array_resources.clear();
+        if self.profiling {
+            self.step_profiles.clear();
+        }
 
         // Wipe any skip-passthrough aliases installed during the previous
         // frame. Without this, a slot that was aliased-on-skip last frame
@@ -561,6 +599,17 @@ impl Executor {
                 // free_after entirely — slots stay bound from last
                 // frame so re-selection picks up the prior state.
                 continue;
+            }
+
+            // Attribution profiling: stamp the step tag onto the GPU encoder
+            // so counter-sampled spans join back to this step, and start the
+            // CPU encode clock. Both gated on `profiling` (off on the live
+            // path).
+            let prof_start = self.profiling.then(std::time::Instant::now);
+            if self.profiling
+                && let Some(g) = gpu.as_deref_mut()
+            {
+                g.native_enc.set_profile_tag(&format!("s{idx}"));
             }
 
             // 1. Acquire output slots.
@@ -728,6 +777,20 @@ impl Executor {
                         );
                     }
                 }
+            }
+
+            // Attribution profiling: close the step's CPU encode clock.
+            if let Some(t0) = prof_start {
+                let type_id = graph
+                    .get_node(step.node)
+                    .map(|i| i.node.type_id().as_str().to_string())
+                    .unwrap_or_default();
+                self.step_profiles.push(StepProfile {
+                    step_idx: idx,
+                    node: step.node,
+                    type_id,
+                    cpu_nanos: u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                });
             }
 
             // Preview capture: if this is the node being previewed, remember

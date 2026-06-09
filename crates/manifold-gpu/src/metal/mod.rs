@@ -18,6 +18,7 @@ mod device;
 mod encoder;
 mod format;
 mod msl_cache;
+mod profiling;
 mod shader_compiler;
 pub mod surface;
 mod texture_pool;
@@ -27,6 +28,7 @@ mod types;
 pub use device::GpuDevice;
 pub use encoder::GpuEncoder;
 pub use fft::{FftKind, GpuFft};
+pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind};
 pub use surface::{GpuDrawable, GpuSurface};
 pub use texture_pool::TexturePool;
 pub use types::{

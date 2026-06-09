@@ -102,6 +102,16 @@ fn resource_for_output(
 fn main() {
     let registry = PrimitiveRegistry::with_builtin();
     let device = GpuDevice::new();
+
+    // `attribute [names…]` → per-node GPU/CPU attribution via counter
+    // sampling (fast path, skips the sweeps).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("attribute") {
+        let names: Vec<&str> = args[1..].iter().map(String::as_str).collect();
+        profile_attribution(&registry, &device, &names);
+        return;
+    }
+
     let source_type_id = Source::new().type_id().as_str().to_string();
 
     println!(
@@ -798,6 +808,273 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
         let speedup = if fused_ms > 0.0 { unfused_ms / fused_ms } else { 0.0 };
         println!("{:>5}p {:>13.3} {:>13.3} {:>9.2}x", h, unfused_ms, fused_ms, speedup);
     }
+}
+
+/// Per-node attribution via Metal counter sampling: every dispatch /
+/// render pass / blit in a frame gets boundary GPU timestamps, tagged with
+/// the executor step that encoded it, plus the step's CPU encode cost. The
+/// measurement that replaces the slow prefix-truncation method — exact
+/// per-step GPU time inside ONE command buffer, for both the unfused def and
+/// (when one exists) the fused def.
+///
+/// Caveat: profiled frames split encoders per dispatch (Apple silicon only
+/// samples at stage boundaries), so absolute ms run slightly above
+/// production; the per-node SHARES are the signal. Work the spans can't see
+/// (MPS/MetalFX internal encoders) shows as "unattributed".
+fn profile_attribution(registry: &PrimitiveRegistry, device: &GpuDevice, names: &[&str]) {
+    use manifold_renderer::node_graph::freeze::install;
+
+    const DEFAULT_NAMES: &[&str] = &[
+        "FluidSimulation",
+        "OilyFluid",
+        "ParticleText",
+        "MetallicGlass",
+        "Glitch",
+        "Bloom",
+    ];
+    let names: Vec<&str> = if names.is_empty() {
+        DEFAULT_NAMES.to_vec()
+    } else {
+        names.to_vec()
+    };
+
+    let Some(sampler) = device.create_timestamp_sampler(2048) else {
+        eprintln!("attribute: device does not support GPU counter sampling");
+        return;
+    };
+    println!(
+        "=== per-node attribution @ 1920x1080 (counter-sampled GPU spans + CPU encode cost) ==="
+    );
+    println!(
+        "profiled frames split encoders per dispatch — absolute ms run a little above \
+         production; per-node shares are the signal.\n"
+    );
+
+    for name in &names {
+        let gen_path = format!("{GENERATOR_PRESETS_DIR}/{name}.json");
+        let eff_path = format!("{EFFECT_PRESETS_DIR}/{name}.json");
+        let (path, is_gen) = if std::path::Path::new(&gen_path).exists() {
+            (gen_path, true)
+        } else {
+            (eff_path, false)
+        };
+        let Ok(bytes) = std::fs::read_to_string(&path) else {
+            eprintln!("skip {name}: no preset JSON in generator/effect dirs");
+            continue;
+        };
+        let def: EffectGraphDef = match serde_json::from_str(&bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skip {name}: parse {e}");
+                continue;
+            }
+        };
+
+        attribute_def(registry, device, &sampler, &def, &format!("{name} — unfused"));
+
+        if is_gen {
+            match install::fused_generator_def_for(&def) {
+                Some(fused) => {
+                    attribute_def(registry, device, &sampler, fused, &format!("{name} — fused"));
+                }
+                None => println!("{name} — fused: no fusable region (renders unfused)\n"),
+            }
+        } else {
+            // `PresetTypeId::new` wants `&'static str`; leaking a few CLI
+            // names in a profiling bin is fine.
+            let static_name: &'static str = Box::leak(name.to_string().into_boxed_str());
+            match install::fused_view_by_id(&PresetTypeId::new(static_name)) {
+                Some(view) => attribute_def(
+                    registry,
+                    device,
+                    &sampler,
+                    view.canonical_def,
+                    &format!("{name} — fused"),
+                ),
+                None => println!("{name} — fused: no fusable region (renders unfused)\n"),
+            }
+        }
+    }
+}
+
+/// Drive one def through the real executor with per-dispatch profiling and
+/// print the per-step table. Generators and effects both run through
+/// `execute_frame_with_state` with their boundary input pre-bound.
+fn attribute_def(
+    registry: &PrimitiveRegistry,
+    device: &GpuDevice,
+    sampler: &manifold_gpu::GpuTimestampSampler,
+    def: &EffectGraphDef,
+    title: &str,
+) {
+    use manifold_renderer::node_graph::StateStore;
+    use std::collections::BTreeMap;
+
+    const ATTR_WARMUP: u32 = 8;
+    const ATTR_FRAMES: u32 = 30;
+    let (w, h) = (1920u32, 1080u32);
+
+    let mut graph = match def.clone().into_graph(registry) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("{title}: build failed: {e}");
+            return;
+        }
+    };
+    let plan = match compile(&graph) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{title}: compile failed: {e}");
+            return;
+        }
+    };
+
+    let mut backend = MetalBackend::new(device, w, h, FORMAT);
+    for boundary in ["system.source", "system.generator_input"] {
+        if let Some(id) = graph
+            .nodes()
+            .find(|n| n.node.type_id().as_str() == boundary)
+            .map(|n| n.id)
+            && let Some(res) = resource_for_output(&plan, id, "out")
+        {
+            backend
+                .pre_bind_texture_2d(res, RenderTarget::new(device, w, h, FORMAT, "attr-input"));
+        }
+    }
+    // Full-size Array/Texture3D allocation, like the production generator
+    // path — without it particle dispatches run on empty buffers.
+    let _ = manifold_renderer::node_graph::pre_allocate_resources(
+        &graph,
+        &plan,
+        device,
+        &mut backend,
+    );
+    let mut exec = Executor::new(Box::new(backend));
+    let mut state = StateStore::new();
+    let ft = |i: u32| FrameTime {
+        seconds: Seconds(f64::from(i) / 60.0),
+        beats: Beats(f64::from(i) / 30.0),
+        delta: Seconds(1.0 / 60.0),
+        frame_count: i64::from(i),
+    };
+
+    for i in 0..ATTR_WARMUP {
+        let mut enc = device.create_encoder("attr-warmup");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            exec.execute_frame_with_state(&mut graph, &plan, ft(i), &mut gpu, &mut state, 0);
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    #[derive(Default)]
+    struct Acc {
+        type_id: String,
+        gpu_ms: f64,
+        cpu_ns: u64,
+        dispatches: u64,
+    }
+    let mut per_step: BTreeMap<usize, Acc> = BTreeMap::new();
+    let mut total_ms = 0.0_f64;
+    let mut unattributed_ms = 0.0_f64;
+    let mut untagged_ms = 0.0_f64;
+    let mut overflow = 0usize;
+
+    for i in 0..ATTR_FRAMES {
+        let mut enc = device.create_encoder("attr-timed");
+        enc.enable_dispatch_profiling(sampler.clone(), device);
+        exec.set_profiling(true);
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            exec.execute_frame_with_state(
+                &mut graph,
+                &plan,
+                ft(ATTR_WARMUP + i),
+                &mut gpu,
+                &mut state,
+                0,
+            );
+        }
+        let profile = enc.commit_and_wait_profiled(device);
+        total_ms += profile.total_ms;
+        unattributed_ms += profile.total_ms - profile.attributed_ms();
+        overflow += profile.overflow;
+        for span in &profile.spans {
+            match span.tag.strip_prefix('s').and_then(|s| s.parse::<usize>().ok()) {
+                Some(idx) => {
+                    let acc = per_step.entry(idx).or_default();
+                    acc.gpu_ms += span.millis;
+                    acc.dispatches += 1;
+                }
+                None => untagged_ms += span.millis,
+            }
+        }
+        for sp in exec.take_step_profiles() {
+            let acc = per_step.entry(sp.step_idx).or_default();
+            acc.cpu_ns += sp.cpu_nanos;
+            acc.type_id = sp.type_id;
+        }
+    }
+
+    let frames = f64::from(ATTR_FRAMES);
+    let cpu_total_us: f64 =
+        per_step.values().map(|a| a.cpu_ns as f64).sum::<f64>() / frames / 1000.0;
+    println!(
+        "--- {title}: {:.3} ms/frame GPU ({} steps), {:.1} µs/frame CPU encode ---",
+        total_ms / frames,
+        plan.steps().len(),
+        cpu_total_us,
+    );
+    if overflow > 0 {
+        println!("    WARNING: {overflow} dispatches ran unprofiled (sample buffer full)");
+    }
+
+    let mut rows: Vec<(usize, Acc)> = per_step.into_iter().collect();
+    rows.sort_by(|a, b| b.1.gpu_ms.partial_cmp(&a.1.gpu_ms).unwrap_or(std::cmp::Ordering::Equal));
+    println!(
+        "{:>5} {:<38} {:>9} {:>6} {:>9} {:>6}",
+        "step", "node type", "gpu ms", "%gpu", "cpu µs", "disp"
+    );
+    let grand_gpu: f64 = rows.iter().map(|(_, a)| a.gpu_ms).sum();
+    let mut shown_gpu = 0.0_f64;
+    for (rank, (idx, acc)) in rows.iter().enumerate() {
+        // Top 24 rows covers every real preset; tail collapses below.
+        if rank >= 24 {
+            let rest_gpu = (grand_gpu - shown_gpu) / frames;
+            println!("      … {} more steps, {rest_gpu:.4} ms", rows.len() - rank);
+            break;
+        }
+        shown_gpu += acc.gpu_ms;
+        let gpu_ms = acc.gpu_ms / frames;
+        let pct = if grand_gpu > 0.0 { acc.gpu_ms / grand_gpu * 100.0 } else { 0.0 };
+        println!(
+            "{:>5} {:<38} {:>9.4} {:>5.1}% {:>9.1} {:>6}",
+            idx,
+            acc.type_id,
+            gpu_ms,
+            pct,
+            acc.cpu_ns as f64 / frames / 1000.0,
+            acc.dispatches / u64::from(ATTR_FRAMES),
+        );
+    }
+
+    // Rollup by node type — which vocabulary owns the frame.
+    let mut by_type: BTreeMap<String, f64> = BTreeMap::new();
+    for (_, acc) in &rows {
+        *by_type.entry(acc.type_id.clone()).or_default() += acc.gpu_ms;
+    }
+    let mut rolled: Vec<(String, f64)> = by_type.into_iter().collect();
+    rolled.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("    --- by node type ---");
+    for (ty, ms) in rolled.iter().take(8) {
+        let pct = if grand_gpu > 0.0 { ms / grand_gpu * 100.0 } else { 0.0 };
+        println!("    {:<38} {:>9.4} ms {:>5.1}%", ty, ms / frames, pct);
+    }
+    println!(
+        "    untagged (outside steps): {:.4} ms   unattributed (MPS/uncovered): {:.4} ms\n",
+        untagged_ms / frames,
+        unattributed_ms / frames,
+    );
 }
 
 /// Synthetic per-pass measurement: `Source → Gain×N → FinalOutput` at 4K,

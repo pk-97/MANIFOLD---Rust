@@ -63,6 +63,9 @@ objc2-metal = { version = "0.3", features = [
     "MTLTypes",
     "MTLVertexDescriptor",
     "MTLStageInputOutputDescriptor",
+    "MTLCounters",
+    "MTLComputePass",
+    "MTLBlitPass",
     "block2",
 ] }
 objc2-metal-fx = { version = "0.3", features = [
