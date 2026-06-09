@@ -207,6 +207,17 @@ fn main() {
     println!("\nms/step ≈ per-dispatch texture round-trip cost a fusion pass collapses.");
     println!("Fusing a pointwise run of length L recovers ~(L-1) × ms/step per frame.");
 
+    // `perdispatch` arg → run ONLY the per-dispatch breakdown (fast iteration).
+    if std::env::args().any(|a| a == "perdispatch") {
+        profile_per_dispatch(&registry, &device);
+        return;
+    }
+    // `reconcile` arg → diagnose the FluidSim 0.49ms(prefix) vs 11.7ms(prod) gap.
+    if std::env::args().any(|a| a == "reconcile") {
+        reconcile_fluidsim(&registry, &device);
+        return;
+    }
+
     profile_synthetic_pointwise(&device);
     profile_fused_colorgrade(&registry, &device);
     profile_auto_fused_colorgrade(&registry, &device);
@@ -214,6 +225,210 @@ fn main() {
     profile_generators(&registry, &device);
     profile_fluidsim_particle_sweep(&registry, &device);
     profile_synthetic_buffer(&device);
+    profile_per_dispatch(&registry, &device);
+}
+
+/// Reconcile the FluidSim anomaly: the per-dispatch prefix sweep sums to
+/// ~0.5ms, but production (`profile_generators` / the particle sweep) reads
+/// ~11.7ms. Same def, same 1080p, same `execute_frame_with_state` underneath.
+/// We vary the two things that differ — warmup count (state/particle pool
+/// accumulation) and the build path (raw `into_graph` vs `PresetRuntime`) — to
+/// localize the 11ms.
+fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
+    use manifold_renderer::node_graph::StateStore;
+    let (w, h) = (1920u32, 1080u32);
+    let path = format!("{GENERATOR_PRESETS_DIR}/FluidSimulation.json");
+    let def: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+    println!("=== reconcile FluidSimulation @ {w}x{h} ===\n");
+
+    // A) Raw executor, FULL plan, accumulating state, vary warmup. If the cost
+    //    climbs with warmup -> it's particle-pool/state accumulation in the
+    //    graph. If it stays ~0.5ms -> the 11ms is NOT in the graph dispatches.
+    println!("--- A) raw executor, full plan, accumulating state, vary warmup ---");
+    println!("{:<10} {:>11} {:>11}", "warmup", "no-prealloc", "prealloc");
+    for &warm in &[5u32, 30, 120] {
+      let mut row = [0.0f64; 2];
+      for (col, prealloc) in [false, true].into_iter().enumerate() {
+        let mut graph = def.clone().into_graph(registry).unwrap();
+        let plan = compile(&graph).unwrap();
+        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        if prealloc {
+            manifold_renderer::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend).unwrap();
+        }
+        let mut exec = Executor::new(Box::new(backend));
+        let mut state = StateStore::new();
+        let ft = FrameTime { beats: Beats(1.0), seconds: Seconds(1.0), delta: Seconds(1.0/60.0), frame_count: 0 };
+        for i in 0..warm {
+            let mut enc = device.create_encoder("rec-warm");
+            { let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+              // advance time so animated seeding evolves
+              let ft = FrameTime { seconds: Seconds(f64::from(i)/60.0), beats: Beats(f64::from(i)/30.0), ..ft };
+              exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0); }
+            enc.commit_and_wait_completed();
+        }
+        let mut secs = 0.0;
+        for i in 0..30u32 {
+            let mut enc = device.create_encoder("rec-timed");
+            { let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+              let ft = FrameTime { seconds: Seconds(f64::from(warm+i)/60.0), beats: Beats(f64::from(warm+i)/30.0), ..ft };
+              exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0); }
+            secs += enc.commit_and_wait_completed_timed();
+        }
+        row[col] = secs * 1000.0 / 30.0;
+      }
+      println!("{:<10} {:>11.4} {:>11.4}", warm, row[0], row[1]);
+    }
+
+    // B) Production path: PresetRuntime::from_def_with_device + render, exactly
+    //    like profile_generators (the 11.7ms number).
+    println!("\n--- B) PresetRuntime::render (production path) ---");
+    {
+        let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT).unwrap();
+        let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
+        let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0, params: [0.0; MAX_GEN_PARAMS], param_count: 0 };
+        for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0)); } enc.commit_and_wait_completed(); }
+        let mut secs = 0.0;
+        for i in 0..30u32 { let mut enc = device.create_encoder("rec-prod-timed"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(30+i)/60.0)); } secs += enc.commit_and_wait_completed_timed(); }
+        println!("PresetRuntime::render: {:.4} ms/frame", secs * 1000.0 / 30.0);
+    }
+}
+
+/// Per-dispatch GPU-time breakdown for the heavy generators — the measurement
+/// that answers "why does a dozen fixed-grid dispatches cost FluidSim 11.7ms:
+/// is it one pathological step, per-dispatch overhead, or real bandwidth?"
+///
+/// Method: compile the generator's plan, then for each prefix length `k =
+/// 1..=N` run the REAL executor on `plan.truncated(k)` (forcing all steps live
+/// so the prefix executes exactly steps `[0..k]`), timing real GPU time. The
+/// marginal `time[k] - time[k-1]` is step `k`'s added cost. This reuses the
+/// production executor — real cross-dispatch overlap, real stateful late-capture
+/// — rather than a hand-rolled per-step fork that could drift from the live
+/// path. Marginals can be small/negative where the scheduler overlaps adjacent
+/// dispatches (flagged); the cumulative curve and the per-type rollup are the
+/// robust signals.
+fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &GpuDevice) {
+    use manifold_renderer::node_graph::StateStore;
+    use std::collections::BTreeMap;
+
+    const GENS: &[&str] = &["FluidSimulation", "OilyFluid", "MetallicGlass"];
+    const PROF_WARMUP: u32 = 5;
+    const PROF_FRAMES: u32 = 30;
+    let (w, h) = (1920u32, 1080u32);
+    let gen_input_type = "system.generator_input";
+
+    // Time one truncated plan against a freshly built graph (fresh state), pre-
+    // binding a black input to the generator-input boundary when it's live.
+    let time_prefix = |def: &EffectGraphDef, k: usize| -> Option<f64> {
+        let mut graph = def.clone().into_graph(registry).ok()?;
+        let full = compile(&graph).ok()?;
+        let plan = full.truncated(k);
+        let input_res = graph
+            .nodes()
+            .find(|n| n.node.type_id().as_str() == gen_input_type)
+            .map(|n| n.id)
+            .and_then(|id| resource_for_output(&full, id, "out"));
+
+        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        if let Some(res) = input_res {
+            backend.pre_bind_texture_2d(res, RenderTarget::new(device, w, h, FORMAT, "pd-input"));
+        }
+        // Allocate the full-size Array (particle) + Texture3D buffers, exactly
+        // like the production generator path — without this the particle
+        // dispatches run on empty buffers and read as ~free.
+        manifold_renderer::node_graph::pre_allocate_resources(&graph, &full, device, &mut backend)
+            .ok()?;
+        let mut exec = Executor::new(Box::new(backend));
+        exec.set_profile_force_all_live(true);
+        let mut state = StateStore::new();
+        let ft = FrameTime {
+            beats: Beats(1.0),
+            seconds: Seconds(1.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+        for _ in 0..PROF_WARMUP {
+            let mut enc = device.create_encoder("pd-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+            }
+            enc.commit_and_wait_completed();
+        }
+        let mut secs = 0.0_f64;
+        for _ in 0..PROF_FRAMES {
+            let mut enc = device.create_encoder("pd-timed");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+            }
+            secs += enc.commit_and_wait_completed_timed();
+        }
+        Some(secs * 1000.0 / f64::from(PROF_FRAMES))
+    };
+
+    for name in GENS {
+        let path = format!("{GENERATOR_PRESETS_DIR}/{name}.json");
+        let Ok(bytes) = std::fs::read_to_string(&path) else {
+            eprintln!("skip {name}: read");
+            continue;
+        };
+        let Ok(def) = serde_json::from_str::<EffectGraphDef>(&bytes) else {
+            eprintln!("skip {name}: parse");
+            continue;
+        };
+        // Step → node-type label from one canonical build.
+        let Ok(graph0) = def.clone().into_graph(registry) else {
+            eprintln!("skip {name}: build");
+            continue;
+        };
+        let Ok(plan0) = compile(&graph0) else {
+            eprintln!("skip {name}: compile");
+            continue;
+        };
+        let n = plan0.steps().len();
+        let labels: Vec<String> = plan0
+            .steps()
+            .iter()
+            .map(|s| {
+                graph0
+                    .get_node(s.node)
+                    .map(|inst| inst.node.type_id().as_str().to_string())
+                    .unwrap_or_else(|| "?".to_string())
+            })
+            .collect();
+
+        println!(
+            "\n=== per-dispatch breakdown: {name} @ {w}x{h} ({n} steps), avg over {PROF_FRAMES} frames ==="
+        );
+        println!("{:>4} {:<34} {:>11} {:>11}", "step", "node type", "marginal", "cumulative");
+        println!("{}", "-".repeat(64));
+
+        let mut prev = 0.0_f64;
+        let mut per_type: BTreeMap<String, f64> = BTreeMap::new();
+        for k in 1..=n {
+            let Some(ms) = time_prefix(&def, k) else {
+                eprintln!("  step {k}: timing failed");
+                continue;
+            };
+            let marginal = ms - prev;
+            prev = ms;
+            let ty = &labels[k - 1];
+            *per_type.entry(ty.clone()).or_default() += marginal.max(0.0);
+            let flag = if marginal < 0.0 { " (overlap/noise)" } else { "" };
+            println!("{:>4} {:<34} {:>10.4} {:>11.4}{}", k, ty, marginal, ms, flag);
+        }
+        println!("  full-frame cumulative: {prev:.3} ms");
+
+        // Rollup: which node TYPES own the frame (sum of positive marginals).
+        let mut rolled: Vec<(String, f64)> = per_type.into_iter().collect();
+        rolled.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        println!("  --- cost by node type (sum of positive marginals) ---");
+        for (ty, ms) in rolled.iter().take(12) {
+            let pct = if prev > 0.0 { ms / prev * 100.0 } else { 0.0 };
+            println!("  {:<34} {:>9.4} ms  {:>5.1}%", ty, ms, pct);
+        }
+    }
 }
 
 /// Buffer-domain fusion BREAK-EVEN (the analog of profile_synthetic_pointwise +

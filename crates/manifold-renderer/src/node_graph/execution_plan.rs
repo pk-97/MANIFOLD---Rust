@@ -202,6 +202,29 @@ impl ExecutionPlan {
     pub fn late_capture_step_indices(&self) -> &[usize] {
         &self.late_capture_steps
     }
+
+    /// Profiling-only: a sub-plan containing just the first `k` execution
+    /// steps. Steps are topologically ordered, so `[0..k]` is always a valid
+    /// executable prefix — every dependency of a kept step is also kept.
+    /// Resource metadata is keyed by [`ResourceId`], not step index, so it
+    /// carries over unchanged. Every `free_after` entry within the prefix stays
+    /// correct: a resource freed at step `j < k` has no reader at or beyond `k`
+    /// by construction (else its last reader, not `j`, would own the free), so
+    /// truncating never orphans a still-live resource. `late_capture_steps` is
+    /// filtered to the kept range so the post-frame pass can't index a dropped
+    /// step. Persistent resources are kept as-is (pre-acquired, harmless if a
+    /// producer that writes one falls outside the prefix).
+    ///
+    /// Used by the per-dispatch profiler to attribute GPU time to individual
+    /// steps via the marginal `time[k] - time[k-1]`. NOT used on the live
+    /// render path.
+    pub fn truncated(&self, k: usize) -> ExecutionPlan {
+        let k = k.min(self.steps.len());
+        let mut p = self.clone();
+        p.steps.truncate(k);
+        p.late_capture_steps.retain(|&i| i < k);
+        p
+    }
 }
 
 /// Compile a graph into an [`ExecutionPlan`].

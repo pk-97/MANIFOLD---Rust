@@ -136,6 +136,13 @@ pub struct Executor {
     /// instead of per-frame spam. Diagnostic only — the live render path never
     /// sets a preview target, so this stays `None` there.
     preview_debug_last: Option<(Option<NodeInstanceId>, bool, usize, Option<ResourceId>)>,
+    /// Profiling-only: force every step live, bypassing the
+    /// [`compute_live_steps`] mux/liveness pruning. Lets the per-dispatch
+    /// profiler run an arbitrary plan *prefix* (which has no `FinalOutput` to
+    /// seed liveness) so it executes exactly steps `[0..k]` and the marginal
+    /// `time[k]-time[k-1]` attributes to step `k`. Off by default — the live
+    /// render path never sets it, so pruning behaves exactly as before.
+    profile_force_all_live: bool,
 }
 
 impl Executor {
@@ -161,7 +168,15 @@ impl Executor {
             dump_resources: Vec::new(),
             dump_array_resources: Vec::new(),
             preview_debug_last: None,
+            profile_force_all_live: false,
         }
+    }
+
+    /// Profiling-only: when on, [`compute_live_steps`] marks every step live
+    /// (no mux/liveness pruning), so an arbitrary plan prefix runs all of its
+    /// steps. Used by the per-dispatch profiler; never set on the live path.
+    pub fn set_profile_force_all_live(&mut self, on: bool) {
+        self.profile_force_all_live = on;
     }
 
     /// Enable/disable "dump every output" mode for the NEXT frame. When on,
@@ -351,6 +366,14 @@ impl Executor {
         let steps = plan.steps();
         self.live_steps.clear();
         self.live_steps.resize(steps.len(), false);
+
+        // Profiling override: run every step, skipping liveness/mux pruning.
+        // A plan prefix has no FinalOutput to seed liveness, so without this it
+        // would prune to whatever the prefix's stateful roots happen to reach.
+        if self.profile_force_all_live {
+            self.live_steps.fill(true);
+            return;
+        }
 
         // Build producer map: ResourceId → step index that produces
         // it. Walked once; reused for every input-port propagation.
