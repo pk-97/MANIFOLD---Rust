@@ -61,6 +61,9 @@ struct FlowState {
     flow_dirty: bool,
     flow_buffer: Vec<f32>,
     flow_texture: GpuTexture,
+    /// Analysis-res downscale target for the readback. Cached here (rebuilt only
+    /// when analysis dims change) so `run` never allocates per readback cadence.
+    staging_texture: GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
     /// Latest cut_score from the FFI worker. Held here so the
@@ -220,6 +223,16 @@ impl OpticalFlowEstimate {
             label: "node.optical_flow_estimate.flow",
             mip_levels: 1,
         });
+        let staging_texture = device.create_texture(&GpuTextureDesc {
+            width: aw,
+            height: ah,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "node.optical_flow_estimate.staging",
+            mip_levels: 1,
+        });
         self.flow_state = Some(FlowState {
             analysis_width: aw,
             analysis_height: ah,
@@ -229,6 +242,7 @@ impl OpticalFlowEstimate {
             flow_dirty: false,
             flow_buffer: vec![0.0f32; pixel_count * 4],
             flow_texture,
+            staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
             cut_score: 0.0,
@@ -376,23 +390,16 @@ impl Primitive for OpticalFlowEstimate {
             if elapsed >= update_interval && !fs.readback.is_pending() {
                 let aw = fs.analysis_width;
                 let ah = fs.analysis_height;
-                let staging = gpu.device.create_texture(&GpuTextureDesc {
-                    width: aw,
-                    height: ah,
-                    depth: 1,
-                    format: GpuTextureFormat::Rgba16Float,
-                    dimension: GpuTextureDimension::D2,
-                    usage: GpuTextureUsage::RENDER_TARGET_FULL,
-                    label: "node.optical_flow_estimate.staging",
-                    mip_levels: 1,
-                });
-                // Bilinear downscale of the WHOLE source into the
+                // Bilinear downscale of the WHOLE source into the cached
                 // analysis-res staging — NOT a blit. A same-size blit
                 // would crop the top-left corner, so the flow net would
                 // only ever see motion in ~9% of a 4K frame. See
-                // GpuEncoder::resize_sample.
-                gpu.resize_sample(source, &staging);
-                fs.readback.submit(gpu, &staging, aw, ah);
+                // GpuEncoder::resize_sample. resize_sample fully overwrites the
+                // staging and submit copies it into its own buffer, so reusing
+                // the cached texture across cadences is safe (a new submit only
+                // runs once the prior readback completed — !is_pending guard).
+                gpu.resize_sample(source, &fs.staging_texture);
+                fs.readback.submit(gpu, &fs.staging_texture, aw, ah);
                 fs.readback_pending = true;
                 fs.last_request_frame = fs.frame_counter;
             }

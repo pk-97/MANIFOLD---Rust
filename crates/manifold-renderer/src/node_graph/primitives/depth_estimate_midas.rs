@@ -56,6 +56,9 @@ struct DepthState {
     depth_dirty: bool,
     depth_buffer: Vec<f32>,
     depth_texture: GpuTexture,
+    /// Analysis-res downscale target for the readback. Cached here (rebuilt only
+    /// when analysis dims change) so `run` never allocates per readback cadence.
+    staging_texture: GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
 }
@@ -172,6 +175,16 @@ impl DepthEstimateMidas {
             label: "node.depth_estimate_midas.depth",
             mip_levels: 1,
         });
+        let staging_texture = device.create_texture(&GpuTextureDesc {
+            width: aw,
+            height: ah,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "node.depth_estimate_midas.staging",
+            mip_levels: 1,
+        });
         self.depth_state = Some(DepthState {
             analysis_width: aw,
             analysis_height: ah,
@@ -181,6 +194,7 @@ impl DepthEstimateMidas {
             depth_dirty: false,
             depth_buffer: vec![0.0f32; pixel_count],
             depth_texture,
+            staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
         });
@@ -281,24 +295,18 @@ impl Primitive for DepthEstimateMidas {
             if elapsed >= update_interval && !ds.readback.is_pending() {
                 let aw = ds.analysis_width;
                 let ah = ds.analysis_height;
-                let staging = gpu.device.create_texture(&GpuTextureDesc {
-                    width: aw,
-                    height: ah,
-                    depth: 1,
-                    format: GpuTextureFormat::Rgba16Float,
-                    dimension: GpuTextureDimension::D2,
-                    usage: GpuTextureUsage::RENDER_TARGET_FULL,
-                    label: "node.depth_estimate_midas.staging",
-                    mip_levels: 1,
-                });
-                // Bilinear downscale of the WHOLE source into the
+                // Bilinear downscale of the WHOLE source into the cached
                 // analysis-res staging — NOT a blit. A same-size blit
                 // (copy_texture_to_texture) would crop the top-left
                 // analysis-sized corner of the full-res frame, so MiDaS
                 // would estimate depth on ~9% of a 4K image (flat corner
                 // → dead Z-slider downstream). See GpuEncoder::resize_sample.
-                gpu.resize_sample(source, &staging);
-                ds.readback.submit(gpu, &staging, aw, ah);
+                // resize_sample fully overwrites the staging and submit copies
+                // it into its own buffer, so reusing the cached texture across
+                // cadences is safe (a new submit only runs once the prior
+                // readback completed — guarded by !ds.readback.is_pending()).
+                gpu.resize_sample(source, &ds.staging_texture);
+                ds.readback.submit(gpu, &ds.staging_texture, aw, ah);
                 ds.readback_pending = true;
                 ds.last_request_frame = ds.frame_counter;
             }

@@ -62,6 +62,9 @@ struct MaskState {
     mask_dirty: bool,
     mask_buffer: Vec<f32>,
     mask_texture: GpuTexture,
+    /// Analysis-res downscale target for the readback. Cached here (rebuilt only
+    /// when analysis dims change) so `run` never allocates per readback cadence.
+    staging_texture: GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
 }
@@ -209,6 +212,16 @@ impl PersonSegment {
             label: "node.person_segment.mask",
             mip_levels: 1,
         });
+        let staging_texture = device.create_texture(&GpuTextureDesc {
+            width: aw,
+            height: ah,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "node.person_segment.staging",
+            mip_levels: 1,
+        });
         self.mask_state = Some(MaskState {
             analysis_width: aw,
             analysis_height: ah,
@@ -218,6 +231,7 @@ impl PersonSegment {
             mask_dirty: false,
             mask_buffer: vec![0.0f32; pixel_count],
             mask_texture,
+            staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
         });
@@ -323,22 +337,16 @@ impl Primitive for PersonSegment {
             if elapsed >= update_interval && !ms.readback.is_pending() {
                 let aw = ms.analysis_width;
                 let ah = ms.analysis_height;
-                let staging = gpu.device.create_texture(&GpuTextureDesc {
-                    width: aw,
-                    height: ah,
-                    depth: 1,
-                    format: GpuTextureFormat::Rgba16Float,
-                    dimension: GpuTextureDimension::D2,
-                    usage: GpuTextureUsage::RENDER_TARGET_FULL,
-                    label: "node.person_segment.staging",
-                    mip_levels: 1,
-                });
-                // Bilinear downscale of the WHOLE source into the
+                // Bilinear downscale of the WHOLE source into the cached
                 // analysis-res staging — NOT a blit. A same-size blit
                 // would crop the top-left corner, so segmentation would
                 // only see ~9% of a 4K frame. See GpuEncoder::resize_sample.
-                gpu.resize_sample(source, &staging);
-                ms.readback.submit(gpu, &staging, aw, ah);
+                // resize_sample fully overwrites the staging and submit copies
+                // it into its own buffer, so reusing the cached texture across
+                // cadences is safe (a new submit only runs once the prior
+                // readback completed — guarded by !ms.readback.is_pending()).
+                gpu.resize_sample(source, &ms.staging_texture);
+                ms.readback.submit(gpu, &ms.staging_texture, aw, ah);
                 ms.readback_pending = true;
                 ms.last_request_frame = ms.frame_counter;
             }

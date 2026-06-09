@@ -80,6 +80,10 @@ struct BlobState {
     blobs_dirty: bool,
     /// Live blob list (count = blobs.len()).
     blobs: Vec<BlobRect>,
+    /// Analysis-res Rgba8Unorm downscale target for the readback. Cached here
+    /// (rebuilt only when analysis dims change) so `run` never allocates per
+    /// readback cadence.
+    staging_texture: manifold_gpu::GpuTexture,
     last_request_frame: i64,
     frame_counter: i64,
 }
@@ -212,7 +216,13 @@ impl BlobDetectFfi {
         }
     }
 
-    fn ensure_blob_state(&mut self, width: u32, height: u32, analysis_max_dim: u32) {
+    fn ensure_blob_state(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+        analysis_max_dim: u32,
+    ) {
         let max_dim = width.max(height);
         let scale = if max_dim == 0 {
             1.0
@@ -229,6 +239,16 @@ impl BlobDetectFfi {
         if !needs_rebuild {
             return;
         }
+        let staging_texture = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: aw,
+            height: ah,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "node.blob_detect_ffi.staging",
+            mip_levels: 1,
+        });
         self.blob_state = Some(BlobState {
             analysis_width: aw,
             analysis_height: ah,
@@ -236,6 +256,7 @@ impl BlobDetectFfi {
             readback_pending: false,
             blobs_dirty: false,
             blobs: Vec::new(),
+            staging_texture,
             last_request_frame: -1024,
             frame_counter: 0,
         });
@@ -272,7 +293,7 @@ impl Primitive for BlobDetectFfi {
 
         let gpu = ctx.gpu_encoder();
         self.ensure_blob_worker();
-        self.ensure_blob_state(source.width, source.height, analysis_max_dim);
+        self.ensure_blob_state(gpu.device, source.width, source.height, analysis_max_dim);
 
         if let (Some(bs), Some(bw)) = (self.blob_state.as_mut(), self.blob_worker.as_mut()) {
             // Poll readback → submit to worker.
@@ -300,23 +321,16 @@ impl Primitive for BlobDetectFfi {
             if elapsed >= update_interval && !bs.readback.is_pending() {
                 let aw = bs.analysis_width;
                 let ah = bs.analysis_height;
-                // Rgba8Unorm matches the plugin's expected pixel format
-                // exactly — the gpu_readback path then takes the fast
-                // row-copy branch (no f16→u8 conversion). Bilinear
-                // downsample via compute shader, not blit, so the entire
-                // source is sampled (not just the top-left analysis-sized
-                // patch the previous `copy_texture_to_texture` blit
-                // copied).
-                let staging = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                    width: aw,
-                    height: ah,
-                    depth: 1,
-                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-                    dimension: manifold_gpu::GpuTextureDimension::D2,
-                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                    label: "node.blob_detect_ffi.staging",
-                    mip_levels: 1,
-                });
+                // Cached Rgba8Unorm staging (sized in ensure_blob_state, rebuilt
+                // only on a resolution change). Rgba8Unorm matches the plugin's
+                // expected pixel format exactly — the gpu_readback path then
+                // takes the fast row-copy branch (no f16→u8 conversion).
+                // Bilinear downsample via compute shader, not blit, so the
+                // entire source is sampled (not just the top-left analysis-sized
+                // patch the previous `copy_texture_to_texture` blit copied). The
+                // downsample fully overwrites the staging and submit copies it
+                // into its own buffer, so reuse across cadences is safe (a new
+                // submit only runs once the prior readback completed).
                 let pipeline = self.downsample_pipeline.get_or_insert_with(|| {
                     gpu.device.create_compute_pipeline(
                         include_str!("shaders/blob_detect_ffi_downsample.wgsl"),
@@ -332,12 +346,12 @@ impl Primitive for BlobDetectFfi {
                     &[
                         GpuBinding::Texture { binding: 0, texture: source },
                         GpuBinding::Sampler { binding: 1, sampler },
-                        GpuBinding::Texture { binding: 2, texture: &staging },
+                        GpuBinding::Texture { binding: 2, texture: &bs.staging_texture },
                     ],
                     [aw.div_ceil(8), ah.div_ceil(8), 1],
                     "node.blob_detect_ffi.downsample",
                 );
-                bs.readback.submit(gpu, &staging, aw, ah);
+                bs.readback.submit(gpu, &bs.staging_texture, aw, ah);
                 bs.readback_pending = true;
                 bs.last_request_frame = bs.frame_counter;
             }
