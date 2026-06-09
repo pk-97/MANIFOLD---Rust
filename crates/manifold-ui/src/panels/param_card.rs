@@ -2007,140 +2007,111 @@ impl ParamCardPanel {
         Vec::new()
     }
 
+    /// Unified pointer-down hit-testing for both card kinds. Steps 1-5 grab the
+    /// modulation overlay handles (env range / target / trim / Ableton trim /
+    /// ADSR sliders); step 6 is the param slider, including the proximity
+    /// catch-zone for trim/target/range handles when a driver/envelope is
+    /// expanded. The emitted target comes from `param_target()`, so effect and
+    /// generator share one path — generators gain the proximity catch-zone they
+    /// previously lacked, and toggle/trigger rows (generator-only, no slider
+    /// widget) are skipped in step 6.
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        match self.kind {
-            ParamCardKind::Effect => self.handle_pointer_down_effect(node_id, pos),
-            ParamCardKind::Generator => self.handle_pointer_down_generator(node_id, pos),
-        }
-    }
+        let target = self.param_target();
 
-    fn handle_pointer_down_effect(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        let ei = self.effect_index;
-
-        // Check envelope range handles first (highest priority for Random mode)
+        // 1. Envelope range handles (Random mode) — highest priority.
         for (pi, range) in self.envelope_range_ids.iter().enumerate() {
             if let Some(t) = range {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                    return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                    return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
                 }
             }
         }
 
-        // Check envelope target bars (ADSR mode)
-        for (pi, target) in self.target_ids.iter().enumerate() {
-            if let Some(t) = target
+        // 2. Envelope target bars (ADSR mode).
+        for (pi, etarget) in self.target_ids.iter().enumerate() {
+            if let Some(t) = etarget
                 && node_id as i32 == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
             }
         }
 
-        // Check trim bars
+        // 3. Trim bars.
         for (pi, trim) in self.trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                    return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                    return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
                 }
             }
         }
 
-        // Check Ableton trim bars
+        // 4. Ableton trim bars.
         for (pi, trim) in self.ableton_trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(target, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                    return vec![PanelAction::AbletonTrimSnapshot(target, self.pid_at(pi))];
                 }
             }
         }
 
-        // Check ADSR slider tracks
+        // 5. ADSR slider tracks (attack / decay / sustain / release).
         for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
             if let Some(c) = env_cfg {
-                if node_id == c.attack_slider.track {
-                    self.drag.dragging_env_param = pi as i32;
-                    self.drag.dragging_env_slot = 0;
-                    let norm = BitmapSlider::x_to_normalized(c.attack_slider.track_rect, pos.x);
-                    return vec![
-                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
-                        PanelAction::EnvParamChanged(
-                            GraphParamTarget::Effect(ei),
-                            self.pid_at(pi),
-                            EnvelopeParam::Attack,
-                            norm * ENV_ADR_MAX,
-                        ),
-                    ];
-                }
-                if node_id == c.decay_slider.track {
-                    self.drag.dragging_env_param = pi as i32;
-                    self.drag.dragging_env_slot = 1;
-                    let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
-                    return vec![
-                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
-                        PanelAction::EnvParamChanged(
-                            GraphParamTarget::Effect(ei),
-                            self.pid_at(pi),
-                            EnvelopeParam::Decay,
-                            norm * ENV_ADR_MAX,
-                        ),
-                    ];
-                }
-                if node_id == c.sustain_slider.track {
-                    self.drag.dragging_env_param = pi as i32;
-                    self.drag.dragging_env_slot = 2;
-                    let norm = BitmapSlider::x_to_normalized(c.sustain_slider.track_rect, pos.x);
-                    return vec![
-                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
-                        PanelAction::EnvParamChanged(
-                            GraphParamTarget::Effect(ei),
-                            self.pid_at(pi),
-                            EnvelopeParam::Sustain,
-                            norm * ENV_S_MAX,
-                        ),
-                    ];
-                }
-                if node_id == c.release_slider.track {
-                    self.drag.dragging_env_param = pi as i32;
-                    self.drag.dragging_env_slot = 3;
-                    let norm = BitmapSlider::x_to_normalized(c.release_slider.track_rect, pos.x);
-                    return vec![
-                        PanelAction::EnvParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
-                        PanelAction::EnvParamChanged(
-                            GraphParamTarget::Effect(ei),
-                            self.pid_at(pi),
-                            EnvelopeParam::Release,
-                            norm * ENV_ADR_MAX,
-                        ),
-                    ];
+                let slots = [
+                    (&c.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
+                    (&c.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
+                    (&c.sustain_slider, EnvelopeParam::Sustain, ENV_S_MAX),
+                    (&c.release_slider, EnvelopeParam::Release, ENV_ADR_MAX),
+                ];
+                for (slot, (slider, param, max)) in slots.iter().enumerate() {
+                    if node_id == slider.track {
+                        self.drag.dragging_env_param = pi as i32;
+                        self.drag.dragging_env_slot = slot;
+                        let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+                        return vec![
+                            PanelAction::EnvParamSnapshot(target, self.pid_at(pi)),
+                            PanelAction::EnvParamChanged(target, self.pid_at(pi), *param, norm * max),
+                        ];
+                    }
                 }
             }
         }
 
-        // Check param slider tracks.
-        // When a driver is active, check if click is near a trim handle first —
-        // the 4px trim bars are hard to hit precisely, so we use a proximity zone.
+        // 6. Param slider tracks. Toggle/trigger rows have no slider widget, so
+        // skip them. When a driver/envelope is expanded, the thin (4px) trim /
+        // target / range bars get an ~8px proximity catch-zone so they're
+        // grabbable by feel before falling through to a normal param drag.
         for (pi, slider) in self.slider_ids.iter().enumerate() {
+            if self
+                .param_info
+                .get(pi)
+                .map(|i| i.is_toggle || i.is_trigger)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if let Some(ids) = slider
                 && (node_id == ids.track || {
                     // Also accept clicks on trim bar / fill / target nodes that are children of this track
@@ -2205,12 +2176,12 @@ impl ParamCardPanel {
                         self.drag.dragging_trim_param = pi as i32;
                         self.drag.dragging_trim_is_min = true;
                         let _ = trim;
-                        return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                        return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
                     }
                     if dist_max < hit_zone {
                         self.drag.dragging_trim_param = pi as i32;
                         self.drag.dragging_trim_is_min = false;
-                        return vec![PanelAction::TrimSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                        return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
                     }
                 }
 
@@ -2257,12 +2228,12 @@ impl ParamCardPanel {
                         if dist_min < hit_zone && dist_min <= dist_max {
                             self.drag.dragging_range_param = pi as i32;
                             self.drag.dragging_range_is_min = true;
-                            return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                            return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
                         }
                         if dist_max < hit_zone {
                             self.drag.dragging_range_param = pi as i32;
                             self.drag.dragging_range_is_min = false;
-                            return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                            return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
                         }
                     } else {
                         let tgt = self
@@ -2276,7 +2247,7 @@ impl ParamCardPanel {
 
                         if (pos.x - target_center).abs() < hit_zone {
                             self.drag.dragging_target_param = pi as i32;
-                            return vec![PanelAction::TargetSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi))];
+                            return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
                         }
                     }
                 }
@@ -2288,119 +2259,8 @@ impl ParamCardPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 return vec![
-                    PanelAction::ParamSnapshot(GraphParamTarget::Effect(ei), self.pid_at(pi)),
-                    PanelAction::ParamChanged(GraphParamTarget::Effect(ei), self.pid_at(pi), val),
-                ];
-            }
-        }
-
-        Vec::new()
-    }
-
-    fn handle_pointer_down_generator(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        // Check envelope range handles (Random mode)
-        for (pi, range) in self.envelope_range_ids.iter().enumerate() {
-            if let Some(t) = range {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_range_param = pi as i32;
-                    self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_range_param = pi as i32;
-                    self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::EnvRangeSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-            }
-        }
-
-        // Check envelope targets (ADSR mode)
-        for (pi, target) in self.target_ids.iter().enumerate() {
-            if let Some(t) = target
-                && node_id as i32 == t.target_bar_id
-            {
-                self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::TargetSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-            }
-        }
-
-        // Check trim bars
-        for (pi, trim) in self.trim_ids.iter().enumerate() {
-            if let Some(t) = trim {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_trim_param = pi as i32;
-                    self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_trim_param = pi as i32;
-                    self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::TrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-            }
-        }
-
-        // Check Ableton trim bars
-        for (pi, trim) in self.ableton_trim_ids.iter().enumerate() {
-            if let Some(t) = trim {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_ableton_trim_param = pi as i32;
-                    self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_ableton_trim_param = pi as i32;
-                    self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonTrimSnapshot(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-            }
-        }
-
-        // Check ADSR slider tracks
-        for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
-            if let Some(c) = env_cfg {
-                let slots = [
-                    (&c.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
-                    (&c.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
-                    (&c.sustain_slider, EnvelopeParam::Sustain, ENV_S_MAX),
-                    (&c.release_slider, EnvelopeParam::Release, ENV_ADR_MAX),
-                ];
-                for (slot, (slider, param, max)) in slots.iter().enumerate() {
-                    if node_id == slider.track {
-                        self.drag.dragging_env_param = pi as i32;
-                        self.drag.dragging_env_slot = slot;
-                        let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                        return vec![
-                            PanelAction::EnvParamSnapshot(GraphParamTarget::Generator, self.pid_at(pi)),
-                            PanelAction::EnvParamChanged(GraphParamTarget::Generator, self.pid_at(pi), *param, norm * max),
-                        ];
-                    }
-                }
-            }
-        }
-
-        // Check param slider tracks (skip toggles + triggers — neither has a
-        // slider widget on the row)
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if self
-                .param_info
-                .get(pi)
-                .map(|i| i.is_toggle || i.is_trigger)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            if let Some(ids) = slider
-                && node_id == ids.track
-            {
-                self.drag.dragging_param = pi as i32;
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                let info = &self.param_info[pi];
-                let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
-                let val = if info.whole_numbers { val.round() } else { val };
-                return vec![
-                    PanelAction::ParamSnapshot(GraphParamTarget::Generator, self.pid_at(pi)),
-                    PanelAction::ParamChanged(GraphParamTarget::Generator, self.pid_at(pi), val),
+                    PanelAction::ParamSnapshot(target, self.pid_at(pi)),
+                    PanelAction::ParamChanged(target, self.pid_at(pi), val),
                 ];
             }
         }
