@@ -61,7 +61,8 @@ use manifold_core::effect_graph_def::{
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
-use crate::node_graph::freeze::region::{RegionInput, partition_regions};
+use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
+use crate::node_graph::ports::PortType;
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::{
     EffectGraphDefExt, LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry, compile,
@@ -437,6 +438,99 @@ pub(crate) struct FusedDef {
     pub retarget: AHashMap<(String, String), (NodeId, String)>,
 }
 
+/// `node.array_feedback`'s stable type id — the head of a buffer in-place
+/// feedback loop. The in-place fusion gate keys on it (see
+/// [`external_is_inplace_loop`]).
+const ARRAY_FEEDBACK_TYPE_ID: &str = "node.array_feedback";
+
+/// Trace a single-output BUFFER region's output back through its members'
+/// `aliased_array_io` chain to the external input it ultimately writes IN PLACE.
+/// Returns that external index, or `None` if the region isn't a clean in-place
+/// chain: multi-output, a member that isn't `aliased_array_io` (so it can't be
+/// threading one buffer in place), or the chain doesn't bottom out at an external
+/// input. Pure structural analysis — the caller still gates on whether that
+/// external is an actual feedback-loop buffer ([`external_is_inplace_loop`]).
+fn region_output_aliases_external(
+    region: &Region,
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+) -> Option<usize> {
+    if region.outputs.len() != 1 {
+        return None;
+    }
+    let mut cur_doc = region.outputs[0];
+    // Bounded walk: a region has finitely many members; the cap is a cycle guard.
+    for _ in 0..64 {
+        let member = region.members.iter().find(|m| m.doc_id == cur_doc)?;
+        let doc_node = def.nodes.iter().find(|n| n.id == cur_doc)?;
+        let node = registry.construct(&doc_node.type_id)?;
+        // v1: a single aliased in/out pair — the member mutates its input buffer.
+        let (in_port, _out_port) = *node.aliased_array_io().first()?;
+        // Index of the aliased input among the member's ARRAY input ports — the
+        // same order `RegionMember.inputs` (and the codegen's `InputSource`) use.
+        let in_idx = node
+            .inputs()
+            .iter()
+            .filter(|p| matches!(p.ty, PortType::Array(_)))
+            .position(|p| p.name == in_port)?;
+        match member.inputs.get(in_idx)? {
+            RegionInput::External(e) => return Some(*e),
+            RegionInput::Member(prev) => cur_doc = *prev,
+        }
+    }
+    None
+}
+
+/// Is `region.externals[ext_idx]` the buffer of a `node.array_feedback` IN-PLACE
+/// loop? Walks the producer chain backward through `aliased_array_io` nodes: an
+/// `array_feedback` head ⇒ yes (a true loop buffer, safe to alias as the fused
+/// output); a forward (non-aliased) producer ⇒ no (aliasing it would reintroduce
+/// the ordering bug the fresh-`dst` model avoids — the input has a producer that
+/// must run first). A producer already fused away ⇒ conservatively no.
+fn external_is_inplace_loop(
+    region: &Region,
+    ext_idx: usize,
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+    member_region: &AHashMap<u32, usize>,
+) -> bool {
+    let Some(ext) = region.externals.get(ext_idx) else {
+        return false;
+    };
+    let mut node = ext.from_node;
+    let mut port = ext.from_port.clone();
+    for _ in 0..128 {
+        if member_region.contains_key(&node) {
+            return false; // producer fused away — can't verify the loop
+        }
+        let Some(n) = def.nodes.iter().find(|x| x.id == node) else {
+            return false;
+        };
+        if n.type_id == ARRAY_FEEDBACK_TYPE_ID {
+            return true;
+        }
+        let Some(prim) = registry.construct(&n.type_id) else {
+            return false;
+        };
+        // Follow the aliased pair whose OUTPUT is the port we arrived on, back to
+        // its INPUT's producer. A non-aliased producer ends the walk (not a loop).
+        let aliasing = prim.aliased_array_io();
+        let Some((in_port, _)) = aliasing.iter().copied().find(|(_, op)| *op == port) else {
+            return false;
+        };
+        let Some(w) = def
+            .wires
+            .iter()
+            .find(|w| w.to_node == node && w.to_port == in_port)
+        else {
+            return false;
+        };
+        node = w.from_node;
+        port = w.from_port.clone();
+    }
+    false
+}
+
 /// Partition `def` into its fusable regions and rewrite it with one fused
 /// `node.wgsl_compute` per region. Returns `None` (leave the card entirely
 /// unfused) when nothing fuses. Conservative throughout: any inability to
@@ -473,6 +567,10 @@ pub(crate) fn fuse_canonical_def(
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
     let mut fused_docs: Vec<u32> = Vec::with_capacity(regions.len());
+    // Per region (parallel to `fused_docs`): `Some(k)` if its output is written in
+    // place to external `src_k` (an aliased feedback-loop buffer), so the output
+    // rewrite below routes consumers off the `src_k` port instead of `dst`.
+    let mut region_in_place: Vec<Option<usize>> = Vec::with_capacity(regions.len());
     // Control wires re-anchored onto a fused node's port-shadow: (fused_doc,
     // producer node, producer port, `n{idx}_<param>` field). Emitted after the
     // texture rewrite so the producer (a surviving boundary) is already in place.
@@ -508,12 +606,23 @@ pub(crate) fn fuse_canonical_def(
                 node_inputs: leak_ports(node.inputs()),
                 node_outputs: leak_ports(node.outputs()),
                 node_includes: node.wgsl_includes(),
+                derived_uniforms: node.derived_uniforms(),
             });
         }
+        // In-place gate: if the region's output threads (through aliased members)
+        // back to an external that is an `array_feedback` loop buffer, the fused
+        // kernel must write back into THAT buffer in place — else the loop's
+        // `in==out` aliasing breaks and array_feedback drops to a one-frame copy
+        // delay (the FluidSim divergence). Forward-produced regions (DigitalPlants)
+        // trace to a non-loop external → None → keep the fresh-`dst` model.
+        let in_place_alias = region_output_aliases_external(region, registry, def)
+            .filter(|&e| external_is_inplace_loop(region, e, registry, def, &member_region));
+
         let fusion_region = FusionRegion {
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
             outputs: region.outputs.iter().map(|&d| NodeInstanceId(d)).collect(),
+            in_place_alias,
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline
@@ -562,6 +671,36 @@ pub(crate) fn fuse_canonical_def(
                     control_wires.push((fused_doc, cw.from_node, cw.from_port.clone(), field));
                 }
             }
+
+            // Frame-derived uniforms (dt_scaled, frame_count, …): the fused kernel
+            // has no per-member run() to recompute them, so wire each from the
+            // matching system.generator_input output — the same wired-frame-value
+            // mechanism scatter's width/height already use. wgsl_compute shadows the
+            // `n{idx}_<field>` uniform member as an optional ScalarF32 input, so this
+            // is a plain control wire (an f32 destined for a u32 field is converted
+            // `as u32` at pack time). Bail to unfused if the graph has no
+            // generator_input or carries a derived uniform we can't source — safe,
+            // just no speedup.
+            for d in node.derived_uniforms() {
+                let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+                // A vec3 derived (camera basis) can't be reconstructed from one
+                // scalar output — those atoms are gather/atomic boundaries anyway.
+                if dty == "vec3" {
+                    return None;
+                }
+                let src_port = match dname {
+                    "dt_scaled" => "frame_delta",
+                    "frame_count" => "frame_count",
+                    "time" | "time2" | "time_val" => "time",
+                    _ => return None, // unknown derived uniform — can't source it
+                };
+                let gen_in = def
+                    .nodes
+                    .iter()
+                    .find(|n| n.type_id == "system.generator_input")?;
+                let field = format!("n{idx}_{dname}");
+                control_wires.push((fused_doc, gen_in.id, src_port.to_string(), field));
+            }
         }
 
         new_nodes.push(EffectGraphNode {
@@ -581,6 +720,7 @@ pub(crate) fn fuse_canonical_def(
             group: None,
         });
         fused_docs.push(fused_doc);
+        region_in_place.push(in_place_alias);
     }
 
     // ── Surviving (non-member) nodes carry over unchanged. ──
@@ -609,10 +749,13 @@ pub(crate) fn fuse_canonical_def(
             Some(&r) => {
                 let producer = &regions[r];
                 let k = producer.outputs.iter().position(|&o| o == from_node)?;
-                let port = if producer.outputs.len() > 1 {
-                    format!("dst_{k}")
-                } else {
-                    "dst".to_string()
+                // Match the output port the codegen emitted: an in-place region's
+                // output is its aliased `src_<k>` buffer; otherwise `dst` (single)
+                // or `dst_<k>` (fan-out).
+                let port = match region_in_place[r] {
+                    Some(src_k) => format!("src_{src_k}"),
+                    None if producer.outputs.len() > 1 => format!("dst_{k}"),
+                    None => "dst".to_string(),
                 };
                 Some((fused_docs[r], port))
             }
@@ -639,18 +782,23 @@ pub(crate) fn fuse_canonical_def(
                 to_port: format!("src_{e}"),
             });
         }
-        // (c) each region output → every consumer it fed. A single-output region
-        // exposes the `dst` port (byte-identical to v1); a FAN-OUT region routes
-        // each escaping member through its own `dst_<k>` (k = its index in
-        // `region.outputs`, matching the codegen's binding order). The finder
-        // already guaranteed every such consumer is a live surviving node, so each
-        // `dst_<k>` lands on a texture the executor allocates.
-        // Single-output regions (every buffer region, and the common texture
-        // case) expose `dst`; a texture FAN-OUT region exposes `dst_<k>`. A buffer
-        // region's fresh `// @fused_output` array is also named `dst`.
+        // (c) each region output → every consumer it fed. Output port depends on
+        // the region's output model:
+        //   - IN-PLACE (region_in_place[i] = Some(k)): the output IS the aliased
+        //     loop buffer `src_k` (read_write, no separate dst), so consumers route
+        //     off `src_k`. Only single-output regions ever get here.
+        //   - FRESH single-output: the `dst` port (byte-identical to v1).
+        //   - FRESH fan-out: each escaping member through its own `dst_<k>` (k = its
+        //     index in `region.outputs`, matching the codegen's binding order).
+        // The finder guaranteed every consumer is a live surviving node, so each
+        // output lands on a resource the executor allocates.
         let multi = region.outputs.len() > 1;
         for (k, &out_doc) in region.outputs.iter().enumerate() {
-            let from_port = if multi { format!("dst_{k}") } else { "dst".to_string() };
+            let from_port = match region_in_place[i] {
+                Some(src_k) => format!("src_{src_k}"),
+                None if multi => format!("dst_{k}"),
+                None => "dst".to_string(),
+            };
             for w in &def.wires {
                 if w.from_node == out_doc && !member_region.contains_key(&w.to_node) {
                     new_wires.push(EffectGraphWire {

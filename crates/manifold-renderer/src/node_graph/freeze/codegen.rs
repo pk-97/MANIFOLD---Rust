@@ -1066,6 +1066,14 @@ pub struct RegionNode<'a> {
     /// every member's helper calls resolve. Empty for the texture path (texture
     /// atoms inline their helpers).
     pub node_includes: &'a [&'static str],
+    /// Frame-derived uniform fields the member's body takes as trailing args
+    /// (`dt_scaled`, `frame_count:u32`, …), in body-arg order after the params.
+    /// The standalone path computes these in run() and packs them; the fused
+    /// buffer path emits them as `n{i}_<name>` Params fields + body args, and the
+    /// install pass wires each to the matching `system.generator_input` output so
+    /// the fused kernel reads the same frame value the unfused atom would. Empty
+    /// for atoms with no frame-derived uniforms (and the texture path).
+    pub derived_uniforms: &'static [&'static str],
 }
 
 /// A maximal fusable region: nodes in topo order, the external inputs they read,
@@ -1083,6 +1091,17 @@ pub struct FusionRegion<'a> {
     /// install pass (so no store ever lands on an unallocated output). Must be
     /// non-empty; each id must name a node in [`Self::nodes`].
     pub outputs: Vec<NodeInstanceId>,
+    /// IN-PLACE buffer regions only: `Some(k)` means the region's single output
+    /// must be written back IN PLACE to external input `src_k` (the aliased loop
+    /// buffer) instead of a fresh `// @fused_output dst`. The install pass sets
+    /// this only when (a) the output traces back through aliased members to that
+    /// external input AND (b) that input is part of an `array_feedback` in-place
+    /// loop — so aliasing preserves the loop's `in==out` contract WITHOUT the
+    /// forward-producer ordering bug the fresh-dst model avoids (a loop buffer has
+    /// no forward producer). `None` keeps the fresh-output model (the default, and
+    /// the only correct choice for forward-produced regions like DigitalPlants).
+    /// Single-output regions only; fan-out (`outputs.len() > 1`) stays fresh.
+    pub in_place_alias: Option<usize>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -1278,6 +1297,30 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             field_count += 1;
         }
     }
+    // Frame-derived uniform fields (`dt_scaled`, `frame_count:u32`, …) per member,
+    // after the params — mirrors the standalone path's emission, namespaced
+    // `n{i}_<name>`. NOT added to `param_order`: their per-frame value comes from a
+    // wire the install pass adds (system.generator_input → this field's port-
+    // shadow), not from inst.params. wgsl_compute port-shadows every uniform field,
+    // so each becomes an optional ScalarF32 input the installer wires.
+    for (i, node) in region.nodes.iter().enumerate() {
+        for d in node.derived_uniforms {
+            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            if dty == "vec3" {
+                // A vec3 derived field expands to three f32 fields (matches the
+                // standalone packing). No buffer atom that fuses needs one yet
+                // (camera-basis atoms are gather/atomic boundaries), but keep the
+                // shape consistent so a future one codegens correctly.
+                writeln!(struct_body, "    n{i}_{dname}_x: f32,").unwrap();
+                writeln!(struct_body, "    n{i}_{dname}_y: f32,").unwrap();
+                writeln!(struct_body, "    n{i}_{dname}_z: f32,").unwrap();
+                field_count += 3;
+            } else {
+                writeln!(struct_body, "    n{i}_{dname}: {dty},").unwrap();
+                field_count += 1;
+            }
+        }
+    }
     let pad_words = (4 - (field_count % 4)) % 4;
     for k in 0..pad_words {
         writeln!(struct_body, "    _pad{k}: u32,").unwrap();
@@ -1296,29 +1339,49 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     out.push_str(&struct_body);
     out.push_str("}\n\n");
 
-    // --- bindings: uniform(0), each external array as READ-ONLY input (forward
-    // dependencies — correctly ordered after their producers), then a FRESH
-    // write-only `dst` output tagged `// @fused_output`. WGSL has no write-only
-    // storage access mode, so dst is declared read_write but the marker makes
-    // node.wgsl_compute treat it as output-only (not aliased), so the loader
-    // allocates it fresh and the inputs stay forward deps. This is the fix for the
-    // aliased-output ordering bug. ---
+    // --- bindings: uniform(0), then the external arrays. Two output models:
+    //
+    // FRESH (in_place_alias = None, the default): every external binds READ-ONLY
+    // (forward deps, correctly ordered after their producers) + a FRESH write-only
+    // `dst` tagged `// @fused_output`. WGSL has no write-only storage mode, so dst
+    // is read_write but the marker makes node.wgsl_compute treat it as output-only
+    // (not aliased) and the loader allocates it fresh. This avoids the aliased-
+    // output ordering bug — correct for any FORWARD-produced region (DigitalPlants).
+    //
+    // IN-PLACE (in_place_alias = Some(k)): the region writes back to external
+    // `src_k` — the loop buffer of an `array_feedback` in-place feedback loop. That
+    // input binds READ_WRITE (no @fused_output), so node.wgsl_compute sees it
+    // read+written → an aliased in/out pair → the loader keeps `in==out` ONE buffer,
+    // preserving the loop's in-place contract (without the ordering bug: a loop
+    // buffer has no forward producer to mis-order against). The install pass only
+    // sets this when the output genuinely aliases a feedback-loop input.
+    let in_place = region.in_place_alias;
+    if let Some(k) = in_place {
+        // Validity: the aliased input must exist and carry the output's element
+        // type (it IS the output buffer). Install guarantees this; guard anyway.
+        if k >= ext_tys.len() || ext_tys[k] != out_ty {
+            return Err(CodegenError::BadInput);
+        }
+    }
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
     let mut binding = 1u32;
     for (e, ty) in ext_tys.iter().enumerate() {
+        let access = if in_place == Some(e) { "read_write" } else { "read" };
         writeln!(
             out,
-            "@group(0) @binding({binding}) var<storage, read> src_{e}: array<{ty}>;"
+            "@group(0) @binding({binding}) var<storage, {access}> src_{e}: array<{ty}>;"
         )
         .unwrap();
         binding += 1;
     }
-    out.push_str("// @fused_output\n");
-    writeln!(
-        out,
-        "@group(0) @binding({binding}) var<storage, read_write> dst: array<{out_ty}>;"
-    )
-    .unwrap();
+    if in_place.is_none() {
+        out.push_str("// @fused_output\n");
+        writeln!(
+            out,
+            "@group(0) @binding({binding}) var<storage, read_write> dst: array<{out_ty}>;"
+        )
+        .unwrap();
+    }
     out.push('\n');
 
     // --- shared library includes (noise_common, …), prepended so the bodies'
@@ -1377,10 +1440,27 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         for p in node.params {
             args.push(format!("params.n{i}_{}", p.name));
         }
+        // Frame-derived uniforms trail the params (same body-arg order the
+        // standalone path uses); a vec3 is reassembled from its three f32 fields.
+        for d in node.derived_uniforms {
+            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            if dty == "vec3" {
+                args.push(format!(
+                    "vec3<f32>(params.n{i}_{dname}_x, params.n{i}_{dname}_y, params.n{i}_{dname}_z)"
+                ));
+            } else {
+                args.push(format!("params.n{i}_{dname}"));
+            }
+        }
         writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
     }
-    // Write the region result to the fresh output array.
-    writeln!(out, "    dst[idx] = r{out_member};").unwrap();
+    // Write the region result. IN-PLACE: back into the aliased loop buffer
+    // `src_k` (read+write makes it an aliased in/out pair). FRESH: the separate
+    // `dst` array.
+    match in_place {
+        Some(k) => writeln!(out, "    src_{k}[idx] = r{out_member};").unwrap(),
+        None => writeln!(out, "    dst[idx] = r{out_member};").unwrap(),
+    }
     out.push_str("}\n");
 
     Ok(GeneratedFusion { wgsl: out, param_order })
@@ -1804,6 +1884,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1815,10 +1896,12 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
             ],
             num_external_inputs: 1,
             outputs: vec![id(1)],
+            in_place_alias: None,
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -1856,11 +1939,13 @@ mod gpu_tests {
             node_inputs: J::INPUTS,
             node_outputs: J::OUTPUTS,
             node_includes: J::WGSL_INCLUDES,
+            derived_uniforms: J::DERIVED_UNIFORMS,
         };
         let region = FusionRegion {
             nodes: vec![mk(0, InputSource::External(0)), mk(1, InputSource::Node(id(0)))],
             num_external_inputs: 1,
             outputs: vec![id(1)],
+            in_place_alias: None,
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -1912,6 +1997,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1923,10 +2009,12 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
             ],
             num_external_inputs: 1,
             outputs: vec![id(1)],
+            in_place_alias: None,
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -1963,6 +2051,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
                 RegionNode {
                     node_id: id(1),
@@ -1974,6 +2063,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
                 RegionNode {
                     node_id: id(2),
@@ -1985,10 +2075,12 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
+                    derived_uniforms: &[],
                 },
             ],
             num_external_inputs: 1,
             outputs: vec![id(1), id(2)],
+            in_place_alias: None,
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -2178,16 +2270,17 @@ mod gpu_tests {
         // atom types' consts.
         let region = FusionRegion {
             nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[] },
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[] },
             ],
             num_external_inputs: 1,
             outputs: vec![id(6)],
+            in_place_alias: None,
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

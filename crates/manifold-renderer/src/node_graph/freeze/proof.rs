@@ -1255,6 +1255,127 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     );
 }
 
+/// BUFFER-domain fusion with FRAME-DERIVED uniforms: the real FluidSimulation —
+/// whose per-particle hot chain (noise force, euler integrate with `dt_scaled`,
+/// wrap, anti-clump with `frame_count`, …) only fuses now that the codegen emits
+/// each member's derived uniform as an `n{i}_<name>` field and the install pass
+/// wires it from `system.generator_input` (frame_delta / frame_count) — must
+/// render frame-for-frame like the unfused preset.
+///
+/// This is the test the whole buffer-chain-fusion build is gated on, and it only
+/// became POSSIBLE after the determinism fix: a chaotic feedback sim amplifies any
+/// divergence, so a non-deterministic render could never be its own oracle. Buffer
+/// fusion threads f32 element registers (no f16 round-trip between atoms), so the
+/// particle math is bit-identical and the chaotic trajectories stay locked — a
+/// wrong derived-uniform wire (dt_scaled defaulting to 0 → frozen particles; a
+/// frame_count off-by-one → decorrelated jitter) diverges the cloud and fails.
+///
+/// This was once blocked: FluidSim's particle buffer flows through array_feedback
+/// IN PLACE, and a fused region writing a fresh `// @fused_output` buffer broke the
+/// in==out aliasing (array_feedback fell to copy-delay = one extra frame of
+/// latency, and the chaotic sim diverged ~15% at frame 1). The fix: the install
+/// pass detects a feedback-loop region (`region_output_aliases_external` +
+/// `external_is_inplace_loop`) and the codegen writes the result back to the
+/// aliased `src_k` buffer in place, keeping array_feedback in-place. This test is
+/// the proof that holds it correct.
+///
+/// Scoped to BUFFER fusion via `set_buffer_fusion_only(true)`: the texture
+/// flow-field region (gradient→scale→rotate) inside the same loop fuses with f32
+/// registers instead of the unfused f16 round-trips, and that rounding difference
+/// — correct, more precise — amplifies in the chaotic sim into a fused-vs-unfused
+/// divergence (~26%) that is NOT a buffer-fusion bug. Holding texture atoms
+/// unfused isolates the f32 particle region, which IS bit-exact. (Production fuses
+/// both; the in-loop-texture-precision trade-off is tracked separately.)
+#[test]
+fn fluidsim_buffer_fusion_renders_like_unfused() {
+    use super::install::fuse_generator_def;
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_runtime::PresetRuntime;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("FluidSimulation"),
+    )
+    .expect("FluidSimulation preset bundled");
+    let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    // Fuse only the (f32, bit-exact) buffer region; keep the texture flow-field
+    // region unfused so its f16↔f32 rounding doesn't masquerade as a bug here.
+    crate::node_graph::freeze::region::set_buffer_fusion_only(true);
+    let fused_def = fuse_generator_def(&canonical, &registry)
+        .expect("FluidSimulation fuses + builds (derived-uniform buffer region)");
+    crate::node_graph::freeze::region::set_buffer_fusion_only(false);
+
+    // The build's whole point: a derived-uniform particle atom must actually have
+    // fused. Assert the fused def added a generator_input → fused frame wire — if
+    // it didn't, the region stayed unfused and this test would pass vacuously.
+    let has_frame_wire = fused_def.nodes.iter().any(|n| n.type_id == "node.wgsl_compute")
+        && fused_def.wires.iter().any(|wire| {
+            fused_def
+                .nodes
+                .iter()
+                .any(|n| n.id == wire.from_node && n.type_id == "system.generator_input")
+                && (wire.from_port == "frame_delta" || wire.from_port == "frame_count")
+        });
+    assert!(
+        has_frame_wire,
+        "FluidSim fusion must wire a frame-derived uniform from generator_input — \
+         no such wire means the derived-uniform region never fused (vacuous pass)"
+    );
+
+    let ctx = |t: f64| PresetContext {
+        time: t,
+        beat: t * 2.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    let render = |def: EffectGraphDef| -> RenderTarget {
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+            .expect("FluidSimulation builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-fusion");
+        for i in 0..8u32 {
+            let mut enc = device.create_encoder("freeze-fluid-fusion");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+        target
+    };
+
+    let unfused = render(canonical);
+    let fused = render(fused_def);
+
+    let differ = TextureDiff::new(&device);
+    // Buffer fusion is bit-exact on the particle math (f32 registers, no f16
+    // round-trip), so a chaotic sim only stays locked if the derived uniforms are
+    // wired correctly. Tight bound — a 0-dt or wrong frame_count blows way past it.
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-3, 1.0e-2);
+    assert!(
+        r.passes(0.002) && r.over_count < 64,
+        "fused FluidSimulation must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Determinism guard for the FluidSimulation feedback sim. Rendering the SAME
 /// canonical preset twice from fresh state, with an identical frame sequence,
 /// must produce the SAME final image. It did NOT before the storage-layer

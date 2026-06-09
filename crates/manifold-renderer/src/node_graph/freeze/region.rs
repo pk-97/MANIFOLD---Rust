@@ -239,6 +239,28 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     regions
 }
 
+thread_local! {
+    /// See [`set_buffer_fusion_only`]. Default off — production fuses texture and
+    /// buffer regions alike.
+    static BUFFER_FUSION_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Read the per-thread buffer-fusion-only flag (`classify_node` boundary gate).
+fn buffer_fusion_only() -> bool {
+    BUFFER_FUSION_ONLY.with(|c| c.get())
+}
+
+/// Test-only: when `on`, `classify_node` keeps every TEXTURE atom a boundary so
+/// only buffer regions fuse. Lets the FluidSim buffer-fusion oracle prove the
+/// (f32, bit-exact) particle region renders identically to unfused, without the
+/// texture flow-field region's f16↔f32 rounding — which a chaotic feedback loop
+/// amplifies into a fused-vs-unfused difference that is correct (more precise),
+/// not a bug. Thread-local, so it only affects fusion on the calling test thread.
+#[cfg(test)]
+pub(crate) fn set_buffer_fusion_only(on: bool) {
+    BUFFER_FUSION_ONLY.with(|c| c.set(on));
+}
+
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
 /// including "the registry doesn't know this type" — is a `Boundary`.
 fn classify_node(
@@ -255,6 +277,15 @@ fn classify_node(
     let Some(n) = registry.construct(&node.type_id) else {
         return NodeClass::Boundary; // unknown atom → never fuse
     };
+    // Test knob: keep TEXTURE atoms (non-Array output) as boundaries so ONLY
+    // buffer regions fuse. The FluidSim buffer-fusion oracle uses this to isolate
+    // the f32-bit-exact buffer region from the texture flow-field region — whose
+    // f16↔f32 rounding amplifies in the chaotic feedback loop (a separate,
+    // pre-existing precision characteristic, NOT a buffer-fusion bug). Default off
+    // (production fuses both domains); thread-local so parallel tests don't race.
+    if buffer_fusion_only() && !n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        return NodeClass::Boundary;
+    }
 
     // Three kinds fold INTO a region: Pointwise / MultiInputCoincident thread
     // their input register(s); Source is a 0-input generator that produces the
@@ -444,11 +475,18 @@ fn classify_buffer_node(
         return NodeClass::Boundary;
     }
     // Frame-derived-uniform integrators (euler_step's dt_scaled, the forces'
-    // frame_count) can't recompute their per-frame values in a fused
-    // `node.wgsl_compute` (no per-member `run()`) — boundary.
-    if !n.derived_uniforms().is_empty() {
-        return NodeClass::Boundary;
-    }
+    // frame_count) FUSE: the fused buffer codegen emits each derived uniform as an
+    // `n{i}_<name>` Params field + body arg, and the install pass wires it from
+    // system.generator_input (frame_delta / frame_count / time) — the same
+    // wired-frame-value mechanism scatter's width/height use. The in-place-loop
+    // hazard (fusing a region inside array_feedback's in==out loop) is handled at
+    // the install/region level: `region_output_aliases_external` +
+    // `external_is_inplace_loop` detect a feedback-loop region and the codegen
+    // writes back to the aliased `src_k` buffer in place, preserving the loop. So
+    // this per-node gate no longer excludes derived-uniform atoms; the install bails
+    // to unfused only if it can't source a derived uniform (no generator_input, or a
+    // vec3 camera basis). Proven by `fluidsim_buffer_fusion_renders_like_unfused`.
+    //
     // Atomic-accumulator outputs (scatter) write via `atomicAdd`, not a coincident
     // element write — boundary.
     if !n.atomic_outputs().is_empty() {
