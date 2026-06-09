@@ -1279,13 +1279,16 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
 /// aliased `src_k` buffer in place, keeping array_feedback in-place. This test is
 /// the proof that holds it correct.
 ///
-/// Scoped to BUFFER fusion via `set_buffer_fusion_only(true)`: the texture
-/// flow-field region (gradient→scale→rotate) inside the same loop fuses with f32
-/// registers instead of the unfused f16 round-trips, and that rounding difference
-/// — correct, more precise — amplifies in the chaotic sim into a fused-vs-unfused
-/// divergence (~26%) that is NOT a buffer-fusion bug. Holding texture atoms
-/// unfused isolates the f32 particle region, which IS bit-exact. (Production fuses
-/// both; the in-loop-texture-precision trade-off is tracked separately.)
+/// FULL fusion — texture flow-field region AND the buffer particle region — and
+/// it's bit-exact because the loop's texture INTERMEDIATES (grad, grad_scaled) are
+/// declared rgba32float in the preset. At full precision the unfused chain stores
+/// each intermediate exactly and the fused kernel keeps it in an f32 register
+/// exactly, so there is NO rounding gap to amplify (the f16 gap that the chaotic
+/// sim blew up). This is the edit-vs-perform guarantee: the editor renders the
+/// region unfused, performance renders it fused, and at full precision they are
+/// identical — the look can't shift when the editor closes. (The fused path keeps
+/// those intermediates in registers, so the fp32 textures only exist while editing
+/// — zero cost on stage.)
 #[test]
 fn fluidsim_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
@@ -1301,12 +1304,8 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     )
     .expect("FluidSimulation preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    // Fuse only the (f32, bit-exact) buffer region; keep the texture flow-field
-    // region unfused so its f16↔f32 rounding doesn't masquerade as a bug here.
-    crate::node_graph::freeze::region::set_buffer_fusion_only(true);
     let fused_def = fuse_generator_def(&canonical, &registry)
         .expect("FluidSimulation fuses + builds (derived-uniform buffer region)");
-    crate::node_graph::freeze::region::set_buffer_fusion_only(false);
 
     // The build's whole point: a derived-uniform particle atom must actually have
     // fused. Assert the fused def added a generator_input → fused frame wire — if

@@ -239,26 +239,30 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     regions
 }
 
-thread_local! {
-    /// See [`set_buffer_fusion_only`]. Default off — production fuses texture and
-    /// buffer regions alike.
-    static BUFFER_FUSION_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Read the per-thread buffer-fusion-only flag (`classify_node` boundary gate).
-fn buffer_fusion_only() -> bool {
-    BUFFER_FUSION_ONLY.with(|c| c.get())
-}
-
-/// Test-only: when `on`, `classify_node` keeps every TEXTURE atom a boundary so
-/// only buffer regions fuse. Lets the FluidSim buffer-fusion oracle prove the
-/// (f32, bit-exact) particle region renders identically to unfused, without the
-/// texture flow-field region's f16↔f32 rounding — which a chaotic feedback loop
-/// amplifies into a fused-vs-unfused difference that is correct (more precise),
-/// not a bug. Thread-local, so it only affects fusion on the calling test thread.
-#[cfg(test)]
-pub(crate) fn set_buffer_fusion_only(on: bool) {
-    BUFFER_FUSION_ONLY.with(|c| c.set(on));
+/// Is `start` on a dataflow cycle — i.e. inside a feedback loop? Forward node
+/// reachability over the wire graph: a feedback node (`array_feedback` /
+/// `node.feedback`) is a SINGLE node whose `in` wires and `out` wires both attach
+/// to it, so the loop's back-edge through it shows up as an ordinary wire-graph
+/// cycle (no special feedback handling needed). Returns true iff following wires
+/// forward from `start` returns to `start`. Bounded by the node/wire counts; runs
+/// once per fusion build (cached).
+fn node_on_cycle(start: u32, def: &EffectGraphDef) -> bool {
+    let mut stack = vec![start];
+    let mut visited: AHashSet<u32> = AHashSet::default();
+    while let Some(n) = stack.pop() {
+        for w in &def.wires {
+            if w.from_node != n {
+                continue;
+            }
+            if w.to_node == start {
+                return true; // wire chain from start loops back to start
+            }
+            if visited.insert(w.to_node) {
+                stack.push(w.to_node);
+            }
+        }
+    }
+    false
 }
 
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
@@ -277,15 +281,6 @@ fn classify_node(
     let Some(n) = registry.construct(&node.type_id) else {
         return NodeClass::Boundary; // unknown atom → never fuse
     };
-    // Test knob: keep TEXTURE atoms (non-Array output) as boundaries so ONLY
-    // buffer regions fuse. The FluidSim buffer-fusion oracle uses this to isolate
-    // the f32-bit-exact buffer region from the texture flow-field region — whose
-    // f16↔f32 rounding amplifies in the chaotic feedback loop (a separate,
-    // pre-existing precision characteristic, NOT a buffer-fusion bug). Default off
-    // (production fuses both domains); thread-local so parallel tests don't race.
-    if buffer_fusion_only() && !n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return NodeClass::Boundary;
-    }
 
     // Three kinds fold INTO a region: Pointwise / MultiInputCoincident thread
     // their input register(s); Source is a 0-input generator that produces the
@@ -409,6 +404,23 @@ fn classify_node(
         if w.from_node == node.id && is_scalar_param_wire(def, registry, w) {
             return NodeClass::Boundary;
         }
+    }
+
+    // Feedback-loop exclusion (TEXTURE atoms only — buffer atoms were dispatched
+    // above and are exempt). A texture atom inside a feedback loop must NOT fuse.
+    // Fusing keeps intermediates in f32 registers, but the unfused editor stores
+    // them through the atom's HARD-CODED rgba16float output and rounds to f16. The
+    // two can't be reconciled: the GPU rounds a register differently than a texture
+    // write (so a fused-side f16 round doesn't match), and the curated atoms can't
+    // switch to fp32 (their shader format is compiled-in). For an ordinary effect
+    // that f16-vs-f32 gap is invisible, but a chaotic feedback sim (FluidSim's flow
+    // field, OilyFluid) amplifies it — and since the editor renders unfused and the
+    // stage renders fused, the look would shift the moment the editor closes. So we
+    // keep in-loop texture atoms unfused: editor and stage then run them
+    // identically. Buffer atoms stay fused — their f32 register threading is
+    // already bit-exact and their in-place feedback fusion is preserved.
+    if node_on_cycle(node.id, def) {
+        return NodeClass::Boundary;
     }
 
     // Final gate: the body must produce a kernel the PLAIN pipeline compiler
