@@ -549,6 +549,7 @@ fn region_output_aliases_external(
         match member.inputs.get(in_idx)? {
             RegionInput::External(e) => return Some(*e),
             RegionInput::Member(prev) => cur_doc = *prev,
+            RegionInput::Unwired => return None, // no buffer threads through an unwired port
         }
     }
     None
@@ -667,6 +668,7 @@ pub(crate) fn fuse_canonical_def(
                 .map(|ri| match ri {
                     RegionInput::External(e) => InputSource::External(*e),
                     RegionInput::Member(doc) => InputSource::Node(NodeInstanceId(*doc)),
+                    RegionInput::Unwired => InputSource::Unwired,
                 })
                 .collect();
             region_nodes.push(RegionNode {

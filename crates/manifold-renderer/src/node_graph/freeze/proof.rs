@@ -1723,6 +1723,88 @@ fn oilyfluid_inloop_f16_fusion_matches_unfused() {
     }
 }
 
+/// Optional-input fusion proof on the real MetallicGlass: its sobel tail
+/// (sobel_x/sobel_y → pack_channels → length_vec2 → gain → clamp) only fuses
+/// once an UNWIRED OPTIONAL texture input (pack_channels' b/a) is expressible
+/// — the codegen passes a zero vector and folds the body's use flag to a
+/// literal `0u`. Compared at the REGION OUTPUT (the fused kernel vs unfused
+/// edge_clamp) under the established out-of-loop ulp tolerance — NOT at the
+/// composite (the PBR render downstream amplifies sub-ulp register noise into
+/// specular shimmer) and NOT bit-exact (out-of-loop fused regions carry
+/// body-level FMA/inlining ULP noise across kernel contexts; the documented
+/// contract is q16 bit-exactness inside loops, ≈ulp outside — see the
+/// quantize_f16 comment in region.rs). A use-flag or argument-order bug fails
+/// loudly here: the default fallback zeroes a sobel channel and the gradient
+/// magnitude collapses, far beyond the tolerance.
+#[test]
+fn metallicglass_optional_input_fusion_matches_unfused() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("MetallicGlass"),
+    )
+    .expect("MetallicGlass bundled");
+    let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    shrink_particle_pool(&mut def, 100_000); // no pools today; suite-parallelism hygiene
+    let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    // Non-vacuous: pack_channels must be fused AWAY (it only fuses through the
+    // unwired-optional path), and some fused kernel must carry the literal
+    // unwired argument the new codegen emits.
+    assert!(
+        !fused.nodes.iter().any(|n| n.type_id == "node.pack_channels"),
+        "pack_channels must fold into the sobel-tail region"
+    );
+    assert!(
+        fused
+            .nodes
+            .iter()
+            .any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("vec4<f32>(0.0)"))),
+        "a fused kernel must carry the unwired-optional zero argument"
+    );
+
+    // Unfused: edge_clamp (the region's tail member). Fused: the kernel that
+    // carries pack_channels' default params — unique to the sobel-tail region.
+    let pick_unfused = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("edge_clamp"))
+            .map(|n| n.id)
+            .expect("edge_clamp present")
+    };
+    let pick_fused = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("default_r")))
+            .map(|n| n.id)
+            .expect("sobel-tail fused kernel present")
+    };
+    for frames in [1u32, 8] {
+        let (u, ud) = render_def_capture_node_host(
+            &def, &registry, &device, w, h, frames, &pick_unfused, true,
+        )
+        .expect("unfused renders");
+        let (f, fd) = render_def_capture_node_host(
+            &fused, &registry, &device, w, h, frames, &pick_fused, true,
+        )
+        .expect("fused renders");
+        assert_eq!(ud, fd, "region output dims match (frames={frames})");
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-2, 3.0e-2);
+        assert!(
+            r.over_count == 0,
+            "fused sobel tail must match unfused within ulp tolerance at frames={frames}: \
+             max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+}
+
 /// Tier-6 proof on the real ParticleText: fp32-mark its flow-field atoms
 /// (`grad` / `grad_scaled` / `grad_rotate` — the same marks FluidSim2D ships
 /// in its grouped field), fuse, and require the fused render to match the

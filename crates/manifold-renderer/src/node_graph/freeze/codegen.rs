@@ -1072,6 +1072,13 @@ pub enum InputSource {
     External(usize),
     /// Another region node's output register (must appear earlier in topo order).
     Node(NodeInstanceId),
+    /// An OPTIONAL texture input with no wire (pack_channels' unwired b/a). The
+    /// body receives a zero vector and its injected `use_<name>` flag is the
+    /// literal `0u`, so the value is never read — the same contract the atom's
+    /// `run()` fulfils by binding a dummy texture and clearing the flag. Wiring
+    /// is static in the def, so the flag folds at codegen time instead of
+    /// becoming a uniform field.
+    Unwired,
 }
 
 /// One atom inside a fusion region. Borrows its body + params (both available
@@ -1502,6 +1509,9 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                     }
                     args.push(format!("r{j}"));
                 }
+                // Optional-unwired is a texture-domain contract (use-flag bodies);
+                // no buffer atom declares one, so reaching here is a finder bug.
+                InputSource::Unwired => return Err(CodegenError::BadInput),
             }
         }
         for p in node.params {
@@ -1769,9 +1779,20 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     }
                     args.push(format!("src_{e}"));
                 }
-                // A gather reading a region register can't be expressed.
-                (InputAccess::Gather | InputAccess::GatherTexel, InputSource::Node(_)) => {
+                // A gather reading a region register can't be expressed, and a
+                // gather needs a real texture to sample — unwired can't fuse
+                // (the finder already keeps such a member out of regions).
+                (
+                    InputAccess::Gather | InputAccess::GatherTexel,
+                    InputSource::Node(_) | InputSource::Unwired,
+                ) => {
                     return Err(CodegenError::BadInput);
+                }
+                // Optional input with no wire: the body's injected use flag (the
+                // literal `0u`, pushed after params below) gates the read off, so
+                // any well-typed value works. Mirrors run()'s dummy-texture bind.
+                (_, InputSource::Unwired) => {
+                    args.push("vec4<f32>(0.0)".to_string());
                 }
                 // Coincident / texel: the pre-read external register, or an earlier
                 // node's threaded register.
@@ -1796,6 +1817,25 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         args.push("vec2<f32>(dims)".to_string());
         for p in node.params {
             args.push(format!("params.n{i}_{}", p.name));
+        }
+        // Optional-input use flags trail the params — the same body-arg order the
+        // standalone wrapper uses (`params.use_<name>` there). Wiring is static in
+        // the def, so each flag folds to a literal here. `node_inputs` describes
+        // the texture ports when install built the region; synthetic test regions
+        // leave it empty → no flags pushed, generated WGSL byte-identical.
+        let tex_specs: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+        if tex_specs.len() == node.inputs.len() {
+            for (idx, spec) in tex_specs.iter().enumerate() {
+                if !spec.required {
+                    let wired = !matches!(node.inputs[idx], InputSource::Unwired);
+                    args.push(if wired { "1u" } else { "0u" }.to_string());
+                }
+            }
+        } else if node.inputs.iter().any(|s| matches!(s, InputSource::Unwired)) {
+            // An unwired optional without port specs to read optionality from
+            // can't satisfy the body's use-flag signature — don't miscompile.
+            return Err(CodegenError::BadInput);
         }
         if node.quantize_f16 {
             // In-loop f16 member: reproduce the unfused chain's rgba16float

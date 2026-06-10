@@ -83,7 +83,8 @@ pub struct RegionMember {
     /// The member's `EffectGraphNode::id` (doc id).
     pub doc_id: u32,
     /// Texture inputs in body-arg order (the atom's `inputs()` filtered to
-    /// texture ports). Each resolves to an external slot or an earlier member.
+    /// texture ports). Each resolves to an external slot, an earlier member,
+    /// or `Unwired` (an optional port with no wire).
     pub inputs: Vec<RegionInput>,
     /// How each input in [`Self::inputs`] is read (aligned by index). A `Gather`
     /// entry's input is always an [`RegionInput::External`] — the codegen binds
@@ -107,6 +108,10 @@ pub enum RegionInput {
     External(usize),
     /// Another member's output register (must be earlier in topo order).
     Member(u32),
+    /// An OPTIONAL texture input with no wire (pack_channels' unwired b/a). The
+    /// fused body receives a zero vector gated off by its injected use flag —
+    /// folded to a literal `0u` at codegen since wiring is static in the def.
+    Unwired,
 }
 
 /// A texture produced outside a region and read by ≥1 of its members. Read once
@@ -629,10 +634,26 @@ fn build_region(
         let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
         for (idx, port) in tex_ports.iter().enumerate() {
             let access = access_list.get(idx).copied().unwrap_or(InputAccess::Coincident);
-            let wire = def
+            let Some(wire) = def
                 .wires
                 .iter()
-                .find(|w| w.to_node == doc_id && w.to_port == *port)?;
+                .find(|w| w.to_node == doc_id && w.to_port == *port)
+            else {
+                // No wire into this port. An OPTIONAL coincident input fuses as
+                // `Unwired` (the body's injected use flag gates the read off, the
+                // same contract run() fulfils with a dummy bind) — this is what
+                // lets pack_channels fuse with only r/g wired. Required-unwired
+                // (the node wouldn't render anyway) and gather-unwired (the body
+                // needs a real texture to sample) drop the region — unfused,
+                // always correct.
+                let spec = constructed.inputs().iter().find(|i| i.name == *port)?;
+                if spec.required || access.is_gather() || is_buffer {
+                    return None;
+                }
+                inputs.push(RegionInput::Unwired);
+                input_access.push(access);
+                continue;
+            };
             let resolved = if node_set.contains(&wire.from_node) {
                 // A gather input must read an external texture, never a region
                 // register (a register is one texel). The finder never unions
@@ -659,6 +680,14 @@ fn build_region(
         // f16-faithful rounding (stencil tier A): an in-loop member whose
         // unfused output texture is f16 gets its fused register quantized to
         // half precision after every body call — see the classify comment.
+        // Deliberately NOT extended to out-of-loop members: a 2026-06-10 probe
+        // (simplex→scale fused vs unfused) measured q16-everywhere WORSE than
+        // plain f32 registers (all-pixel 1-ulp drift vs half-pixel) — the
+        // residual out-of-loop gap is body-level FMA/inlining ULP noise across
+        // kernel contexts, which quantization can't reconcile, only amplify.
+        // Out-of-loop regions live with the documented ≈ulp tolerance; loops
+        // get q16 because there the inputs are identical by induction and the
+        // store rounding is the only gap.
         let quantize_f16 = !is_buffer
             && node_on_cycle(doc_id, def)
             && !node.output_formats.values().any(|s| s.contains("32float"));
@@ -1632,6 +1661,163 @@ mod audit {
              raw_regions={raw:<2} flat_regions={:<2} fused_atoms={fused_atoms:<3} sizes={sizes:?}",
             regions.len(),
         );
+    }
+
+    /// Per-preset WHY report: classification of every node, region membership,
+    /// and — for each eligible↔eligible wire that did NOT union — which gate cut
+    /// it. Diagnoses "this pointwise atom stayed standalone" without guessing.
+    fn explain_preset(name: &str, json: &str, registry: &PrimitiveRegistry) {
+        use crate::node_graph::freeze::classify::FusionKind;
+        let def: EffectGraphDef = serde_json::from_str(json).expect("preset parses");
+        let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+        let spaces = resolve_output_spaces(&def, registry);
+        let regions = partition_regions(&def, registry);
+        let member_of: AHashMap<u32, usize> = regions
+            .iter()
+            .enumerate()
+            .flat_map(|(i, r)| r.members.iter().map(move |m| (m.doc_id, i)))
+            .collect();
+        eprintln!("=== {name}: {} regions ===", regions.len());
+        for n in &def.nodes {
+            let class = classify_node(n, &def, registry);
+            let kind = registry
+                .construct(&n.type_id)
+                .map(|p| format!("{:?}", p.fusion_kind()))
+                .unwrap_or_else(|| "?".into());
+            let region = member_of
+                .get(&n.id)
+                .map(|i| format!("region {i}"))
+                .unwrap_or_else(|| "-".into());
+            eprintln!(
+                "  [{:>3}] {:<28} {:<34} {:?} kind={kind:<22} {region}",
+                n.id,
+                n.handle.as_deref().unwrap_or("-"),
+                n.type_id,
+                class
+            );
+        }
+        // Re-run the union-candidate filters per eligible↔eligible wire and name
+        // the first gate that cut it.
+        for w in &def.wires {
+            let from_ok = classify_node(
+                def.nodes.iter().find(|n| n.id == w.from_node).unwrap(),
+                &def,
+                registry,
+            ) == NodeClass::Eligible;
+            let to_ok = classify_node(
+                def.nodes.iter().find(|n| n.id == w.to_node).unwrap(),
+                &def,
+                registry,
+            ) == NodeClass::Eligible;
+            if !(from_ok && to_ok) {
+                continue;
+            }
+            let same_region = member_of.get(&w.from_node).is_some()
+                && member_of.get(&w.from_node) == member_of.get(&w.to_node);
+            if same_region {
+                continue;
+            }
+            let verdict = if !(is_texture_wire(&def, registry, w) || is_array_wire(&def, registry, w)) {
+                "not a texture/Array wire (control)"
+            } else if !wire_coincident_consumed(&def, registry, w) {
+                "gather-consumed (producer stays external)"
+            } else if !is_array_wire(&def, registry, w)
+                && space_of(spaces.as_ref(), w.from_node, &w.from_port)
+                    != node_output_space(spaces.as_ref(), &def, registry, w.to_node)
+            {
+                "element-space mismatch"
+            } else {
+                "union rejected (convexity) or split by another gate"
+            };
+            eprintln!(
+                "  WIRE {} -> {} ({}.{} -> {}.{}): {verdict}",
+                w.from_node, w.to_node, w.from_node, w.from_port, w.to_node, w.to_port
+            );
+        }
+        let _ = FusionKind::Pointwise; // keep the import used even if kinds print as "?"
+
+        // Replicate the union loop to separate "merge rejected (convexity)" from
+        // "component merged fine, then build_region dropped it".
+        let class: AHashMap<u32, NodeClass> = def
+            .nodes
+            .iter()
+            .map(|n| (n.id, classify_node(n, &def, registry)))
+            .collect();
+        let eligible: AHashSet<u32> = class
+            .iter()
+            .filter(|(_, c)| **c == NodeClass::Eligible)
+            .map(|(id, _)| *id)
+            .collect();
+        let forward: Vec<(u32, u32)> = def
+            .wires
+            .iter()
+            .filter(|w| !is_state_capture_wire(&def, registry, w))
+            .map(|w| (w.from_node, w.to_node))
+            .collect();
+        let mut candidates: Vec<(u32, u32)> = def
+            .wires
+            .iter()
+            .filter(|w| {
+                eligible.contains(&w.from_node)
+                    && eligible.contains(&w.to_node)
+                    && (is_texture_wire(&def, registry, w) || is_array_wire(&def, registry, w))
+                    && wire_coincident_consumed(&def, registry, w)
+                    && (is_array_wire(&def, registry, w)
+                        || space_of(spaces.as_ref(), w.from_node, &w.from_port)
+                            == node_output_space(spaces.as_ref(), &def, registry, w.to_node))
+            })
+            .map(|w| (w.from_node, w.to_node))
+            .collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+        let mut uf = UnionFind::new(&eligible);
+        for (a, b) in candidates {
+            if uf.find(a) == uf.find(b) {
+                continue;
+            }
+            let finds: AHashMap<u32, u32> = eligible.iter().map(|&n| (n, uf.find(n))).collect();
+            let (ra, rb) = (uf.find(a), uf.find(b));
+            let key = |n: u32| -> u32 {
+                match finds.get(&n) {
+                    Some(&r) if r == rb => ra,
+                    Some(&r) => r,
+                    None => n,
+                }
+            };
+            if collapsed_has_cycle(&forward, &key) {
+                eprintln!("  MERGE REJECTED (convexity): {a} + {b}");
+            } else {
+                uf.union(a, b);
+            }
+        }
+        let mut components: AHashMap<u32, Vec<u32>> = AHashMap::default();
+        for &id in &eligible {
+            components.entry(uf.find(id)).or_default().push(id);
+        }
+        let final_reachable = final_reachable_nodes(&def);
+        for (_, mut nodes) in components {
+            nodes.sort_unstable();
+            if nodes.len() < 2 {
+                continue;
+            }
+            let built =
+                build_region(&def, registry, &nodes, &final_reachable, spaces.as_ref()).is_some();
+            eprintln!("  COMPONENT {nodes:?}: build_region={built}");
+        }
+    }
+
+    #[test]
+    #[ignore = "on-demand per-preset fusion WHY report"]
+    fn explain_presets() {
+        let registry = PrimitiveRegistry::with_builtin();
+        for name in ["MetallicGlass", "OilyFluid", "FluidSimulation"] {
+            let type_id = manifold_core::PresetTypeId::new(name);
+            if let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) {
+                explain_preset(name, &json, &registry);
+            } else {
+                eprintln!("=== {name}: NO BUNDLED JSON ===");
+            }
+        }
     }
 
     #[test]
