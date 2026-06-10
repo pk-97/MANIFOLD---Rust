@@ -796,6 +796,17 @@ pub trait EffectNode: Send {
         crate::node_graph::freeze::classify::FusionKind::Boundary
     }
 
+    /// PURE node: output depends only on param values + wired inputs — no
+    /// frame time, no `StateStore`, no randomness, no CPU/FFI side effects.
+    /// The executor memoizes pure steps (constant-subgraph hoisting): when a
+    /// pure step's params and input resources are unchanged since its last
+    /// execute, the step is skipped and its held output slot serves
+    /// consumers. Default `false` — opt in via the `primitive!` macro's
+    /// `pure:` field only after verifying the contract against `run()`.
+    fn is_pure(&self) -> bool {
+        false
+    }
+
     /// REGISTER-HEAVY body: the atom's `wgsl_body` inlines enough code (a
     /// bespoke simplex, a large helper suite) that folding it into a
     /// multi-atom kernel pushes register pressure past the occupancy cliff

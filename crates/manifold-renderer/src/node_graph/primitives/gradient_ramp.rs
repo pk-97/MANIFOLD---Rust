@@ -83,6 +83,7 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["gradient", "color ramp", "lut", "palette"],
+    pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/gradient_ramp_body.wgsl"),
 }

@@ -91,6 +91,18 @@ pub trait PrimitiveSpec: Send {
     const FUSION_KIND: crate::node_graph::freeze::classify::FusionKind =
         crate::node_graph::freeze::classify::FusionKind::Boundary;
 
+    /// PURE primitive: `run()`'s output depends ONLY on its param values and
+    /// its wired inputs — no frame time/beat/delta, no `StateStore`, no
+    /// randomness, no CPU/FFI side effects, no canvas-dims dependence beyond
+    /// the output texture it's handed. The executor memoizes pure steps:
+    /// when params and inputs are unchanged since the last execute, the step
+    /// is skipped and its held output slot serves consumers (constant-subgraph
+    /// hoisting — a static LUT renders once, not per frame; a param tweak
+    /// re-renders it once). Opt-in via the macro's `pure:` field because the
+    /// contract can't be checked mechanically — declare it only after reading
+    /// `run()` end-to-end.
+    const PURE: bool = false;
+
     /// Optional fusable body fragment: a WGSL `fn body(...)` with no global
     /// accesses (purity-checked) that the fusion codegen chains into one
     /// kernel — and from which the standalone `cs_main` is generated
@@ -530,6 +542,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
         P::FUSION_KIND
     }
+    fn is_pure(&self) -> bool {
+        P::PURE
+    }
     fn fusion_register_heavy(&self) -> bool {
         Primitive::fusion_register_heavy(self)
     }
@@ -657,6 +672,7 @@ macro_rules! primitive {
         $( category: $cat:ident, )?
         $( role: $role:ident, )?
         $( aliases: [ $($alias:literal),* $(,)? ], )?
+        $( pure: $pure:literal, )?
         $( fusion_kind: $fusion_kind:ident, )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
@@ -708,6 +724,7 @@ macro_rules! primitive {
 
             const PARAMS: &'static [$crate::node_graph::parameters::ParamDef] = &[ $($params)* ];
 
+            $( const PURE: bool = $pure; )?
             $( const FUSION_KIND: $crate::node_graph::freeze::classify::FusionKind =
                 $crate::node_graph::freeze::classify::FusionKind::$fusion_kind; )?
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?

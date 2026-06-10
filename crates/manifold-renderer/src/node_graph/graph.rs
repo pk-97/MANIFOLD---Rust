@@ -42,6 +42,15 @@ pub struct NodeInstance {
     /// single home for the title — it round-trips back to the def via
     /// persistence's `from_graph`.
     pub title: Option<String>,
+    /// Bumped whenever a param write actually CHANGES a value (compare-on-
+    /// write in [`Graph::set_param`] / [`Graph::set_param_unchecked`]). The
+    /// executor's memoized-dataflow skip reads this: a pure step whose
+    /// `param_epoch` and input resources are unchanged since its last execute
+    /// is skipped and its held output slot serves consumers. Per-frame hosts
+    /// re-writing the SAME value (binding applies, constant `aspect`) don't
+    /// bump; `time`/`beat` writes bump every frame, which is exactly what
+    /// keeps time-driven nodes re-executing.
+    pub param_epoch: u64,
 }
 
 impl NodeInstance {
@@ -61,6 +70,7 @@ impl NodeInstance {
             params,
             exposed_params: AHashSet::default(),
             title: None,
+            param_epoch: 0,
         }
     }
 }
@@ -257,7 +267,15 @@ impl Graph {
                 node: id,
                 param: name.to_string(),
             })?;
+        // Compare-on-write: a write that doesn't change the value is a no-op
+        // — no epoch bump (the executor's memo skip keys on `param_epoch`),
+        // and no reconfigure (same params ⇒ same port shape). Hosts re-apply
+        // bindings and constants every frame; only real changes count.
+        if inst.params.get(static_name) == Some(&value) {
+            return Ok(());
+        }
         inst.params.insert(static_name, value);
+        inst.param_epoch += 1;
         // Variadic nodes rebuild their port lists when a count-style param
         // changes. Disjoint field borrows (`node` mut, `params` shared).
         inst.node.reconfigure(&inst.params);
@@ -378,7 +396,12 @@ impl Graph {
         value: ParamValue,
     ) {
         if let Some(inst) = self.nodes.get_mut(&id) {
+            // Same compare-on-write contract as `set_param` — see there.
+            if inst.params.get(name) == Some(&value) {
+                return;
+            }
             inst.params.insert(name, value);
+            inst.param_epoch += 1;
         }
     }
 

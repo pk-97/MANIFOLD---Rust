@@ -152,6 +152,35 @@ pub struct Executor {
     /// `(step_idx, node, type_id, cpu_nanos)` per live step of the last
     /// profiled frame. Cleared at frame start while [`profiling`] is on.
     step_profiles: Vec<StepProfile>,
+    /// Memoized-dataflow state (constant-subgraph hoisting). `step_memo[idx]`
+    /// records the epochs a PURE step ([`EffectNode::is_pure`]) last executed
+    /// with. A pure step whose node `param_epoch` and input resource epochs
+    /// are unchanged is CLEAN: skipped exactly like a pruned mux branch — its
+    /// held output slots serve consumers. A static gradient LUT renders once,
+    /// not per frame; a palette tweak bumps the param epoch and re-renders it
+    /// once. Sized to the plan's step count on first frame (plans never swap
+    /// under a live executor — topology changes rebuild the whole runtime).
+    step_memo: Vec<Option<StepMemo>>,
+    /// Producer-execution counter per resource: bumped every time the step
+    /// producing the resource actually evaluates. The memo compares these to
+    /// detect upstream changes. Non-pure producers bump every frame they run,
+    /// which conservatively keeps their consumers dirty.
+    resource_epoch: ahash::AHashMap<ResourceId, u64>,
+    /// Outputs of pure steps — exempt from `free_after` release so the held
+    /// texture/scalar survives the frame for the memo skip to serve. Without
+    /// this, the consumer's `free_after` returns the LUT's slot to the pool
+    /// every frame and nothing can ever cache. Built once per plan shape.
+    sticky_resources: ahash::AHashSet<ResourceId>,
+    /// Step count the memo/sticky structures were built for; rebuilt when it
+    /// differs (defensive — a live executor's plan does not change shape).
+    memo_steps_len: Option<usize>,
+}
+
+/// Epoch snapshot a pure step last executed with — see [`Executor::step_memo`].
+struct StepMemo {
+    param_epoch: u64,
+    /// Aligned with the step's `inputs` order.
+    input_epochs: Vec<u64>,
 }
 
 /// One step's CPU-side cost from a profiled frame: acquire + evaluate
@@ -192,6 +221,10 @@ impl Executor {
             profile_force_all_live: false,
             profiling: false,
             step_profiles: Vec::new(),
+            step_memo: Vec::new(),
+            resource_epoch: ahash::AHashMap::default(),
+            sticky_resources: ahash::AHashSet::default(),
+            memo_steps_len: None,
         }
     }
 
@@ -526,6 +559,27 @@ impl Executor {
     ) {
         self.compute_live_steps(graph, plan);
 
+        // Build the memoized-dataflow structures on first frame (or if the
+        // plan shape ever changed — defensive; live executors keep one plan).
+        // Sticky = outputs of pure steps, exempted from `free_after` below so
+        // the held slot survives for the clean-skip to serve.
+        if self.memo_steps_len != Some(plan.steps().len()) {
+            self.memo_steps_len = Some(plan.steps().len());
+            self.step_memo.clear();
+            self.step_memo.resize_with(plan.steps().len(), || None);
+            self.resource_epoch.clear();
+            self.sticky_resources.clear();
+            for step in plan.steps() {
+                if let Some(inst) = graph.get_node(step.node)
+                    && inst.node.is_pure()
+                {
+                    for &(_, res) in &step.outputs {
+                        self.sticky_resources.insert(res);
+                    }
+                }
+            }
+        }
+
         // Reset preview capture for this frame. Re-resolved below if the
         // target node is live and produces a texture.
         self.preview_resource = None;
@@ -601,6 +655,40 @@ impl Executor {
                 continue;
             }
 
+            // Memoized-dataflow skip (constant-subgraph hoisting): a PURE
+            // step whose params and input resources are unchanged since its
+            // last execute re-emits its held output slots without running.
+            // Skipped exactly like the mux short-circuit above — no acquire,
+            // no evaluate, no free_after — so consumers read the prior write.
+            // Diagnostic modes force-dirty: attribution profiling wants real
+            // per-step cost, dump wants every output recorded, and the
+            // preview path resolves its capture inside the execute body.
+            let force_dirty = self.profile_force_all_live
+                || self.profiling
+                || self.dump_all
+                || self.preview_target == Some(step.node);
+            if !force_dirty
+                && let Some(inst) = graph.get_node(step.node)
+                && inst.node.is_pure()
+                && inst.node.skip_passthrough(&inst.params).is_none()
+                && let Some(memo) = &self.step_memo[idx]
+                && memo.param_epoch == inst.param_epoch
+                && memo.input_epochs.len() == step.inputs.len()
+                && step
+                    .inputs
+                    .iter()
+                    .zip(&memo.input_epochs)
+                    .all(|(&(_, res), &epoch)| {
+                        self.resource_epoch.get(&res).copied().unwrap_or(0) == epoch
+                    })
+                && step
+                    .outputs
+                    .iter()
+                    .all(|&(_, res)| self.backend.slot_for(res).is_some())
+            {
+                continue;
+            }
+
             // Attribution profiling: stamp the step tag onto the GPU encoder
             // so counter-sampled spans join back to this step, and start the
             // CPU encode clock. Both gated on `profiling` (off on the live
@@ -646,7 +734,15 @@ impl Executor {
             // (optionally) a per-step mutable reborrow of the host's
             // GpuEncoder + StateStore. Scoped tightly so the borrows end
             // before the release loop's mutable borrow below.
+            // Set when this step's node is pure and it executed (evaluate or
+            // skip-alias) — the memo snapshot is recorded after the node
+            // borrow ends. `None` leaves any prior memo cleared (non-pure or
+            // missing node).
+            let mut executed_pure_epoch: Option<u64> = None;
             if let Some(inst) = graph.get_node_mut(step.node) {
+                if inst.node.is_pure() {
+                    executed_pure_epoch = Some(inst.param_epoch);
+                }
                 // Query skip-passthrough BEFORE building the full context.
                 // If the node declares itself a no-op, alias the input
                 // slot's texture onto the output slot — zero GPU work
@@ -779,6 +875,25 @@ impl Executor {
                 }
             }
 
+            // Memoized-dataflow bookkeeping: this step executed, so every
+            // output resource is new content — bump its epoch so consumers'
+            // memos see the change. Pure steps then snapshot the epochs they
+            // ran with (the clean-skip compares against this next frame);
+            // non-pure steps clear any stale memo. The input-epoch Vec only
+            // allocates on dirty executes of pure steps — never on the
+            // steady-state (clean) path.
+            for &(_, res) in &step.outputs {
+                *self.resource_epoch.entry(res).or_insert(0) += 1;
+            }
+            self.step_memo[idx] = executed_pure_epoch.map(|param_epoch| StepMemo {
+                param_epoch,
+                input_epochs: step
+                    .inputs
+                    .iter()
+                    .map(|&(_, res)| self.resource_epoch.get(&res).copied().unwrap_or(0))
+                    .collect(),
+            });
+
             // Attribution profiling: close the step's CPU encode clock.
             if let Some(t0) = prof_start {
                 let type_id = graph
@@ -854,6 +969,12 @@ impl Executor {
                 // Dump mode preserves everything for a one-frame read; preview
                 // preserves just the watched node's output.
                 if self.dump_all || self.preview_resource == Some(res_id) {
+                    continue;
+                }
+                // Pure steps' outputs are held past the frame so the memo
+                // skip can serve them — without this, the consumer returns
+                // the LUT's slot to the pool every frame and nothing caches.
+                if self.sticky_resources.contains(&res_id) {
                     continue;
                 }
                 let ty = plan
@@ -1970,6 +2091,148 @@ mod tests {
             slots_one < slots_all,
             "single-branch selection must allocate fewer slots than full eager evaluation; \
              eager={slots_all}, pruned={slots_one}",
+        );
+    }
+
+    // ─── Memoized-dataflow (constant-subgraph hoisting) ───
+
+    /// Pure test node: one float param, one texture output, counts evaluates.
+    struct PureCountingNode {
+        type_id: EffectNodeType,
+        pure: bool,
+        evals: Arc<Mutex<u32>>,
+    }
+
+    impl PureCountingNode {
+        fn new(pure: bool, evals: Arc<Mutex<u32>>) -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.pure_counting"),
+                pure,
+                evals,
+            }
+        }
+    }
+
+    impl EffectNode for PureCountingNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: "out",
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            static PARAMS: [ParamDef; 1] = [ParamDef {
+                name: "k",
+                label: "K",
+                ty: crate::node_graph::parameters::ParamType::Float,
+                default: crate::node_graph::parameters::ParamValue::Float(1.0),
+                range: None,
+                enum_values: &[],
+            }];
+            &PARAMS
+        }
+        fn is_pure(&self) -> bool {
+            self.pure
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            *self.evals.lock().unwrap() += 1;
+        }
+    }
+
+    /// A pure step with unchanged params executes exactly once — frames 2..n
+    /// serve its held output slot without re-running (the Infrared static-LUT
+    /// shape: a constant ramp must not re-render 60×/s).
+    #[test]
+    fn pure_step_executes_once_while_clean() {
+        let evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        g.add_node(Box::new(PureCountingNode::new(true, evals.clone())));
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..3 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*evals.lock().unwrap(), 1, "clean pure step must skip");
+    }
+
+    /// The default (non-pure) node never memoizes — identical setup, three
+    /// executes. Guards against accidentally memoizing un-opted-in nodes.
+    #[test]
+    fn impure_step_executes_every_frame() {
+        let evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        g.add_node(Box::new(PureCountingNode::new(false, evals.clone())));
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..3 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*evals.lock().unwrap(), 3);
+    }
+
+    /// A REAL param change re-executes the pure step exactly once; re-writing
+    /// the SAME value (what binding applies do every frame) does not. This is
+    /// the live-perform contract: twist the palette knob → one re-render.
+    #[test]
+    fn param_change_reexecutes_pure_step_once() {
+        use crate::node_graph::parameters::ParamValue;
+
+        let evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        let n = g.add_node(Box::new(PureCountingNode::new(true, evals.clone())));
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        exec.execute_frame(&mut g, &plan, frame_time());
+        // Same-value writes: no epoch bump, still clean.
+        g.set_param(n, "k", ParamValue::Float(1.0)).unwrap();
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(*evals.lock().unwrap(), 1, "same-value write must stay clean");
+
+        // Real change: one re-execute, then clean again.
+        g.set_param(n, "k", ParamValue::Float(2.0)).unwrap();
+        exec.execute_frame(&mut g, &plan, frame_time());
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(*evals.lock().unwrap(), 2, "changed param re-executes exactly once");
+    }
+
+    /// A non-pure consumer keeps running every frame and reads the SAME slot
+    /// the pure producer wrote on frame 1 — the held slot serves consumers
+    /// (this is what `sticky_resources` protects from `free_after`).
+    #[test]
+    fn consumer_reads_held_slot_of_clean_pure_producer() {
+        let evals = Arc::new(Mutex::new(0));
+        let log: Arc<Mutex<Vec<EvaluationRecord>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(PureCountingNode::new(true, evals.clone())));
+        let consumer = g.add_node(Box::new(RecordingNode::new(
+            "test.consumer",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        g.connect((producer, "out"), (consumer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..3 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*evals.lock().unwrap(), 1, "producer runs once");
+        let records = log.lock().unwrap();
+        assert_eq!(records.len(), 3, "consumer runs every frame");
+        let first_in = records[0].inputs.clone();
+        assert!(
+            records.iter().all(|r| r.inputs == first_in),
+            "consumer must read the producer's held slot on every frame"
         );
     }
 }
