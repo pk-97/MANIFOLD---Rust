@@ -322,8 +322,7 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     // ── Build a region from each component; drop the ones v1 can't express. ──
     let mut regions: Vec<Region> = Vec::new();
     for (_, nodes) in &comp_list {
-        if let Some(region) = build_region(def, registry, nodes, &final_reachable, spaces.as_ref())
-        {
+        if let Ok(region) = build_region(def, registry, nodes, &final_reachable, spaces.as_ref()) {
             regions.push(region);
         }
     }
@@ -1234,21 +1233,24 @@ fn classify_buffer_node(
     NodeClass::Eligible
 }
 
-/// Assemble a [`Region`] from a connected component's node set, or `None` if it
-/// fails a v1 expressibility gate (too short, multi-output, or an unresolvable
-/// input — all left unfused).
+/// Assemble a [`Region`] from a connected component's node set, or `Err` naming
+/// the first v1 expressibility gate it failed (too short, multi-output, or an
+/// unresolvable input — all left unfused). The reason string feeds the
+/// `explain_presets` report: a component can union cleanly and STILL not fuse,
+/// and without the reason that reads as a convexity bug (Watercolor's tail did,
+/// 2026-06-11 — see the element-space gate below).
 fn build_region(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     nodes: &[u32],
     final_reachable: &AHashSet<u32>,
     spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
-) -> Option<Region> {
+) -> Result<Region, &'static str> {
     // Singles ARE built here: a lone stencil atom (a blur) becomes worth fusing
     // the moment the absorption pass folds a producer chain into its fetch.
     // `partition_regions` drops chainless sub-MIN_REGION_LEN regions at the end.
     if nodes.is_empty() {
-        return None;
+        return Err("empty component");
     }
     let node_set: AHashSet<u32> = nodes.iter().copied().collect();
     // Texture vs buffer region — drives every port/wire filter below (a region is
@@ -1257,15 +1259,20 @@ fn build_region(
 
     // Topo-sort the members by intra-region wires so every Member input refers to
     // an earlier entry (the codegen threads registers in this order).
-    let order = topo_sort(nodes, def, registry, &node_set, is_buffer)?;
+    let order = topo_sort(nodes, def, registry, &node_set, is_buffer)
+        .ok_or("intra-region wires form a cycle")?;
 
     // Resolve external inputs (deduped, first-seen order) + each member's inputs.
     let mut externals: Vec<ExternalRef> = Vec::new();
     let mut ext_index: AHashMap<(u32, String), usize> = AHashMap::default();
     let mut members: Vec<RegionMember> = Vec::with_capacity(order.len());
     for &doc_id in &order {
-        let node = def.nodes.iter().find(|n| n.id == doc_id)?;
-        let constructed = registry.construct(&node.type_id)?;
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.id == doc_id)
+            .ok_or("member id missing from def")?;
+        let constructed = registry.construct(&node.type_id).ok_or("unknown member type")?;
         let tex_ports: Vec<&str> = constructed
             .inputs()
             .iter()
@@ -1289,9 +1296,13 @@ fn build_region(
                 // (the node wouldn't render anyway) and gather-unwired (the body
                 // needs a real texture to sample) drop the region — unfused,
                 // always correct.
-                let spec = constructed.inputs().iter().find(|i| i.name == *port)?;
+                let spec = constructed
+                    .inputs()
+                    .iter()
+                    .find(|i| i.name == *port)
+                    .ok_or("port missing from member spec")?;
                 if spec.required || access.is_gather() || is_buffer {
-                    return None;
+                    return Err("required/gather/buffer input unwired");
                 }
                 inputs.push(RegionInput::Unwired);
                 input_access.push(access);
@@ -1303,7 +1314,7 @@ fn build_region(
                 // across a gather-consumed wire, so a gathered producer should
                 // never be a member — bail defensively if one slipped through.
                 if access.is_gather() {
-                    return None;
+                    return Err("gather input wired from a member");
                 }
                 RegionInput::Member(wire.from_node)
             } else {
@@ -1331,14 +1342,15 @@ fn build_region(
         if is_buffer {
             for port in constructed.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
                 if port.ty != PortType::Texture2D {
-                    return None;
+                    return Err("buffer member samples a non-2D texture");
                 }
                 let wire = def
                     .wires
                     .iter()
-                    .find(|w| w.to_node == doc_id && w.to_port == port.name)?;
+                    .find(|w| w.to_node == doc_id && w.to_port == port.name)
+                    .ok_or("buffer member's texture input unwired")?;
                 if node_set.contains(&wire.from_node) {
-                    return None;
+                    return Err("buffer member's texture produced inside the region");
                 }
                 let key = (wire.from_node, wire.from_port.clone());
                 let slot = *ext_index.entry(key).or_insert_with(|| {
@@ -1387,7 +1399,7 @@ fn build_region(
                 && is_region_wire(def, registry, w, is_buffer)
             {
                 if !final_reachable.contains(&w.to_node) {
-                    return None; // escaping wire to a dead consumer — don't fuse
+                    return Err("escaping wire to a dead consumer");
                 }
                 escapes = true;
             }
@@ -1398,14 +1410,14 @@ fn build_region(
     }
     outputs.sort_unstable();
     if outputs.is_empty() {
-        return None; // dead region — nothing leaves it, nothing to fuse
+        return Err("dead region — nothing leaves it");
     }
 
     // v1 buffer regions are single-output (the fused node writes one fresh `dst`
     // array). Fan-out buffer regions are a follow-on. Texture regions allow
     // multi-output (fan-out) as before.
     if is_buffer && outputs.len() != 1 {
-        return None;
+        return Err("fan-out buffer region (v1 is single-output)");
     }
 
     // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
@@ -1422,9 +1434,20 @@ fn build_region(
         let region_space = node_output_space(spaces, def, registry, order[0]);
         for &id in &order {
             if node_output_space(spaces, def, registry, id) != region_space {
-                return None;
+                return Err("member off the region's element space");
             }
         }
+        // This gate — not convexity — is what splits Watercolor's tail
+        // (luma_blur_v → dilute → guard → wet_dry): the component unions
+        // cleanly across the feedback loop (the guard → feedback state-capture
+        // wire IS correctly excluded as a back edge), but `dilute.mask` reads
+        // `mask_map` — the half-res flow field, rescaled — as a COINCIDENT
+        // external, and a coincident read is a `textureLoad` at the fused
+        // kernel's own canvas coordinate, which on a half-res texture reads
+        // the wrong texel (or out of bounds). Diagnosed 2026-06-11; the split
+        // is correct. The unlock is cross-resolution externals (sample
+        // space-mismatched coincident externals at normalized UV like gathers
+        // do — workstream 4, same machinery Bloom needs), not a convexity fix.
         for member in &members {
             for (input, access) in member.inputs.iter().zip(&member.input_access) {
                 if access.is_gather() {
@@ -1433,7 +1456,7 @@ fn build_region(
                 if let RegionInput::External(slot) = input {
                     let ext = &externals[*slot];
                     if space_of(spaces, ext.from_node, &ext.from_port) != region_space {
-                        return None;
+                        return Err("coincident external off the region's element space");
                     }
                 }
             }
@@ -1441,7 +1464,7 @@ fn build_region(
         Some(region_space)
     };
 
-    Some(Region { members, externals, outputs, space, virtual_chains: Vec::new() })
+    Ok(Region { members, externals, outputs, space, virtual_chains: Vec::new() })
 }
 
 /// The element space of `id`'s (single) texture output in the unfused plan —
@@ -2576,7 +2599,10 @@ mod audit {
             {
                 "element-space mismatch"
             } else {
-                "union rejected (convexity) or split by another gate"
+                // The MERGE REJECTED / COMPONENT lines below name the cutter:
+                // either convexity refused the union, or the component formed
+                // and build_region dropped it (reason printed).
+                "see MERGE/COMPONENT lines"
             };
             eprintln!(
                 "  WIRE {} -> {} ({}.{} -> {}.{}): {verdict}",
@@ -2649,9 +2675,12 @@ mod audit {
             if nodes.len() < 2 {
                 continue;
             }
-            let built =
-                build_region(&def, registry, &nodes, &final_reachable, spaces.as_ref()).is_some();
-            eprintln!("  COMPONENT {nodes:?}: build_region={built}");
+            match build_region(&def, registry, &nodes, &final_reachable, spaces.as_ref()) {
+                Ok(_) => eprintln!("  COMPONENT {nodes:?}: build_region=ok"),
+                Err(reason) => {
+                    eprintln!("  COMPONENT {nodes:?}: build_region DROPPED — {reason}")
+                }
+            }
         }
     }
 
