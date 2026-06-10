@@ -15,7 +15,6 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::state_store::NodeState;
-use crate::render_target::RenderTarget;
 
 // =====================================================================
 // Feedback — 1-frame texture delay. Last frame's `in` becomes this
@@ -71,10 +70,35 @@ crate::primitive! {
 
 const FEEDBACK_DEFAULT_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
-/// Per-`(NodeInstanceId, OwnerKey)` persistent state — the previous
-/// frame's input. Held by the runtime's `StateStore`.
+/// Zero-copy ping-pong kill switch: `MANIFOLD_FEEDBACK_PINGPONG=0` (or
+/// `false`/`off`) forces every feedback back onto the two-copies-a-frame
+/// path. Read per `run` (an env lookup at node rate, not per pixel);
+/// flippable in tests without process restarts.
+fn pingpong_enabled() -> bool {
+    !matches!(
+        std::env::var("MANIFOLD_FEEDBACK_PINGPONG").as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
+/// Per-`(NodeInstanceId, OwnerKey)` persistent state. The state TEXTURE
+/// is the node's own PERSISTENT `out` slot (declared via
+/// `persistent_output_ports`) — this struct only tracks dims + which
+/// landing mode `late_capture` uses:
+///
+/// - **Swap** — zero-copy. The `out` slot and the back-edge producer's
+///   slot (persistent via `state_capture_input_ports`) form an A/B pair
+///   the executor swaps at `late_capture`
+///   ([`Backend::swap_texture_2d`](crate::node_graph::Backend::swap_texture_2d)).
+///   Requires the producer's format + dims to match `out`'s.
+/// - **Bridge** — one dispatch. Cross-format (fp32 state fed by an fp16
+///   producer chain — Phase 3c) or dims-mismatched loops land the
+///   producer's value directly into `out` via the compute bridge.
+///
+/// Either way the old two-copies-a-frame `prev` round-trip is gone:
+/// `run` does no steady-state GPU work at all.
 struct FeedbackState {
-    prev: RenderTarget,
+    swap: bool,
     width: u32,
     height: u32,
 }
@@ -148,40 +172,39 @@ impl Primitive for Feedback {
             .as_deref_mut()
             .expect("Feedback::run requires a StateStore");
 
-        // Lazy-init the persistent prev-frame buffer. First-allocation
-        // seed: when `seed` is wired, copy it in; otherwise fall back
-        // to seeding from `in` (matches `node.array_feedback`'s
-        // first-frame contract — first frame's `out` reads the
-        // current input). Re-allocated if dims change.
+        // Landing-mode selection: when the producer's format + dims
+        // match `out`'s, `late_capture` SWAPS the two persistent slots'
+        // textures (zero copies). A format mismatch (fp32 state fed by
+        // fp16 producers — Phase 3c) or a dims mismatch lands via the
+        // compute bridge directly into `out` (one dispatch). Both are
+        // down from the old two-copies-a-frame `prev` round-trip.
+        let swap = pingpong_enabled()
+            && in_tex.format == out_tex.format
+            && in_tex.width == out_tex.width
+            && in_tex.height == out_tex.height;
+
+        // Lazy-init. First-allocation seed: when `seed` is wired, copy
+        // it into the persistent `out`; otherwise fall back to seeding
+        // from `in` (matches `node.array_feedback`'s first-frame
+        // contract — first frame's `out` reads the current input).
+        // Re-initialized if dims change (the executor re-allocated the
+        // persistent slot on resize).
         let needs_alloc = match store.get::<FeedbackState>(node_id, owner_key) {
-            Some(s) => s.width != width || s.height != height,
+            Some(s) => s.width != width || s.height != height || s.swap != swap,
             None => true,
         };
         if needs_alloc {
-            let prev = if let Some(pool) = gpu.pool {
-                RenderTarget::new_pooled(pool, width, height, state_format, "feedback prev")
-            } else {
-                RenderTarget::new(gpu.device, width, height, state_format, "feedback prev")
-            };
             let init_source = seed_tex.unwrap_or(in_tex);
             Self::copy_with_format_bridge(
                 gpu,
                 init_source,
-                &prev.texture,
+                out_tex,
                 width,
                 height,
                 state_format,
                 &mut self.cross_format_copy_fp32,
             );
-            store.insert(
-                node_id,
-                owner_key,
-                FeedbackState {
-                    prev,
-                    width,
-                    height,
-                },
-            );
+            store.insert(node_id, owner_key, FeedbackState { swap, width, height });
         }
 
         // Reset-on-trigger: if `reset_trigger` is wired and its
@@ -198,25 +221,16 @@ impl Primitive for Feedback {
                 None => false,
             };
             self.last_reset_trigger = Some(current);
-            if edge
-                && let Some(state_mut) = store.get::<FeedbackState>(node_id, owner_key)
-            {
-                gpu.clear_texture(&state_mut.prev.texture, 0.0, 0.0, 0.0, 0.0);
+            if edge && store.get::<FeedbackState>(node_id, owner_key).is_some() {
+                // `out` IS the state about to be read this frame — clear it.
+                gpu.clear_texture(out_tex, 0.0, 0.0, 0.0, 0.0);
             }
         }
 
-        let state = store
-            .get::<FeedbackState>(node_id, owner_key)
-            .expect("just inserted above");
-
-        // Emit `out` ← state.prev. state.prev holds last frame's
-        // producer output (snapshotted by `late_capture` at end of
-        // the previous frame), giving a true 1-frame delay. On the
-        // alloc frame, state.prev = seed (or in_tex passthrough).
-        // state.prev and out_tex always share state_format (out_tex's
-        // slot was acquired using the same `output_format` we read
-        // above), so this stays a same-format blit.
-        gpu.copy_texture_to_texture(&state.prev.texture, out_tex, width, height);
+        // Steady state: nothing to do. `out`'s persistent slot already
+        // holds last frame's producer value (the late-capture swap or
+        // bridge put it there), so downstream consumers read a true
+        // 1-frame delay with zero GPU work here.
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -239,26 +253,45 @@ impl Primitive for Feedback {
         let owner_key = ctx.owner_key;
         let state_format = self.output_format_override.unwrap_or(FEEDBACK_DEFAULT_FORMAT);
 
+        // If `run` short-circuited before allocating state (zero-dim
+        // out_tex), there's nothing to capture into yet. Pull the mode +
+        // dims out and release the state borrow before touching ctx again.
+        let Some((swap, width, height)) = ctx
+            .state
+            .as_deref_mut()
+            .expect("Feedback::late_capture requires a StateStore")
+            .get::<FeedbackState>(node_id, owner_key)
+            .map(|s| (s.swap, s.width, s.height))
+        else {
+            return;
+        };
+
+        if swap {
+            // Zero-copy: swap the persistent `out` and back-edge slots'
+            // textures — `out` adopts this frame's producer write (read
+            // next frame), the producer's slot adopts the old `out`
+            // texture to overwrite next frame. The executor performs the
+            // swap right after this returns.
+            ctx.request_texture_swap("out", "in");
+            return;
+        }
+
+        // Bridge landing (cross-format / dims mismatch): land this
+        // frame's producer value directly into the persistent `out` —
+        // one dispatch, read by consumers next frame. `out` is bound in
+        // the late-capture context because it's a persistent output.
+        let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
         ctx.mark_gpu_accessed();
         let gpu = ctx
             .gpu
             .as_deref_mut()
             .expect("Feedback::late_capture requires a GpuEncoder");
-        let store = ctx
-            .state
-            .as_deref_mut()
-            .expect("Feedback::late_capture requires a StateStore");
-
-        // If `run` short-circuited before allocating state (zero-dim
-        // out_tex), there's nothing to capture into yet.
-        let Some(state) = store.get::<FeedbackState>(node_id, owner_key) else {
-            return;
-        };
-        let (width, height) = (state.width, state.height);
         Self::copy_with_format_bridge(
             gpu,
             in_tex,
-            &state.prev.texture,
+            out_tex,
             width,
             height,
             state_format,
@@ -288,6 +321,15 @@ impl Primitive for Feedback {
         // persistent slot to black and the seed would init from
         // garbage instead of the producer's actual output.
         &["in"]
+    }
+
+    fn persistent_output_ports(&self) -> &[&str] {
+        // `out` must persist across frames: it's the emit half of the
+        // zero-copy ping-pong pair (the back-edge producer's slot —
+        // already persistent via `state_capture_input_ports` — is the
+        // capture half). The late-capture swap between the two pinned
+        // slots replaces both per-frame copies.
+        &["out"]
     }
 }
 

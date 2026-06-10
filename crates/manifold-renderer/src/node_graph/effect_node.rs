@@ -149,6 +149,13 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// don't thread an error scratch — the `error` method is a silent
     /// no-op in that case (test-construction shortcut).
     pub errors: Option<&'ctx mut Vec<String>>,
+    /// Zero-copy feedback ping-pong: a `late_capture` implementation
+    /// sets this (via [`Self::request_texture_swap`]) to ask the
+    /// executor to swap the textures bound at one of its OUTPUT ports
+    /// and one of its INPUT ports — both must resolve to persistent
+    /// slots. Read and performed by the executor after `late_capture`
+    /// returns; ignored on the `evaluate` path.
+    pub texture_swap_request: Option<(&'static str, &'static str)>,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -170,6 +177,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             owner_key: 0,
             gpu_accessed: false,
             errors: None,
+            texture_swap_request: None,
         }
     }
 
@@ -197,7 +205,19 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             owner_key,
             gpu_accessed: false,
             errors: None,
+            texture_swap_request: None,
         }
+    }
+
+    /// Zero-copy feedback ping-pong (called from `late_capture` only):
+    /// ask the executor to swap the textures bound at `out_port` (one of
+    /// this node's outputs) and `in_port` (one of its inputs). Both must
+    /// resolve to PERSISTENT slots — the executor performs the swap via
+    /// [`Backend::swap_texture_2d`](crate::node_graph::Backend::swap_texture_2d)
+    /// after `late_capture` returns and ignores the request if either
+    /// slot isn't bound.
+    pub fn request_texture_swap(&mut self, out_port: &'static str, in_port: &'static str) {
+        self.texture_swap_request = Some((out_port, in_port));
     }
 
     /// Attach a per-step error scratch buffer. The executor calls this
@@ -588,6 +608,17 @@ pub trait EffectNode: Send {
     /// node overrides this to a non-empty list, `breaks_dependency_cycle`
     /// follows automatically via its default impl.
     fn state_capture_input_ports(&self) -> &[&str] {
+        &[]
+    }
+
+    /// Output ports whose resources must be PERSISTENT — pre-acquired
+    /// before the step loop, never pool-released, surviving across
+    /// frames. The zero-copy feedback ping-pong rides on this: with
+    /// both `node.feedback`'s `out` and its capture producer's output
+    /// persistent, the two pinned slots ARE the ping-pong pair and a
+    /// per-frame texture-handle swap replaces both full-canvas copies.
+    /// Default: empty (outputs stay pooled transients).
+    fn persistent_output_ports(&self) -> &[&str] {
         &[]
     }
 

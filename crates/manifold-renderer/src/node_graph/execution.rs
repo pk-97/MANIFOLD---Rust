@@ -940,12 +940,20 @@ impl Executor {
                     self.input_scratch.push((port_name, slot));
                 }
             }
-            // Empty output scratch — late_capture must not write to
-            // outputs. The trait contract documents this; the absence
-            // of bindings means any erroneous attempt to do so via
-            // `ctx.outputs` resolves to `None` rather than corrupting
-            // a recycled slot.
+            // Output scratch carries ONLY this node's PERSISTENT outputs —
+            // those slots are never pool-released, so a late_capture write
+            // (feedback's direct state landing: swap for same-format,
+            // cross-format bridge otherwise) can't corrupt a recycled
+            // slot. Pooled outputs stay unbound: any erroneous write
+            // attempt resolves to `None` exactly as before.
             self.output_scratch.clear();
+            for &(port_name, res_id) in &step.outputs {
+                if plan.persistent_resources().contains(&res_id)
+                    && let Some(slot) = self.backend.slot_for(res_id)
+                {
+                    self.output_scratch.push((port_name, slot));
+                }
+            }
 
             if let Some(inst) = graph.get_node_mut(step.node) {
                 self.scalar_write_scratch.clear();
@@ -975,12 +983,45 @@ impl Executor {
                 )
                 .with_errors(&mut self.error_scratch);
                 inst.node.late_capture(&mut ctx);
+                let swap_request = ctx.texture_swap_request.take();
                 for msg in self.error_scratch.drain(..) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
                         step.node,
                         inst.node.type_id().as_str(),
                     );
+                }
+                // Zero-copy feedback ping-pong: perform a requested
+                // texture swap between one of this node's output slots
+                // and one of its input slots (both persistent). The
+                // node verified eligibility (matching dims + format)
+                // before requesting; a failed swap here (slot missing /
+                // borrowed shadow) is loud because silently dropping it
+                // would freeze the feedback loop on one frame.
+                if let Some((out_port, in_port)) = swap_request {
+                    let out_slot = step
+                        .outputs
+                        .iter()
+                        .find(|(p, _)| *p == out_port)
+                        .and_then(|&(_, res)| self.backend.slot_for(res));
+                    let in_slot = step
+                        .inputs
+                        .iter()
+                        .find(|(p, _)| *p == in_port)
+                        .and_then(|&(_, res)| self.backend.slot_for(res));
+                    let swapped = match (out_slot, in_slot) {
+                        (Some(a), Some(b)) => self.backend.swap_texture_2d(a, b),
+                        _ => false,
+                    };
+                    if !swapped {
+                        eprintln!(
+                            "[graph error] node {:?} ({}): texture swap \
+                             {out_port}<->{in_port} failed (unbound or shadowed \
+                             slot) — feedback state did NOT advance this frame",
+                            step.node,
+                            inst.node.type_id().as_str(),
+                        );
+                    }
                 }
             }
         }

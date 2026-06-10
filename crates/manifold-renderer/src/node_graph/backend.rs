@@ -125,6 +125,18 @@ pub trait Backend: Send {
         None
     }
 
+    /// Swap the owned textures bound at two PERSISTENT slots — the
+    /// zero-copy feedback ping-pong primitive: `node.feedback` requests
+    /// this from `late_capture` so its `out` slot (read next frame)
+    /// adopts the back-edge producer's fresh write while the producer's
+    /// slot adopts the old `out` texture to overwrite next frame. Both
+    /// slots must hold owned textures and neither may carry a borrowed
+    /// shadow. Returns `false` (no-op) when either condition fails —
+    /// callers fall back to the copy path. Mock backends: `false`.
+    fn swap_texture_2d(&mut self, _a: Slot, _b: Slot) -> bool {
+        false
+    }
+
     /// Write a scalar value into a slot. The runtime invokes this after
     /// a control-rate node's `evaluate` returns, draining the
     /// per-step scratch buffer populated via

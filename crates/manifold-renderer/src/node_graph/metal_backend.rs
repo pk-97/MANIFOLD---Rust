@@ -587,6 +587,26 @@ impl Backend for MetalBackend {
             .or_else(|| self.textures_2d.get(&slot).map(|rt| &rt.texture))
     }
 
+    fn swap_texture_2d(&mut self, a: Slot, b: Slot) -> bool {
+        // Zero-copy feedback ping-pong: swap the owned RenderTargets of
+        // two persistent slots. Refuse (caller falls back to copies)
+        // when either slot is missing or carries a borrowed shadow —
+        // swapping under a shadow would silently swap textures nobody
+        // reads this frame.
+        if a == b
+            || self.borrowed_2d.contains_key(&a)
+            || self.borrowed_2d.contains_key(&b)
+            || !self.textures_2d.contains_key(&a)
+            || !self.textures_2d.contains_key(&b)
+        {
+            return false;
+        }
+        let ta = self.textures_2d.remove(&a).expect("checked above");
+        let tb = self.textures_2d.insert(b, ta).expect("checked above");
+        self.textures_2d.insert(a, tb);
+        true
+    }
+
     fn scalar(&self, slot: Slot) -> Option<ParamValue> {
         self.scalars.get(&slot).cloned()
     }

@@ -1596,6 +1596,61 @@ fn particletext_seed_gate_matches_ungated() {
     );
 }
 
+/// Zero-copy feedback ping-pong equivalence: MetallicGlass (three
+/// same-format `node.feedback` loops — the SWAP-eligible shape) rendered
+/// with the ping-pong slot swap must match the bridge fallback BIT-EXACTLY
+/// over 8 frames — a feedback loop amplifies any state error, and a swap
+/// landing one frame off would diverge wildly, so this is the show-safety
+/// oracle for the new path. (OilyFluid's fp32-state feedbacks take the
+/// bridge on both settings — same copies as before, minus the prev
+/// round-trip — so it wouldn't exercise the swap.) Env-var toggled; the
+/// unfused def isolates the mechanism from fusion entirely.
+#[test]
+fn feedback_pingpong_matches_copy_path() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("MetallicGlass"),
+    )
+    .expect("MetallicGlass bundled");
+    let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+
+    let pick_tail = |d: &EffectGraphDef| {
+        let fo = d
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "system.final_output")
+            .map(|n| n.id)
+            .expect("final_output");
+        d.wires
+            .iter()
+            .find(|w| w.to_node == fo)
+            .map(|w| w.from_node)
+            .expect("final_output fed")
+    };
+    // SAFETY of the env toggle: this test renders both variants
+    // sequentially within one thread; the env var is read per-frame by
+    // `Feedback::run`, so each render sees a stable value.
+    unsafe { std::env::set_var("MANIFOLD_FEEDBACK_PINGPONG", "0") };
+    let copy = render_def_capture_node_host(&def, &registry, &device, w, h, 8, &pick_tail, true);
+    unsafe { std::env::remove_var("MANIFOLD_FEEDBACK_PINGPONG") };
+    let pp = render_def_capture_node_host(&def, &registry, &device, w, h, 8, &pick_tail, true);
+    let (copy, cd) = copy.expect("copy path renders");
+    let (pp, pd) = pp.expect("ping-pong renders");
+    assert_eq!(cd, pd, "composite dims match");
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &copy.texture, &pp.texture, 1.0e-7, 1.0e-6);
+    assert!(
+        r.over_count == 0,
+        "ping-pong must be bit-exact vs the copy path: max_abs={}, over={}/{}",
+        r.max_abs,
+        r.over_count,
+        r.total
+    );
+}
+
 /// Stencil tier A proof on the real OilyFluid: its feedback-loop f16 chains
 /// (previously hard boundaries) now fuse with `q16` register rounding, and
 /// the fused render must match the unfused one BIT-EXACTLY through the raw

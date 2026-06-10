@@ -297,6 +297,15 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::persistent_output_ports`](crate::node_graph::effect_node::EffectNode::persistent_output_ports).
+    /// Output ports whose resources persist across frames (pre-acquired,
+    /// never pool-released). The zero-copy feedback ping-pong's emit half.
+    /// Default: empty.
+    fn persistent_output_ports(&self) -> &[&str] {
+        &[]
+    }
+
+    /// Mirror of
     /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
     /// Mux-family primitives override to return the selected input
     /// port name (e.g. `"in_2"` for mux selector=2). See the
@@ -481,6 +490,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn state_capture_input_ports(&self) -> &[&str] {
         Primitive::state_capture_input_ports(self)
+    }
+    fn persistent_output_ports(&self) -> &[&str] {
+        Primitive::persistent_output_ports(self)
     }
     fn selected_input_branch(
         &self,

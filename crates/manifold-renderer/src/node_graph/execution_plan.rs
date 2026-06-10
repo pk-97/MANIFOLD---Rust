@@ -544,6 +544,16 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 .get(&(node_id, output_port.name))
                 .expect("output resource was assigned in the first pass");
             step_outputs.push((output_port.name, res_id));
+            // A node-declared persistent output (feedback's `out` — the
+            // emit half of the zero-copy ping-pong) joins the persistent
+            // set: pre-acquired before the step loop, never pool-released,
+            // its texture survives across frames so a late-capture swap
+            // with the back-edge slot carries state with no copies.
+            if inst.node.persistent_output_ports().contains(&output_port.name)
+                && persistent_seen.insert(res_id)
+            {
+                persistent.push(res_id);
+            }
             // Default last_reader to the producer step — handles "never read"
             // outputs by freeing them immediately.
             last_reader.entry(res_id).or_insert(step_idx);
