@@ -921,6 +921,15 @@ impl Executor {
                 continue;
             }
             let step = &plan.steps()[step_idx];
+            // Attribution profiling: late-capture GPU work (a feedback node's
+            // state-snapshot blit) belongs to ITS node's row, not whichever
+            // step happened to set the tag last (final_output — the
+            // "final_output burns 2-3 dispatches" red herring).
+            if self.profiling
+                && let Some(g) = gpu.as_deref_mut()
+            {
+                g.native_enc.set_profile_tag(&format!("s{step_idx}"));
+            }
             // Re-resolve input slot bindings. State-capture inputs are
             // backed by persistent resources whose slots stay bound
             // across the frame, so the same slot the main pass saw is
