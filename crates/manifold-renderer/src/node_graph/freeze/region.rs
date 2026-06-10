@@ -894,16 +894,14 @@ fn classify_node(
         if param_wgsl_type(p).is_err() {
             return NodeClass::Boundary;
         }
-        // An ENUM param that an outer-card binding targets can't retarget onto
-        // the fused node: the fused uniform field introspects as a plain Int,
-        // and the loader (correctly) rejects the binding's enum convert
-        // against it (FluidSim3D's `container` → container_repel_force_3d).
-        // Keep the atom a boundary so the binding keeps driving the real node.
-        if matches!(p.ty, crate::node_graph::parameters::ParamType::Enum)
-            && param_is_binding_target(node, p.name, def)
-        {
-            return NodeClass::Boundary;
-        }
+        // Binding-targeted ENUM params are no longer boundaries (the 59b3cf25
+        // gate): the retarget rewrites the binding's `EnumRound` convert to
+        // `IntRound` when it repoints onto the fused uniform field, which the
+        // field's u32 cast consumes identically (round + clamp-at-0 happens at
+        // the uniform-write boundary either way). FluidSim3D's `container` →
+        // container_repel_force_3d fuses through this. Specialization-token
+        // enum params (blurVW's `quality`) are a different story — see the
+        // wgsl_specialization gate below, which stays.
     }
 
     // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve).

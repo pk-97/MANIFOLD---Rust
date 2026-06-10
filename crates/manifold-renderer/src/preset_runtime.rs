@@ -985,6 +985,10 @@ impl PresetRuntime {
                         let mut c = core.clone();
                         c.node_id = fused_id.clone();
                         c.inner_param = field.clone();
+                        // The fused uniform field consumes Float, not Enum —
+                        // same convert rewrite the static retarget applies.
+                        c.convert =
+                            crate::node_graph::freeze::install::convert_for_fused_field(c.convert);
                         c
                     });
                 let resolve_core = retargeted.as_ref().unwrap_or(core);

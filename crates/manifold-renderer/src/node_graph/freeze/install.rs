@@ -65,6 +65,7 @@ use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
 use crate::node_graph::parameters::{ParamDef, ParamValue};
+use crate::node_graph::param_binding::ParamConvert;
 use crate::node_graph::{LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry};
 
 /// Whether fusion is enabled this process. Default ON — the freeze compiler is
@@ -465,6 +466,7 @@ fn retarget_binding_defs(
                     node_id: fused_id.clone(),
                     param: field.clone(),
                 };
+                nb.convert = convert_for_fused_field(nb.convert);
             } else if !surviving.contains(node_id.as_str()) {
                 return None; // stranded binding — refuse to fuse this generator
             }
@@ -498,6 +500,7 @@ fn retarget_bindings(
                     node_id: fused_id.clone(),
                     param: field_static,
                 };
+                nb.convert = convert_for_fused_field(nb.convert);
             } else if !surviving.contains(node_id.as_str()) {
                 // Neither retargeted nor surviving — a stranded slider. Refuse.
                 return None;
@@ -509,6 +512,25 @@ fn retarget_bindings(
         out.push(nb);
     }
     Some(out)
+}
+
+/// The convert a binding needs once it's repointed onto a fused uniform field.
+/// An `EnumRound` convert targeted the inner atom's Enum param; the fused field
+/// for that param is a plain u32 uniform member, whose writer
+/// (`UniformMemberType::write_to`) consumes `ParamValue::Float` and casts
+/// `f.max(0.0) as u32` at the write boundary — `ParamValue::Enum` would land in
+/// its silent-zeros mismatch arm, and the loader's convert check rejects it
+/// outright (`BindingConvertTypeMismatch`). `IntRound` produces
+/// `Float(v.round())`, so the value the field receives is identical to
+/// `EnumRound`'s `round().max(0)` for every input. Everything else already
+/// writes a variant the scalar field accepts and passes through unchanged.
+/// This rewrite is what lets binding-targeted Enum atoms fuse (FluidSim3D's
+/// `container` → container_repel_force_3d) instead of being classify gated.
+pub(crate) fn convert_for_fused_field(convert: ParamConvert) -> ParamConvert {
+    match convert {
+        ParamConvert::EnumRound => ParamConvert::IntRound,
+        other => other,
+    }
 }
 
 /// A canonical def rewritten with one fused node per region, plus the routing the
@@ -1803,5 +1825,112 @@ mod tests {
             }
             other => panic!("binding not retargeted to a node: {other:?}"),
         }
+    }
+
+    /// The enum mirror of [`generator_binding_def_retargets_onto_fused`] +
+    /// [`fused_view_retargets_every_binding`]: a binding with an `EnumRound`
+    /// convert onto a member's Enum param (mix.mode — the FluidSim3D
+    /// `container` shape) retargets onto the fused uniform field with its
+    /// convert rewritten to `IntRound`, and the fused def passes the loader's
+    /// convert check (`BindingConvertTypeMismatch` is exactly what stranded
+    /// this before — the fused field introspects as Int, which rejects an
+    /// Enum-producing convert). The atom fuses instead of being classify
+    /// gated (59b3cf25 removed).
+    #[test]
+    fn enum_converted_binding_retargets_with_int_round_and_loads() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        let json = r#"{
+            "version": 1, "name": "EnumFuseGen",
+            "presetMetadata": {
+                "id": "EnumFuseGen", "displayName": "Enum Fuse Gen", "category": "Diagnostic",
+                "oscPrefix": "enum_fuse_gen",
+                "params": [{ "id": "m", "name": "Mode", "min": 0.0, "max": 4.0, "defaultValue": 3.0, "wholeNumbers": true }],
+                "bindings": [{ "id": "m", "label": "Mode", "defaultValue": 3.0,
+                    "target": { "kind": "node", "nodeId": "mix", "param": "mode" },
+                    "convert": { "type": "EnumRound" } }]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
+                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
+                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 3, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "b" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let reg = registry();
+        let fused = fuse_generator_def(&def, &reg)
+            .expect("an enum-binding-targeted member must fuse, not classify gate");
+        let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
+        assert_eq!(meta.bindings.len(), 1);
+        match &meta.bindings[0].target {
+            BindingTarget::Node { node_id, param } => {
+                assert_eq!(node_id.as_str(), "fused_region_0");
+                assert_eq!(param, "n2_mode", "mix is member 2, so its field is n2_mode");
+            }
+            other => panic!("binding not retargeted to a node: {other:?}"),
+        }
+        assert_eq!(
+            meta.bindings[0].convert,
+            manifold_core::effects::ParamConvert::IntRound,
+            "EnumRound must rewrite to IntRound on retarget — the fused u32 \
+             field consumes Float and casts at the uniform-write boundary"
+        );
+        // The fused def must clear the loader's binding-convert validation —
+        // the check that originally rejected EnumRound against the fused Int
+        // field. A load error here means the rewrite regressed.
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        fused
+            .clone()
+            .into_graph(&reg)
+            .expect("fused def with retargeted enum binding must load");
+    }
+
+    /// The effect-side (`ParamBinding`) twin of the rewrite: retargeting maps
+    /// `EnumRound → IntRound`, while a binding left on a surviving boundary
+    /// node keeps its `EnumRound` untouched (the real node still declares a
+    /// real Enum param).
+    #[test]
+    fn retarget_bindings_rewrites_enum_round_only_when_repointed() {
+        use crate::node_graph::param_binding::ParamId;
+        let mk = |node: &str, param: &'static str| ParamBinding {
+            id: ParamId::from("m"),
+            label: "Mode",
+            default_value: 0.0,
+            target: ParamTarget::Node { node_id: NodeId::new(node), param },
+            convert: ParamConvert::EnumRound,
+            scale: 1.0,
+            offset: 0.0,
+            min: 0.0,
+            max: 3.0,
+            curve: manifold_core::macro_bank::MacroCurve::Linear,
+            invert: false,
+        };
+        let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
+        retarget
+            .insert(("mix".into(), "mode".into()), (NodeId::new("fused_region_0"), "n2_mode".into()));
+        let surviving: AHashSet<String> = ["boundary".to_string()].into_iter().collect();
+
+        let out = retarget_bindings(&[mk("mix", "mode"), mk("boundary", "mode")], &retarget, &surviving)
+            .expect("both bindings route");
+        assert_eq!(out[0].convert, ParamConvert::IntRound, "repointed → rewritten");
+        match &out[0].target {
+            ParamTarget::Node { node_id, param } => {
+                assert_eq!(node_id.as_str(), "fused_region_0");
+                assert_eq!(*param, "n2_mode");
+            }
+            other => panic!("not retargeted: {other:?}"),
+        }
+        assert_eq!(
+            out[1].convert,
+            ParamConvert::EnumRound,
+            "surviving-node binding keeps its enum convert — the real node still \
+             declares a real Enum param"
+        );
     }
 }
