@@ -62,11 +62,10 @@ use manifold_core::effect_graph_def::{
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
 use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
+use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
 use crate::node_graph::parameters::{ParamDef, ParamValue};
-use crate::node_graph::{
-    EffectGraphDefExt, LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry, compile,
-};
+use crate::node_graph::{LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry};
 
 /// Whether fusion is enabled this process. Default ON — the freeze compiler is
 /// the main render path (Peter's request). The `MANIFOLD_FREEZE` env var is the
@@ -162,13 +161,15 @@ fn fuse_view_parts(
         .map(|n| resolve_node_id(n).as_str().to_string())
         .collect();
     let bindings = retarget_bindings(bindings, &fused.retarget, &surviving)?;
-    // The fused def must actually build (not just parse) — fall back to unfused otherwise.
-    if !fused_def_builds(&fused.def, registry) {
+    // The fused def must actually build (not just parse) AND preserve every
+    // region output's element space — fall back to unfused otherwise.
+    if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
         return None;
     }
     let FusedDef {
         def: fused_def,
         retarget,
+        ..
     } = fused;
     let def_static: &'static EffectGraphDef = Box::leak(Box::new(fused_def));
     Some(LoadedPresetView {
@@ -346,12 +347,14 @@ pub fn fuse_generator_def(
         .iter()
         .map(|n| resolve_node_id(n).as_str().to_string())
         .collect();
+    let expected_spaces = fused.expected_spaces;
     let mut out_def = fused.def;
     if let Some(meta) = out_def.preset_metadata.as_mut() {
         meta.bindings = retarget_binding_defs(&meta.bindings, &fused.retarget, &surviving)?;
     }
-    // The fused def must actually build (not just parse) — fall back to unfused otherwise.
-    if !fused_def_builds(&out_def, registry) {
+    // The fused def must actually build (not just parse) AND preserve every
+    // region output's element space — fall back to unfused otherwise.
+    if !fused_def_builds(&out_def, registry, &expected_spaces) {
         return None;
     }
     Some(out_def)
@@ -436,6 +439,12 @@ pub(crate) struct FusedDef {
     /// within its region — the codegen convention); the node id is that region's
     /// `fused_region_{i}`.
     pub retarget: AHashMap<(String, String), (NodeId, String)>,
+    /// Tier 6: `(fused doc id, output port, space)` per texture-region output —
+    /// the element space the replaced member's output resolved to in the
+    /// UNFUSED plan. [`fused_def_builds`] verifies the fused def resolves each
+    /// of these ports to the SAME space; any drift rejects the fusion (renders
+    /// unfused), so element-space preservation is an installed invariant.
+    pub expected_spaces: Vec<(u32, String, ElementSpace)>,
 }
 
 /// `node.array_feedback`'s stable type id — the head of a buffer in-place
@@ -631,6 +640,9 @@ pub(crate) fn fuse_canonical_def(
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
     let mut fused_docs: Vec<u32> = Vec::with_capacity(regions.len());
+    // Tier 6: per texture-region output, the element space the unfused member
+    // resolved to — verified against the fused def by `fused_def_builds`.
+    let mut expected_spaces: Vec<(u32, String, ElementSpace)> = Vec::new();
     // Per region (parallel to `fused_docs`): `Some(k)` if its output is written in
     // place to external `src_k` (an aliased feedback-loop buffer), so the output
     // rewrite below routes consumers off the `src_k` port instead of `dst`.
@@ -774,6 +786,31 @@ pub(crate) fn fuse_canonical_def(
             }
         }
 
+        // Tier 6: stamp the region's element space onto the fused node so the
+        // executor sizes its output exactly like the member output it
+        // replaced. A `Scaled` space becomes a def-level `output_canvas_scales`
+        // entry (honoured by `node.wgsl_compute`); `Canvas` needs no stamp;
+        // `Concrete` has no def-level override and relies on the fused node's
+        // input propagation — all three are verified by `fused_def_builds`
+        // against `expected_spaces`, so a resolution that drifts rejects the
+        // fusion instead of shipping a wrong-grid kernel. In-place regions
+        // (their output rides an aliased input port) are skipped: buffer loops
+        // have no texture grid, and the verify below would mis-read the port.
+        let mut output_canvas_scales: std::collections::BTreeMap<String, [u32; 2]> =
+            Default::default();
+        if let Some(space) = region.space
+            && in_place_alias.is_none()
+        {
+            let multi = region.outputs.len() > 1;
+            for (k, _) in region.outputs.iter().enumerate() {
+                let port = if multi { format!("dst_{k}") } else { "dst".to_string() };
+                if let ElementSpace::Scaled(num, den) = space {
+                    output_canvas_scales.insert(port.clone(), [num, den]);
+                }
+                expected_spaces.push((fused_doc, port, space));
+            }
+        }
+
         new_nodes.push(EffectGraphNode {
             id: fused_doc,
             node_id: fused_id,
@@ -787,7 +824,7 @@ pub(crate) fn fuse_canonical_def(
             wgsl_source: Some(generated.wgsl),
             title: Some(format!("Fused Region {i}")),
             output_formats: Default::default(),
-            output_canvas_scales: Default::default(),
+            output_canvas_scales,
             group: None,
         });
         fused_docs.push(fused_doc);
@@ -907,7 +944,7 @@ pub(crate) fn fuse_canonical_def(
         wires: new_wires,
     };
 
-    Some(FusedDef { def: fused_def, retarget })
+    Some(FusedDef { def: fused_def, retarget, expected_spaces })
 }
 
 /// Defense in depth: a fused def must BUILD, not just contain valid WGSL. The
@@ -920,12 +957,24 @@ pub(crate) fn fuse_canonical_def(
 /// (Not called from [`fuse_canonical_def`] itself — the install unit tests drive
 /// it with synthetic fixtures that intentionally don't fully compile.) Runs once
 /// at fuse-build (cached), so the cost is negligible.
-fn fused_def_builds(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
-    def.clone()
-        .into_graph(registry)
-        .map_err(|_| ())
-        .and_then(|g| compile(&g).map_err(|_| ()))
-        .is_ok()
+fn fused_def_builds(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    expected_spaces: &[(u32, String, ElementSpace)],
+) -> bool {
+    // `resolve_output_spaces` builds the graph AND compiles the plan, so a
+    // `Some` already proves the def builds (the old check). On top of that,
+    // tier 6: every fused texture output must resolve to the SAME element
+    // space the member output it replaced had in the unfused plan — a drift
+    // (the mixed-input canvas fallback, a stamp the loader didn't honour)
+    // means the fused kernel would iterate a different grid than the atoms
+    // did, the ParticleText fp32 divergence class. Reject → render unfused.
+    let Some(spaces) = resolve_output_spaces(def, registry) else {
+        return false;
+    };
+    expected_spaces
+        .iter()
+        .all(|(doc, port, want)| space_of(Some(&spaces), *doc, port) == *want)
 }
 
 /// A node's stable id defaults to its handle when the document carries none —

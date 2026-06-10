@@ -1596,6 +1596,597 @@ fn particletext_seed_gate_matches_ungated() {
     );
 }
 
+/// Tier-6 proof on the real ParticleText: fp32-mark its flow-field atoms
+/// (`grad` / `grad_scaled` / `grad_rotate` — the same marks FluidSim2D ships
+/// in its grouped field), fuse, and require the fused render to match the
+/// unfused one tight. Before element-space propagation this diverged ~0.43%
+/// edge-localized — the fused region iterated a different grid than the
+/// standalone atoms (the mixed-input canvas fallback). With the region's
+/// space resolved from the unfused plan, stamped onto the fused node, and
+/// verified by the install build-check, the fusion must now be coincident —
+/// or be refused outright (also a pass: unfused is always correct).
+#[test]
+fn particletext_fp32_flow_field_fused_matches_unfused() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    for handle in ["grad", "grad_scaled", "grad_rotate"] {
+        let node = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.handle.as_deref() == Some(handle))
+            .unwrap_or_else(|| panic!("ParticleText carries node `{handle}`"));
+        node.output_formats.insert("out".to_string(), "rgba32float".to_string());
+    }
+    // Shrink the particle pool ~80×: the flow-field region under test is
+    // texture-domain (doesn't depend on particle count), and the shipped 8M
+    // pool (~512MB per Array) starves the GPU when the suite runs this test
+    // in parallel with the other FluidSim renders.
+    shrink_particle_pool(&mut def, 100_000);
+
+    let Some(fused) = crate::node_graph::freeze::install::fuse_generator_def(&def, &registry)
+    else {
+        // The install verify refused the fusion (space drift it can't stamp
+        // away). Refusal renders unfused — correct, just no speedup. Fail
+        // here anyway so the refusal is VISIBLE: this preset is the tier-6
+        // fixture, and a silent refusal would mean the stamp didn't land.
+        panic!("ParticleText fp32 flow field should fuse under tier-6 space propagation");
+    };
+    // Sanity: the flow-field pointwise pair actually folded away.
+    for handle in ["grad_scaled", "grad_rotate"] {
+        assert!(
+            !fused.nodes.iter().any(|n| n.handle.as_deref() == Some(handle)),
+            "`{handle}` should be fused away"
+        );
+    }
+
+    // The tier-6 claim is about the GRID: the fused region must iterate the
+    // same element space the standalone atoms did and produce the identical
+    // field. Compare the region OUTPUT bitwise (the composite still carries a
+    // pre-existing production-path divergence unrelated to this region — see
+    // `particletext_canonical_fused_diag`).
+    let by_unfused = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("grad_rotate"))
+            .map(|n| n.id)
+            .expect("grad_rotate")
+    };
+    let by_fused = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| {
+                n.type_id == "node.wgsl_compute" && n.params.keys().any(|k| k.ends_with("_angle"))
+            })
+            .map(|n| n.id)
+            .expect("fused flow-field region")
+    };
+    for frames in [1u32, 8] {
+        let (u, ud) =
+            render_def_capture_node(&def, &registry, &device, w, h, frames, &by_unfused)
+                .expect("unfused captures");
+        let (f, fd) = render_def_capture_node(&fused, &registry, &device, w, h, frames, &by_fused)
+            .expect("fused captures");
+        assert_eq!(ud, fd, "fused region must resolve to the member's grid (frames={frames})");
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-7, 1.0e-6);
+        assert!(
+            r.over_count == 0,
+            "fp32 flow-field region must be bit-exact at frames={frames}: max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+}
+
+/// Diagnostic for the ParticleText fp32 divergence — prints the flow-field
+/// region's members/space and the unfused-vs-fused plan resolution of every
+/// relevant output. Run with `-- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn particletext_fp32_flow_field_diag() {
+    use crate::node_graph::freeze::space::resolve_output_spaces;
+    let registry = PrimitiveRegistry::with_builtin();
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    for handle in ["grad", "grad_scaled", "grad_rotate"] {
+        let node = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.handle.as_deref() == Some(handle))
+            .unwrap();
+        node.output_formats.insert("out".to_string(), "rgba32float".to_string());
+    }
+
+    let handle_of = |def: &EffectGraphDef, id: u32| -> String {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| n.handle.clone())
+            .unwrap_or_else(|| format!("#{id}"))
+    };
+
+    let regions = crate::node_graph::freeze::region::partition_regions(&def, &registry);
+    println!("=== {} regions in fp32-marked ParticleText ===", regions.len());
+    for (i, r) in regions.iter().enumerate() {
+        let members: Vec<String> =
+            r.members.iter().map(|m| handle_of(&def, m.doc_id)).collect();
+        let outs: Vec<String> = r.outputs.iter().map(|&o| handle_of(&def, o)).collect();
+        let exts: Vec<String> = r
+            .externals
+            .iter()
+            .map(|e| format!("{}:{}", handle_of(&def, e.from_node), e.from_port))
+            .collect();
+        println!(
+            "region {i}: space={:?}\n  members: {members:?}\n  outputs: {outs:?}\n  externals: {exts:?}",
+            r.space
+        );
+    }
+
+    let unfused_spaces = resolve_output_spaces(&def, &registry).expect("unfused resolves");
+    for handle in ["grad", "grad_scaled", "grad_rotate", "field_mix", "density_downsample"] {
+        if let Some(n) = def.nodes.iter().find(|n| n.handle.as_deref() == Some(handle)) {
+            let s = unfused_spaces.get(&(n.id, "out".to_string()));
+            println!("unfused {handle}: {s:?}");
+        }
+    }
+
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+    let fused_spaces = resolve_output_spaces(&fused, &registry).expect("fused resolves");
+    for n in &fused.nodes {
+        if n.type_id == "node.wgsl_compute" && n.handle.as_deref().is_some_and(|h| h.starts_with("fused_region")) {
+            for port in ["dst", "dst_0", "dst_1"] {
+                if let Some(s) = fused_spaces.get(&(n.id, port.to_string())) {
+                    println!(
+                        "fused {}: {port} -> {s:?} (stamped: {:?})",
+                        n.handle.as_deref().unwrap_or("?"),
+                        n.output_canvas_scales
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Cap every `max_capacity` / `active_count` param in `def` at `cap` — the
+/// particle-pool shrink the FluidSim sweep uses, for tests whose subject is
+/// texture-domain and doesn't depend on pool size.
+fn shrink_particle_pool(def: &mut EffectGraphDef, cap: i32) {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    for node in &mut def.nodes {
+        for key in ["max_capacity", "active_count"] {
+            if node.params.contains_key(key) {
+                node.params
+                    .insert(key.to_string(), SerializedParamValue::Int { value: cap });
+            }
+        }
+    }
+}
+
+/// Drive `def` through the RAW executor (standalone instantiate, identical on
+/// both sides of an A/B — generator_input stays at defaults) for `frames`
+/// frames, previewing the node `pick` selects so its output survives the last
+/// frame. Returns the previewed texture copied out, plus its dims.
+fn render_def_capture_node(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    device: &GpuDevice,
+    w: u32,
+    h: u32,
+    frames: u32,
+    pick: &dyn Fn(&EffectGraphDef) -> u32,
+) -> Option<(RenderTarget, (u32, u32))> {
+    use crate::node_graph::graph_loader::{
+        BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
+    };
+    use crate::node_graph::{Graph, StateStore};
+
+    let mut graph = Graph::new();
+    let inst = instantiate_def(
+        &mut graph,
+        def,
+        registry,
+        HandleScope::Global,
+        BoundaryHandling::Standalone,
+    )
+    .ok()?;
+    let plan = compile(&graph).ok()?;
+    let target_inst = *inst.id_map.get(&pick(def))?;
+
+    let mut backend = MetalBackend::new(device, w, h, FMT);
+    pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
+    let mut exec = Executor::new(Box::new(backend));
+    exec.set_preview_target(Some(target_inst));
+    let mut state = StateStore::new();
+    for i in 0..frames {
+        let ft = FrameTime {
+            seconds: Seconds(f64::from(i) / 60.0),
+            beats: Beats(f64::from(i) / 30.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: i64::from(i),
+        };
+        let mut enc = device.create_encoder("diag-frame");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+        }
+        enc.commit_and_wait_completed();
+    }
+    let res = exec.preview_resource()?;
+    let slot = exec.backend().slot_for(res)?;
+    let tex = exec.backend().texture_2d(slot)?;
+    let dims = (tex.width, tex.height);
+    let out = RenderTarget::new(device, tex.width, tex.height, tex.format, "diag-capture");
+    let mut enc = device.create_encoder("diag-copy");
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+        gpu.copy_texture_to_texture(tex, &out.texture, tex.width, tex.height);
+    }
+    enc.commit_and_wait_completed();
+    Some((out, dims))
+}
+
+/// Like [`render_def_capture_node`], but captures an ARRAY (particle buffer)
+/// output of the picked node on the LAST frame via dump mode, read back to
+/// host bytes.
+fn render_def_capture_array(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    device: &GpuDevice,
+    w: u32,
+    h: u32,
+    frames: u32,
+    pick: &dyn Fn(&EffectGraphDef) -> u32,
+) -> Option<Vec<f32>> {
+    use crate::node_graph::graph_loader::{
+        BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
+    };
+    use crate::node_graph::{Graph, StateStore};
+
+    let mut graph = Graph::new();
+    let inst = instantiate_def(
+        &mut graph,
+        def,
+        registry,
+        HandleScope::Global,
+        BoundaryHandling::Standalone,
+    )
+    .ok()?;
+    let plan = compile(&graph).ok()?;
+    let target_inst = *inst.id_map.get(&pick(def))?;
+
+    let mut backend = MetalBackend::new(device, w, h, FMT);
+    pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
+    let mut exec = Executor::new(Box::new(backend));
+    let mut state = StateStore::new();
+    for i in 0..frames {
+        if i == frames - 1 {
+            exec.set_dump_all(true);
+        }
+        let ft = FrameTime {
+            seconds: Seconds(f64::from(i) / 60.0),
+            beats: Beats(f64::from(i) / 30.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: i64::from(i),
+        };
+        let mut enc = device.create_encoder("diag-arr-frame");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+        }
+        enc.commit_and_wait_completed();
+    }
+    let &(_, _, res) = exec
+        .dump_array_resources()
+        .iter()
+        .find(|(n, _, _)| *n == target_inst)?;
+    let slot = exec.backend().slot_for(res)?;
+    let buf = exec.backend().array_buffer(slot)?;
+    let staging = device.create_buffer_shared(buf.size);
+    let mut enc = device.create_encoder("diag-arr-read");
+    enc.copy_buffer_to_buffer(buf, &staging, buf.size);
+    enc.commit_and_wait_completed();
+    let ptr = staging.mapped_ptr()? as *const f32;
+    let count = (buf.size / 4) as usize;
+    Some(unsafe { std::slice::from_raw_parts(ptr, count) }.to_vec())
+}
+
+/// Fifth-stage diagnostic: the COMPOSITE through the RAW executor (host
+/// `time` param frozen at 0, frame clock advancing) vs the production
+/// PresetRuntime path (host time advancing). Raw exact + production diverging
+/// points at frame-context handling (derived-uniform sourcing), not kernels.
+#[test]
+#[ignore]
+fn particletext_raw_composite_diag() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    // The surviving node feeding final_output exists identically on both
+    // sides — preview it as the composite.
+    let pick_tail = |d: &EffectGraphDef| {
+        let fo = d
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "system.final_output")
+            .map(|n| n.id)
+            .expect("final_output");
+        d.wires
+            .iter()
+            .find(|w| w.to_node == fo)
+            .map(|w| w.from_node)
+            .expect("final_output fed")
+    };
+    let differ = TextureDiff::new(&device);
+    for frames in [1u32, 8] {
+        let u = render_def_capture_node(&def, &registry, &device, w, h, frames, &pick_tail);
+        let f = render_def_capture_node(&fused, &registry, &device, w, h, frames, &pick_tail);
+        match (u, f) {
+            (Some((u, ud)), Some((f, fd))) if ud == fd => {
+                let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-7, 1.0e-6);
+                println!(
+                    "raw composite frames={frames}: max_abs={} over={}/{}",
+                    r.max_abs, r.over_count, r.total
+                );
+            }
+            (u, f) => println!(
+                "raw composite frames={frames}: capture mismatch (u={:?} f={:?})",
+                u.as_ref().map(|x| x.1),
+                f.as_ref().map(|x| x.1)
+            ),
+        }
+    }
+}
+
+/// Fourth-stage diagnostic: the particle BUFFER itself, fused in-place chain
+/// vs unfused atoms, after 1 / 2 / 8 frames. Frame-1 divergence = codegen
+/// semantics; later-only divergence = ordering / feedback interaction.
+#[test]
+#[ignore]
+fn particletext_buffer_region_diag() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    // Unfused: the chain tail (apply_inject) writes the loop buffer. Fused:
+    // the in-place region writes the SAME loop buffer — its consumers read
+    // the aliased src port, but dump records the array_feedback node's output
+    // identically on both sides, so capture THAT (the loop's canonical home).
+    let pick_loop = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| n.type_id == "node.array_feedback")
+            .map(|n| n.id)
+            .expect("array_feedback")
+    };
+    for frames in [1u32, 2, 8] {
+        let u = render_def_capture_array(&def, &registry, &device, w, h, frames, &pick_loop);
+        let f = render_def_capture_array(&fused, &registry, &device, w, h, frames, &pick_loop);
+        match (u, f) {
+            (Some(u), Some(f)) => {
+                if u.len() != f.len() {
+                    println!("frames={frames}: LEN DIFFERS {} vs {}", u.len(), f.len());
+                    continue;
+                }
+                let mut max_abs = 0.0_f32;
+                let mut diff_count = 0usize;
+                let mut first: Option<usize> = None;
+                for (i, (a, b)) in u.iter().zip(&f).enumerate() {
+                    let d = (a - b).abs();
+                    if d > 0.0 {
+                        diff_count += 1;
+                        if first.is_none() {
+                            first = Some(i);
+                        }
+                    }
+                    if d > max_abs {
+                        max_abs = d;
+                    }
+                }
+                println!(
+                    "frames={frames}: max_abs={max_abs} diffs={diff_count}/{} first={first:?}",
+                    u.len()
+                );
+            }
+            (u, f) => println!(
+                "frames={frames}: capture failed (unfused={}, fused={})",
+                u.is_some(),
+                f.is_some()
+            ),
+        }
+    }
+}
+
+/// Third-stage diagnostic: is the composite divergence PRE-EXISTING in the
+/// canonical (unmarked) ParticleText? Its buffer region (euler/wrap/inject)
+/// and text region fuse today without any fp32 marks — and no render-diff
+/// has ever gated them. Also bitwise-compares the text region's output.
+#[test]
+#[ignore]
+fn particletext_canonical_fused_diag() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    // Composite, canonical def: fused vs unfused.
+    let u = render_generator_8_frames(def.clone(), &registry, &device, w, h);
+    let f = render_generator_8_frames(fused.clone(), &registry, &device, w, h);
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-3, 1.0e-2);
+    println!(
+        "canonical composite: max_abs={} over={}/{} ({:.4})",
+        r.max_abs,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+
+    // Discriminator: same comparison with the outer-card bindings STRIPPED
+    // from both defs. The raw-executor composite (no bindings applied) is
+    // bit-exact, so if removing bindings here kills the divergence, the bug
+    // is the retargeted-binding application path on the fused def.
+    let strip = |mut d: EffectGraphDef| {
+        if let Some(meta) = d.preset_metadata.as_mut() {
+            meta.bindings.clear();
+        }
+        d
+    };
+    let u2 = render_generator_8_frames(strip(def.clone()), &registry, &device, w, h);
+    let f2 = render_generator_8_frames(strip(fused.clone()), &registry, &device, w, h);
+    let r2 = differ.compare(&device, &u2.texture, &f2.texture, 1.0e-3, 1.0e-2);
+    println!(
+        "canonical composite, bindings stripped: max_abs={} over={}/{} ({:.4})",
+        r2.max_abs,
+        r2.over_count,
+        r2.total,
+        r2.over_fraction()
+    );
+
+    // Text region output, bitwise.
+    let pick_unfused = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("text_force_gain"))
+            .map(|n| n.id)
+            .expect("text_force_gain")
+    };
+    let pick_fused = |d: &EffectGraphDef| {
+        d.nodes
+            .iter()
+            .find(|n| {
+                n.type_id == "node.wgsl_compute"
+                    && n.params.keys().any(|k| k.ends_with("_gain"))
+                    && n.params.keys().any(|k| k.ends_with("_angle"))
+            })
+            .map(|n| n.id)
+            .expect("fused text region")
+    };
+    for frames in [1u32, 8] {
+        let Some((ut, ud)) =
+            render_def_capture_node(&def, &registry, &device, w, h, frames, &pick_unfused)
+        else {
+            println!("frames={frames}: unfused text capture failed");
+            continue;
+        };
+        let Some((ft, fd)) =
+            render_def_capture_node(&fused, &registry, &device, w, h, frames, &pick_fused)
+        else {
+            println!("frames={frames}: fused text capture failed");
+            continue;
+        };
+        println!("text region frames={frames}: unfused dims={ud:?} fused dims={fd:?}");
+        if ud == fd {
+            let r = differ.compare(&device, &ut.texture, &ft.texture, 1.0e-7, 1.0e-6);
+            println!(
+                "  text region diff: max_abs={} over={}/{}",
+                r.max_abs, r.over_count, r.total
+            );
+        }
+    }
+}
+
+/// Second-stage diagnostic: compare the flow-field REGION OUTPUT directly
+/// (grad_rotate unfused vs fused_region dst), bitwise, at 1 and 8 frames —
+/// the discriminator between "the fused field itself differs" and "the field
+/// is exact but the divergence enters through the feedback/particle loop".
+#[test]
+#[ignore]
+fn particletext_fp32_region_output_diag() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    for handle in ["grad", "grad_scaled", "grad_rotate"] {
+        let node = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.handle.as_deref() == Some(handle))
+            .unwrap();
+        node.output_formats.insert("out".to_string(), "rgba32float".to_string());
+    }
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    let by_handle = |h: &'static str| {
+        move |d: &EffectGraphDef| {
+            d.nodes
+                .iter()
+                .find(|n| n.handle.as_deref() == Some(h))
+                .map(|n| n.id)
+                .unwrap_or_else(|| panic!("node `{h}`"))
+        }
+    };
+
+    for frames in [1u32, 8] {
+        let (u, ud) = render_def_capture_node(
+            &def, &registry, &device, w, h, frames, &by_handle("grad_rotate"),
+        )
+        .expect("unfused captures");
+        // The flow-field region fused as the region containing grad_rotate —
+        // its handle is `fused_region_<i>`; find the wgsl_compute whose params
+        // carry the rotate angle shadow (n2_angle) to disambiguate.
+        let pick_fused = |d: &EffectGraphDef| {
+            d.nodes
+                .iter()
+                .find(|n| {
+                    n.type_id == "node.wgsl_compute"
+                        && n.params.keys().any(|k| k.ends_with("_angle"))
+                })
+                .map(|n| n.id)
+                .expect("fused flow-field region")
+        };
+        let (f, fd) =
+            render_def_capture_node(&fused, &registry, &device, w, h, frames, &pick_fused)
+                .expect("fused captures");
+        println!("frames={frames}: unfused dims={ud:?} fused dims={fd:?}");
+        if ud != fd {
+            println!("  DIMS DIFFER — grid mismatch survives, stamp didn't land at runtime");
+            continue;
+        }
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-7, 1.0e-6);
+        println!(
+            "  region output diff: max_abs={} max_rel={} over={}/{}",
+            r.max_abs, r.max_rel, r.over_count, r.total
+        );
+    }
+}
+
 /// FluidSim3D twin of [`particletext_seed_gate_matches_ungated`]. Here seed_alloc
 /// is EveryFrame, so the gated skip relies on the order (seed_alloc writes, the
 /// gated seed_pattern re-dispatches only on reset) rather than buffer retention —

@@ -47,7 +47,13 @@ use crate::node_graph::PrimitiveRegistry;
 use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::node_graph::freeze::classify::InputAccess;
 use crate::node_graph::freeze::codegen::param_wgsl_type;
+use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
+
+/// Resolved per-output element spaces, or `None` when the def didn't build
+/// standalone (synthetic fixtures) — every lookup then defaults to
+/// [`ElementSpace::Canvas`], reproducing pre-tier-6 behaviour.
+type SpaceMap = Option<AHashMap<(u32, String), ElementSpace>>;
 
 /// Minimum members for a region to be worth fusing. A single-node "region" is
 /// just the atom's own standalone kernel — fusing it changes nothing and only
@@ -124,6 +130,13 @@ pub struct Region {
     /// wire each `dst_<k>` to an allocated texture — a region with any escaping
     /// wire to a dead (non-final-reachable) consumer is dropped, not fused.
     pub outputs: Vec<u32>,
+    /// The element space every member ran at in the UNFUSED plan (tier 6).
+    /// `Some` for texture regions — the install pass stamps a `Scaled` space
+    /// onto the fused node's `output_canvas_scales` so the executor sizes the
+    /// fused output exactly like the member output it replaced, and the
+    /// build-check verifies the fused def resolves back to this space.
+    /// `None` for buffer (Array) regions, which have no texture grid.
+    pub space: Option<ElementSpace>,
 }
 
 /// Partition a flattened def into its maximal pointwise-fusion regions. Returns
@@ -136,6 +149,11 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     if def.nodes.iter().any(|n| n.group.is_some()) {
         return Vec::new();
     }
+
+    // ── Resolve every output's element space from the unfused plan (tier 6).
+    // `None` (def doesn't build standalone — synthetic fixtures) degrades every
+    // lookup to Canvas, i.e. the pre-tier-6 single-space behaviour. ──
+    let spaces: SpaceMap = resolve_output_spaces(def, registry);
 
     // ── Classify every node once. ──
     let class: AHashMap<u32, NodeClass> = def
@@ -189,6 +207,16 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
                 // (texture↔texture, Array↔Array), so this never merges domains.
                 && (is_texture_wire(def, registry, w) || is_array_wire(def, registry, w))
                 && wire_coincident_consumed(def, registry, w)
+                // Tier 6: a texture union additionally requires producer and
+                // consumer to share one element space — the fused kernel
+                // iterates a single grid. Mixed-space chains (a quarter-res
+                // value feeding a node whose OWN output resolved to canvas via
+                // the mixed-input fallback) split at the seam instead of
+                // fusing onto the wrong grid. Array wires carry no texture
+                // grid, so the check doesn't apply.
+                && (is_array_wire(def, registry, w)
+                    || space_of(spaces.as_ref(), w.from_node, &w.from_port)
+                        == node_output_space(spaces.as_ref(), def, registry, w.to_node))
         })
         .map(|w| (w.from_node, w.to_node))
         .collect();
@@ -230,7 +258,8 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     let mut regions: Vec<Region> = Vec::new();
     for (_, mut nodes) in components {
         nodes.sort_unstable();
-        if let Some(region) = build_region(def, registry, &nodes, &final_reachable) {
+        if let Some(region) = build_region(def, registry, &nodes, &final_reachable, spaces.as_ref())
+        {
             regions.push(region);
         }
     }
@@ -353,17 +382,14 @@ fn classify_node(
         }
     }
 
-    // Conservative element-space (design §11.A): the fused kernel reads its
-    // externals via `textureLoad` at its own coord — no rescale — so fusing
-    // across a resolution/scale seam reads garbage. v1 fuses only the default
-    // full-canvas 2D space: any explicit canvas-scale override, or a 3D port,
-    // makes the atom a boundary. (The precise per-node element-space
-    // propagation that would let quarter-res chains fuse internally is the next
-    // increment; until then, cutting at every scale change is correct, just
-    // conservative.)
-    if !node.output_canvas_scales.is_empty() {
-        return NodeClass::Boundary;
-    }
+    // Element space (tier 6): per-node spaces are resolved from the unfused
+    // plan in `partition_regions` — unions are gated on space equality and
+    // `build_region` enforces member/external uniformity, so a def-level
+    // canvas-scale override no longer makes the atom a blanket boundary (its
+    // space simply has to match its neighbours'). Atom-level resamples
+    // (`output_canvas_scale` ≠ 1:1, the gate above) remain boundaries: folding
+    // a resampler INTO a region needs cross-scale reads (stencil-tier work).
+    // 3D ports stay out of the texture finder.
     if n.inputs().iter().any(|i| i.ty == PortType::Texture3D)
         || n.outputs().iter().any(|o| o.ty == PortType::Texture3D)
     {
@@ -558,6 +584,7 @@ fn build_region(
     registry: &PrimitiveRegistry,
     nodes: &[u32],
     final_reachable: &AHashSet<u32>,
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
 ) -> Option<Region> {
     if nodes.len() < MIN_REGION_LEN {
         return None;
@@ -658,7 +685,66 @@ fn build_region(
         return None;
     }
 
-    Some(Region { members, externals, outputs })
+    // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
+    // so every member's unfused output must have resolved to the SAME space,
+    // and every coincident external (read via `textureLoad` at the kernel's
+    // own coordinate) must live at that space too. Gathered externals are
+    // exempt — the body samples them at a normalized UV through `samp`, which
+    // is resolution-independent by construction. Any mismatch drops the whole
+    // region (renders unfused, always correct). Buffer regions have no
+    // texture grid; their space is `None`. ──
+    let space = if is_buffer {
+        None
+    } else {
+        let region_space = node_output_space(spaces, def, registry, order[0]);
+        for &id in &order {
+            if node_output_space(spaces, def, registry, id) != region_space {
+                return None;
+            }
+        }
+        for member in &members {
+            for (input, access) in member.inputs.iter().zip(&member.input_access) {
+                if access.is_gather() {
+                    continue;
+                }
+                if let RegionInput::External(slot) = input {
+                    let ext = &externals[*slot];
+                    if space_of(spaces, ext.from_node, &ext.from_port) != region_space {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(region_space)
+    };
+
+    Some(Region { members, externals, outputs, space })
+}
+
+/// The element space of `id`'s (single) texture output in the unfused plan —
+/// [`ElementSpace::Canvas`] when the node is unknown, has no texture output,
+/// or the spaces map is unavailable.
+fn node_output_space(
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    id: u32,
+) -> ElementSpace {
+    let Some(node) = def.nodes.iter().find(|n| n.id == id) else {
+        return ElementSpace::Canvas;
+    };
+    let Some(constructed) = registry.construct(&node.type_id) else {
+        return ElementSpace::Canvas;
+    };
+    let Some(port) = constructed
+        .outputs()
+        .iter()
+        .find(|o| is_texture_port(&o.ty))
+        .map(|o| o.name)
+    else {
+        return ElementSpace::Canvas;
+    };
+    space_of(spaces, id, port)
 }
 
 /// Kahn topo-sort of a region's members by intra-region texture wires. `None` on
