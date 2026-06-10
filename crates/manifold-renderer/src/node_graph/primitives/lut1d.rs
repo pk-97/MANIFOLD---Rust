@@ -55,6 +55,7 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["lut", "lookup", "palette", "Lookup TOP"],
+    pure: true,
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/lut1d_body.wgsl"),
     input_access: [Coincident, Gather],

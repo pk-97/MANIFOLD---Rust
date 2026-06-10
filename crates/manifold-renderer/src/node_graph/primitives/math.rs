@@ -72,6 +72,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["math", "calculate", "Math CHOP"],
+    pure: true,
 }
 
 impl Primitive for Math {

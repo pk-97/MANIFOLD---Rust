@@ -198,6 +198,14 @@ impl EffectNode for MuxTexture {
         &MUX_PARAMS
     }
 
+    /// PURE: the output is a copy of the selected input — selector param (or
+    /// wired scalar) + input textures fully determine it. No time, no state.
+    /// With a static selector and static (hoistable) inputs the whole
+    /// ramp-constellation → mux chain goes quiet (Infrared's palette bank).
+    fn is_pure(&self) -> bool {
+        true
+    }
+
     fn reconfigure(&mut self, params: &ParamValues) {
         let n = params
             .get("num_inputs")

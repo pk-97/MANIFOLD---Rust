@@ -40,6 +40,7 @@ crate::primitive! {
     category: Control,
     role: Source,
     aliases: ["value", "constant", "Constant CHOP"],
+    pure: true,
 }
 
 impl Primitive for Value {

@@ -56,6 +56,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["scale offset", "rescale", "map range", "attenuvert"],
+    pure: true,
 }
 
 impl Primitive for AffineScalar {

@@ -166,10 +166,21 @@ pub struct Executor {
     /// detect upstream changes. Non-pure producers bump every frame they run,
     /// which conservatively keeps their consumers dirty.
     resource_epoch: ahash::AHashMap<ResourceId, u64>,
-    /// Outputs of pure steps — exempt from `free_after` release so the held
-    /// texture/scalar survives the frame for the memo skip to serve. Without
-    /// this, the consumer's `free_after` returns the LUT's slot to the pool
-    /// every frame and nothing can ever cache. Built once per plan shape.
+    /// Per-step HOISTABLE bit: the step's node is pure AND every input is
+    /// produced by a hoistable step (transitively-static closure, computed in
+    /// topo order at memo build). Purity alone is not enough for two reasons:
+    /// a pure node fed by dynamic content (color_lut reading the live source)
+    /// can never go clean, so holding its output out of the pool would be
+    /// pure memory cost; and an input with NO producing step (a host-prebound
+    /// resource mutated via `replace_texture_2d`) carries no epoch, so caching
+    /// across it would serve stale content. Only hoistable steps get a memo,
+    /// the clean-skip check, and sticky outputs.
+    hoistable_steps: Vec<bool>,
+    /// Outputs of hoistable steps — exempt from `free_after` release so the
+    /// held texture/scalar survives the frame for the memo skip to serve.
+    /// Without this, the consumer's `free_after` returns the LUT's slot to
+    /// the pool every frame and nothing can ever cache. Built once per plan
+    /// shape.
     sticky_resources: ahash::AHashSet<ResourceId>,
     /// Step count the memo/sticky structures were built for; rebuilt when it
     /// differs (defensive — a live executor's plan does not change shape).
@@ -223,6 +234,7 @@ impl Executor {
             step_profiles: Vec::new(),
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
+            hoistable_steps: Vec::new(),
             sticky_resources: ahash::AHashSet::default(),
             memo_steps_len: None,
         }
@@ -569,11 +581,27 @@ impl Executor {
             self.step_memo.resize_with(plan.steps().len(), || None);
             self.resource_epoch.clear();
             self.sticky_resources.clear();
-            for step in plan.steps() {
-                if let Some(inst) = graph.get_node(step.node)
-                    && inst.node.is_pure()
-                {
-                    for &(_, res) in &step.outputs {
+            self.hoistable_steps.clear();
+            self.hoistable_steps.resize(plan.steps().len(), false);
+            // Hoistable closure, in plan (topo) order: pure node AND every
+            // input produced by an already-hoistable step. An input with no
+            // producing step (host-prebound) breaks the chain — it has no
+            // epoch, so caching across it would serve stale content.
+            let mut res_hoistable: ahash::AHashMap<ResourceId, bool> =
+                ahash::AHashMap::with_capacity(plan.resource_count());
+            for (idx, step) in plan.steps().iter().enumerate() {
+                let pure = graph
+                    .get_node(step.node)
+                    .is_some_and(|inst| inst.node.is_pure());
+                let hoistable = pure
+                    && step
+                        .inputs
+                        .iter()
+                        .all(|&(_, res)| res_hoistable.get(&res).copied().unwrap_or(false));
+                self.hoistable_steps[idx] = hoistable;
+                for &(_, res) in &step.outputs {
+                    res_hoistable.insert(res, hoistable);
+                    if hoistable {
                         self.sticky_resources.insert(res);
                     }
                 }
@@ -668,8 +696,8 @@ impl Executor {
                 || self.dump_all
                 || self.preview_target == Some(step.node);
             if !force_dirty
+                && self.hoistable_steps[idx]
                 && let Some(inst) = graph.get_node(step.node)
-                && inst.node.is_pure()
                 && inst.node.skip_passthrough(&inst.params).is_none()
                 && let Some(memo) = &self.step_memo[idx]
                 && memo.param_epoch == inst.param_epoch
@@ -734,13 +762,13 @@ impl Executor {
             // (optionally) a per-step mutable reborrow of the host's
             // GpuEncoder + StateStore. Scoped tightly so the borrows end
             // before the release loop's mutable borrow below.
-            // Set when this step's node is pure and it executed (evaluate or
+            // Set when this step is hoistable and it executed (evaluate or
             // skip-alias) — the memo snapshot is recorded after the node
-            // borrow ends. `None` leaves any prior memo cleared (non-pure or
-            // missing node).
+            // borrow ends. `None` leaves any prior memo cleared (non-
+            // hoistable or missing node).
             let mut executed_pure_epoch: Option<u64> = None;
             if let Some(inst) = graph.get_node_mut(step.node) {
-                if inst.node.is_pure() {
+                if self.hoistable_steps[idx] {
                     executed_pure_epoch = Some(inst.param_epoch);
                 }
                 // Query skip-passthrough BEFORE building the full context.
@@ -2097,9 +2125,11 @@ mod tests {
     // ─── Memoized-dataflow (constant-subgraph hoisting) ───
 
     /// Pure test node: one float param, one texture output, counts evaluates.
+    /// Optionally takes a texture input (for transitive-closure tests).
     struct PureCountingNode {
         type_id: EffectNodeType,
         pure: bool,
+        with_input: bool,
         evals: Arc<Mutex<u32>>,
     }
 
@@ -2108,6 +2138,16 @@ mod tests {
             Self {
                 type_id: EffectNodeType::new("test.pure_counting"),
                 pure,
+                with_input: false,
+                evals,
+            }
+        }
+
+        fn with_input(pure: bool, evals: Arc<Mutex<u32>>) -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.pure_counting_consumer"),
+                pure,
+                with_input: true,
                 evals,
             }
         }
@@ -2118,7 +2158,13 @@ mod tests {
             &self.type_id
         }
         fn inputs(&self) -> &[NodeInput] {
-            &[]
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: "in",
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            }];
+            if self.with_input { &INPUTS } else { &[] }
         }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
@@ -2203,6 +2249,46 @@ mod tests {
         exec.execute_frame(&mut g, &plan, frame_time());
         exec.execute_frame(&mut g, &plan, frame_time());
         assert_eq!(*evals.lock().unwrap(), 2, "changed param re-executes exactly once");
+    }
+
+    /// A pure chain goes transitively quiet: pure producer → pure consumer,
+    /// both execute exactly once (the hoistable closure extends through the
+    /// wire — Infrared's ramp-bank → mux shape).
+    #[test]
+    fn pure_chain_goes_transitively_quiet() {
+        let p_evals = Arc::new(Mutex::new(0));
+        let c_evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(PureCountingNode::new(true, p_evals.clone())));
+        let consumer = g.add_node(Box::new(PureCountingNode::with_input(true, c_evals.clone())));
+        g.connect((producer, "out"), (consumer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..3 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*p_evals.lock().unwrap(), 1);
+        assert_eq!(*c_evals.lock().unwrap(), 1, "pure consumer of a pure producer must skip");
+    }
+
+    /// A pure node fed by an IMPURE producer is NOT hoistable (the closure
+    /// rule): the producer re-executes every frame, so the consumer must too
+    /// — and its output is never held out of the texture pool.
+    #[test]
+    fn pure_node_fed_by_impure_producer_runs_every_frame() {
+        let p_evals = Arc::new(Mutex::new(0));
+        let c_evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(PureCountingNode::new(false, p_evals.clone())));
+        let consumer = g.add_node(Box::new(PureCountingNode::with_input(true, c_evals.clone())));
+        g.connect((producer, "out"), (consumer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..3 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*p_evals.lock().unwrap(), 3);
+        assert_eq!(*c_evals.lock().unwrap(), 3, "dynamic upstream must keep the pure node live");
     }
 
     /// A non-pure consumer keeps running every frame and reads the SAME slot
