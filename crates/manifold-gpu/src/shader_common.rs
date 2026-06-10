@@ -77,18 +77,19 @@ fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
     let mut optimizer = opt::create(None);
 
     optimizer
-        // KNOWN GAP: shaders whose naga output contains unreachable blocks
-        // (switch arms behind a constant selector, some early-out guards)
-        // make MergeReturn abort the whole pipeline ("Module contains
-        // unreachable blocks during merge return") and ship unoptimized
-        // SPIR-V. The textbook fix — DeadBranchElim before MergeReturn — was
-        // tried 2026-06-10 and reverted: its output trips SPIRV-Cross ("The
-        // SPIR-V operation is unsupported: Bad cast") on watercolor.slope and
-        // the scatter splat oracles, a worse failure than the silent
-        // fall-back (Metal's compiler re-optimizes the MSL regardless; perf
-        // gate verdicts were identical either way). Revisit alongside a
-        // spirv-tools / SPIRV-Cross version bump.
-        // MergeReturn first: it rewrites functions with early `return`s
+        // DeadBranchElim BEFORE MergeReturn: naga output can contain
+        // unreachable blocks (switch arms behind a constant selector, some
+        // early-out guards), and MergeReturn aborts on them ("Module contains
+        // unreachable blocks during merge return"), shipping unoptimized
+        // SPIR-V library-wide (luminance, mix, voronoi, scatter, most
+        // wgsl_compute kernels). DeadBranchElim removes those blocks first.
+        // History: this ordering was tried 2026-06-10 on spirv-cross2 0.4.6
+        // and reverted — its output tripped SPIRV-Cross ("Bad cast") on
+        // watercolor.slope and the scatter splat oracles. The 0.7.x
+        // SPIRV-Cross bump (38681a3) fixed that; those oracles are the
+        // regression gate for this pass order.
+        .register_pass(opt::Passes::DeadBranchElim)
+        // MergeReturn next: it rewrites functions with early `return`s
         // (mix's blend_rgb/safe_div/overlay_channel, colorize masks, the
         // fused-kernel bodies) into single-return form so InlineExhaustive
         // can actually inline them. Without it spirv-opt logs

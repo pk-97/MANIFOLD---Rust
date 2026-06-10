@@ -22,7 +22,7 @@ log = "0.4"
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
 spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
 # SPIR-V → MSL compilation (wraps SPIRV-Cross C) — Metal backend only.
-spirv-cross2 = { version = "0.4", default-features = false, features = ["msl"] }
+spirv-cross2 = { version = "0.7", default-features = false, features = ["msl"] }
 
 # Vulkan loader bindings. Opt-in via the `vulkan` feature — pure FFI loader
 # with no C deps, so enabling it costs essentially no compile time.
