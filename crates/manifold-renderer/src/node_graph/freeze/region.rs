@@ -89,6 +89,14 @@ pub struct RegionMember {
     /// entry's input is always an [`RegionInput::External`] — the codegen binds
     /// it as a texture (+ sampler) the body samples itself.
     pub input_access: Vec<InputAccess>,
+    /// f16-faithful rounding (stencil tier A): this member sits inside a
+    /// feedback loop and its unfused output texture is f16, so the unfused
+    /// graph rounds its value to half precision every frame. The fused kernel
+    /// must reproduce that rounding in-register (`q16` pack/unpack round-trip)
+    /// or the f32 registers drift from the editor's unfused render and the
+    /// loop amplifies the gap. False for fp32-marked members (their store is
+    /// exact) and everything outside a loop (shipped behaviour, unchanged).
+    pub quantize_f16: bool,
 }
 
 /// Where one of a member's texture inputs comes from.
@@ -268,6 +276,17 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     regions
 }
 
+/// Stencil tier A kill switch: `MANIFOLD_FREEZE_Q16=0` (or `false`/`off`)
+/// keeps in-loop f16 atoms as boundaries, restoring pre-tier-A partitions.
+/// Read per call (cheap env lookup at fuse-build time, never per frame) so
+/// tests can flip it without process restarts.
+fn q16_tier_enabled() -> bool {
+    !matches!(
+        std::env::var("MANIFOLD_FREEZE_Q16").as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
 /// Is `start` on a dataflow cycle — i.e. inside a feedback loop? Forward node
 /// reachability over the wire graph: a feedback node (`array_feedback` /
 /// `node.feedback`) is a SINGLE node whose `in` wires and `out` wires both attach
@@ -432,37 +451,31 @@ fn classify_node(
         }
     }
 
-    // Feedback-loop exclusion (TEXTURE atoms only — buffer atoms were dispatched
-    // above and are exempt). A texture atom inside a feedback loop fuses ONLY at
-    // full precision. The hazard: fusing keeps intermediates in f32 registers, but
-    // the unfused editor stores each through its output texture and rounds to that
-    // format. At f16 the two can't be reconciled — the GPU rounds a register
-    // differently than an f16 texture write (a fused-side f16 round doesn't match) —
-    // so a chaotic feedback sim (FluidSim flow field, OilyFluid) amplifies the gap,
-    // and since the editor renders unfused and the stage renders fused, the look
-    // would shift when the editor closes. At fp32 (`outputFormats: rgba32float`)
-    // there is NO rounding: the unfused store is exact, matching the fused register,
-    // so fused == unfused and the atom fuses freely (the codegen emits an fp32 dst,
-    // and the fused kernel keeps the intermediates in registers — so fp32 costs the
-    // unfused editor a little memory and the stage nothing). An f16 in-loop texture
-    // atom stays a boundary; an fp32 one is allowed through. Buffer atoms are
-    // exempt: their f32 register threading is already bit-exact.
-    if node_on_cycle(node.id, def) {
-        let output_is_fp32 = node.output_formats.values().any(|s| s.contains("32float"));
-        // An f16 in-loop texture atom stays a boundary (the unfused editor rounds
-        // each store to f16 while the fused kernel keeps f32 registers — a chaotic
-        // feedback sim amplifies the gap and the look would shift when the editor
-        // closes); an fp32 one fuses freely (the store is exact, so fused == unfused).
-        //
-        // A GATHER atom (e.g. the toroidal fluid gradient, wrap_mode=Repeat) is now
-        // admitted at fp32 too: the install pass resolves the region's agreed gather
-        // sampler mode and the fused kernel binds a sampler at that mode (a
-        // `// @sampler_address_mode` marker `node.wgsl_compute` reads), so a wrapped
-        // gather samples its edges identically fused or unfused. Earlier this stayed
-        // a boundary because the fused `samp` was hard-coded clamp.
-        if !output_is_fp32 {
-            return NodeClass::Boundary;
-        }
+    // Feedback-loop precision (TEXTURE atoms only — buffer atoms were dispatched
+    // above and their f32 register threading is already bit-exact). A texture
+    // atom inside a feedback loop must NOT change its rounding when fused: the
+    // unfused editor stores each intermediate through its output texture (f16
+    // chain default, or fp32 via `outputFormats: rgba32float`), and a chaotic
+    // feedback sim amplifies any register-vs-store rounding gap until the look
+    // shifts when the editor closes. Two reconciliations, both fuse-eligible:
+    //   - fp32-marked: the unfused store is exact, matching the fused f32
+    //     register — fuses as-is.
+    //   - f16 (stencil tier A): the fused kernel reproduces the unfused f16
+    //     rounding in-register — `build_region` flags the member
+    //     `quantize_f16` and the codegen wraps its body call in a `q16`
+    //     pack2x16float/unpack2x16float round-trip (exact IEEE-half RTNE,
+    //     identical to an rgba16float store+load). Costs a few ALU per member;
+    //     no preset edit, no editor memory increase, no look change.
+    // Gathers are admitted the same way (the region's agreed sampler address
+    // mode is resolved at install and bound via `// @sampler_address_mode`).
+    //
+    // Kill switch: `MANIFOLD_FREEZE_Q16=0` restores the pre-tier-A behaviour
+    // (in-loop f16 atoms stay boundaries) without touching fp32 admission.
+    if !q16_tier_enabled()
+        && node_on_cycle(node.id, def)
+        && !node.output_formats.values().any(|s| s.contains("32float"))
+    {
+        return NodeClass::Boundary;
     }
 
     // Final gate: the body must produce a kernel the PLAIN pipeline compiler
@@ -643,7 +656,13 @@ fn build_region(
             inputs.push(resolved);
             input_access.push(access);
         }
-        members.push(RegionMember { doc_id, inputs, input_access });
+        // f16-faithful rounding (stencil tier A): an in-loop member whose
+        // unfused output texture is f16 gets its fused register quantized to
+        // half precision after every body call — see the classify comment.
+        let quantize_f16 = !is_buffer
+            && node_on_cycle(doc_id, def)
+            && !node.output_formats.values().any(|s| s.contains("32float"));
+        members.push(RegionMember { doc_id, inputs, input_access, quantize_f16 });
     }
 
     // The region output(s): each member with ≥1 texture wire to a non-member. A

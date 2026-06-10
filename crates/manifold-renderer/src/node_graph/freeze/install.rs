@@ -684,6 +684,7 @@ pub(crate) fn fuse_canonical_def(
                 node_includes: node.wgsl_includes(),
                 derived_uniforms: node.derived_uniforms(),
                 output_storage: resolve_output_storage(doc_node, node.as_ref()),
+                quantize_f16: member.quantize_f16,
             });
         }
         // In-place gate: if the region's output threads (through aliased members)

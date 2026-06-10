@@ -1596,6 +1596,78 @@ fn particletext_seed_gate_matches_ungated() {
     );
 }
 
+/// Stencil tier A proof on the real OilyFluid: its feedback-loop f16 chains
+/// (previously hard boundaries) now fuse with `q16` register rounding, and
+/// the fused render must match the unfused one BIT-EXACTLY through the raw
+/// executor — the loop amplifies any rounding mismatch, so 8 frames at
+/// 256² is a real drift test, not a smoke test. (Raw harness, not
+/// PresetRuntime: the production path carries the parked
+/// [[particletext_canonical_fused_diag]] f16-seed divergence which would
+/// pollute this oracle.)
+#[test]
+fn oilyfluid_inloop_f16_fusion_matches_unfused() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("OilyFluid"),
+    )
+    .expect("OilyFluid bundled");
+    let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    // Texture-domain oracle: shrink any particle pools so this test doesn't
+    // starve the GPU when the suite runs it in parallel with the sim renders.
+    shrink_particle_pool(&mut def, 100_000);
+    // OilyFluid is GROUPED; the raw harness instantiates directly, so flatten
+    // first (the live loader and the fuse entry both do).
+    let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    // The tier actually engaged: the fused def must carry a q16-quantized
+    // kernel (an in-loop f16 member fused) — else this oracle is vacuous.
+    assert!(
+        fused
+            .nodes
+            .iter()
+            .any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("fn q16"))),
+        "OilyFluid must fuse at least one in-loop f16 region under tier A"
+    );
+
+    let pick_tail = |d: &EffectGraphDef| {
+        let fo = d
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "system.final_output")
+            .map(|n| n.id)
+            .expect("final_output");
+        d.wires
+            .iter()
+            .find(|w| w.to_node == fo)
+            .map(|w| w.from_node)
+            .expect("final_output fed")
+    };
+    for frames in [1u32, 8] {
+        let (u, ud) = render_def_capture_node_host(
+            &def, &registry, &device, w, h, frames, &pick_tail, true,
+        )
+        .expect("unfused renders");
+        let (f, fd) = render_def_capture_node_host(
+            &fused, &registry, &device, w, h, frames, &pick_tail, true,
+        )
+        .expect("fused renders");
+        assert_eq!(ud, fd, "composite dims match (frames={frames})");
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-7, 1.0e-6);
+        assert!(
+            r.over_count == 0,
+            "in-loop f16 fusion must be bit-exact at frames={frames}: max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+}
+
 /// Tier-6 proof on the real ParticleText: fp32-mark its flow-field atoms
 /// (`grad` / `grad_scaled` / `grad_rotate` — the same marks FluidSim2D ships
 /// in its grouped field), fuse, and require the fused render to match the
@@ -1988,7 +2060,7 @@ fn particletext_production_region_diag() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(8);
     println!("frames: {frames}");
-    let mut run = |d: EffectGraphDef| -> (PresetRuntime, RenderTarget) {
+    let run = |d: EffectGraphDef| -> (PresetRuntime, RenderTarget) {
         let mut g = PresetRuntime::from_def_with_device(d, &registry, &device, w, h, FMT)
             .expect("preset builds");
         let target = RenderTarget::new(&device, w, h, FMT, "prod-diag");
