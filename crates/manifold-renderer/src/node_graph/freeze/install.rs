@@ -149,8 +149,9 @@ fn fuse_view_parts(
     type_id: &PresetTypeId,
     skip_mode: crate::node_graph::SkipMode,
     registry: &PrimitiveRegistry,
+    region_mask: Option<&[bool]>,
 ) -> Option<LoadedPresetView> {
-    let fused = fuse_canonical_def(canonical_def, registry)?;
+    let fused = fuse_canonical_def_masked(canonical_def, registry, region_mask)?;
     // Node ids that survive the rewrite (boundaries + the fused nodes): a binding
     // targeting one of these is left as-is; one targeting a fused-away member is
     // retargeted; anything else strands a slider, so refuse to fuse.
@@ -282,8 +283,81 @@ fn compile_fused_view(
     base: &LoadedPresetView,
 ) -> Option<&'static LoadedPresetView> {
     let registry = PrimitiveRegistry::with_builtin();
-    let fused = fuse_view_parts(def, base.bindings, &base.type_id, base.skip_mode, &registry)?;
+    let fused =
+        fuse_view_parts(def, base.bindings, &base.type_id, base.skip_mode, &registry, None)?;
     Some(Box::leak(Box::new(fused)))
+}
+
+// ===========================================================================
+// Per-region perf-gate hooks. The gate explores REGION MASKS per card (greedy
+// leave-one-out at tune time) and, when a partial mask wins, seeds the content
+// cache so every future `fused_view_for(canonical_def)` returns the measured
+// winner. Candidate views built here are uncached (one leak per candidate per
+// tune — bounded, a few KB each, startup-only).
+// ===========================================================================
+
+/// Build the fused view for effect `id`'s CANONICAL def under a region mask,
+/// without touching the cache. `None` when nothing fuses under that mask.
+pub(crate) fn masked_view_by_id(
+    id: &PresetTypeId,
+    registry: &PrimitiveRegistry,
+    mask: &[bool],
+) -> Option<&'static LoadedPresetView> {
+    let base = crate::node_graph::loaded_preset_view_by_id(id)?;
+    let fused = fuse_view_parts(
+        base.canonical_def,
+        base.bindings,
+        &base.type_id,
+        base.skip_mode,
+        registry,
+        Some(mask),
+    )?;
+    Some(Box::leak(Box::new(fused)))
+}
+
+/// Seed the content cache so `fused_view_for` over effect `id`'s canonical def
+/// returns `view` — the gate's measured winner. Content-thread only (the cache
+/// is thread-local there, like every fuse/tune path).
+pub(crate) fn override_canonical_fused_view(
+    id: &PresetTypeId,
+    view: Option<&'static LoadedPresetView>,
+) {
+    let Some(base) = crate::node_graph::loaded_preset_view_by_id(id) else {
+        return;
+    };
+    let key = def_content_key(base.canonical_def);
+    FUSED_EFFECT_CACHE.with(|c| {
+        c.borrow_mut().insert(key, view);
+    });
+}
+
+/// Generator twin of [`masked_view_by_id`] — the fused generator def for `id`'s
+/// canonical shape under a region mask, uncached.
+pub(crate) fn masked_generator_def_by_id(
+    id: &PresetTypeId,
+    registry: &PrimitiveRegistry,
+    mask: &[bool],
+) -> Option<&'static EffectGraphDef> {
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
+    let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
+    fuse_generator_def_masked(&def, registry, Some(mask)).map(|d| &*Box::leak(Box::new(d)))
+}
+
+/// Generator twin of [`override_canonical_fused_view`].
+pub(crate) fn override_canonical_fused_generator_def(
+    id: &PresetTypeId,
+    def_override: Option<&'static EffectGraphDef>,
+) {
+    let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(id) else {
+        return;
+    };
+    let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else {
+        return;
+    };
+    let key = def_content_key(&def);
+    FUSED_GENERATOR_CACHE.with(|c| {
+        c.borrow_mut().insert(key, def_override);
+    });
 }
 
 /// Generator twin of [`fused_view_for`]: a generator carries its modulation
@@ -337,7 +411,17 @@ pub fn fuse_generator_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<EffectGraphDef> {
-    let fused = fuse_canonical_def(def, registry)?;
+    fuse_generator_def_masked(def, registry, None)
+}
+
+/// [`fuse_generator_def`] with the perf gate's region mask — see
+/// [`fuse_canonical_def_masked`].
+pub(crate) fn fuse_generator_def_masked(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    region_mask: Option<&[bool]>,
+) -> Option<EffectGraphDef> {
+    let fused = fuse_canonical_def_masked(def, registry, region_mask)?;
     // Node ids that survive (boundaries + fused nodes) — a binding targeting one
     // is left as-is; one targeting a fused-away member is retargeted; anything
     // else strands, so refuse to fuse (render unfused).
@@ -655,6 +739,30 @@ pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<FusedDef> {
+    fuse_canonical_def_masked(def, registry, None)
+}
+
+/// How many fusable regions the canonical def partitions into (after the same
+/// flatten the fuse performs). The perf gate uses this to size its per-region
+/// exploration mask; 0 ⇒ nothing to gate.
+pub(crate) fn canonical_region_count(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> usize {
+    let Ok(flattened) = manifold_core::flatten::flatten_groups(def) else {
+        return 0;
+    };
+    partition_regions(&flattened, registry).len()
+}
+
+/// [`fuse_canonical_def`] with a REGION MASK: `mask[i] = false` leaves the
+/// partition's i-th region (deterministic order) unfused — its members (and
+/// any absorbed virtual-chain members) survive as ordinary nodes. The perf
+/// gate explores masks per card so one slow region can't drag the rest back
+/// to fully-unfused; `None` (or all-true) fuses everything, byte-identical to
+/// the unmasked path. All-false (or all regions masked off) returns `None`.
+pub(crate) fn fuse_canonical_def_masked(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    region_mask: Option<&[bool]>,
+) -> Option<FusedDef> {
     // The finder operates on a FLATTENED graph: `partition_regions` refuses any
     // def still carrying a group node (group boundary nodes would fragment every
     // region), and the live loader (`graph_loader`) flattens before building. So
@@ -668,6 +776,15 @@ pub(crate) fn fuse_canonical_def(
     let flattened = manifold_core::flatten::flatten_groups(def).ok()?;
     let def = &flattened;
     let regions = partition_regions(def, registry);
+    let regions: Vec<_> = match region_mask {
+        None => regions,
+        Some(mask) => regions
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| mask.get(*i).copied().unwrap_or(true))
+            .map(|(_, r)| r)
+            .collect(),
+    };
     if regions.is_empty() {
         return None;
     }
@@ -1147,6 +1264,65 @@ mod tests {
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    /// A region mask leaves the disabled region's nodes as ordinary surviving
+    /// nodes: source → gain → contrast → threshold(boundary) → saturation →
+    /// clamp → final partitions into two regions; masking the second fuses only
+    /// {gain, contrast}, and saturation/clamp survive verbatim. All-false ⇒
+    /// `None` (fully unfused).
+    #[test]
+    fn region_mask_fuses_only_enabled_regions() {
+        let json = r#"{
+            "version": 1, "name": "split", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
+                { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
+                { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
+                { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let reg = registry();
+        assert_eq!(canonical_region_count(&def, &reg), 2);
+
+        let full = fuse_canonical_def(&def, &reg).expect("both regions fuse unmasked");
+        assert_eq!(
+            full.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+            2
+        );
+
+        let half = fuse_canonical_def_masked(&def, &reg, Some(&[true, false]))
+            .expect("one enabled region still fuses");
+        assert_eq!(
+            half.def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+            1,
+            "only the enabled region becomes a fused node"
+        );
+        for survivor in ["node.saturation", "node.clamp_texture"] {
+            assert!(
+                half.def.nodes.iter().any(|n| n.type_id == survivor),
+                "{survivor} must survive the masked fuse"
+            );
+        }
+        assert!(
+            !half.def.nodes.iter().any(|n| n.type_id == "node.gain"),
+            "the enabled region's members are fused away"
+        );
+
+        assert!(
+            fuse_canonical_def_masked(&def, &reg, Some(&[false, false])).is_none(),
+            "all regions masked off = fully unfused = None"
+        );
     }
 
     #[test]

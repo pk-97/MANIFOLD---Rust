@@ -44,7 +44,11 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
 };
-use crate::node_graph::freeze::install::{fused_generator_def_by_id, fused_view_by_id};
+use crate::node_graph::freeze::install::{
+    canonical_region_count, fused_generator_def_by_id, fused_view_by_id,
+    masked_generator_def_by_id, masked_view_by_id, override_canonical_fused_generator_def,
+    override_canonical_fused_view,
+};
 use crate::node_graph::{
     EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry, StateStore, compile,
     loaded_preset_view_by_id,
@@ -197,6 +201,53 @@ fn decides_fuse(unfused_ms: f64, fused_ms: f64) -> bool {
     (unfused_ms / fused_ms) >= MIN_SPEEDUP && (unfused_ms - fused_ms) >= MIN_SAVING_MS
 }
 
+/// Minimum measured drop (ms/frame) for the greedy mask search to accept
+/// disabling a region — a noise guard on the leave-one-out comparisons, well
+/// under [`MIN_SAVING_MS`] because each step compares two FUSED variants of
+/// the same card (shared warmup state, same resources, low variance).
+const GREEDY_MIN_DROP_MS: f64 = 0.03;
+/// Only run the per-region mask search on cards where it can matter: more than
+/// one region AND a baseline big enough that a region-sized saving clears the
+/// noise floor. Below this, all-or-nothing is measured exactly as before.
+const GREEDY_MIN_UNFUSED_MS: f64 = 2.0;
+
+/// Greedy leave-one-out over region masks: start all-on, try disabling one
+/// region at a time (single ascending pass), keep any drop that measurably
+/// helps. `measure` returns the mean ms/frame for a mask, `None` when that
+/// variant doesn't build (skipped, never chosen). Returns the best mask and
+/// its time; time is `None` only if even the all-on candidate failed.
+fn greedy_region_mask(
+    n: usize,
+    measure: &mut dyn FnMut(&[bool]) -> Option<f64>,
+) -> (Vec<bool>, Option<f64>) {
+    let mut mask = vec![true; n];
+    let all_on = measure(&mask);
+    let Some(mut best_ms) = all_on else {
+        return (mask, None);
+    };
+    if n > 1 {
+        for i in 0..n {
+            let mut cand = mask.clone();
+            cand[i] = false;
+            if cand.iter().all(|on| !on) {
+                continue; // fully-off IS the unfused baseline, measured separately
+            }
+            if let Some(ms) = measure(&cand)
+                && ms + GREEDY_MIN_DROP_MS < best_ms
+            {
+                mask = cand;
+                best_ms = ms;
+            }
+        }
+    }
+    (mask, Some(best_ms))
+}
+
+/// Render a mask as `11010` for the tune log.
+fn mask_str(mask: &[bool]) -> String {
+    mask.iter().map(|&on| if on { '1' } else { '0' }).collect()
+}
+
 /// Count of fusable worker atoms in a canonical def — every node that isn't a
 /// `system.source` / `system.final_output` boundary. Reported in the tune log
 /// line for context (the fuse decision itself is purely measured).
@@ -228,23 +279,66 @@ pub fn tune_all(device: &GpuDevice) {
         };
         let atoms = worker_atom_count(base_view.canonical_def);
         let unfused = measure_def(device, &registry, base_view.canonical_def, SOURCE_TYPE_ID);
-        let fused = measure_def(device, &registry, fused_view.canonical_def, SOURCE_TYPE_ID);
 
-        let verdict = match (unfused, fused) {
-            (Some(u), Some(f)) => {
+        let Some(u) = unfused else {
+            log::warn!(
+                "[freeze] tune {} on {dev}: unfused measurement failed -> keep unfused",
+                type_id.as_str(),
+            );
+            map.insert(type_id, false);
+            continue;
+        };
+
+        // Per-region exploration on big multi-region cards; otherwise the
+        // classic all-or-nothing measurement (the all-on candidate is the
+        // pre-warmed canonical fused view either way).
+        let n = canonical_region_count(base_view.canonical_def, &registry);
+        let explore = n > 1 && u >= GREEDY_MIN_UNFUSED_MS;
+        let mut measure = |mask: &[bool]| -> Option<f64> {
+            let view = if mask.iter().all(|&on| on) {
+                fused_view
+            } else {
+                masked_view_by_id(&type_id, &registry, mask)?
+            };
+            measure_def(device, &registry, view.canonical_def, SOURCE_TYPE_ID)
+        };
+        let (mask, fused) = if explore {
+            greedy_region_mask(n, &mut measure)
+        } else {
+            let all = vec![true; n.max(1)];
+            let t = measure(&all);
+            (all, t)
+        };
+
+        let verdict = match fused {
+            Some(f) => {
                 let pays = decides_fuse(u, f);
                 let speedup = if f > 0.0 { u / f } else { 0.0 };
+                let partial = !mask.iter().all(|&on| on);
                 let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
                 let name = type_id.as_str();
+                let mask_note = if partial {
+                    format!(" [regions {}]", mask_str(&mask))
+                } else {
+                    String::new()
+                };
                 log::info!(
                     "[freeze] tune {name} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
-                     {speedup:.2}x, {atoms} atoms -> {outcome}"
+                     {speedup:.2}x, {atoms} atoms{mask_note} -> {outcome}"
                 );
+                // A winning PARTIAL mask becomes the canonical fused view, so
+                // the live path renders exactly the measured winner.
+                if pays && partial {
+                    override_canonical_fused_view(
+                        &type_id,
+                        masked_view_by_id(&type_id, &registry, &mask),
+                    );
+                }
                 pays
             }
-            _ => {
+            None => {
                 log::warn!(
-                    "[freeze] tune {} on {dev}: measurement failed -> keep unfused",
+                    "[freeze] tune {} on {dev}: fused measurement failed -> keep unfused",
                     type_id.as_str(),
                 );
                 false
@@ -270,22 +364,61 @@ pub fn tune_all(device: &GpuDevice) {
         };
         let atoms = worker_atom_count(&canonical);
         let unfused = measure_def(device, &registry, &canonical, GENERATOR_INPUT_TYPE_ID);
-        let fused = measure_def(device, &registry, fused_def, GENERATOR_INPUT_TYPE_ID);
-        let verdict = match (unfused, fused) {
-            (Some(u), Some(f)) => {
+
+        let Some(u) = unfused else {
+            log::warn!(
+                "[freeze] tune generator {} on {dev}: unfused measurement failed -> keep unfused",
+                type_id.as_str(),
+            );
+            gen_map.insert(type_id, false);
+            continue;
+        };
+
+        let n = canonical_region_count(&canonical, &registry);
+        let explore = n > 1 && u >= GREEDY_MIN_UNFUSED_MS;
+        let mut measure = |mask: &[bool]| -> Option<f64> {
+            let def = if mask.iter().all(|&on| on) {
+                fused_def
+            } else {
+                masked_generator_def_by_id(&type_id, &registry, mask)?
+            };
+            measure_def(device, &registry, def, GENERATOR_INPUT_TYPE_ID)
+        };
+        let (mask, fused) = if explore {
+            greedy_region_mask(n, &mut measure)
+        } else {
+            let all = vec![true; n.max(1)];
+            let t = measure(&all);
+            (all, t)
+        };
+
+        let verdict = match fused {
+            Some(f) => {
                 let pays = decides_fuse(u, f);
                 let speedup = if f > 0.0 { u / f } else { 0.0 };
+                let partial = !mask.iter().all(|&on| on);
                 let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
+                let mask_note = if partial {
+                    format!(" [regions {}]", mask_str(&mask))
+                } else {
+                    String::new()
+                };
                 log::info!(
                     "[freeze] tune generator {} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
-                     {speedup:.2}x, {atoms} atoms -> {outcome}",
+                     {speedup:.2}x, {atoms} atoms{mask_note} -> {outcome}",
                     type_id.as_str()
                 );
+                if pays && partial {
+                    override_canonical_fused_generator_def(
+                        &type_id,
+                        masked_generator_def_by_id(&type_id, &registry, &mask),
+                    );
+                }
                 pays
             }
-            _ => {
+            None => {
                 log::warn!(
-                    "[freeze] tune generator {} on {dev}: measurement failed -> keep unfused",
+                    "[freeze] tune generator {} on {dev}: fused measurement failed -> keep unfused",
                     type_id.as_str(),
                 );
                 false
@@ -355,6 +488,47 @@ mod tests {
             assert!(should_fuse(&PresetTypeId::new("ColorGrade")));
             assert!(should_fuse(&PresetTypeId::new("AnythingUntuned")));
         }
+    }
+
+    #[test]
+    fn greedy_mask_drops_only_regions_that_measurably_help() {
+        // Region 1 is a net loss (disabling it saves 0.5ms); region 0 and 2
+        // help (disabling them costs time). One ascending pass finds [1,0,1].
+        let mut measure = |mask: &[bool]| -> Option<f64> {
+            let mut ms = 3.0;
+            if mask[0] { ms -= 0.4 } // region 0 saves 0.4
+            if mask[1] { ms += 0.5 } // region 1 COSTS 0.5
+            if mask[2] { ms -= 0.2 } // region 2 saves 0.2
+            Some(ms)
+        };
+        let (mask, best) = greedy_region_mask(3, &mut measure);
+        assert_eq!(mask, vec![true, false, true]);
+        assert!((best.unwrap() - 2.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn greedy_mask_keeps_all_on_when_every_region_helps() {
+        let mut measure = |mask: &[bool]| -> Option<f64> {
+            Some(3.0 - mask.iter().filter(|&&on| on).count() as f64 * 0.3)
+        };
+        let (mask, best) = greedy_region_mask(4, &mut measure);
+        assert_eq!(mask, vec![true; 4]);
+        assert!((best.unwrap() - 1.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn greedy_mask_ignores_sub_noise_drops_and_failed_builds() {
+        // Disabling region 0 "helps" by 0.01ms — under the noise guard, keep
+        // it. Region 1's masked variant fails to build → never chosen.
+        let mut measure = |mask: &[bool]| -> Option<f64> {
+            if !mask[1] {
+                return None;
+            }
+            Some(if mask[0] { 2.00 } else { 1.99 })
+        };
+        let (mask, best) = greedy_region_mask(2, &mut measure);
+        assert_eq!(mask, vec![true, true]);
+        assert!((best.unwrap() - 2.0).abs() < 1e-9);
     }
 
     #[test]
