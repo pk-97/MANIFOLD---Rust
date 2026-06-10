@@ -2144,14 +2144,15 @@ mod tests {
         );
     }
 
-    /// A specialization-constant atom is a BOUNDARY. `gaussian_blur_variable_width`
-    /// compiles only through `create_specialized_compute_pipeline` (its body
-    /// references `QUALITY_LEVEL` / `WEIGHTING_MODE` as free tokens substituted
-    /// before naga sees the source); a fused `node.wgsl_compute` parses plain, so
-    /// the atom can't fuse there. The classify gate catches it generically (its
-    /// standalone kernel doesn't parse), so a chain through it forms no region.
+    /// A specialization-constant atom now FUSES: classify substitutes the
+    /// declared tokens (`QUALITY_LEVEL` / `WEIGHTING_MODE`) with the def's
+    /// static param values before the naga parse gate, so
+    /// `gaussian_blur_variable_width` stops being a permanent boundary. Here
+    /// the upstream invert is a stranded single absorbed into the blur's `in`
+    /// fetch; the `width` input gathers the source as a real external; the
+    /// downstream invert threads the blur's register. One region.
     #[test]
-    fn specialization_atom_is_a_boundary() {
+    fn specialization_atom_fuses_with_substituted_tokens() {
         let json = r#"{
             "version": 1, "name": "spec", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
@@ -2162,14 +2163,57 @@ mod tests {
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "width" },
                 { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
                 { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
             ]
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "the variable-width blur fuses");
+        let r = &regions[0];
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![2, 3],
+            "blur + downstream invert"
+        );
+        assert_eq!(r.virtual_chains.len(), 1, "the upstream invert is absorbed");
+        assert_eq!(r.virtual_chains[0].members[0].doc_id, 1);
+        assert_eq!(r.externals.len(), 1, "the source backs both the chain and width");
+        assert_eq!(r.outputs, vec![3]);
+    }
+
+    /// A specialization param that an outer binding targets keeps the atom a
+    /// BOUNDARY — the baked token value could diverge from the live binding.
+    #[test]
+    fn binding_targeted_specialization_param_stays_boundary() {
+        let json = r#"{
+            "version": 1, "name": "specbind", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "inv_b" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "width" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ],
+            "presetMetadata": {
+                "id": "specbind", "displayName": "Spec Bind", "category": "Stylize",
+                "oscPrefix": "specbind",
+                "params": [],
+                "bindings": [
+                    { "id": "outer_quality", "label": "Quality", "defaultValue": 1.0,
+                      "target": { "kind": "node", "nodeId": "blur", "param": "quality" },
+                      "convert": { "type": "Float" } }
+                ]
+            }
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
         assert!(
             partition_regions(&def, &registry()).is_empty(),
-            "the specialization blur is a boundary, leaving both inverts lone atoms"
+            "a binding-targeted specialization param keeps the blur a boundary"
         );
     }
 
@@ -2368,9 +2412,10 @@ mod audit {
         let regions = partition_regions(&flat, registry);
         let sizes: Vec<usize> = regions.iter().map(|r| r.members.len()).collect();
         let fused_atoms: usize = sizes.iter().sum();
+        let chains: usize = regions.iter().map(|r| r.virtual_chains.len()).sum();
         eprintln!(
             "[audit] {name:<26} grouped={grouped:<5} workers={workers:<3} 3d={tex3d:<3} arr={arr:<3} \
-             raw_regions={raw:<2} flat_regions={:<2} fused_atoms={fused_atoms:<3} sizes={sizes:?}",
+             raw_regions={raw:<2} flat_regions={:<2} fused_atoms={fused_atoms:<3} chains={chains:<2} sizes={sizes:?}",
             regions.len(),
         );
     }
@@ -2528,6 +2573,16 @@ mod audit {
                 explain_preset(name, &json, &registry);
             } else {
                 eprintln!("=== {name}: NO BUNDLED JSON ===");
+            }
+        }
+        // Effect presets live in the loaded-view registry, not bundled_preset_json.
+        for name in ["DepthOfField", "Watercolor", "Bloom"] {
+            let type_id = manifold_core::PresetTypeId::new(name);
+            if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
+                let json = serde_json::to_string(view.canonical_def).unwrap();
+                explain_preset(name, &json, &registry);
+            } else {
+                eprintln!("=== {name}: NO LOADED VIEW ===");
             }
         }
     }

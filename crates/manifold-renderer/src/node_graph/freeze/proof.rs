@@ -1068,6 +1068,164 @@ fn stencil_virtual_chain_fractional_tap_blur_matches_unfused() {
     );
 }
 
+/// STENCIL + SPECIALIZATION — the variable-width blur (DoF's kernel) fuses with
+/// its QUALITY_LEVEL / WEIGHTING_MODE tokens substituted from the def's static
+/// params, an absorbed upstream gain in its `in` fetch, the source gathered as
+/// the real `width` external, and a downstream invert threading its register.
+/// Proven at a non-default specialization (25-tap + scatter-as-gather) so a
+/// wrong substitution can't hide behind the default kernel.
+#[test]
+fn fused_variable_width_blur_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "vbw", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.gain", "nodeId": "gain",
+              "params": { "gain": { "type": "Float", "value": 1.2 } } },
+            { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur",
+              "params": {
+                "quality": { "type": "Enum", "value": 2 },
+                "weighting_mode": { "type": "Enum", "value": 1 },
+                "max_radius": { "type": "Float", "value": 9.0 }
+              } },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "width" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the specialized blur fuses");
+    assert!(
+        !fdef.nodes.iter().any(|n| n.type_id == "node.gain"),
+        "the gain is absorbed into the blur's in-fetch"
+    );
+    let wgsl = fdef
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.wgsl_compute")
+        .and_then(|n| n.wgsl_source.as_deref())
+        .expect("fused kernel present");
+    assert!(
+        !wgsl.contains("QUALITY_LEVEL") && !wgsl.contains("WEIGHTING_MODE"),
+        "specialization tokens must be substituted, not free"
+    );
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 2.0e-3, 1.0e-3);
+    assert!(
+        r.passes(0.005),
+        "fused variable-width blur must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// Look-equivalence for the Watercolor/Bloom preset swap: a legacy `node.blur`
+/// (monolithic H+V with an internal f16 scratch) renders identically to an
+/// explicit pair of `node.gaussian_blur` passes in `Linear` mode — the exact
+/// port of blur.wgsl's loop, with the same f16 texture between the axes. Both
+/// run unfused here; agreement is to f16-ulp scale (separate kernel
+/// compilations may differ in FMA contraction). This is what licenses
+/// rewriting the presets onto the fusable single-axis atom.
+#[test]
+fn linear_blur_pair_matches_legacy_blur_node() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = noise_input(&device, w, h);
+
+    let legacy = r#"{
+        "version": 1, "name": "legacy", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.blur", "nodeId": "blur",
+              "params": { "radius": { "type": "Float", "value": 8.0 },
+                          "mode": { "type": "Enum", "value": 0 } } },
+            { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+        ]
+    }"#;
+    let pair = r#"{
+        "version": 1, "name": "pair", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.gaussian_blur", "nodeId": "blur_h",
+              "params": { "radius_mode": { "type": "Enum", "value": 2 },
+                          "radius": { "type": "Float", "value": 8.0 },
+                          "axis": { "type": "Enum", "value": 0 } } },
+            { "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur_v",
+              "params": { "radius_mode": { "type": "Enum", "value": 2 },
+                          "radius": { "type": "Float", "value": 8.0 },
+                          "axis": { "type": "Enum", "value": 1 } } },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+
+    let l_def: EffectGraphDef = serde_json::from_str(legacy).unwrap();
+    let mut l_graph = l_def.into_graph(&registry).expect("legacy graph");
+    let l_plan = compile(&l_graph).expect("compile legacy");
+    let l_src = resource_for_output(&l_plan, find_node(&l_graph, "system.source"), "out");
+    let l_out = resource_for_output(&l_plan, find_node(&l_graph, "node.blur"), "out");
+    let l_img = render_graph(&device, &mut l_graph, &l_plan, l_src, &input, l_out);
+
+    let p_def: EffectGraphDef = serde_json::from_str(pair).unwrap();
+    let mut p_graph = p_def.into_graph(&registry).expect("pair graph");
+    let p_plan = compile(&p_graph).expect("compile pair");
+    let p_src = resource_for_output(&p_plan, find_node(&p_graph, "system.source"), "out");
+    let p_out = {
+        let blur_v = p_graph
+            .nodes()
+            .filter(|n| n.node.type_id().as_str() == "node.gaussian_blur")
+            .map(|n| n.id)
+            .max_by_key(|id| id.0)
+            .expect("blur_v present");
+        resource_for_output(&p_plan, blur_v, "out")
+    };
+    let p_img = render_graph(&device, &mut p_graph, &p_plan, p_src, &input, p_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &l_img.texture, &p_img.texture, 1.0e-3, 1.0e-3);
+    assert!(
+        r.max_abs < 1.5e-3,
+        "Linear pair must reproduce node.blur to f16-ulp scale: max_abs={}, over={}/{}",
+        r.max_abs,
+        r.over_count,
+        r.total
+    );
+}
+
 /// Coverage baseline — a regression guard on how much of the shipped library the
 /// finder fuses. Walks every bundled effect preset, partitions it, and tallies
 /// the presets that fuse + the total atoms folded into kernels. A future change
