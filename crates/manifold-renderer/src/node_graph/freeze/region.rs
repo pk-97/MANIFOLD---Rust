@@ -430,6 +430,16 @@ fn classify_node(
         if param_wgsl_type(p).is_err() {
             return NodeClass::Boundary;
         }
+        // An ENUM param that an outer-card binding targets can't retarget onto
+        // the fused node: the fused uniform field introspects as a plain Int,
+        // and the loader (correctly) rejects the binding's enum convert
+        // against it (FluidSim3D's `container` → container_repel_force_3d).
+        // Keep the atom a boundary so the binding keeps driving the real node.
+        if matches!(p.ty, crate::node_graph::parameters::ParamType::Enum)
+            && param_is_binding_target(node, p.name, def)
+        {
+            return NodeClass::Boundary;
+        }
     }
 
     // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve).
@@ -1230,6 +1240,28 @@ fn is_region_wire(
     } else {
         is_texture_wire(def, registry, w)
     }
+}
+
+/// Whether an outer-card binding in the def's preset metadata targets
+/// (`node`, `param`). Addressed by stable `node_id`, falling back to the
+/// handle for defs minted before node-id targeting (same resolution rule as
+/// the install pass's `resolve_node_id`).
+fn param_is_binding_target(node: &EffectGraphNode, param: &str, def: &EffectGraphDef) -> bool {
+    let Some(meta) = &def.preset_metadata else {
+        return false;
+    };
+    let stable = if node.node_id.is_empty() {
+        node.handle.clone().unwrap_or_default()
+    } else {
+        node.node_id.as_str().to_string()
+    };
+    meta.bindings.iter().any(|b| {
+        matches!(
+            &b.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: p }
+                if node_id.as_str() == stable && p == param
+        )
+    })
 }
 
 /// Whether node `id` is a BUFFER-domain atom (writes an `Array<T>` output).

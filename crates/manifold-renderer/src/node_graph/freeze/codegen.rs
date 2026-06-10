@@ -1596,7 +1596,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     // "clamp" emits no marker — byte-identical to the standalone buffer atoms'
     // default sampler; a non-default mode rides the same side-channel marker the
     // texture path uses (`node.wgsl_compute` reads it at sampler creation).
-    if ext_kinds.iter().any(|k| *k == ExtKind::Texture) {
+    if ext_kinds.contains(&ExtKind::Texture) {
         if region.sampler_address_mode == "clamp" {
             writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
         } else {
