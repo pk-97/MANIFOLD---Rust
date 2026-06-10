@@ -1786,9 +1786,28 @@ fn render_def_capture_node(
     frames: u32,
     pick: &dyn Fn(&EffectGraphDef) -> u32,
 ) -> Option<(RenderTarget, (u32, u32))> {
+    render_def_capture_node_host(def, registry, device, w, h, frames, pick, false)
+}
+
+/// `host_params = true` additionally drives the `system.generator_input`
+/// host params (time / beat / aspect / output dims) per frame the way the
+/// production `PresetRuntime` path does — the discriminating variable
+/// between the raw harness and production.
+#[allow(clippy::too_many_arguments)]
+fn render_def_capture_node_host(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    device: &GpuDevice,
+    w: u32,
+    h: u32,
+    frames: u32,
+    pick: &dyn Fn(&EffectGraphDef) -> u32,
+    host_params: bool,
+) -> Option<(RenderTarget, (u32, u32))> {
     use crate::node_graph::graph_loader::{
         BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
     };
+    use crate::node_graph::parameters::ParamValue;
     use crate::node_graph::{Graph, StateStore};
 
     let mut graph = Graph::new();
@@ -1802,6 +1821,11 @@ fn render_def_capture_node(
     .ok()?;
     let plan = compile(&graph).ok()?;
     let target_inst = *inst.id_map.get(&pick(def))?;
+    let gen_in = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "system.generator_input")
+        .and_then(|n| inst.id_map.get(&n.id).copied());
 
     let mut backend = MetalBackend::new(device, w, h, FMT);
     pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
@@ -1809,9 +1833,21 @@ fn render_def_capture_node(
     exec.set_preview_target(Some(target_inst));
     let mut state = StateStore::new();
     for i in 0..frames {
+        let t = f64::from(i) / 60.0;
+        if host_params && let Some(gi) = gen_in {
+            for (name, v) in [
+                ("time", t as f32),
+                ("beat", (t * 2.0) as f32),
+                ("aspect", w as f32 / h as f32),
+                ("output_width", w as f32),
+                ("output_height", h as f32),
+            ] {
+                let _ = graph.set_param(gi, name, ParamValue::Float(v));
+            }
+        }
         let ft = FrameTime {
-            seconds: Seconds(f64::from(i) / 60.0),
-            beats: Beats(f64::from(i) / 30.0),
+            seconds: Seconds(t),
+            beats: Beats(t * 2.0),
             delta: Seconds(1.0 / 60.0),
             frame_count: i64::from(i),
         };
@@ -1901,6 +1937,125 @@ fn render_def_capture_array(
     Some(unsafe { std::slice::from_raw_parts(ptr, count) }.to_vec())
 }
 
+/// Sixth-stage diagnostic: bisect INSIDE the production path. Render the
+/// canonical def fused and unfused through `PresetRuntime`, dump every
+/// texture output on the last frame, and diff each node-id the two graphs
+/// share (the surviving boundaries). The first divergent surviving node
+/// localizes where the production-only divergence enters.
+#[test]
+#[ignore]
+fn particletext_production_region_diag() {
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_runtime::PresetRuntime;
+    use std::collections::BTreeMap;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("ParticleText"),
+    )
+    .expect("ParticleText bundled");
+    let base_def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let strip_arg = std::env::var("PT_STRIP_BINDINGS").is_ok();
+    let mut def = base_def;
+    if strip_arg && let Some(meta) = def.preset_metadata.as_mut() {
+        meta.bindings.clear();
+    }
+    println!("bindings stripped: {strip_arg}");
+    let fused =
+        crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
+
+    let ctx = |t: f64| PresetContext {
+        time: t,
+        beat: t * 2.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    let frames: u32 = std::env::var("PT_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    println!("frames: {frames}");
+    let mut run = |d: EffectGraphDef| -> (PresetRuntime, RenderTarget) {
+        let mut g = PresetRuntime::from_def_with_device(d, &registry, &device, w, h, FMT)
+            .expect("preset builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "prod-diag");
+        for i in 0..frames {
+            if i == frames - 1 {
+                g.set_dump_all(true);
+            }
+            let mut enc = device.create_encoder("prod-diag");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                g.render(&mut gpu, &target.texture, &ctx(f64::from(i) / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+        (g, target)
+    };
+    let (u_rt, _ut) = run(def);
+    let (f_rt, _ft) = run(fused);
+
+    let collect = |rt: &PresetRuntime| -> BTreeMap<(String, String), (u32, u32)> {
+        rt.dump_textures_all()
+            .into_iter()
+            .map(|(name, port, _ty, tex)| ((name, port), (tex.width, tex.height)))
+            .collect()
+    };
+    let u_keys = collect(&u_rt);
+    let f_keys = collect(&f_rt);
+
+    let differ = TextureDiff::new(&device);
+    let mut divergent = 0;
+    for (key, &udims) in &u_keys {
+        let Some(&fdims) = f_keys.get(key) else {
+            continue; // fused-away node — not shared
+        };
+        if udims != fdims {
+            println!("{key:?}: DIMS {udims:?} vs {fdims:?}");
+            divergent += 1;
+            continue;
+        }
+        let u_tex = u_rt
+            .dump_textures_all()
+            .into_iter()
+            .find(|(n, p, _, _)| (&(n.clone(), p.clone())) == key)
+            .map(|(_, _, _, t)| t as *const GpuTexture);
+        let f_tex = f_rt
+            .dump_textures_all()
+            .into_iter()
+            .find(|(n, p, _, _)| (&(n.clone(), p.clone())) == key)
+            .map(|(_, _, _, t)| t as *const GpuTexture);
+        let (Some(u_tex), Some(f_tex)) = (u_tex, f_tex) else {
+            continue;
+        };
+        // Safety: the runtimes outlive this loop; raw pointers only dodge the
+        // double-borrow of calling dump_textures_all twice above.
+        let (u_tex, f_tex) = unsafe { (&*u_tex, &*f_tex) };
+        let r = differ.compare(&device, u_tex, f_tex, 1.0e-7, 1.0e-6);
+        if r.over_count > 0 {
+            println!(
+                "{key:?}: max_abs={} over={}/{}",
+                r.max_abs, r.over_count, r.total
+            );
+            divergent += 1;
+        }
+    }
+    println!("{divergent} divergent shared outputs of {} shared keys", u_keys.len());
+}
+
 /// Fifth-stage diagnostic: the COMPOSITE through the RAW executor (host
 /// `time` param frozen at 0, frame clock advancing) vs the production
 /// PresetRuntime path (host time advancing). Raw exact + production diverging
@@ -1935,22 +2090,28 @@ fn particletext_raw_composite_diag() {
             .expect("final_output fed")
     };
     let differ = TextureDiff::new(&device);
-    for frames in [1u32, 8] {
-        let u = render_def_capture_node(&def, &registry, &device, w, h, frames, &pick_tail);
-        let f = render_def_capture_node(&fused, &registry, &device, w, h, frames, &pick_tail);
-        match (u, f) {
-            (Some((u, ud)), Some((f, fd))) if ud == fd => {
-                let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-7, 1.0e-6);
-                println!(
-                    "raw composite frames={frames}: max_abs={} over={}/{}",
-                    r.max_abs, r.over_count, r.total
-                );
+    for host_params in [false, true] {
+        for frames in [1u32, 8] {
+            let u = render_def_capture_node_host(
+                &def, &registry, &device, w, h, frames, &pick_tail, host_params,
+            );
+            let f = render_def_capture_node_host(
+                &fused, &registry, &device, w, h, frames, &pick_tail, host_params,
+            );
+            match (u, f) {
+                (Some((u, ud)), Some((f, fd))) if ud == fd => {
+                    let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-7, 1.0e-6);
+                    println!(
+                        "raw composite host_params={host_params} frames={frames}: max_abs={} over={}/{}",
+                        r.max_abs, r.over_count, r.total
+                    );
+                }
+                (u, f) => println!(
+                    "raw composite host_params={host_params} frames={frames}: capture mismatch (u={:?} f={:?})",
+                    u.as_ref().map(|x| x.1),
+                    f.as_ref().map(|x| x.1)
+                ),
             }
-            (u, f) => println!(
-                "raw composite frames={frames}: capture mismatch (u={:?} f={:?})",
-                u.as_ref().map(|x| x.1),
-                f.as_ref().map(|x| x.1)
-            ),
         }
     }
 }
