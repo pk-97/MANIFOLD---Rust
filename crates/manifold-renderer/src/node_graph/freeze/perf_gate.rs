@@ -61,12 +61,16 @@ const TUNE_W: u32 = 3840;
 const TUNE_H: u32 = 2160;
 const WARMUP: u32 = 8;
 const FRAMES: u32 = 60;
-/// §12.5 accepted defaults: fuse only a region of ≥3 atoms that runs ≥1.3×
-/// faster. Below 3 atoms the bandwidth saved rarely beats the lost overlap;
-/// below 1.3× the win is inside measurement noise and not worth forfeiting the
-/// unfused path's debuggability.
-const MIN_ATOMS: usize = 3;
-const MIN_SPEEDUP: f64 = 1.3;
+/// Fuse on ANY measured improvement beyond noise. The original §12.5 defaults
+/// (≥3 atoms, ≥1.3× whole-card speedup) predate trustworthy measurement; with
+/// the gate now measuring real workloads at 4K, the never-worse guarantee IS
+/// the measurement, so the bar only needs to clear noise. The whole-card ratio
+/// also punished Amdahl-limited cards: FluidSim's fused region saves a real
+/// ~1.05 ms/frame but the card ratio is 1.18× because scatter + blurs dominate
+/// — a 1.3× bar threw ~3.3 ms/frame away across the Liveschool card types.
+/// Decided with Peter 2026-06-10: always fuse if it measurably helps.
+const MIN_SPEEDUP: f64 = 1.05;
+const MIN_SAVING_MS: f64 = 0.05;
 
 /// `type_id → fuse?`. Set once by [`tune_all`]; read lock-free thereafter.
 static VERDICTS: OnceLock<AHashMap<PresetTypeId, bool>> = OnceLock::new();
@@ -180,20 +184,22 @@ fn measure_def(
     Some(secs * 1000.0 / f64::from(FRAMES))
 }
 
-/// The pure fuse/keep decision: fuse only a region of ≥[`MIN_ATOMS`] atoms that
-/// ran ≥[`MIN_SPEEDUP`]× faster fused than unfused. Split out from [`tune_all`]
-/// so the margin logic is unit-testable without a GPU. A non-positive fused
-/// time is treated as a failed measurement → keep unfused.
-fn decides_fuse(unfused_ms: f64, fused_ms: f64, atoms: usize) -> bool {
+/// The pure fuse/keep decision: fuse whenever the fused variant measurably
+/// beats unfused — ≥[`MIN_SPEEDUP`]× faster AND ≥[`MIN_SAVING_MS`] saved per
+/// frame, both noise guards rather than quality bars. No atom-count rule: with
+/// real measurement the measurement decides. Split out from [`tune_all`] so
+/// the margin logic is unit-testable without a GPU. A non-positive fused time
+/// is treated as a failed measurement → keep unfused.
+fn decides_fuse(unfused_ms: f64, fused_ms: f64) -> bool {
     if fused_ms <= 0.0 || !unfused_ms.is_finite() || !fused_ms.is_finite() {
         return false;
     }
-    atoms >= MIN_ATOMS && (unfused_ms / fused_ms) >= MIN_SPEEDUP
+    (unfused_ms / fused_ms) >= MIN_SPEEDUP && (unfused_ms - fused_ms) >= MIN_SAVING_MS
 }
 
 /// Count of fusable worker atoms in a canonical def — every node that isn't a
-/// `system.source` / `system.final_output` boundary. This is the region size
-/// the [`MIN_ATOMS`] threshold checks.
+/// `system.source` / `system.final_output` boundary. Reported in the tune log
+/// line for context (the fuse decision itself is purely measured).
 fn worker_atom_count(def: &EffectGraphDef) -> usize {
     def.nodes
         .iter()
@@ -226,7 +232,7 @@ pub fn tune_all(device: &GpuDevice) {
 
         let verdict = match (unfused, fused) {
             (Some(u), Some(f)) => {
-                let pays = decides_fuse(u, f, atoms);
+                let pays = decides_fuse(u, f);
                 let speedup = if f > 0.0 { u / f } else { 0.0 };
                 let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
                 let name = type_id.as_str();
@@ -267,7 +273,7 @@ pub fn tune_all(device: &GpuDevice) {
         let fused = measure_def(device, &registry, fused_def, GENERATOR_INPUT_TYPE_ID);
         let verdict = match (unfused, fused) {
             (Some(u), Some(f)) => {
-                let pays = decides_fuse(u, f, atoms);
+                let pays = decides_fuse(u, f);
                 let speedup = if f > 0.0 { u / f } else { 0.0 };
                 let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
                 log::info!(
@@ -304,35 +310,38 @@ mod tests {
 
     #[test]
     fn colorgrade_shaped_measurement_fuses() {
-        // ColorGrade's measured shape: 7 atoms, ~7× faster fused.
-        assert!(decides_fuse(2.65, 0.36, 7));
-        assert!(decides_fuse(0.50, 0.06, 7));
+        // ColorGrade's measured shape: ~7× faster fused.
+        assert!(decides_fuse(2.65, 0.36));
+        assert!(decides_fuse(0.50, 0.06));
     }
 
     #[test]
-    fn below_speedup_margin_keeps_unfused() {
-        // Faster, but not by the 1.3× margin — inside noise, not worth losing
-        // the unfused path's debuggability + the lost cross-dispatch overlap.
-        assert!(!decides_fuse(1.0, 0.85, 7));
-        assert!(!decides_fuse(1.0, 1.0, 7));
+    fn amdahl_limited_card_with_real_saving_fuses() {
+        // FluidSim's measured shape at 4K: whole-card ratio only 1.18×
+        // (scatter + blurs dominate) but a real ~1.05 ms/frame saving.
+        // The old 1.3× whole-card bar vetoed this; any-improvement fuses it.
+        assert!(decides_fuse(6.96, 5.91));
+        // ParticleText: 1.10×, ~0.8 ms saved.
+        assert!(decides_fuse(8.81, 8.00));
+    }
+
+    #[test]
+    fn inside_noise_keeps_unfused() {
+        // Below the 1.05× ratio guard — measurement noise, not a win.
+        assert!(!decides_fuse(1.0, 0.97));
+        assert!(!decides_fuse(1.0, 1.0));
+        // Ratio clears 1.05× but absolute saving under 0.05 ms — a sub-noise
+        // micro-card; not worth forfeiting the unfused path's debuggability.
+        assert!(!decides_fuse(0.10, 0.06));
         // Slower fused → definitely keep unfused (the never-worse case).
-        assert!(!decides_fuse(1.0, 1.4, 7));
-    }
-
-    #[test]
-    fn below_min_atoms_keeps_unfused() {
-        // Even a big speedup on a 2-atom region doesn't clear the min-atoms
-        // bar — too little bandwidth saved to beat the lost overlap in general.
-        assert!(!decides_fuse(2.0, 0.1, 2));
-        assert!(!decides_fuse(2.0, 0.1, 1));
-        assert!(decides_fuse(2.0, 0.1, 3)); // exactly at the bar, clears
+        assert!(!decides_fuse(1.0, 1.4));
     }
 
     #[test]
     fn failed_or_degenerate_measurement_keeps_unfused() {
-        assert!(!decides_fuse(2.0, 0.0, 7)); // zero fused time = failed measure
-        assert!(!decides_fuse(f64::NAN, 0.3, 7));
-        assert!(!decides_fuse(2.0, f64::INFINITY, 7));
+        assert!(!decides_fuse(2.0, 0.0)); // zero fused time = failed measure
+        assert!(!decides_fuse(f64::NAN, 0.3));
+        assert!(!decides_fuse(2.0, f64::INFINITY));
     }
 
     #[test]
