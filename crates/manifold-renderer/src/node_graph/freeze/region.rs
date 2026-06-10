@@ -215,10 +215,17 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
             eligible.contains(&w.from_node)
                 && eligible.contains(&w.to_node)
                 // Union over coincident wires of EITHER domain: a texture (pixel)
-                // chain OR an Array (particle / instance) chain. Two eligible
-                // atoms of the same domain are always wired by their own kind
-                // (texture↔texture, Array↔Array), so this never merges domains.
-                && (is_texture_wire(def, registry, w) || is_array_wire(def, registry, w))
+                // chain OR an Array (particle / instance) chain. A texture wire
+                // into a BUFFER atom (a force-sampler's flow field, anti_clump's
+                // modulator) is a sampler-GATHER — the body samples the whole
+                // texture at element-computed coords, which no register can
+                // carry — so it never unions; the texture producer stays an
+                // external the fused kernel binds. Without this guard an
+                // eligible texture atom would merge into a buffer region across
+                // that wire, producing an unexpressible mixed-domain region.
+                && (is_array_wire(def, registry, w)
+                    || (is_texture_wire(def, registry, w)
+                        && !node_is_buffer_atom(def, registry, w.to_node)))
                 && wire_coincident_consumed(def, registry, w)
                 // Tier 6: a texture union additionally requires producer and
                 // consumer to share one element space — the fused kernel
@@ -588,16 +595,17 @@ fn classify_node(
 
 /// Classify a BUFFER-domain atom (writes an `Array<T>` — particle / instance /
 /// curve element) for fusion eligibility. The buffer twin of the texture gates
-/// in [`classify_node`]: the atom must match the v1 buffer codegen contract
+/// in [`classify_node`]: the atom must match the buffer codegen contract
 /// ([`super::codegen::generate_fused`]'s buffer branch) — ≥1 Array input threaded
-/// as an element register, exactly one Array output, no texture I/O, no
-/// `BufferGather`, no frame-derived uniforms, no atomic output — and its
-/// non-Array wires must be region edges or re-anchorable scalar params, and it
-/// must not be a control PRODUCER. Anything else is a `Boundary`. The standalone
-/// naga-parse gate the texture path uses is NOT applied here (it threads no
-/// `wgsl_includes`, so a noise-based buffer body would falsely fail); the install
-/// pass naga-parses the FUSED kernel as the real guard, falling back to unfused.
-#[allow(dead_code)] // Re-enabled when the buffer-fusion call site in classify_node is un-gated.
+/// as an element register, exactly one Array output (no texture output), no
+/// `BufferGather`, no atomic output — and its non-Array wires must be region
+/// edges, gathered texture externals (wired plain `Texture2D` only — the body
+/// samples them at element-computed coords), or re-anchorable scalar params,
+/// and it must not be a control PRODUCER. Anything else is a `Boundary`. The
+/// standalone naga-parse gate the texture path uses is NOT applied here (it
+/// threads no `wgsl_includes`, so a noise-based buffer body would falsely fail);
+/// the install pass naga-parses the FUSED kernel as the real guard, falling back
+/// to unfused.
 fn classify_buffer_node(
     n: &dyn crate::node_graph::effect_node::EffectNode,
     node: &EffectGraphNode,
@@ -611,12 +619,35 @@ fn classify_buffer_node(
     if arr_in < 1 || arr_out != 1 {
         return NodeClass::Boundary;
     }
-    // No texture I/O — the `*_at_particles` volume samplers (texture-gather buffer
-    // atoms) stay boundaries so a particle pipeline cuts cleanly around them.
-    if n.inputs().iter().any(|i| is_texture_port(&i.ty))
-        || n.outputs().iter().any(|o| is_texture_port(&o.ty))
-    {
+    // A texture OUTPUT from a buffer atom has no fused expression (the kernel
+    // writes element arrays) — boundary. Texture INPUTS fuse: the body samples
+    // the bound texture at a coord it computes from the element (the
+    // `*_at_particles` force-sampler family, anti_clump's modulator) — the
+    // buffer-domain analogue of the texture path's sampler-Gather. The fused
+    // codegen binds each as a `src_<slot>` texture + the shared `samp`, exactly
+    // like the standalone buffer kernel, so the sample is bit-identical. Gates:
+    //   - plain `Texture2D` only: `node.wgsl_compute` (the fused node) rejects
+    //     sampled 3D textures at introspection, so a 3D sampler
+    //     (sample_texture_3d_at_particles) staying a boundary keeps the rest of
+    //     its pipeline fusable instead of failing the whole card's build;
+    //   - WIRED only: the fused node's texture port is required, and an unwired
+    //     port would silently kill its whole dispatch. The standalone atom binds
+    //     a dummy texture for an unwired optional; the fused path has no node to
+    //     do that, so unwired (even optional) stays a boundary.
+    if n.outputs().iter().any(|o| is_texture_port(&o.ty)) {
         return NodeClass::Boundary;
+    }
+    for i in n.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
+        if i.ty != PortType::Texture2D {
+            return NodeClass::Boundary;
+        }
+        if !def
+            .wires
+            .iter()
+            .any(|w| w.to_node == node.id && w.to_port == i.name)
+        {
+            return NodeClass::Boundary;
+        }
     }
     // A BufferGather input (neighbor_smooth) indexes its global itself — it can't
     // thread one element register, so it stays a boundary (the gathered producer
@@ -643,13 +674,15 @@ fn classify_buffer_node(
         return NodeClass::Boundary;
     }
     // Wire gate: an Array input wire is a region edge (threads or stays external);
+    // a texture input wire is a gathered external (bound + sampled by the body);
     // a scalar-param wire is re-anchored onto the fused port-shadow; any other
-    // wire into a non-Array non-scalar-param input cuts; a control PRODUCER stays
-    // a boundary so its scalar survives the rewrite to wire into the fused node.
+    // wire into a non-Array non-texture non-scalar-param input cuts; a control
+    // PRODUCER stays a boundary so its scalar survives the rewrite to wire into
+    // the fused node.
     let arr_ports: AHashSet<&str> = n
         .inputs()
         .iter()
-        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .filter(|i| matches!(i.ty, PortType::Array(_)) || is_texture_port(&i.ty))
         .map(|i| i.name)
         .collect();
     let scalar_params: AHashSet<&str> = n
@@ -754,6 +787,38 @@ fn build_region(
             };
             inputs.push(resolved);
             input_access.push(access);
+        }
+        // BUFFER members: append each texture input as a gathered EXTERNAL after
+        // the array entries — the buffer analogue of the texture path's sampler-
+        // Gather (the body samples the bound texture at an element-computed
+        // coord). Array entries stay first so array-port indexing (the in-place
+        // alias trace, the codegen's element registers) is untouched. Classify
+        // admitted only WIRED plain-Texture2D inputs; a member can never produce
+        // a texture (buffer atoms with texture outputs are boundaries), so the
+        // producer is always external — bail defensively if either is violated.
+        if is_buffer {
+            for port in constructed.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
+                if port.ty != PortType::Texture2D {
+                    return None;
+                }
+                let wire = def
+                    .wires
+                    .iter()
+                    .find(|w| w.to_node == doc_id && w.to_port == port.name)?;
+                if node_set.contains(&wire.from_node) {
+                    return None;
+                }
+                let key = (wire.from_node, wire.from_port.clone());
+                let slot = *ext_index.entry(key).or_insert_with(|| {
+                    externals.push(ExternalRef {
+                        from_node: wire.from_node,
+                        from_port: wire.from_port.clone(),
+                    });
+                    externals.len() - 1
+                });
+                inputs.push(RegionInput::External(slot));
+                input_access.push(InputAccess::Gather);
+            }
         }
         // f16-faithful rounding (stencil tier A): an in-loop member whose
         // unfused output texture is f16 gets its fused register quantized to
@@ -1165,6 +1230,18 @@ fn is_region_wire(
     } else {
         is_texture_wire(def, registry, w)
     }
+}
+
+/// Whether node `id` is a BUFFER-domain atom (writes an `Array<T>` output).
+/// Drives the union guard: a texture wire into such an atom is a gathered
+/// external, never a register-threading union edge.
+fn node_is_buffer_atom(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u32) -> bool {
+    def.nodes
+        .iter()
+        .find(|n| n.id == id)
+        .and_then(|n| registry.construct(&n.type_id))
+        .map(|c| c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))))
+        .unwrap_or(false)
 }
 
 /// Whether a region's members are buffer-domain (their fused output is an

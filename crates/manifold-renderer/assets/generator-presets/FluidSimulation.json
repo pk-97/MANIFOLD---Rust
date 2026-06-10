@@ -2477,14 +2477,14 @@
         ],
         "wires": [
           {
-            "fromNode": 0,
-            "fromPort": "particles",
+            "fromNode": 4,
+            "fromPort": "out",
             "toNode": 2,
             "toPort": "particles"
           },
           {
-            "fromNode": 0,
-            "fromPort": "particles",
+            "fromNode": 4,
+            "fromPort": "out",
             "toNode": 3,
             "toPort": "particles"
           },

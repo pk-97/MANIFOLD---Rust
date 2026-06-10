@@ -769,7 +769,10 @@ pub(crate) fn fuse_canonical_def(
         // same-named consts with different values, which dedup can't merge). If the
         // kernel doesn't parse, leave the whole card unfused rather than ship a
         // node whose introspection silently fails back to its default shape.
-        if naga::front::wgsl::parse_str(&generated.wgsl).is_err() {
+        if let Err(e) = naga::front::wgsl::parse_str(&generated.wgsl) {
+            // Falls back to unfused (always correct) — but a region the codegen
+            // emitted and naga rejected is a codegen bug worth surfacing.
+            log::warn!("[freeze] fused region {i} failed to parse, card renders unfused: {e:?}");
             return None;
         }
 

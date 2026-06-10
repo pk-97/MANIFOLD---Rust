@@ -1218,6 +1218,11 @@ fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
     let mut prelude: Vec<String> = Vec::new();
     let mut blocks: Vec<FnBlock> = Vec::new();
     let mut current: Option<(String, Vec<String>)> = None;
+    // >0 while inside a MULTI-LINE top-level declaration (a `const` lookup
+    // table spanning lines — simplex gradient arrays): the count of unclosed
+    // `(`/`[`/`{` carried over, so continuation lines join the prelude instead
+    // of being dropped (which would truncate the declaration mid-expression).
+    let mut open_brackets = 0i32;
     for line in fragment.lines() {
         if let Some(rest) = line.strip_prefix("fn ") {
             if let Some((name, lines)) = current.take() {
@@ -1227,14 +1232,54 @@ fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
             current = Some((name, vec![line.to_string()]));
         } else if let Some((_, lines)) = current.as_mut() {
             lines.push(line.to_string());
-        } else if is_top_level_decl(line) {
-            prelude.push(line.to_string());
+        } else if open_brackets > 0 || is_top_level_decl(line) {
+            // One prelude ENTRY per declaration (continuation lines append to
+            // the open entry) so the fused paths' dedup-by-entry compares whole
+            // declarations — line-wise entries would dedup a shared `);` line
+            // across two different lookup tables and truncate the second.
+            if open_brackets > 0 {
+                let entry = prelude.last_mut().expect("open declaration has an entry");
+                entry.push('\n');
+                entry.push_str(line);
+            } else {
+                prelude.push(line.to_string());
+            }
+            open_brackets += line
+                .chars()
+                .map(|c| match c {
+                    '(' | '[' | '{' => 1,
+                    ')' | ']' | '}' => -1,
+                    _ => 0,
+                })
+                .sum::<i32>();
         }
     }
     if let Some((name, lines)) = current.take() {
         blocks.push(FnBlock { name, text: lines.join("\n") });
     }
     (prelude, blocks)
+}
+
+/// Replace every whole-identifier occurrence of `from` with `to`. A match
+/// counts only when neither neighbour is an identifier character, so renaming
+/// `Element` never corrupts `Element2`. Used by the fused buffer codegen to map
+/// each body's standalone element-struct names onto the region's global naming.
+fn rename_ident(text: &str, from: &str, to: &str) -> String {
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(pos) = text[i..].find(from) {
+        let start = i + pos;
+        let end = start + from.len();
+        out.push_str(&text[i..start]);
+        let bounded = (start == 0 || !is_ident(bytes[start - 1]))
+            && (end == bytes.len() || !is_ident(bytes[end]));
+        out.push_str(if bounded { to } else { from });
+        i = end;
+    }
+    out.push_str(&text[i..]);
+    out
 }
 
 /// Whether a fragment line is a WGSL top-level declaration the fused prelude must
@@ -1257,10 +1302,13 @@ fn is_top_level_decl(line: &str) -> bool {
 ///
 /// v1 scope — anything outside it returns `Err` so the card renders unfused
 /// (always correct; the install pass also naga-parses the result as a final
-/// guard): every member is a coincident per-element atom (no `BufferGather`, no
-/// texture input — those stay boundaries), each writes exactly ONE Array output,
-/// and its scalar params are port-shadow uniforms (frame-derived-uniform atoms
-/// like euler_step are kept boundaries by the finder, so none reach here).
+/// guard): every member is a coincident per-element atom (no `BufferGather` —
+/// those stay boundaries), each writes exactly ONE Array output, and its scalar
+/// params are port-shadow uniforms. TEXTURE inputs fuse as gathered externals:
+/// the kernel binds each as `src_<e>: texture_2d<f32>` plus one shared `samp`,
+/// and the consuming body samples it at an element-computed coord — the same
+/// `tex + samp` ABI the standalone buffer kernel passes, so the sample is
+/// bit-identical (the `*_at_particles` force samplers, anti_clump's modulator).
 fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, CodegenError> {
     let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
     let specs_of = |ty: &PortType| -> Option<&'static [ChannelSpec]> {
@@ -1277,11 +1325,8 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         out_specs: &'static [ChannelSpec],
     }
     let mut member_io: Vec<MemberIo> = Vec::with_capacity(region.nodes.len());
-    let mut prelude: Vec<String> = Vec::new();
-    let mut helpers: Vec<FnBlock> = Vec::new();
-    let mut bodies: Vec<String> = Vec::new();
     let mut includes: Vec<&'static str> = Vec::new(); // deduped shared WGSL libs (noise_common, …)
-    for (i, node) in region.nodes.iter().enumerate() {
+    for node in region.nodes.iter() {
         if !node.fusion_kind.is_fusable() {
             return Err(CodegenError::NotFusable(node.fusion_kind));
         }
@@ -1293,31 +1338,137 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                 includes.push(inc);
             }
         }
-        // No gather / no texture input in v1 (those atoms stay boundaries).
-        if node.input_access.iter().any(|a| a.is_gather())
-            || node.node_inputs.iter().any(is_texture_input)
-        {
-            return Err(CodegenError::BadInput);
-        }
+        // Input shape: the finder resolves a buffer member's ARRAY inputs first
+        // (coincident element registers), then appends its TEXTURE inputs as
+        // gathered externals (the body samples each bound texture at an element-
+        // computed coord — the buffer analogue of the texture path's sampler-
+        // Gather; same `tex + samp` body-arg ABI the standalone buffer kernel
+        // uses). A `BufferGather` array input (neighbor_smooth indexes its global
+        // itself) still can't thread a register — boundary.
         let arr_in: Vec<&NodeInput> =
             node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        let tex_in: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
         // node.inputs (the finder's resolved sources) must align 1:1 with the
-        // member's Array input ports — else an input is unwired / mis-resolved.
-        if node.inputs.len() != arr_in.len() {
+        // member's Array inputs then its texture inputs — else an input is
+        // unwired / mis-resolved.
+        if node.inputs.len() != arr_in.len() + tex_in.len() {
+            return Err(CodegenError::BadInput);
+        }
+        for (k, access) in node.input_access.iter().enumerate() {
+            let is_texture_entry = k >= arr_in.len();
+            // Array entries thread registers (never gather); texture entries are
+            // always sampler-gathered externals.
+            if is_texture_entry != access.is_gather() {
+                return Err(CodegenError::BadInput);
+            }
+        }
+        // Only plain 2D sampled textures: `node.wgsl_compute` rejects sampled 3D
+        // textures at introspection, so emitting one would fail the whole build.
+        if tex_in.iter().any(|p| p.ty != PortType::Texture2D) {
             return Err(CodegenError::BadInput);
         }
         let arr_out: Vec<&NodeOutput> =
             node.node_outputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
-        if arr_out.len() != 1 {
+        if arr_out.len() != 1 || node.node_outputs.iter().any(|o| is_texture_port(&o.ty)) {
             return Err(CodegenError::BadInput); // v1: single Array output per member
         }
         let in_specs: Vec<&'static [ChannelSpec]> =
             arr_in.iter().map(|p| specs_of(&p.ty)).collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
         let out_specs = specs_of(&arr_out[0].ty).ok_or(CodegenError::BadInput)?;
         member_io.push(MemberIo { in_specs, out_specs });
+    }
+    // v1: single output region (fan-out buffer regions are a follow-on).
+    if region.outputs.len() != 1 {
+        return Err(CodegenError::BadInput);
+    }
 
-        // Split body into prelude / helpers / the n{i}_body fn (same as texture).
-        let (pre, blocks) = split_fns(node.body);
+    // Per-slot external kind: an ARRAY slot (read as a coincident element — its
+    // element type comes from the consumer's array-input specs) or a TEXTURE
+    // slot (bound as `src_<e>: texture_2d<f32>` + the shared `samp`, sampled by
+    // the consuming bodies). Every external is read by ≥1 member (the finder
+    // built the slot because a member reads it), so each resolves; one producer
+    // port has one type, so a both-ways slot is a finder bug — fail closed.
+    #[derive(Clone, Copy, PartialEq)]
+    enum ExtKind {
+        Array(&'static [ChannelSpec]),
+        Texture,
+    }
+    let mut ext_kinds: Vec<Option<ExtKind>> = vec![None; region.num_external_inputs];
+    for (mi, node) in region.nodes.iter().enumerate() {
+        let arr_count = member_io[mi].in_specs.len();
+        for (k, src) in node.inputs.iter().enumerate() {
+            if let InputSource::External(e) = src {
+                if *e >= region.num_external_inputs {
+                    return Err(CodegenError::BadInput);
+                }
+                let kind = if k < arr_count {
+                    ExtKind::Array(member_io[mi].in_specs[k])
+                } else {
+                    ExtKind::Texture
+                };
+                match ext_kinds[*e] {
+                    Some(existing) if existing != kind => return Err(CodegenError::BadInput),
+                    _ => ext_kinds[*e] = Some(kind),
+                }
+            }
+        }
+    }
+    let ext_kinds: Vec<ExtKind> =
+        ext_kinds.into_iter().collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
+
+    // --- element structs (deduped, first-appearance order across all I/O). The
+    // fused output is a FRESH write-only `dst` array (not aliased onto an input):
+    // its element type is the output member's Array output type. ---
+    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    // Element type per ARRAY slot (`None` for texture slots — no element struct).
+    let ext_tys: Vec<Option<String>> = ext_kinds
+        .iter()
+        .map(|k| match k {
+            ExtKind::Array(specs) => Some(buffer_element_type(specs, &mut structs)),
+            ExtKind::Texture => None,
+        })
+        .collect();
+    let out_member = index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?;
+    let out_ty = buffer_element_type(member_io[out_member].out_specs, &mut structs);
+
+    // --- bodies: split into prelude / helpers / the n{i}_body fn (same as the
+    // texture path), reconciling element STRUCT NAMES first. Each body's
+    // `Element*` references use its STANDALONE naming — first-appearance order
+    // over that atom's own array inputs then output — while the region has one
+    // GLOBAL naming (external slots, then the output, then intermediates). Two
+    // members can even permute the same names (a vec2-input atom calls vec2
+    // `Element` and Particle `Element2`; a Particle-input neighbour the
+    // reverse), so each member's body is rewritten local → global through
+    // placeholders. This walk also registers every intermediate register type
+    // (a member output that is neither an external's nor the region output's
+    // type) so its struct definition is emitted. ---
+    let mut prelude: Vec<String> = Vec::new();
+    let mut helpers: Vec<FnBlock> = Vec::new();
+    let mut bodies: Vec<String> = Vec::new();
+    for (i, node) in region.nodes.iter().enumerate() {
+        let mut local: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+        let mut renames: Vec<(String, String)> = Vec::new();
+        let io = &member_io[i];
+        for specs in io.in_specs.iter().copied().chain(std::iter::once(io.out_specs)) {
+            if specs.len() < 2 {
+                continue; // bare scalar/vector element — no struct, no name
+            }
+            let l = buffer_element_type(specs, &mut local);
+            let g = buffer_element_type(specs, &mut structs);
+            if l != g && !renames.iter().any(|(from, _)| *from == l) {
+                renames.push((l, g));
+            }
+        }
+        let mut text = node.body.to_string();
+        for (k, (from, _)) in renames.iter().enumerate() {
+            text = rename_ident(&text, from, &format!("__FUSED_EL{k}__"));
+        }
+        for (k, (_, to)) in renames.iter().enumerate() {
+            text = rename_ident(&text, &format!("__FUSED_EL{k}__"), to);
+        }
+
+        let (pre, blocks) = split_fns(&text);
         for line in pre {
             if !prelude.contains(&line) {
                 prelude.push(line);
@@ -1340,36 +1491,6 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             return Err(CodegenError::NoBody);
         }
     }
-    // v1: single output region (fan-out buffer regions are a follow-on).
-    if region.outputs.len() != 1 {
-        return Err(CodegenError::BadInput);
-    }
-
-    // Element type per external slot: from a member that reads it (consumer's
-    // array-input specs). Every external is read by ≥1 member (the finder built
-    // the slot because a member reads it), so each resolves.
-    let mut ext_specs: Vec<Option<&'static [ChannelSpec]>> = vec![None; region.num_external_inputs];
-    for (mi, node) in region.nodes.iter().enumerate() {
-        for (k, src) in node.inputs.iter().enumerate() {
-            if let InputSource::External(e) = src {
-                if *e >= region.num_external_inputs {
-                    return Err(CodegenError::BadInput);
-                }
-                ext_specs[*e] = Some(member_io[mi].in_specs[k]);
-            }
-        }
-    }
-    let ext_specs: Vec<&'static [ChannelSpec]> =
-        ext_specs.into_iter().collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
-
-    // --- element structs (deduped, first-appearance order across all I/O). The
-    // fused output is a FRESH write-only `dst` array (not aliased onto an input):
-    // its element type is the output member's Array output type. ---
-    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
-    let ext_tys: Vec<String> =
-        ext_specs.iter().map(|s| buffer_element_type(s, &mut structs)).collect();
-    let out_member = index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?;
-    let out_ty = buffer_element_type(member_io[out_member].out_specs, &mut structs);
 
     // --- merged param uniform (node-namespaced scalar fields, padded to 16). ---
     let mut param_order: Vec<(NodeInstanceId, &'static str)> = Vec::new();
@@ -1443,21 +1564,49 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     // sets this when the output genuinely aliases a feedback-loop input.
     let in_place = region.in_place_alias;
     if let Some(k) = in_place {
-        // Validity: the aliased input must exist and carry the output's element
-        // type (it IS the output buffer). Install guarantees this; guard anyway.
-        if k >= ext_tys.len() || ext_tys[k] != out_ty {
+        // Validity: the aliased input must exist, be an ARRAY slot, and carry the
+        // output's element type (it IS the output buffer). Install guarantees
+        // this; guard anyway.
+        if ext_tys.get(k).and_then(|t| t.as_deref()) != Some(out_ty.as_str()) {
             return Err(CodegenError::BadInput);
         }
     }
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
     let mut binding = 1u32;
     for (e, ty) in ext_tys.iter().enumerate() {
-        let access = if in_place == Some(e) { "read_write" } else { "read" };
-        writeln!(
-            out,
-            "@group(0) @binding({binding}) var<storage, {access}> src_{e}: array<{ty}>;"
-        )
-        .unwrap();
+        match ty {
+            Some(ty) => {
+                let access = if in_place == Some(e) { "read_write" } else { "read" };
+                writeln!(
+                    out,
+                    "@group(0) @binding({binding}) var<storage, {access}> src_{e}: array<{ty}>;"
+                )
+                .unwrap();
+            }
+            // A gathered texture external: bound + sampled by the consuming
+            // bodies at element-computed coords, via the shared `samp` below.
+            None => {
+                writeln!(out, "@group(0) @binding({binding}) var src_{e}: texture_2d<f32>;")
+                    .unwrap();
+            }
+        }
+        binding += 1;
+    }
+    // The shared gather sampler, when any texture external exists. The default
+    // "clamp" emits no marker — byte-identical to the standalone buffer atoms'
+    // default sampler; a non-default mode rides the same side-channel marker the
+    // texture path uses (`node.wgsl_compute` reads it at sampler creation).
+    if ext_kinds.iter().any(|k| *k == ExtKind::Texture) {
+        if region.sampler_address_mode == "clamp" {
+            writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
+        } else {
+            writeln!(
+                out,
+                "@group(0) @binding({binding}) var samp: sampler; // @sampler_address_mode: {}",
+                region.sampler_address_mode
+            )
+            .unwrap();
+        }
         binding += 1;
     }
     if in_place.is_none() {
@@ -1509,7 +1658,15 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     out.push_str("@compute @workgroup_size(256)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
     out.push_str("    let idx = gid.x;\n");
-    out.push_str("    let count = arrayLength(&src_0);\n");
+    // Count anchor: the first ARRAY external (slot 0 in every all-array region,
+    // keeping prior fused WGSL — a pipeline-cache key — byte-identical). It's
+    // coincident with the output (one output element per input element); a
+    // texture slot has no arrayLength, so anchor past any leading texture slot.
+    let count_anchor = ext_tys
+        .iter()
+        .position(|t| t.is_some())
+        .ok_or(CodegenError::BadInput)?;
+    writeln!(out, "    let count = arrayLength(&src_{count_anchor});").unwrap();
     out.push_str("    if idx >= count {\n        return;\n    }\n");
     // Live-count cap (in-place loop regions): early-return past the members'
     // shared `active_count`, leaving the pool tail untouched exactly like the
@@ -1534,12 +1691,31 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         )
         .unwrap();
     }
-    for e in 0..region.num_external_inputs {
-        writeln!(out, "    let e_{e} = src_{e}[idx];").unwrap();
+    // Pre-read each ARRAY external's element `[idx]` once; texture externals are
+    // sampled by the bodies themselves (never pre-read — a register is one
+    // element, not a whole texture).
+    for (e, ty) in ext_tys.iter().enumerate() {
+        if ty.is_some() {
+            writeln!(out, "    let e_{e} = src_{e}[idx];").unwrap();
+        }
     }
     for (i, node) in region.nodes.iter().enumerate() {
+        let arr_count = member_io[i].in_specs.len();
         let mut args: Vec<String> = vec!["idx".to_string(), "count".to_string()];
-        for src in node.inputs.iter() {
+        for (k, src) in node.inputs.iter().enumerate() {
+            if k >= arr_count {
+                // A gathered texture input: the body receives the bound texture
+                // + the shared sampler and samples it at an element-computed
+                // coord (same ABI as the standalone buffer kernel). Always an
+                // external — members never produce textures, and the finder
+                // never admits an unwired one.
+                let InputSource::External(e) = src else {
+                    return Err(CodegenError::BadInput);
+                };
+                args.push(format!("src_{e}"));
+                args.push("samp".to_string());
+                continue;
+            }
             match src {
                 InputSource::External(e) => args.push(format!("e_{e}")),
                 InputSource::Node(id) => {
@@ -1552,7 +1728,8 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                     args.push(format!("r{j}"));
                 }
                 // Optional-unwired is a texture-domain contract (use-flag bodies);
-                // no buffer atom declares one, so reaching here is a finder bug.
+                // no buffer ARRAY input fuses unwired, so reaching here is a
+                // finder bug.
                 InputSource::Unwired => return Err(CodegenError::BadInput),
             }
         }
@@ -1570,6 +1747,12 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             } else {
                 args.push(format!("params.n{i}_{dname}"));
             }
+        }
+        // Optional-texture use flags, last (matching the standalone body ABI).
+        // Wiring is static in the def and the finder only admits WIRED textures,
+        // so each flag folds to the literal `1u` instead of a uniform field.
+        for _ in node.node_inputs.iter().filter(|p| is_texture_input(p) && !p.required) {
+            args.push("1u".to_string());
         }
         writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
     }
