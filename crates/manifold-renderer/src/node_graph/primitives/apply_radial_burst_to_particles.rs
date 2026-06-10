@@ -144,6 +144,14 @@ impl Primitive for ApplyRadialBurstToParticles {
         &[("in", "out")]
     }
 
+    // The bespoke inlined `arb_simplex_noise_2d` makes this body register-heavy:
+    // fused into FluidSimulation's euler+wrap chain the combined kernel measured
+    // 3.05 ms vs 2.43 ms for the three standalone dispatches (occupancy cliff).
+    // Standalone it costs ~0.69 ms and early-outs when the burst envelope is ~0.
+    fn fusion_register_heavy(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let point_x = ctx.scalar_or_param("point_x", 0.5);
         let point_y = ctx.scalar_or_param("point_y", 0.5);

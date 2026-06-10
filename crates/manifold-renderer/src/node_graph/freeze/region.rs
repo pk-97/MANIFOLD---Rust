@@ -350,6 +350,15 @@ fn classify_node(
         return NodeClass::Boundary;
     }
 
+    // Register-heavy body (a bespoke inlined simplex): fusing it raises the
+    // whole kernel's register pressure past the occupancy cliff, so the fused
+    // region runs slower than the standalone dispatches (FluidSimulation's
+    // euler+wrap+burst: 3.05 ms fused vs 2.43 unfused). Keep it a boundary —
+    // its register-light neighbours still fuse around it.
+    if n.fusion_register_heavy() {
+        return NodeClass::Boundary;
+    }
+
     // Every param must lay out as a scalar uniform field — the fused codegen
     // ([`super::codegen::generate_fused`]) can only carry scalars. Vec3/Table/
     // string params keep the atom standalone (a boundary) until the fused path

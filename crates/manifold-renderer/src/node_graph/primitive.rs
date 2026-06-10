@@ -306,6 +306,15 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::fusion_register_heavy`](crate::node_graph::effect_node::EffectNode::fusion_register_heavy).
+    /// A register-heavy `wgsl_body` (big inlined noise) that pessimizes any
+    /// fused region it joins overrides this to `true` and stays a fusion
+    /// Boundary. Default: `false`.
+    fn fusion_register_heavy(&self) -> bool {
+        false
+    }
+
+    /// Mirror of
     /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
     /// Mux-family primitives override to return the selected input
     /// port name (e.g. `"in_2"` for mux selector=2). See the
@@ -511,6 +520,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
         P::FUSION_KIND
+    }
+    fn fusion_register_heavy(&self) -> bool {
+        Primitive::fusion_register_heavy(self)
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY

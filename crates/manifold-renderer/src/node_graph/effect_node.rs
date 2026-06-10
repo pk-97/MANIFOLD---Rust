@@ -796,6 +796,20 @@ pub trait EffectNode: Send {
         crate::node_graph::freeze::classify::FusionKind::Boundary
     }
 
+    /// REGISTER-HEAVY body: the atom's `wgsl_body` inlines enough code (a
+    /// bespoke simplex, a large helper suite) that folding it into a
+    /// multi-atom kernel pushes register pressure past the occupancy cliff
+    /// and the fused region runs SLOWER than its standalone dispatches —
+    /// measured on FluidSimulation, where euler+wrap+burst fused at 3.05 ms
+    /// vs the same three atoms at 2.43 ms standalone (burst's inlined
+    /// `arb_simplex_noise_2d`). `true` keeps the atom a fusion Boundary (its
+    /// own dispatch, exactly its unfused behaviour) so register-light
+    /// neighbours still fuse profitably around it. Default `false`; the perf
+    /// gate stays the final never-worse arbiter either way.
+    fn fusion_register_heavy(&self) -> bool {
+        false
+    }
+
     /// Optional fusable WGSL body fragment (a pure `fn body(...)`) the fusion
     /// codegen chains into one kernel and generates the standalone kernel from
     /// (single-source). `None` (default) = the primitive's own kernel is
