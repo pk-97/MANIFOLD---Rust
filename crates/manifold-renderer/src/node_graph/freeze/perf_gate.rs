@@ -52,11 +52,13 @@ use crate::node_graph::{
 use crate::render_target::RenderTarget;
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
-/// Tune at a representative HD canvas. The fuse/keep ratio for pointwise atoms
-/// is near-flat across resolution (both fused and unfused scale with pixels),
-/// so a verdict measured here holds at 4K; the margin below has the slack.
-const TUNE_W: u32 = 1920;
-const TUNE_H: u32 = 1080;
+/// Tune at 4K — the show canvas. Verdicts were previously measured at 1080p on
+/// the assumption that the fuse/keep ratio is resolution-flat, but fusion's win
+/// is texture-bandwidth, and bandwidth dominates harder at 4K: a region that
+/// measures below the margin at 1080p can be a clear win at 4K. Measuring at
+/// the resolution the show actually renders keeps the verdicts truthful.
+const TUNE_W: u32 = 3840;
+const TUNE_H: u32 = 2160;
 const WARMUP: u32 = 8;
 const FRAMES: u32 = 60;
 /// §12.5 accepted defaults: fuse only a region of ≥3 atoms that runs ≥1.3×
@@ -135,6 +137,13 @@ fn measure_def(
         let input = RenderTarget::new(device, TUNE_W, TUNE_H, FMT, "freeze-tune-input");
         backend.pre_bind_texture_2d(res, input);
     }
+    // Allocate the full-size Array (particle) + Texture3D resources exactly
+    // like the production generator path. Without this, particle dispatches
+    // run on empty buffers and measure as ~free, and `node.wgsl_compute`
+    // can't resolve its dispatch port (the buffer doesn't exist) so it skips
+    // entirely — which is how FluidSimulation tuned at 0.6ms against a real
+    // cost of ~4.6ms and earned a bogus keep-unfused verdict.
+    crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
     let mut exec = Executor::new(Box::new(backend));
     let frame_time = FrameTime {
         beats: Beats(1.0),

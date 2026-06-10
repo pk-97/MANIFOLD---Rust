@@ -99,6 +99,25 @@ fn resource_for_output(
     None
 }
 
+/// Forward `log::info!`/`warn!` to stderr so the perf gate's per-verdict tune
+/// lines (which go through the `log` crate, not `println!`) are visible from
+/// this bin. The app installs env_logger; this bin has no logger otherwise.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+static STDERR_LOGGER: StderrLogger = StderrLogger;
+
 fn main() {
     let registry = PrimitiveRegistry::with_builtin();
     let device = GpuDevice::new();
@@ -109,6 +128,14 @@ fn main() {
     if args.first().map(String::as_str) == Some("attribute") {
         let names: Vec<&str> = args[1..].iter().map(String::as_str).collect();
         profile_attribution(&registry, &device, &names);
+        return;
+    }
+    // `tune` → run ONLY the startup perf-gate tuning and print every verdict
+    // (validation mode for gate measurement changes — fast, skips the sweeps).
+    if args.first().map(String::as_str) == Some("tune") {
+        let _ = log::set_logger(&STDERR_LOGGER);
+        log::set_max_level(log::LevelFilter::Info);
+        profile_perf_gate(&device);
         return;
     }
 
