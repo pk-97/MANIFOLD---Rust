@@ -3362,3 +3362,73 @@ fn fused_fanout_region_matches_unfused() {
         r.over_fraction()
     );
 }
+
+/// Checkpoint (wgsl_compute fusion contract): a FRAGMENT-form `node.wgsl_compute`
+/// fuses between two atoms, and the fused single-kernel render matches the three
+/// standalone dispatches within the f16-accumulation tolerance. The fragment is a
+/// pointwise `c.rgb * scale`; `gain` and `invert` are real atoms. The unfused
+/// side dispatches all three (the fragment running its synthesized standalone
+/// kernel); the fused side collapses {gain, fragment, invert} into ONE
+/// `node.wgsl_compute`. Proves the contract end-to-end: classify saw the fragment
+/// (configured-construct), the codegen chained its body, and the result is
+/// numerically faithful.
+#[test]
+fn fused_wgsl_compute_fragment_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "frag-parity", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.gain", "nodeId": "gain",
+              "params": { "gain": { "type": "Float", "value": 1.2 } } },
+            { "id": 2, "typeId": "node.wgsl_compute", "nodeId": "frag",
+              "wgslSource": "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
+              "params": { "scale": { "type": "Float", "value": 0.75 } } },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "src" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    // Unfused: all three atoms dispatch; the fragment runs its synthesized kernel.
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    // Fused: {gain, fragment, invert} collapse into one node.wgsl_compute.
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the fragment region fuses");
+    assert!(
+        !fdef.nodes.iter().any(|n| n.type_id == "node.gain"),
+        "gain must be absorbed into the fused kernel"
+    );
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, find_node(&fused, "node.wgsl_compute"), "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005),
+        "fused fragment region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}

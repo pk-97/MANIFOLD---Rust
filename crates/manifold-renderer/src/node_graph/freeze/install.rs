@@ -600,7 +600,7 @@ fn resolve_gather_sampler_mode(
             continue; // no gather input — doesn't touch the sampler
         }
         let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
-        let node = registry.construct(&doc_node.type_id)?;
+        let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
         // Effective params as f32 (the gather-mode override reads its enum from a
         // Float or Enum value); covers every scalar param the finder admits.
         let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
@@ -642,7 +642,7 @@ fn region_output_aliases_external(
     for _ in 0..64 {
         let member = region.members.iter().find(|m| m.doc_id == cur_doc)?;
         let doc_node = def.nodes.iter().find(|n| n.id == cur_doc)?;
-        let node = registry.construct(&doc_node.type_id)?;
+        let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
         // v1: a single aliased in/out pair — the member mutates its input buffer.
         let (in_port, _out_port) = *node.aliased_array_io().first()?;
         // Index of the aliased input among the member's ARRAY input ports — the
@@ -734,7 +734,7 @@ fn resolve_dispatch_count_field(
     let mut source: Option<(u32, String)> = None;
     for (i, member) in region.members.iter().enumerate() {
         let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
-        let node = registry.construct(&doc_node.type_id)?;
+        let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
         let param = node.fused_dispatch_count_param()?;
         let wire = def
             .wires
@@ -862,7 +862,7 @@ pub(crate) fn fuse_canonical_def_masked(
         let mut region_nodes: Vec<RegionNode<'_>> = Vec::with_capacity(all_members.len());
         for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
-            let node = registry.construct(&doc_node.type_id)?;
+            let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
             // Specialization tokens baked from the def's static params (classify
             // already gated binding-targeted / control-wired ones). A substituted
             // body is leaked like the params/ports below — one-time at fuse-build.
@@ -970,7 +970,7 @@ pub(crate) fn fuse_canonical_def_masked(
         let mut fused_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
         for (idx, member) in all_members.iter().enumerate() {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
-            let node = registry.construct(&doc_node.type_id)?;
+            let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
             let stable = resolve_node_id(doc_node);
             for p in node.parameters() {
                 let field = format!("n{idx}_{}", p.name);

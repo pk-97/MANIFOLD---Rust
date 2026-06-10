@@ -396,7 +396,7 @@ fn absorb_virtual_chains(
             let Some(doc_node) = def.nodes.iter().find(|n| n.id == member.doc_id) else {
                 continue;
             };
-            let Some(node) = registry.construct(&doc_node.type_id) else { continue };
+            let Some(node) = configured_construct(registry, doc_node) else { continue };
             if !node.stencil_fetch() {
                 continue;
             }
@@ -464,7 +464,7 @@ fn absorb_virtual_chains(
             let mut members: Vec<RegionMember> = Vec::with_capacity(order.len());
             for &doc_id in &order {
                 let constructed =
-                    registry.construct(&def.nodes.iter().find(|n| n.id == doc_id)?.type_id)?;
+                    configured_construct(registry, def.nodes.iter().find(|n| n.id == doc_id)?)?;
                 let tex_ports: Vec<&crate::node_graph::ports::NodeInput> = constructed
                     .inputs()
                     .iter()
@@ -635,7 +635,7 @@ fn chain_is_absorbable(
         let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
             return false;
         };
-        let Some(n) = registry.construct(&doc.type_id) else {
+        let Some(n) = configured_construct(registry, doc) else {
             return false;
         };
         if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
@@ -677,7 +677,7 @@ fn node_taps_texel_exact(def: &EffectGraphDef, registry: &PrimitiveRegistry, id:
     let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
         return false;
     };
-    let Some(n) = registry.construct(&doc.type_id) else {
+    let Some(n) = configured_construct(registry, doc) else {
         return false;
     };
     let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
@@ -720,7 +720,7 @@ fn node_sampler_mode(
     let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
         return manifold_gpu::GpuAddressMode::ClampToEdge;
     };
-    let Some(n) = registry.construct(&doc.type_id) else {
+    let Some(n) = configured_construct(registry, doc) else {
         return manifold_gpu::GpuAddressMode::ClampToEdge;
     };
     let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
@@ -845,6 +845,41 @@ fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRe
     false
 }
 
+/// Construct a primitive for a def node and apply the node's CONFIGURED state —
+/// its `wgsl_source` (so a fragment-form `node.wgsl_compute` reparses its declared
+/// ports/params and reports its `fusion_kind()` / `wgsl_body()`) and its param
+/// values (so dynamic-port primitives like `node.mux_texture` reconfigure to the
+/// right port count). A bare `registry.construct` returns the DEFAULT shape; the
+/// freeze classifier, finder, and codegen must see the SAME shape the live loader
+/// ([`instantiate_def`](crate::node_graph::graph_loader::instantiate_def)) builds —
+/// mirroring its `set_wgsl_source` then param-override + `reconfigure` order.
+pub(crate) fn configured_construct(
+    registry: &PrimitiveRegistry,
+    node: &EffectGraphNode,
+) -> Option<Box<dyn crate::node_graph::effect_node::EffectNode>> {
+    let mut boxed = registry.construct(&node.type_id)?;
+    // (1) WGSL source first — a dynamic-shape primitive reparses its port list
+    // before params are read. No-op for fixed-shape atoms.
+    if let Some(src) = node.wgsl_source.as_deref() {
+        boxed.set_wgsl_source(src);
+    }
+    // (2) Params — seed every declared default, override with the def's values,
+    // then reconfigure (variadic nodes rebuild param-derived ports). Matches
+    // `NodeInstance::new`. Unknown / mistyped params are skipped (the loader would
+    // have rejected the def upstream; the freeze pass only needs a faithful shape).
+    let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
+    for p in boxed.parameters() {
+        params.insert(p.name, p.default.clone());
+    }
+    for (key, value) in &node.params {
+        if let Some(p) = boxed.parameters().iter().find(|p| p.name == key.as_str()) {
+            params.insert(p.name, value.clone().into());
+        }
+    }
+    boxed.reconfigure(&params);
+    Some(boxed)
+}
+
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
 /// including "the registry doesn't know this type" — is a `Boundary`.
 fn classify_node(
@@ -858,7 +893,9 @@ fn classify_node(
     if node.type_id == SOURCE_TYPE_ID || node.type_id == FINAL_OUTPUT_TYPE_ID {
         return NodeClass::Boundary;
     }
-    let Some(n) = registry.construct(&node.type_id) else {
+    // Configured so a fragment-form `node.wgsl_compute` reports its real
+    // fusion_kind/body/ports (a bare construct is the DEFAULT opaque kernel).
+    let Some(n) = configured_construct(registry, node) else {
         return NodeClass::Boundary; // unknown atom → never fuse
     };
 
@@ -1270,7 +1307,7 @@ fn build_region(
             .iter()
             .find(|n| n.id == doc_id)
             .ok_or("member id missing from def")?;
-        let constructed = registry.construct(&node.type_id).ok_or("unknown member type")?;
+        let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
         let tex_ports: Vec<&str> = constructed
             .inputs()
             .iter()
@@ -1477,7 +1514,7 @@ fn node_output_space(
     let Some(node) = def.nodes.iter().find(|n| n.id == id) else {
         return ElementSpace::Canvas;
     };
-    let Some(constructed) = registry.construct(&node.type_id) else {
+    let Some(constructed) = configured_construct(registry, node) else {
         return ElementSpace::Canvas;
     };
     let Some(port) = constructed
@@ -1636,7 +1673,7 @@ fn is_scalar_param_wire(
     let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
         return false;
     };
-    let Some(node) = registry.construct(&to.type_id) else {
+    let Some(node) = configured_construct(registry, to) else {
         return false;
     };
     node.parameters()
@@ -1657,7 +1694,7 @@ fn is_state_capture_wire(
     let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
         return false;
     };
-    let Some(node) = registry.construct(&to.type_id) else {
+    let Some(node) = configured_construct(registry, to) else {
         return false;
     };
     node.state_capture_input_ports().contains(&w.to_port.as_str())
@@ -1724,7 +1761,9 @@ fn is_texture_wire(
     if from.type_id == SOURCE_TYPE_ID {
         return true;
     }
-    let Some(node) = registry.construct(&from.type_id) else {
+    // Configured so a fragment-form `node.wgsl_compute` producer reports its real
+    // output port (`dst`) rather than the default kernel's.
+    let Some(node) = configured_construct(registry, from) else {
         return false;
     };
     node.outputs()
@@ -1749,7 +1788,7 @@ fn is_array_wire(def: &EffectGraphDef, registry: &PrimitiveRegistry, w: &EffectG
     let Some(from) = def.nodes.iter().find(|n| n.id == w.from_node) else {
         return false;
     };
-    let Some(node) = registry.construct(&from.type_id) else {
+    let Some(node) = configured_construct(registry, from) else {
         return false;
     };
     node.outputs()
@@ -2455,6 +2494,44 @@ mod tests {
             vec![2, 3],
             "gain + invert fuse; texture_dimensions stays a boundary producer"
         );
+    }
+
+    /// Checkpoint (wgsl_compute fusion contract): a FRAGMENT-form `node.wgsl_compute`
+    /// is a first-class fusable atom — an atom → fragment → atom chain partitions
+    /// into ONE region holding all three. The fragment reports `Pointwise` + a
+    /// `wgsl_body` only because `configured_construct` applies its `wgslSource`
+    /// before the classifier reads it; a bare construct sees the opaque default
+    /// kernel (Boundary) and the chain would split into three singletons. Note the
+    /// fragment's output port is `dst` — the name the standalone codegen gives the
+    /// single storage-texture output it synthesizes.
+    #[test]
+    fn wgsl_compute_fragment_fuses_with_atoms() {
+        let json = r#"{
+            "version": 1, "name": "frag", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain",
+                  "params": { "gain": { "type": "Float", "value": 1.2 } } },
+                { "id": 2, "typeId": "node.wgsl_compute", "nodeId": "frag",
+                  "wgslSource": "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
+                  "params": { "scale": { "type": "Float", "value": 0.75 } } },
+                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "src" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "gain + fragment + invert form one region");
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "the fragment-form wgsl_compute fuses between the two atoms"
+        );
+        assert!(regions[0].virtual_chains.is_empty());
     }
 
 }

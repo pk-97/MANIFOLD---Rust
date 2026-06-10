@@ -41,6 +41,7 @@ use manifold_gpu::{GpuAddressMode, GpuBinding, GpuComputePipeline, GpuSampler, G
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
+use crate::node_graph::freeze::classify::FusionKind;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
     ArrayType, ChannelElementType, ChannelSpec, NodeInput, NodeOutput, NodePort, PortKind,
@@ -85,7 +86,30 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 // ─────────────────────────────────────────────────────────────────────
 
 pub struct WgslCompute {
+    /// The kernel actually compiled, introspected, and dispatched. For a
+    /// full-kernel node this is the author's source verbatim. For a FUSION
+    /// FRAGMENT (see [`fragment_source`](Self::fragment_source)) this is the
+    /// standalone kernel synthesized from the fragment's body + declared
+    /// ports/params via `codegen::generate_standalone` — so compile, dispatch,
+    /// port-shadowing and uniform packing are byte-identical to a hand kernel.
     source: String,
+    /// `Some(original fragment text)` when this node was authored in FUSION
+    /// FRAGMENT form (a `fn body(...)` + `// @fusion:` marker, no bindings/
+    /// `cs_main`). `wgsl_source()` returns this so the editor / persistence
+    /// round-trips the fragment, not the synthesized kernel. `None` for a
+    /// full-kernel node. The freeze compiler reads
+    /// [`fusion_kind`](Self::fusion_kind) / [`fusion_body`](Self::fusion_body)
+    /// to fold the synthesized atom into a fused region like any built-in.
+    fragment_source: Option<String>,
+    /// Fusion classification reported to the freeze compiler. `Pointwise` /
+    /// `Source` for a fragment-form node, `Boundary` (the opaque-kernel default)
+    /// for a full-kernel node. Returned by the [`EffectNode::fusion_kind`] impl.
+    fusion_kind: FusionKind,
+    /// Leaked fragment body (the verbatim `fn body(...)` fragment) returned by
+    /// [`EffectNode::wgsl_body`]. `None` for a full-kernel node. Leaked because
+    /// the trait returns `&'static str` (an atom's body is normally an
+    /// `include_str!`); bounded by distinct fragment sources in a session.
+    fusion_body: Option<&'static str>,
 
     // Derived from naga on `set_wgsl_source` / `new`:
     inputs: Vec<NodeInput>,
@@ -261,6 +285,9 @@ impl WgslCompute {
     pub fn new() -> Self {
         let mut node = Self {
             source: String::new(),
+            fragment_source: None,
+            fusion_kind: FusionKind::Boundary,
+            fusion_body: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
             params: Vec::new(),
@@ -300,15 +327,48 @@ impl WgslCompute {
     /// flips `compile_failed`, logs a warning. The dispatch is
     /// skipped on the failed-compile path.
     fn reparse(&mut self, source: String) {
-        self.source = source;
         self.pipeline = None;
         self.compiled_hash = None;
+
+        // FUSION FRAGMENT contract (design: wgsl_compute fusion contract). A
+        // source carrying a `// @fusion:` marker + a `fn body(` is a fusable
+        // body fragment, not a full kernel: ports/params come from `// @in:` /
+        // `// @param:` markers (a fragment has no bindings to introspect).
+        // Synthesize the standalone kernel from those, then run the EXISTING
+        // introspection on it — so the compile/dispatch/uniform-packing path is
+        // byte-identical to a hand-authored kernel. The fragment text is kept in
+        // `fragment_source` (round-trip) and the body is leaked for the freeze
+        // compiler's `wgsl_body()`. Fail closed: a fragment that doesn't
+        // synthesize/parse leaves the node compile-failed (renders nothing — a
+        // clear load error check-presets surfaces), never a broken card.
+        let fragment = FusionFragment::parse(&source);
+        let kernel = match &fragment {
+            Some(frag) => match frag.synthesize() {
+                Ok(k) => k,
+                Err(msg) => {
+                    log::warn!(
+                        "[node.wgsl_compute] fusion-fragment synthesis failed: {msg}"
+                    );
+                    self.compile_failed = true;
+                    self.source = source;
+                    self.fragment_source = None;
+                    self.fusion_kind = FusionKind::Boundary;
+                    self.fusion_body = None;
+                    return;
+                }
+            },
+            None => source.clone(),
+        };
+        self.source = kernel;
 
         let parsed = match introspect(&self.source) {
             Ok(p) => p,
             Err(msg) => {
                 log::warn!("[node.wgsl_compute] introspection failed: {msg}");
                 self.compile_failed = true;
+                self.fragment_source = None;
+                self.fusion_kind = FusionKind::Boundary;
+                self.fusion_body = None;
                 return;
             }
         };
@@ -374,6 +434,65 @@ impl WgslCompute {
         } else {
             self.uniform_scratch.clear();
         }
+
+        // Fragment form: record the contract for the freeze compiler and restore
+        // the author's declared param defaults/ranges. The synthesized kernel's
+        // `Params` struct carries zeroed defaults (the marker-declared defaults
+        // aren't visible to naga introspection), so `parsed.params` would lose
+        // them — overwrite with the fragment's ParamDefs, whose names, order and
+        // count match the synthesized uniform members one-to-one (same PARAMS
+        // order both directions), so the layout/port-shadow bindings stay valid.
+        match &fragment {
+            Some(frag) => {
+                self.fragment_source = Some(source);
+                self.fusion_kind = frag.kind;
+                self.fusion_body =
+                    Some(Box::leak(frag.body.clone().into_boxed_str()) as &'static str);
+                self.params = frag.params.clone();
+
+                // `generate_standalone` names each texture-input binding
+                // `tex_<name>` and the single output `dst`. Rename the
+                // introspected ports (and their binding port keys) back to the
+                // AUTHORED names — `<name>` per `@in`, and `out` for the output —
+                // so presets wire to the names the fragment declares, not codegen
+                // internals. Scalar param-shadow inputs carry the param name
+                // already (no `tex_` prefix), so they pass through untouched.
+                for inp in &mut self.inputs {
+                    if let Some(stripped) = inp.name.strip_prefix("tex_") {
+                        inp.name = leak_str(stripped);
+                    }
+                }
+                for b in &mut self.bindings {
+                    match &mut b.kind {
+                        BindingKind::SampledTexture { port } => {
+                            if let Some(s) = port.strip_prefix("tex_") {
+                                *port = s.to_string();
+                            }
+                        }
+                        BindingKind::StorageTexture { port, .. } if port == FRAGMENT_DST => {
+                            *port = FRAGMENT_OUT.to_string();
+                        }
+                        _ => {}
+                    }
+                }
+                for out in &mut self.outputs {
+                    if out.name == FRAGMENT_DST {
+                        out.name = FRAGMENT_OUT;
+                    }
+                }
+                if let Some(fmt) = self.output_formats.remove(FRAGMENT_DST) {
+                    self.output_formats.insert(FRAGMENT_OUT.to_string(), fmt);
+                }
+                if self.dispatch_port.as_deref() == Some(FRAGMENT_DST) {
+                    self.dispatch_port = Some(FRAGMENT_OUT.to_string());
+                }
+            }
+            None => {
+                self.fragment_source = None;
+                self.fusion_kind = FusionKind::Boundary;
+                self.fusion_body = None;
+            }
+        }
     }
 }
 
@@ -399,6 +518,11 @@ struct ParsedShader {
 /// The synthetic input port a `// @reset_gated` kernel exposes to receive its
 /// edge trigger (wired from the same clip-trigger count the gated consumer uses).
 const RESET_TRIGGER_PORT: &str = "reset_trigger";
+
+/// `generate_standalone` names the single storage-texture output `dst`; a
+/// fragment node renames it to the conventional atom output port `out`.
+const FRAGMENT_DST: &str = "dst";
+const FRAGMENT_OUT: &str = "out";
 
 fn introspect(source: &str) -> Result<ParsedShader, String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
@@ -1298,6 +1422,155 @@ fn parse_field_name(code: &str) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Fusion-fragment contract (`// @fusion:` body fragments)
+// ─────────────────────────────────────────────────────────────────────
+
+/// A fusable body fragment authored in `node.wgsl_compute`: a pure
+/// `fn body(...)` written to the freeze codegen ABI, with its ports/params
+/// declared by markers (a fragment has no bindings to introspect). Detected by
+/// a `// @fusion:` marker; synthesized into a standalone kernel via
+/// [`generate_standalone`](crate::node_graph::freeze::codegen::generate_standalone)
+/// and then introspected exactly like a hand-authored kernel.
+///
+/// Markers (own-line or trailing `//` comments; block comments stripped first):
+///   - `// @fusion: pointwise` — one texture input, one `vec4` output.
+///   - `// @fusion: source` — zero inputs (a 0-input generator).
+///   - `// @in: <port>` — one texture input, in body-arg order (Pointwise wants 1).
+///   - `// @param: <name> = <default> [<min>, <max>]` — a scalar f32 param;
+///     the `[min, max]` range tail is optional.
+///
+/// Body ABI (the existing freeze ABI — see any atom's `*_body.wgsl`, e.g. gain):
+///   Pointwise: `fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, <params…>) -> vec4<f32>`
+///   Source:    `fn body(uv: vec2<f32>, dims: vec2<f32>, <params…>) -> vec4<f32>`
+/// The `@param` declaration order must match the body's trailing arg order.
+struct FusionFragment {
+    kind: FusionKind,
+    inputs: Vec<NodeInput>,
+    params: Vec<ParamDef>,
+    body: String,
+}
+
+impl FusionFragment {
+    /// Parse the fragment markers, or `None` when `source` carries no
+    /// `// @fusion:` marker or no `fn body(` — i.e. a full kernel (the existing
+    /// opaque path). A malformed marker (unknown kind, bad `@param`) also returns
+    /// `None`; the caller then treats the source as a full kernel, whose introspect
+    /// reports the real error and leaves the node compile-failed (fail closed).
+    fn parse(source: &str) -> Option<FusionFragment> {
+        let stripped = strip_block_comments(source);
+        let mut kind: Option<FusionKind> = None;
+        let mut inputs: Vec<NodeInput> = Vec::new();
+        let mut params: Vec<ParamDef> = Vec::new();
+        for line in stripped.lines() {
+            let Some(c) = split_line_comment(line).1 else {
+                continue;
+            };
+            let c = c.trim();
+            if let Some(rest) = c.strip_prefix("@fusion:") {
+                kind = match rest.trim() {
+                    "pointwise" => Some(FusionKind::Pointwise),
+                    "source" => Some(FusionKind::Source),
+                    other => {
+                        log::warn!("[node.wgsl_compute] unknown @fusion kind '{other}'");
+                        return None;
+                    }
+                };
+            } else if let Some(rest) = c.strip_prefix("@in:") {
+                let name = rest.trim();
+                if !name.is_empty() {
+                    inputs.push(NodePort {
+                        name: leak_str(name),
+                        ty: PortType::Texture2D,
+                        kind: PortKind::Input,
+                        required: true,
+                    });
+                }
+            } else if let Some(rest) = c.strip_prefix("@param:") {
+                match parse_fusion_param(rest) {
+                    Some(p) => params.push(p),
+                    None => {
+                        log::warn!("[node.wgsl_compute] malformed @param marker: '{rest}'");
+                        return None;
+                    }
+                }
+            }
+        }
+        let kind = kind?;
+        // A real fragment defines `fn body(`. Without it, fall through to the
+        // full-kernel path (which will surface the actual parse error).
+        if !source.contains("fn body(") {
+            return None;
+        }
+        Some(FusionFragment {
+            kind,
+            inputs,
+            params,
+            body: source.to_string(),
+        })
+    }
+
+    /// Synthesize the standalone kernel from the fragment — the exact single-
+    /// source codegen the freeze compiler also generates for this atom, so the
+    /// dispatched kernel and the fused inline are guaranteed consistent. The
+    /// single texture output is named `dst` by the codegen (its binding name);
+    /// introspection therefore exposes one output port `dst`.
+    fn synthesize(&self) -> Result<String, String> {
+        const OUT: &[NodeOutput] = &[NodePort {
+            name: "out",
+            ty: PortType::Texture2D,
+            kind: PortKind::Output,
+            required: false,
+        }];
+        crate::node_graph::freeze::codegen::generate_standalone(
+            self.kind,
+            &self.body,
+            &self.inputs,
+            &self.params,
+            &[],
+            OUT,
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+}
+
+/// Parse a `// @param: <name> = <default> [<min>, <max>]` marker tail (the text
+/// after `@param:`) into a scalar f32 [`ParamDef`]. The `[min, max]` range is
+/// optional. `None` on any malformed field. v1 rejects a name a WGSL reserved
+/// word would force the codegen to mangle (`type` → `p_type`), which would
+/// desync the uniform member from the port/param name.
+fn parse_fusion_param(rest: &str) -> Option<ParamDef> {
+    let (name, after_eq) = rest.trim().split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    if crate::node_graph::freeze::codegen::wgsl_safe_field(name).as_ref() != name {
+        return None;
+    }
+    let after_eq = after_eq.trim();
+    let (default_str, range) = match after_eq.split_once('[') {
+        Some((d, r)) => {
+            let r = r.trim().strip_suffix(']')?;
+            let (lo, hi) = r.split_once(',')?;
+            let lo: f32 = lo.trim().parse().ok()?;
+            let hi: f32 = hi.trim().parse().ok()?;
+            (d.trim(), Some((lo, hi)))
+        }
+        None => (after_eq, None),
+    };
+    let default: f32 = default_str.trim().parse().ok()?;
+    let name_static = leak_str(name);
+    Some(ParamDef {
+        name: name_static,
+        label: name_static,
+        ty: ParamType::Float,
+        default: ParamValue::Float(default),
+        range,
+        enum_values: &[],
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // EffectNode impl
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1319,14 +1592,29 @@ impl EffectNode for WgslCompute {
     }
 
     fn wgsl_source(&self) -> Option<&str> {
-        Some(&self.source)
+        // Round-trip the AUTHORED text: the original fragment for a fragment-form
+        // node (so the editor / persistence never see the synthesized kernel),
+        // else the verbatim full-kernel source.
+        Some(self.fragment_source.as_deref().unwrap_or(&self.source))
     }
 
     fn set_wgsl_source(&mut self, source: &str) {
-        if self.source == source {
+        // Compare against the AUTHORED text on both shapes — for a fragment node
+        // `self.source` holds the synthesized kernel, never the incoming fragment.
+        if self.fragment_source.as_deref() == Some(source)
+            || (self.fragment_source.is_none() && self.source == source)
+        {
             return;
         }
         self.reparse(source.to_string());
+    }
+
+    fn fusion_kind(&self) -> FusionKind {
+        self.fusion_kind
+    }
+
+    fn wgsl_body(&self) -> Option<&'static str> {
+        self.fusion_body
     }
 
     fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {
@@ -1732,6 +2020,40 @@ mod tests {
 
     fn input_names(node: &WgslCompute) -> Vec<&str> {
         node.inputs.iter().map(|i| i.name).collect()
+    }
+
+    const FRAGMENT_SRC: &str = "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n";
+
+    #[test]
+    fn fragment_form_introspects_and_reports_fusion_contract() {
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(FRAGMENT_SRC);
+        assert!(!node.compile_failed, "fragment must synthesize + introspect");
+        assert_eq!(node.fusion_kind(), FusionKind::Pointwise);
+        let body = node.wgsl_body().expect("fragment exposes a body");
+        assert!(body.contains("fn body"));
+        // One texture input (`src`) + the `scale` param's port-shadow.
+        assert!(node.inputs.iter().any(|i| i.name == "src" && i.ty == PortType::Texture2D));
+        assert!(node.inputs.iter().any(|i| i.name == "scale"));
+        // The output is renamed from the codegen's `dst` to the atom `out`.
+        assert_eq!(node.outputs.len(), 1);
+        assert_eq!(node.outputs[0].name, "out");
+        assert_eq!(node.outputs[0].ty, PortType::Texture2D);
+        // The author's declared default + range survive introspection.
+        assert_eq!(node.params.len(), 1);
+        assert_eq!(node.params[0].name, "scale");
+        assert_eq!(node.params[0].default, ParamValue::Float(0.75));
+        assert_eq!(node.params[0].range, Some((0.0, 2.0)));
+        // wgsl_source() round-trips the AUTHORED fragment, not the kernel.
+        assert_eq!(node.wgsl_source(), Some(FRAGMENT_SRC));
+    }
+
+    #[test]
+    fn full_kernel_stays_a_fusion_boundary() {
+        let node = WgslCompute::new();
+        assert_eq!(node.fusion_kind(), FusionKind::Boundary);
+        assert!(node.wgsl_body().is_none());
+        assert!(node.fragment_source.is_none());
     }
 
     #[test]
