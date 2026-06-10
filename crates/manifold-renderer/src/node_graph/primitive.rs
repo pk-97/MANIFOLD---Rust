@@ -336,6 +336,23 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::reports_empty_output`](crate::node_graph::effect_node::EffectNode::reports_empty_output).
+    /// Detector/spawner primitives override to report a zero-count frame
+    /// (queried right after `run()`). Default: `false`.
+    fn reports_empty_output(&self) -> bool {
+        false
+    }
+
+    /// Mirror of
+    /// [`EffectNode::empty_skip_input_ports`](crate::node_graph::effect_node::EffectNode::empty_skip_input_ports).
+    /// Pure data-shapers downstream of a detector override to list the data
+    /// ports whose emptiness makes their evaluate a no-op. Default: never
+    /// skipped. Read the EffectNode contract before declaring.
+    fn empty_skip_input_ports(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Mirror of
     /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
     /// Mux-family primitives override to return the selected input
     /// port name (e.g. `"in_2"` for mux selector=2). See the
@@ -550,6 +567,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn fused_dispatch_count_param(&self) -> Option<&'static str> {
         Primitive::fused_dispatch_count_param(self)
+    }
+    fn reports_empty_output(&self) -> bool {
+        Primitive::reports_empty_output(self)
+    }
+    fn empty_skip_input_ports(&self) -> &'static [&'static str] {
+        Primitive::empty_skip_input_ports(self)
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY

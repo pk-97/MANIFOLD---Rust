@@ -807,6 +807,38 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Data-driven skip, REPORTER side: did this frame's `evaluate` produce
+    /// EMPTY output — zero detected blobs, zero spawned particles, zero live
+    /// tracks? The executor queries this immediately after `evaluate` and
+    /// marks the step's output resources empty for the frame; downstream
+    /// steps that declare [`empty_skip_input_ports`](Self::empty_skip_input_ports)
+    /// over those resources skip. Only meaningful right after `evaluate`
+    /// (typically backed by a count the node already computed CPU-side).
+    /// Default `false` — never reports empty.
+    fn reports_empty_output(&self) -> bool {
+        false
+    }
+
+    /// Data-driven skip, CONSUMER side: input ports whose content being EMPTY
+    /// (per an upstream [`reports_empty_output`](Self::reports_empty_output)
+    /// reporter, or transitively another skipped consumer) makes this node's
+    /// whole evaluate a no-op. When every listed port is wired, was empty
+    /// LAST frame, and is empty THIS frame, the executor skips the step
+    /// entirely — no acquire, no evaluate — and marks its outputs empty too.
+    /// The one-frame guard means the node always executes the FIRST empty
+    /// frame (writing out its empty state — a zeroed array, a cleared
+    /// overlay), so the held slots consumers read while it skips hold the
+    /// empty content, never the last non-empty frame's (no ghosting).
+    ///
+    /// Contract for declaring: with the listed inputs empty, `run()` writes
+    /// outputs that are themselves empty AND frame-invariant (no time-driven
+    /// animation of the empty state), and the node carries no per-frame state
+    /// that must keep evolving while inputs are empty (a track-ager or trail
+    /// decay must NOT declare this). Default: empty — never skipped.
+    fn empty_skip_input_ports(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// REGISTER-HEAVY body: the atom's `wgsl_body` inlines enough code (a
     /// bespoke simplex, a large helper suite) that folding it into a
     /// multi-atom kernel pushes register pressure past the occupancy cliff

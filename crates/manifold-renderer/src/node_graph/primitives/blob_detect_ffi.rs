@@ -159,6 +159,10 @@ crate::primitive! {
         blob_worker: Option<BackgroundWorker<BlobRequest, BlobResponse>> = None,
         blob_worker_tried: bool = false,
         blob_state: Option<BlobState> = None,
+        // Data-driven skip: the blob count `run()` last uploaded into the
+        // output buffer, `None` on early-out paths (output untouched → never
+        // report empty over content we didn't write).
+        last_output_count: Option<u32> = None,
     },
 }
 
@@ -264,7 +268,17 @@ impl BlobDetectFfi {
 }
 
 impl Primitive for BlobDetectFfi {
+    // Data-driven skip, reporter side: a frame whose upload wrote ZERO valid
+    // blobs reports empty, so downstream `empty_skip_input_ports` declarers
+    // (track shapers, overlay passes) can skip their work. Covers both "no
+    // bright regions in the source" and "inference hasn't completed yet"
+    // (the all-zeros warm-up the composition notes describe).
+    fn reports_empty_output(&self) -> bool {
+        self.last_output_count == Some(0)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.last_output_count = None;
         let threshold = match ctx.params.get("threshold") {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.5,
@@ -407,6 +421,7 @@ impl Primitive for BlobDetectFfi {
             [capacity.div_ceil(64), 1, 1],
             "node.blob_detect_ffi",
         );
+        self.last_output_count = Some(count);
     }
 }
 

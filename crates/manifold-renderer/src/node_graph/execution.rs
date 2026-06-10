@@ -185,6 +185,22 @@ pub struct Executor {
     /// Step count the memo/sticky structures were built for; rebuilt when it
     /// differs (defensive — a live executor's plan does not change shape).
     memo_steps_len: Option<usize>,
+
+    /// Data-driven skip (the third skip reason, after the mux short-circuit
+    /// and the memoized-dataflow clean skip). Resources whose producer
+    /// reported EMPTY output this frame ([`EffectNode::reports_empty_output`]
+    /// — zero blobs, zero spawned particles), plus the outputs of every step
+    /// skipped through [`EffectNode::empty_skip_input_ports`] (transitive).
+    /// Rebuilt every frame in step order — producers always precede
+    /// consumers, so a consumer's check sees its producers' marks.
+    empty_resources: ahash::AHashSet<ResourceId>,
+    /// Last frame's [`Self::empty_resources`] (swapped at frame top). The
+    /// consumer skip requires empty-last-frame AND empty-this-frame, so a
+    /// declaring node always EXECUTES the first empty frame — writing out its
+    /// empty state — before its held outputs are served to consumers. Without
+    /// the guard, a skip on the first empty frame would serve the last
+    /// NON-empty frame's content (ghost blobs).
+    empty_resources_prev: ahash::AHashSet<ResourceId>,
 }
 
 /// Epoch snapshot a pure step last executed with — see [`Executor::step_memo`].
@@ -237,6 +253,8 @@ impl Executor {
             hoistable_steps: Vec::new(),
             sticky_resources: ahash::AHashSet::default(),
             memo_steps_len: None,
+            empty_resources: ahash::AHashSet::default(),
+            empty_resources_prev: ahash::AHashSet::default(),
         }
     }
 
@@ -619,6 +637,13 @@ impl Executor {
             self.step_profiles.clear();
         }
 
+        // Data-driven skip: roll this frame's empty-resource marks into
+        // "previous" and start the current set fresh — reporters re-mark on
+        // every evaluate, so emptiness never persists past the frame that
+        // observed it.
+        std::mem::swap(&mut self.empty_resources, &mut self.empty_resources_prev);
+        self.empty_resources.clear();
+
         // Wipe any skip-passthrough aliases installed during the previous
         // frame. Without this, a slot that was aliased-on-skip last frame
         // would shadow its real write this frame and downstream reads
@@ -715,6 +740,35 @@ impl Executor {
                     .all(|&(_, res)| self.backend.slot_for(res).is_some())
             {
                 continue;
+            }
+
+            // Data-driven skip (zero blobs / zero spawned particles): a step
+            // that declared its data input ports skips when EVERY declared
+            // port is wired and its resource was marked empty BOTH last frame
+            // and this frame (the one-frame guard — the node executed the
+            // first empty frame and wrote out its empty state, so the held
+            // outputs consumers read are the empty content, never the last
+            // non-empty frame's). Its outputs are marked empty too, so the
+            // skip propagates through a declaring chain. Diagnostic modes
+            // force-dirty, same as the memo skip above.
+            if !force_dirty
+                && let Some(inst) = graph.get_node(step.node)
+            {
+                let empty_ports = inst.node.empty_skip_input_ports();
+                if !empty_ports.is_empty()
+                    && empty_ports.iter().all(|p| {
+                        step.inputs.iter().any(|&(name, res)| {
+                            name == *p
+                                && self.empty_resources.contains(&res)
+                                && self.empty_resources_prev.contains(&res)
+                        })
+                    })
+                {
+                    for &(_, res) in &step.outputs {
+                        self.empty_resources.insert(res);
+                    }
+                    continue;
+                }
             }
 
             // Attribution profiling: stamp the step tag onto the GPU encoder
@@ -899,6 +953,17 @@ impl Executor {
                             step.node,
                             inst.node.type_id().as_str(),
                         );
+                    }
+                    // Data-driven skip, reporter side: an evaluate that
+                    // produced EMPTY output (zero blobs, zero spawned
+                    // particles) marks its output resources so downstream
+                    // `empty_skip_input_ports` declarers can skip. Queried
+                    // only on real evaluates — an aliased passthrough never
+                    // reports.
+                    if inst.node.reports_empty_output() {
+                        for &(_, res) in &step.outputs {
+                            self.empty_resources.insert(res);
+                        }
                     }
                 }
             }
@@ -2319,6 +2384,180 @@ mod tests {
         assert!(
             records.iter().all(|r| r.inputs == first_in),
             "consumer must read the producer's held slot on every frame"
+        );
+    }
+
+    /// Data-driven skip fixture (the third skip reason). `reporter()` flips
+    /// [`EffectNode::reports_empty_output`] from a shared flag — a stand-in
+    /// for blob_detect_ffi's zero-track frames. `consumer()` declares its
+    /// `in` port via [`EffectNode::empty_skip_input_ports`]. Both count
+    /// evaluates.
+    struct EmptyDrivenNode {
+        type_id: EffectNodeType,
+        with_input: bool,
+        declares_skip: bool,
+        empty: Arc<Mutex<bool>>,
+        evals: Arc<Mutex<u32>>,
+    }
+
+    impl EmptyDrivenNode {
+        fn reporter(empty: Arc<Mutex<bool>>, evals: Arc<Mutex<u32>>) -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.empty_reporter"),
+                with_input: false,
+                declares_skip: false,
+                empty,
+                evals,
+            }
+        }
+
+        fn consumer(declares_skip: bool, evals: Arc<Mutex<u32>>) -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.empty_consumer"),
+                with_input: true,
+                declares_skip,
+                empty: Arc::new(Mutex::new(false)),
+                evals,
+            }
+        }
+    }
+
+    impl EffectNode for EmptyDrivenNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: "in",
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            }];
+            if self.with_input { &INPUTS } else { &[] }
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: "out",
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn reports_empty_output(&self) -> bool {
+            !self.with_input && *self.empty.lock().unwrap()
+        }
+        fn empty_skip_input_ports(&self) -> &'static [&'static str] {
+            if self.declares_skip { &["in"] } else { &[] }
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            *self.evals.lock().unwrap() += 1;
+        }
+    }
+
+    fn empty_skip_graph(
+        empty: Arc<Mutex<bool>>,
+        declares: bool,
+    ) -> (Graph, Arc<Mutex<u32>>, Arc<Mutex<u32>>) {
+        let r_evals = Arc::new(Mutex::new(0));
+        let c_evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        let reporter = g.add_node(Box::new(EmptyDrivenNode::reporter(empty, r_evals.clone())));
+        let consumer = g.add_node(Box::new(EmptyDrivenNode::consumer(declares, c_evals.clone())));
+        g.connect((reporter, "out"), (consumer, "in")).unwrap();
+        (g, r_evals, c_evals)
+    }
+
+    /// Steady empty data: the declaring consumer executes the FIRST empty
+    /// frame (writing out its empty state — the one-frame guard) and skips
+    /// every frame after. The reporter itself runs every frame — it is the
+    /// detector and must keep detecting.
+    #[test]
+    fn empty_consumer_skips_after_one_empty_frame() {
+        let empty = Arc::new(Mutex::new(true));
+        let (mut g, r_evals, c_evals) = empty_skip_graph(empty, true);
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..4 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*r_evals.lock().unwrap(), 4, "the reporter keeps detecting every frame");
+        assert_eq!(
+            *c_evals.lock().unwrap(),
+            1,
+            "declaring consumer runs the first empty frame, then skips"
+        );
+    }
+
+    /// Data returning un-skips immediately: the frame the reporter stops
+    /// reporting empty, its output is no longer marked and the consumer
+    /// evaluates that same frame (no one-frame lag on the way BACK — a blob
+    /// appearing must draw on the frame it appears).
+    #[test]
+    fn empty_skip_unskips_the_frame_data_returns() {
+        let empty = Arc::new(Mutex::new(true));
+        let (mut g, _r_evals, c_evals) = empty_skip_graph(empty.clone(), true);
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..3 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*c_evals.lock().unwrap(), 1, "steady empty: one execute");
+        *empty.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(
+            *c_evals.lock().unwrap(),
+            2,
+            "consumer must evaluate on the frame data returns"
+        );
+    }
+
+    /// A node that does NOT declare `empty_skip_input_ports` never skips on
+    /// empty input — the skip is strictly opt-in (a track-ager or trail decay
+    /// must keep evolving while its input is empty).
+    #[test]
+    fn undeclared_consumer_never_skips_on_empty_input() {
+        let empty = Arc::new(Mutex::new(true));
+        let (mut g, _r_evals, c_evals) = empty_skip_graph(empty, false);
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..4 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*c_evals.lock().unwrap(), 4, "no declaration → no skip");
+    }
+
+    /// Emptiness propagates through a DECLARING chain, one frame per stage:
+    /// a skipped consumer's outputs count as empty, so the next declarer
+    /// downstream skips a frame later (after IT has written its own empty
+    /// state once).
+    #[test]
+    fn empty_skip_propagates_through_declaring_chain() {
+        let empty = Arc::new(Mutex::new(true));
+        let a_evals = Arc::new(Mutex::new(0));
+        let b_evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        let reporter = g.add_node(Box::new(EmptyDrivenNode::reporter(
+            empty,
+            Arc::new(Mutex::new(0)),
+        )));
+        let a = g.add_node(Box::new(EmptyDrivenNode::consumer(true, a_evals.clone())));
+        let b = g.add_node(Box::new(EmptyDrivenNode::consumer(true, b_evals.clone())));
+        g.connect((reporter, "out"), (a, "in")).unwrap();
+        g.connect((a, "out"), (b, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        for _ in 0..5 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        assert_eq!(*a_evals.lock().unwrap(), 1, "first declarer skips from frame 2");
+        assert_eq!(
+            *b_evals.lock().unwrap(),
+            2,
+            "second declarer sees emptiness one frame later (a's frame-2 skip marks it)"
         );
     }
 }
