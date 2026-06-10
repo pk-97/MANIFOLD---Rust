@@ -122,6 +122,27 @@ pub trait PrimitiveSpec: Send {
     /// also defaults to `Coincident`.
     const INPUT_ACCESS: &'static [crate::node_graph::freeze::classify::InputAccess] = &[];
 
+    /// STENCIL-FETCH body ABI (stencil tier): the `wgsl_body` reads each of its
+    /// `Gather` texture inputs through a free function `fetch_<port>(uv:
+    /// vec2<f32>) -> vec4<f32>` instead of receiving `(texture_2d, sampler)`
+    /// args. The codegen always DEFINES that function before the body — as a
+    /// real `textureSampleLevel` over the bound input (standalone, or a fused
+    /// region's real external), or as a recomputed upstream chain with manual
+    /// bilinear (a fused virtual source). This is what lets pointwise work
+    /// upstream of a blur fold INTO the blur's read. Opt-in via the macro's
+    /// `stencil_fetch:` field; only meaningful for atoms with `Gather` inputs.
+    const STENCIL_FETCH: bool = false;
+
+    /// Specialization tokens the `wgsl_body` references as free identifiers
+    /// (e.g. `QUALITY_LEVEL`), each resolved from a STATIC Enum/Int param:
+    /// `(token, param_name)` pairs. The hand `run()` substitutes them via
+    /// `create_specialized_compute_pipeline`; the freeze compiler substitutes
+    /// the def's param value into the body TEXT before parsing/fusing, so the
+    /// atom stops being a permanent fusion boundary. The classifier keeps the
+    /// atom a boundary if any listed param is binding-targeted or control-wired
+    /// (the baked value could then diverge from the live one). Empty default.
+    const WGSL_SPECIALIZATION: &'static [(&'static str, &'static str)] = &[];
+
     /// Buffer-domain ONLY: names of injected non-param `f32` uniform fields the
     /// generated kernel needs that aren't user params — frame-derived values
     /// like a particle integrator's `dt_scaled` (= `delta * 60`). The buffer
@@ -580,6 +601,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
         P::INPUT_ACCESS
     }
+    fn stencil_fetch(&self) -> bool {
+        P::STENCIL_FETCH
+    }
+    fn wgsl_specialization(&self) -> &'static [(&'static str, &'static str)] {
+        P::WGSL_SPECIALIZATION
+    }
     fn wgsl_includes(&self) -> &'static [&'static str] {
         P::WGSL_INCLUDES
     }
@@ -699,6 +726,8 @@ macro_rules! primitive {
         $( fusion_kind: $fusion_kind:ident, )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
+        $( stencil_fetch: $stencil:literal, )?
+        $( wgsl_specialization: [ $(($tok:literal, $tok_param:literal)),* $(,)? ], )?
         $( derived_uniforms: [ $($derived:literal),* $(,)? ], )?
         $( wgsl_includes: [ $($inc:expr),* $(,)? ], )?
         $( atomic_outputs: [ $($atomic_out:literal),* $(,)? ], )?
@@ -753,6 +782,9 @@ macro_rules! primitive {
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
+            $( const STENCIL_FETCH: bool = $stencil; )?
+            $( const WGSL_SPECIALIZATION: &'static [(&'static str, &'static str)] =
+                &[ $(($tok, $tok_param)),* ]; )?
             $( const DERIVED_UNIFORMS: &'static [&'static str] = &[ $($derived),* ]; )?
             $( const WGSL_INCLUDES: &'static [&'static str] = &[ $($inc),* ]; )?
             $( const ATOMIC_OUTPUTS: &'static [&'static str] = &[ $($atomic_out),* ]; )?

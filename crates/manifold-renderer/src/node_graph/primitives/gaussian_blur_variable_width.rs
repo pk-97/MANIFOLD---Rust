@@ -93,6 +93,8 @@ crate::primitive! {
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/gaussian_blur_variable_width_body.wgsl"),
     input_access: [Gather, Gather],
+    stencil_fetch: true,
+    wgsl_specialization: [("QUALITY_LEVEL", "quality"), ("WEIGHTING_MODE", "weighting_mode")],
     extra_fields: {
         pipelines: AHashMap<u32, GpuComputePipeline> = AHashMap::new(),
     },

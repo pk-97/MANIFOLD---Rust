@@ -194,7 +194,15 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_))) {
         return generate_standalone_resolve(body, P::INPUTS, P::PARAMS, P::OUTPUTS);
     }
-    generate_standalone(P::FUSION_KIND, body, P::INPUTS, P::PARAMS, P::INPUT_ACCESS, P::OUTPUTS)
+    generate_standalone_ext(
+        P::FUSION_KIND,
+        body,
+        P::INPUTS,
+        P::PARAMS,
+        P::INPUT_ACCESS,
+        P::OUTPUTS,
+        P::STENCIL_FETCH,
+    )
 }
 
 /// WGSL storage-texture format token for the formats a texture kernel can declare
@@ -251,6 +259,27 @@ pub fn generate_standalone(
     params: &[ParamDef],
     input_access: &[InputAccess],
     outputs: &[NodeOutput],
+) -> Result<String, CodegenError> {
+    generate_standalone_ext(fusion_kind, body, inputs, params, input_access, outputs, false)
+}
+
+/// [`generate_standalone`] with the STENCIL-FETCH body ABI flag. When
+/// `stencil_fetch` is true, each sampler-`Gather` input is read by the body
+/// through a free `fetch_<port>(uv) -> vec4<f32>` function this wrapper
+/// DEFINES as the real `textureSampleLevel` over the bound texture — instead
+/// of passing `(texture, sampler)` body args. Compiles to identical code
+/// (the fn inlines); the indirection is what lets the FUSED codegen swap a
+/// recomputed virtual source in for the texture. `false` keeps every
+/// existing atom's generated WGSL byte-identical.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_standalone_ext(
+    fusion_kind: FusionKind,
+    body: &str,
+    inputs: &[NodeInput],
+    params: &[ParamDef],
+    input_access: &[InputAccess],
+    outputs: &[NodeOutput],
+    stencil_fetch: bool,
 ) -> Result<String, CodegenError> {
     if body.is_empty() {
         return Err(CodegenError::NoBody);
@@ -444,6 +473,23 @@ pub fn generate_standalone(
         out.push_str("}\n\n");
     }
 
+    // --- stencil-fetch ABI: define `fetch_<port>` over each sampler-Gather
+    // input as the real textureSampleLevel, so the body's free fetch calls
+    // resolve. Inlines to the exact code the (tex, samp)-args form produced. ---
+    if stencil_fetch {
+        for (i, inp) in tex_inputs.iter().enumerate() {
+            if access_of(i) == InputAccess::Gather {
+                writeln!(
+                    out,
+                    "fn fetch_{}(c: vec2<f32>) -> vec4<f32> {{\n    \
+                     return textureSampleLevel(tex_{}, samp, c, 0.0);\n}}\n",
+                    inp.name, inp.name
+                )
+                .unwrap();
+            }
+        }
+    }
+
     // --- the atom's body fragment, verbatim ---
     out.push_str(body.trim_end());
     out.push_str("\n\n");
@@ -502,11 +548,14 @@ pub fn generate_standalone(
     let mut args: Vec<String> = Vec::new();
     for (i, inp) in tex_inputs.iter().enumerate() {
         match access_of(i) {
-            // Sampler-gather: the body owns the filter, so it gets the texture +
-            // the shared sampler.
+            // Sampler-gather: the body owns the filter. Stencil-fetch bodies
+            // read through the `fetch_<port>` fn defined above (no args);
+            // (tex, samp)-args bodies get the texture + the shared sampler.
             InputAccess::Gather => {
-                args.push(format!("tex_{}", inp.name));
-                args.push("samp".to_string());
+                if !stencil_fetch {
+                    args.push(format!("tex_{}", inp.name));
+                    args.push("samp".to_string());
+                }
             }
             // Integer-load gather: no sampler — the body does textureLoad itself.
             InputAccess::GatherTexel => {
@@ -1132,6 +1181,14 @@ pub struct RegionNode<'a> {
     /// kernel threads them as f32 registers — no texture). Defaults to
     /// `"rgba16float"`; the buffer path ignores it.
     pub output_storage: &'static str,
+    /// STENCIL-FETCH member: the body reads each sampler-`Gather` input through
+    /// a free `fetch_<port>(uv)` function instead of `(texture, sampler)` args.
+    /// The fused codegen namespaces the member's ENTIRE fragment (helpers call
+    /// the fetch, so they can't dedup across members) and emits one
+    /// `n{i}_fetch_<port>` per gather input — a real `textureSampleLevel` over
+    /// `src_<e>` for an external, or the recomputed virtual-source chain.
+    /// `false` keeps the (tex, samp)-args path and prior WGSL byte-identical.
+    pub stencil_fetch: bool,
     /// f16-faithful rounding (stencil tier A): wrap this member's body call in
     /// `q16(...)` — a pack2x16float/unpack2x16float round-trip that reproduces
     /// the unfused chain's rgba16float store+load rounding exactly. Set for
@@ -1264,7 +1321,7 @@ fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
 /// counts only when neither neighbour is an identifier character, so renaming
 /// `Element` never corrupts `Element2`. Used by the fused buffer codegen to map
 /// each body's standalone element-struct names onto the region's global naming.
-fn rename_ident(text: &str, from: &str, to: &str) -> String {
+pub(crate) fn rename_ident(text: &str, from: &str, to: &str) -> String {
     let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -1808,6 +1865,30 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 prelude.push(line);
             }
         }
+        if node.stencil_fetch {
+            // STENCIL member: its helpers call the free `fetch_<port>` fns, so
+            // they can't dedup across members — namespace the member's ENTIRE
+            // fragment (every fn it defines + every fetch reference) with the
+            // `n{i}_` prefix and emit it whole. Module-scope fn order is free
+            // in WGSL, so the fetch definitions (emitted below the helpers)
+            // resolve regardless of position.
+            if !blocks.iter().any(|b| b.name == "body") {
+                return Err(CodegenError::NoBody);
+            }
+            let fn_names: Vec<String> = blocks.iter().map(|b| b.name.clone()).collect();
+            for fb in blocks {
+                let mut text = fb.text;
+                for name in &fn_names {
+                    text = rename_ident(&text, name, &format!("n{i}_{name}"));
+                }
+                for port in node.node_inputs.iter().filter(|p| is_texture_input(p)) {
+                    let fetch = format!("fetch_{}", port.name);
+                    text = rename_ident(&text, &fetch, &format!("n{i}_{fetch}"));
+                }
+                bodies.push(text);
+            }
+            continue;
+        }
         let mut found_body = false;
         for fb in blocks {
             if fb.name == "body" {
@@ -1963,6 +2044,39 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         out.push_str(h.text.trim_end());
         out.push_str("\n\n");
     }
+    // STENCIL members: one `n{i}_fetch_<port>` per sampler-Gather input — the
+    // real textureSampleLevel over the bound external, exactly the read the
+    // standalone wrapper's fetch does, so a fused stencil member samples
+    // bit-identically to its unfused dispatch.
+    for (i, node) in region.nodes.iter().enumerate() {
+        if !node.stencil_fetch {
+            continue;
+        }
+        let tex_specs: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+        if tex_specs.len() != node.inputs.len() {
+            return Err(CodegenError::BadInput); // need port names for fetch fns
+        }
+        for (idx, src) in node.inputs.iter().enumerate() {
+            let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            if access != InputAccess::Gather {
+                continue;
+            }
+            let InputSource::External(e) = src else {
+                return Err(CodegenError::BadInput);
+            };
+            if *e >= region.num_external_inputs {
+                return Err(CodegenError::BadInput);
+            }
+            writeln!(
+                out,
+                "fn n{i}_fetch_{}(c: vec2<f32>) -> vec4<f32> {{\n    \
+                 return textureSampleLevel(src_{e}, samp, c, 0.0);\n}}\n",
+                tex_specs[idx].name
+            )
+            .unwrap();
+        }
+    }
     for b in &bodies {
         out.push_str(b.trim_end());
         out.push_str("\n\n");
@@ -1995,8 +2109,13 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     if *e >= region.num_external_inputs {
                         return Err(CodegenError::BadInput);
                     }
-                    args.push(format!("src_{e}"));
-                    args.push("samp".to_string());
+                    // A stencil member reads through its `n{i}_fetch_<port>` fn
+                    // (emitted above) — no body args. The (tex, samp)-args form
+                    // gets the texture handle + the shared sampler.
+                    if !node.stencil_fetch {
+                        args.push(format!("src_{e}"));
+                        args.push("samp".to_string());
+                    }
                 }
                 (InputAccess::GatherTexel, InputSource::External(e)) => {
                     if *e >= region.num_external_inputs {
@@ -2262,6 +2381,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
                 RegionNode {
@@ -2276,6 +2396,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
             ],
@@ -2323,6 +2444,7 @@ mod gpu_tests {
             node_includes: J::WGSL_INCLUDES,
             derived_uniforms: J::DERIVED_UNIFORMS,
             output_storage: "rgba16float",
+            stencil_fetch: false,
             quantize_f16: false,
         };
         let region = FusionRegion {
@@ -2385,6 +2507,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
                 RegionNode {
@@ -2399,6 +2522,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
             ],
@@ -2445,6 +2569,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
                 RegionNode {
@@ -2459,6 +2584,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
                 RegionNode {
@@ -2473,6 +2599,7 @@ mod gpu_tests {
                     node_includes: &[],
                     derived_uniforms: &[],
                     output_storage: "rgba16float",
+                    stencil_fetch: false,
                     quantize_f16: false,
                 },
             ],
@@ -2670,13 +2797,13 @@ mod gpu_tests {
         // atom types' consts.
         let region = FusionRegion {
             nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", quantize_f16: false },
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
             ],
             num_external_inputs: 1,
             outputs: vec![id(6)],
@@ -3487,13 +3614,14 @@ mod gpu_tests {
         let differ = TextureDiff::new(&device);
 
         let node = registry.construct("node.gaussian_blur").unwrap();
-        let generated = generate_standalone(
+        let generated = generate_standalone_ext(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
             node.inputs(),
             node.parameters(),
             node.input_access(),
             node.outputs(),
+            node.stencil_fetch(),
         )
         .expect("gaussian_blur generates");
         assert!(
@@ -3800,13 +3928,14 @@ mod gpu_tests {
         let differ = TextureDiff::new(&device);
 
         let node = registry.construct("node.gaussian_blur_variable_width").unwrap();
-        let generated = generate_standalone(
+        let generated = generate_standalone_ext(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
             node.inputs(),
             node.parameters(),
             node.input_access(),
             node.outputs(),
+            node.stencil_fetch(),
         )
         .expect("variable-width blur generates");
         assert!(

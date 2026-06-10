@@ -885,6 +885,26 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// STENCIL-FETCH body ABI (stencil tier): the `wgsl_body` reads each
+    /// `Gather` texture input via a free `fetch_<port>(uv) -> vec4<f32>`
+    /// function the codegen defines (a real sample standalone / for a fused
+    /// real external, or a recomputed upstream chain for a fused virtual
+    /// source), instead of `(texture_2d, sampler)` body args. Default `false`;
+    /// the macro forwards `P::STENCIL_FETCH`.
+    fn stencil_fetch(&self) -> bool {
+        false
+    }
+
+    /// Specialization tokens the `wgsl_body` references as free identifiers,
+    /// each `(token, param_name)` resolved from a STATIC Enum/Int param. The
+    /// freeze compiler substitutes the def's param value into the body text
+    /// before parsing/fusing; the classifier keeps the atom a boundary when a
+    /// listed param is binding-targeted or control-wired. Default empty; the
+    /// macro forwards `P::WGSL_SPECIALIZATION`.
+    fn wgsl_specialization(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// Shared WGSL library snippets this primitive's `wgsl_body` depends on
     /// (e.g. `noise_common`'s simplex helpers). The standalone codegen prepends
     /// them; the BUFFER fusion codegen prepends the deduped union across a

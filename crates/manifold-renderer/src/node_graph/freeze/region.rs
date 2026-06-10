@@ -578,29 +578,83 @@ fn classify_node(
         return NodeClass::Boundary;
     }
 
+    // Specialization tokens (QUALITY_LEVEL, WEIGHTING_MODE): the freeze paths
+    // bake the def's STATIC param value into the body text. A baked value must
+    // not be able to diverge from the live one, so a specialization param that
+    // an outer binding targets or a control wire drives keeps the atom a
+    // boundary (its run() keeps specializing per-dispatch as before).
+    for (_, sp_param) in n.wgsl_specialization() {
+        if param_is_binding_target(node, sp_param, def)
+            || def
+                .wires
+                .iter()
+                .any(|w| w.to_node == node.id && w.to_port == *sp_param)
+        {
+            return NodeClass::Boundary;
+        }
+    }
+
     // Final gate: the body must produce a kernel the PLAIN pipeline compiler
-    // (naga) accepts. A few atoms — gaussian_blur_variable_width, the separable
-    // gaussian — compile only through `create_specialized_compute_pipeline`, which
-    // textually substitutes specialization tokens (QUALITY_LEVEL, WEIGHTING_MODE)
-    // BEFORE naga sees the source; their bodies reference those tokens as free
-    // identifiers. The fused node is a `node.wgsl_compute`, which parses +
-    // dispatches through the plain (non-specialized) path, so such a body can't
-    // fuse there. Detect it generically — generate this atom's standalone kernel
-    // and parse it; if it can't parse on its own, it can't parse inside a fused
-    // kernel either → boundary. No hard-coded atom list, so any future
-    // specialization / free-identifier body is caught the same way.
-    let standalone = crate::node_graph::freeze::codegen::generate_standalone(
+    // (naga) accepts — after substituting any declared specialization tokens
+    // exactly as the fused codegen will. An atom whose body still carries a
+    // free identifier (an undeclared token, a typo) fails the parse and stays
+    // a boundary; the substituted-and-parsed text is precisely what fusion
+    // compiles, so the gate remains sound. No hard-coded atom list.
+    let Some(body) = substituted_body(n.as_ref(), node) else {
+        return NodeClass::Boundary;
+    };
+    let standalone = crate::node_graph::freeze::codegen::generate_standalone_ext(
         n.fusion_kind(),
-        n.wgsl_body().unwrap_or(""),
+        &body,
         n.inputs(),
         n.parameters(),
         n.input_access(),
         n.outputs(),
+        n.stencil_fetch(),
     );
     match standalone {
         Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => NodeClass::Eligible,
         _ => NodeClass::Boundary,
     }
+}
+
+/// The atom's `wgsl_body` with its declared specialization tokens substituted
+/// by the def node's STATIC param values — the exact text every freeze path
+/// (classify parse gate, install, fused codegen) works from. `None` when the
+/// atom has no body, or a token's param value isn't a scalar it can bake.
+/// Enum/Bool/Int params bake as `u32` literals (the token comparison form the
+/// specialized pipelines use); Float bakes as a decimal literal.
+pub(crate) fn substituted_body(
+    n: &dyn crate::node_graph::effect_node::EffectNode,
+    node: &EffectGraphNode,
+) -> Option<std::borrow::Cow<'static, str>> {
+    use crate::node_graph::parameters::ParamValue;
+    use manifold_core::effect_graph_def::SerializedParamValue;
+
+    let body = n.wgsl_body()?;
+    let spec = n.wgsl_specialization();
+    if spec.is_empty() {
+        return Some(std::borrow::Cow::Borrowed(body));
+    }
+    let mut text = body.to_string();
+    for (token, param) in spec {
+        let def_param = n.parameters().iter().find(|p| p.name == *param)?;
+        let literal = match node.params.get(*param) {
+            Some(SerializedParamValue::Enum { value }) => format!("{value}u"),
+            Some(SerializedParamValue::Bool { value }) => format!("{}u", u32::from(*value)),
+            Some(SerializedParamValue::Int { value }) => format!("{value}u"),
+            Some(SerializedParamValue::Float { value }) => format!("{value:?}"),
+            Some(_) => return None,
+            None => match &def_param.default {
+                ParamValue::Enum(v) => format!("{v}u"),
+                ParamValue::Bool(b) => format!("{}u", u32::from(*b)),
+                ParamValue::Float(f) => format!("{f:?}"),
+                _ => return None,
+            },
+        };
+        text = super::codegen::rename_ident(&text, token, &literal);
+    }
+    Some(std::borrow::Cow::Owned(text))
 }
 
 /// Classify a BUFFER-domain atom (writes an `Array<T>` — particle / instance /

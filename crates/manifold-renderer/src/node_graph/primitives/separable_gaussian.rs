@@ -116,6 +116,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/separable_gaussian_body.wgsl"),
     input_access: [Gather],
+    stencil_fetch: true,
     extra_fields: {
         // Track the GpuAddressMode the cached sampler was created
         // with so we can rebuild it on address_mode param edits.

@@ -702,7 +702,15 @@ pub(crate) fn fuse_canonical_def(
         for member in &region.members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = registry.construct(&doc_node.type_id)?;
-            let body = node.wgsl_body()?;
+            // Specialization tokens baked from the def's static params (classify
+            // already gated binding-targeted / control-wired ones). A substituted
+            // body is leaked like the params/ports below — one-time at fuse-build.
+            let body: &str =
+                match crate::node_graph::freeze::region::substituted_body(node.as_ref(), doc_node)?
+                {
+                    std::borrow::Cow::Borrowed(b) => b,
+                    std::borrow::Cow::Owned(s) => Box::leak(s.into_boxed_str()),
+                };
             let inputs: Vec<InputSource> = member
                 .inputs
                 .iter()
@@ -727,6 +735,7 @@ pub(crate) fn fuse_canonical_def(
                 node_includes: node.wgsl_includes(),
                 derived_uniforms: node.derived_uniforms(),
                 output_storage: resolve_output_storage(doc_node, node.as_ref()),
+                stencil_fetch: node.stencil_fetch(),
                 quantize_f16: member.quantize_f16,
             });
         }
