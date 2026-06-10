@@ -1894,9 +1894,6 @@
                 "type": "Enum",
                 "value": 1
               }
-            },
-            "outputFormats": {
-              "out": "rgba32float"
             }
           },
           {
@@ -1913,9 +1910,6 @@
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "outputFormats": {
-              "out": "rgba32float"
             }
           },
           {
@@ -1928,9 +1922,6 @@
                 "type": "Float",
                 "value": 1.4835
               }
-            },
-            "outputFormats": {
-              "out": "rgba32float"
             }
           },
           {

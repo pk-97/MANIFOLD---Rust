@@ -318,6 +318,62 @@ fn node_on_cycle(start: u32, def: &EffectGraphDef) -> bool {
     false
 }
 
+/// Does `start`'s feedback cycle pass through a PARTICLE/array stage? True
+/// when some node with an `Array`-typed output is mutually reachable with
+/// `start` (same strongly-connected component). Distinguishes the two loop
+/// families for the in-loop f16 fusion gate:
+///   - pure texture loops (OilyFluid's advection): locally smooth — a 1-ulp
+///     register/store gap stays ~1 ulp, and tier A's q16 rounding holds the
+///     fused render bit-exact (its proof passes);
+///   - particle loops (FluidSim: density → flow field → forces → particle
+///     buffer → scatter → density): a 1-ulp force difference moves a particle
+///     across a texel boundary and the scatter amplifies it to a visibly
+///     different field (measured max_abs 0.6+ over ~30% of pixels).
+fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
+    // Forward reachability from `start`, remembering everything reachable.
+    let mut forward: AHashSet<u32> = AHashSet::default();
+    let mut stack = vec![start];
+    while let Some(n) = stack.pop() {
+        for w in &def.wires {
+            if w.from_node == n && forward.insert(w.to_node) {
+                stack.push(w.to_node);
+            }
+        }
+    }
+    if !forward.contains(&start) {
+        return false; // not on a cycle at all
+    }
+    // A node is in `start`'s SCC iff start →* node AND node →* start. Check
+    // each forward-reachable array-producing node for a path back to start.
+    for node in &def.nodes {
+        if !forward.contains(&node.id) {
+            continue;
+        }
+        let Some(n) = registry.construct(node.type_id.as_str()) else {
+            continue;
+        };
+        if !n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+            continue;
+        }
+        let mut back: AHashSet<u32> = AHashSet::default();
+        let mut stack = vec![node.id];
+        while let Some(m) = stack.pop() {
+            if m == start && node.id != start {
+                return true;
+            }
+            for w in &def.wires {
+                if w.from_node == m && back.insert(w.to_node) {
+                    if w.to_node == start {
+                        return true;
+                    }
+                    stack.push(w.to_node);
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
 /// including "the registry doesn't know this type" — is a `Boundary`.
 fn classify_node(
@@ -480,14 +536,27 @@ fn classify_node(
     //     pack2x16float/unpack2x16float round-trip (exact IEEE-half RTNE,
     //     identical to an rgba16float store+load). Costs a few ALU per member;
     //     no preset edit, no editor memory increase, no look change.
-    // Gathers are admitted the same way (the region's agreed sampler address
-    // mode is resolved at install and bound via `// @sampler_address_mode`).
-    //
     // Kill switch: `MANIFOLD_FREEZE_Q16=0` restores the pre-tier-A behaviour
     // (in-loop f16 atoms stay boundaries) without touching fp32 admission.
     if !q16_tier_enabled()
         && node_on_cycle(node.id, def)
         && !node.output_formats.values().any(|s| s.contains("32float"))
+    {
+        return NodeClass::Boundary;
+    }
+
+    // In-loop f16 texture atoms on a PARTICLE loop: boundary. The q16 round-
+    // trip reproduces store rounding but not cross-kernel body ULP noise (the
+    // out-of-loop probe measured this 1-ulp drift), and a loop that passes
+    // through a particle buffer + scatter amplifies one ulp of force into a
+    // visibly different field (FluidSim flow field, 2026-06-10: max_abs 0.73
+    // / 31% of pixels fused vs unfused; still 0.62 with only the pointwise
+    // pair fused). Pure-texture loops (OilyFluid's advection) stay smooth
+    // under the same ulp and keep fusing via tier A — its bit-exact proof
+    // stands. fp32-marked atoms keep fusing as-is (exact stores), but fp32 is
+    // an explicit data-texture opt-in now, never a compiler default.
+    if !node.output_formats.values().any(|s| s.contains("32float"))
+        && cycle_contains_array(node.id, def, registry)
     {
         return NodeClass::Boundary;
     }

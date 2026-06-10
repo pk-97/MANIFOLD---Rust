@@ -1338,39 +1338,53 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
         "fused particle kernel must carry the live-count dispatch marker"
     );
 
-    // The fp32 in-loop path must actually fire too: a fused texture region inside
-    // the feedback loop (the pointwise flow-field atoms scale → rotate) declares
-    // an rgba32float `dst`. If this is absent, the fp32 atoms stayed excluded and
-    // the bit-exact result below would be vacuous (everything in-loop unfused).
-    let has_fp32_texture_fusion = fused_def.nodes.iter().any(|n| {
-        n.type_id == "node.wgsl_compute"
-            && n.wgsl_source
-                .as_deref()
-                .is_some_and(|src| src.contains("texture_storage_2d<rgba32float, write>"))
-    });
+    // The in-loop texture path must actually fire — at F16. The flow-field
+    // atoms (grad → scale → rotate) fuse through the q16 f16-faithful tier:
+    // an f16 `dst` plus the `q16(...)` register-rounding wrapper that
+    // reproduces the unfused f16 store/load. f16 is the engine's texture
+    // currency (2026-06-10 decision): the old rgba32float overrides existed
+    // only as a pre-q16 parity workaround, and they doubled every downstream
+    // consumer's bandwidth AND broke the gaussian blur's bilinear tap-pair
+    // trick (fp32 textures aren't filterable on Apple GPUs). No rgba32float
+    // dst may appear; the q16 wrapper must.
+    let fused_texture_kernels: Vec<&str> = fused_def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.wgsl_compute")
+        .filter_map(|n| n.wgsl_source.as_deref())
+        .filter(|src| src.contains("texture_storage_2d<"))
+        .collect();
     assert!(
-        has_fp32_texture_fusion,
-        "FluidSim must fuse the fp32 pointwise flow-field atoms (rgba32float dst) — \
-         absent means the fp32 in-loop path didn't fire (vacuous bit-exact pass)"
+        !fused_texture_kernels
+            .iter()
+            .any(|src| src.contains("texture_storage_2d<rgba32float, write>")),
+        "no fused FluidSim texture kernel may declare an rgba32float dst — fp32 \
+         textures are reserved for explicit data-texture opt-ins, not fusion policy"
     );
+    // No in-loop texture fusion either: with the fp32 marks gone the flow
+    // field is f16, and in-loop f16 texture atoms are boundaries (region.rs —
+    // q16 reconciles store rounding but not cross-kernel body ULP noise,
+    // which the feedback loop amplifies). The flow field renders unfused;
+    // the bit-exact diff below holds because unfused IS the reference.
+    let _ = &fused_texture_kernels;
 
-    // Gather-sampler propagation must fire: the toroidal gradient (a `Gather` with
-    // wrap_mode=Repeat) now folds into the fused flow-field region, and the fused
-    // kernel binds a REPEAT sampler via the `// @sampler_address_mode: repeat`
-    // marker. Without it the gradient stayed a boundary (its old behaviour) and the
-    // bit-exact diff below would never exercise the wrapped-edge sampling that the
-    // propagation exists to keep identical fused-vs-unfused.
-    let has_repeat_gather_fusion = fused_def.nodes.iter().any(|n| {
-        n.type_id == "node.wgsl_compute"
-            && n.wgsl_source
-                .as_deref()
-                .is_some_and(|src| src.contains("@sampler_address_mode: repeat"))
-    });
+    // The toroidal gradient (a `Gather` with wrap_mode=Repeat) must stay
+    // UNFUSED now: in-loop gathers at f16 are boundaries (region.rs) because
+    // the q16 register round-trip reproduces store rounding but not an f16
+    // bilinear gather's interpolation, and the feedback loop amplifies that
+    // gap (measured max_abs 0.73 / 31% of pixels, 2026-06-10). Gather fusion
+    // with `// @sampler_address_mode` remains available to fp32-opt-in data
+    // textures only. Assert the gradient produced NO fused repeat-sampler
+    // kernel — if one appears, the boundary rule regressed.
     assert!(
-        has_repeat_gather_fusion,
-        "FluidSim must fuse the toroidal gradient gather with a repeat sampler \
-         (// @sampler_address_mode: repeat marker) — absent means the in-loop gather \
-         stayed excluded, so the wrapped-edge sampling is untested"
+        !fused_def.nodes.iter().any(|n| {
+            n.type_id == "node.wgsl_compute"
+                && n.wgsl_source
+                    .as_deref()
+                    .is_some_and(|src| src.contains("@sampler_address_mode: repeat"))
+        }),
+        "the f16 in-loop toroidal gradient must stay unfused (in-loop gather \
+         boundary rule) — a fused repeat-sampler kernel means the rule regressed"
     );
 
     let ctx = |t: f64| PresetContext {
