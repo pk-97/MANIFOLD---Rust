@@ -171,6 +171,21 @@ impl Primitive for GaussianBlur {
         }
     }
 
+    /// Linear mode taps at integer pixel offsets from the fragment's own
+    /// texel — texel-exact, so a fused fetch through it is bit-faithful even
+    /// inside a feedback loop. Fixed mode's `step` is fractional (and wirable)
+    /// and Dynamic uses bilinear tap-pairs — both stay `false`.
+    fn stencil_taps_texel_exact(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> bool {
+        match params.get("radius_mode") {
+            Some(ParamValue::Enum(v)) => *v == 2,
+            Some(ParamValue::Float(f)) => f.round() as u32 == 2,
+            _ => false,
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let kernel_size = match ctx.params.get("kernel_size") {
             Some(ParamValue::Enum(v)) => (*v).min(2),

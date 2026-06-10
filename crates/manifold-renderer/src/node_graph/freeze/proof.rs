@@ -1148,6 +1148,205 @@ fn fused_variable_width_blur_matches_unfused() {
     );
 }
 
+/// STENCIL + GATHER CHAIN — the Watercolor diffuse shape: a uv-displace warp
+/// (itself a sampler-Gather atom, fed by a HALF-RES flow field) is the sole
+/// producer of a Linear blur's input, so it absorbs into the blur's fetch.
+/// The fetch re-evaluates the warp per tap corner: the warp's `in` stays a
+/// bound texture it samples at its own computed coords, its `flow` reads
+/// through the shared sampler at the corner uv — the same resolution-robust
+/// read the unfused atom made of the half-res field. Integer Linear taps ⇒
+/// near-exact agreement.
+#[test]
+fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = noise_input(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "wc-diffuse", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.flow_field_noise", "nodeId": "flow",
+              "params": { "warp_scale": { "type": "Float", "value": 0.0 },
+                          "resolution": { "type": "Enum", "value": 1 } } },
+            { "id": 2, "typeId": "node.uv_displace_by_flow", "nodeId": "flow_warp",
+              "params": { "weight": { "type": "Float", "value": 0.004 },
+                          "bias": { "type": "Float", "value": 0.5 } } },
+            { "id": 3, "typeId": "node.gaussian_blur", "nodeId": "blur_h",
+              "params": { "radius_mode": { "type": "Enum", "value": 2 },
+                          "radius": { "type": "Float", "value": 2.0 },
+                          "axis": { "type": "Enum", "value": 0 } } },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "flow", "toNode": 2, "toPort": "flow" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    // Structural expectation first: the warp is absorbed (deleted), the flow
+    // field survives standalone, the blur folds into the fused kernel.
+    let regions = crate::node_graph::freeze::region::partition_regions(&def, &registry);
+    assert_eq!(regions.len(), 1, "blur + absorbed warp form one region");
+    assert_eq!(regions[0].virtual_chains.len(), 1, "the warp is a virtual chain");
+    assert_eq!(regions[0].virtual_chains[0].members[0].doc_id, 2);
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the warp-chain region fuses");
+    assert!(
+        !fdef.nodes.iter().any(|n| n.type_id == "node.uv_displace_by_flow"),
+        "the warp must be absorbed into the blur's fetch"
+    );
+    assert!(
+        fdef.nodes.iter().any(|n| n.type_id == "node.flow_field_noise"),
+        "the half-res flow field survives as the chain's sampled external"
+    );
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 2.0e-3, 1.0e-3);
+    eprintln!(
+        "[stencil chain] warp+half-res flow into Linear blur: max_abs={} over={}/{}",
+        r.max_abs, r.over_count, r.total
+    );
+    assert!(
+        r.passes(0.005),
+        "absorbed warp chain must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// Render an EFFECT def for `frames` frames through the state-aware executor
+/// (feedback loops warm up across frames), source pre-bound to `input`, and
+/// return the texture feeding `final_output` after the last frame.
+fn render_effect_frames_with_state(
+    device: &GpuDevice,
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+    input: &GpuTexture,
+    frames: u32,
+) -> RenderTarget {
+    use crate::node_graph::StateStore;
+    let (w, h) = (input.width, input.height);
+    let mut graph = def.clone().into_graph(registry).expect("graph builds");
+    let plan = compile(&graph).expect("compiles");
+    let src_res = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
+    let final_id = find_node(&graph, "system.final_output");
+    let out_res = plan
+        .steps()
+        .iter()
+        .find(|s| s.node == final_id)
+        .and_then(|s| s.inputs.iter().find(|(n, _)| *n == "in").map(|(_, r)| *r))
+        .expect("final_output consumes a texture");
+
+    let src_rt = RenderTarget::new(device, w, h, FMT, "freeze-fb-src");
+    {
+        let mut e = device.create_encoder("freeze-fb-src-fill");
+        e.copy_texture_to_texture(input, &src_rt.texture, w, h, 1);
+        e.commit_and_wait_completed();
+    }
+    let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-fb-out");
+    let mut backend = MetalBackend::new(device, w, h, FMT);
+    backend.pre_bind_texture_2d(src_res, src_rt);
+    let out_slot = backend.pre_bind_texture_2d(out_res, out_rt);
+    crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+        .expect("pre-allocate");
+
+    let mut exec = Executor::new(Box::new(backend));
+    let mut state = StateStore::new();
+    for i in 0..frames {
+        let ft = FrameTime {
+            beats: Beats(f64::from(i) / 30.0),
+            seconds: Seconds(f64::from(i) / 60.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: i64::from(i),
+        };
+        let mut enc = device.create_encoder("freeze-fb-frame");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    let result = RenderTarget::new(device, w, h, FMT, "freeze-fb-result");
+    let out_tex = exec.backend().texture_2d(out_slot).expect("output retained");
+    {
+        let mut e = device.create_encoder("freeze-fb-copy");
+        e.copy_texture_to_texture(&out_tex.clone(), &result.texture, w, h, 1);
+        e.commit_and_wait_completed();
+    }
+    result
+}
+
+/// The REAL Watercolor preset, fused vs unfused, 8 feedback frames. The fused
+/// def carries an IN-LOOP stencil region (the Linear diffuse blur with the
+/// uv-displace warp absorbed into its fetch) plus two in-loop pointwise
+/// regions (tier-A q16) — the whole wet path lives inside node.feedback's
+/// cycle, so any per-frame rounding gap would compound visibly across frames.
+/// Texel-exact taps + q16'd chain tail keep the loop bit-faithful by
+/// induction; this is the live-path guarantee for the editor==stage line.
+#[test]
+fn watercolor_inloop_chain_fusion_matches_unfused() {
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = noise_input(&device, w, h);
+
+    let base = crate::node_graph::loaded_preset_view_by_id(&manifold_core::PresetTypeId::new(
+        "Watercolor",
+    ))
+    .expect("Watercolor view");
+    let def = base.canonical_def;
+
+    let fused = super::install::fuse_canonical_def(def, &registry)
+        .expect("Watercolor fuses")
+        .def;
+    assert!(
+        !fused.nodes.iter().any(|n| n.type_id == "node.uv_displace_by_flow"),
+        "the warp must be absorbed into the diffuse blur's fetch"
+    );
+
+    let u_img = render_effect_frames_with_state(&device, &registry, def, &input, 8);
+    let f_img = render_effect_frames_with_state(&device, &registry, &fused, &input, 8);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-3, 1.0e-2);
+    eprintln!(
+        "[watercolor in-loop] 8 frames fused vs unfused: max_abs={} over={}/{}",
+        r.max_abs, r.over_count, r.total
+    );
+    assert!(
+        r.passes(0.002) && r.over_count < 64,
+        "in-loop stencil fusion must hold across feedback frames: \
+         max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Look-equivalence for the Watercolor/Bloom preset swap: a legacy `node.blur`
 /// (monolithic H+V with an internal f16 scratch) renders identically to an
 /// explicit pair of `node.gaussian_blur` passes in `Linear` mode — the exact

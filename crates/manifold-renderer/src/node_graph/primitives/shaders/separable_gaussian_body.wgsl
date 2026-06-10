@@ -126,23 +126,30 @@ fn sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32>
 // clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
 // texel centers, so fusing through this mode is filter-exact by construction.
 fn sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    // Single-exit on purpose: an early return here leaves unreachable blocks
+    // that abort spirv-opt's merge-return pass, and the whole fused kernel
+    // then ships UNOPTIMIZED (no inlining/DCE — measured slow enough to flip
+    // the perf gate). Same arithmetic, same order, just one return.
     let r_int = min(i32(radius), 32);
+    var result: vec4<f32>;
     if r_int <= 0 {
-        return fetch_in(uv);
-    }
-    let sigma = max(radius * 0.5, 0.5);
-    let two_sigma_sq = 2.0 * sigma * sigma;
+        result = fetch_in(uv);
+    } else {
+        let sigma = max(radius * 0.5, 0.5);
+        let two_sigma_sq = 2.0 * sigma * sigma;
 
-    var sum = vec4<f32>(0.0);
-    var weight_sum = 0.0;
-    for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
-        let s = fetch_in(uv + axis_dir * f32(d));
-        let dist_sq = f32(d * d);
-        let w = exp(-dist_sq / two_sigma_sq);
-        sum = sum + s * w;
-        weight_sum = weight_sum + w;
+        var sum = vec4<f32>(0.0);
+        var weight_sum = 0.0;
+        for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+            let s = fetch_in(uv + axis_dir * f32(d));
+            let dist_sq = f32(d * d);
+            let w = exp(-dist_sq / two_sigma_sq);
+            sum = sum + s * w;
+            weight_sum = weight_sum + w;
+        }
+        result = sum / max(weight_sum, 1e-6);
     }
-    return sum / max(weight_sum, 1e-6);
+    return result;
 }
 
 fn body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {

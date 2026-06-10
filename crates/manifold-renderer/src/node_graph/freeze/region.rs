@@ -471,22 +471,33 @@ fn absorb_virtual_chains(
                     .iter()
                     .filter(|i| is_texture_port(&i.ty))
                     .collect();
+                let access_list = constructed.input_access();
                 let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
                 let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
-                for port in &tex_ports {
+                for (pidx, port) in tex_ports.iter().enumerate() {
+                    let access =
+                        access_list.get(pidx).copied().unwrap_or(InputAccess::Coincident);
                     let Some(wire) = def
                         .wires
                         .iter()
                         .find(|w| w.to_node == doc_id && w.to_port == port.name)
                     else {
-                        if port.required {
+                        // A gather needs a real texture to sample — unwired
+                        // (even optional) can't re-anchor; required-unwired
+                        // wouldn't render anyway.
+                        if port.required || access.is_gather() {
                             return None;
                         }
                         inputs.push(RegionInput::Unwired);
-                        input_access.push(InputAccess::Coincident);
+                        input_access.push(access);
                         continue;
                     };
                     let resolved = if node_set.contains(&wire.from_node) {
+                        // A gathered producer can't thread as a per-corner
+                        // register (the body samples a whole texture).
+                        if access.is_gather() {
+                            return None;
+                        }
                         RegionInput::Member(wire.from_node)
                     } else {
                         let key = (wire.from_node, wire.from_port.clone());
@@ -500,7 +511,7 @@ fn absorb_virtual_chains(
                         RegionInput::External(slot)
                     };
                     inputs.push(resolved);
-                    input_access.push(InputAccess::Coincident);
+                    input_access.push(access);
                 }
                 // Chains never sit on a feedback cycle (gate above), so the
                 // tier-A in-loop rounding never applies; the codegen q16s the
@@ -580,10 +591,14 @@ fn absorb_virtual_chains(
     });
 }
 
-/// Per-member + per-incoming-wire gates for absorbing `nodes` into a stencil
-/// fetch: single escape to `consumer`, texture-domain all-coincident members
-/// off any cycle at the region's element space, and every incoming texture
-/// wire produced at that space too (corner reads are exact `textureLoad`s).
+/// Per-member gates for absorbing `nodes` into a stencil fetch: single escape
+/// to `consumer`, texture-domain pointwise/coincident/gather/Source members
+/// off any cycle whose OUTPUT lives at the region's element space, every
+/// member agreeing with the consumer's sampler address mode. Chain INPUT wires
+/// carry no space constraint: the fetch reads chain externals through the
+/// shared sampler at the corner uv (coincident) or a body-computed coord
+/// (gather) — the same resolution-robust read the unfused standalone atom
+/// makes, so a half-res flow field feeding an absorbed warp stays exact.
 fn chain_is_absorbable(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
@@ -601,21 +616,22 @@ fn chain_is_absorbable(
                 return false;
             }
         }
-        // Incoming TEXTURE wire: the fetch textureLoads it at corner texels of
-        // the region grid, so it must be produced at the region's space. (A
-        // scalar/control wire into a param port re-anchors as a port shadow.)
-        if !node_set.contains(&w.from_node)
-            && node_set.contains(&w.to_node)
-            && is_texture_wire(def, registry, w)
-            && wire_feeds_texture_port(def, registry, w)
-            && space_of(spaces, w.from_node, &w.from_port) != region_space
-        {
-            return false;
-        }
     }
     if escapes != 1 {
         return false;
     }
+    // The consumer's sampler mode is the region's shared `samp`; every chain
+    // member's reads go through it, so each member must create the same mode
+    // standalone (default clamp for nearly every atom) or the look would shift
+    // at texture edges.
+    let consumer_mode = node_sampler_mode(def, registry, consumer);
+    // In a PURE-TEXTURE feedback loop, absorption is sound only when the
+    // consumer's taps are texel-exact (Linear blur): corner values are q16'd
+    // to the unfused store and integer taps read corners exactly, so the loop
+    // stays bit-identical by induction (the tier-A argument). Fractional taps
+    // leave ~1 ulp of lerp noise per frame, which a loop amplifies — and a
+    // PARTICLE loop amplifies anything (the parked f16 class) — both stay out.
+    let consumer_taps_exact = node_taps_texel_exact(def, registry, consumer);
     for &id in nodes {
         let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
             return false;
@@ -626,39 +642,115 @@ fn chain_is_absorbable(
         if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
             return false; // buffer atom — no texture grid
         }
-        if n.input_access().iter().any(|a| *a != InputAccess::Coincident) {
-            return false; // a gather/texel read inside a chain can't re-anchor
+        // Coincident reads re-anchor as sampled corner reads; a sampler-Gather
+        // re-anchors as (texture, sampler) body args. Exact-texel kinds
+        // (CoincidentTexel / GatherTexel) are resolution- and grid-pinned in a
+        // way a re-anchored sampled read can't reproduce — boundary.
+        if n.input_access()
+            .iter()
+            .any(|a| !matches!(a, InputAccess::Coincident | InputAccess::Gather))
+        {
+            return false;
         }
         if n.stencil_fetch() {
             return false; // nested stencils are a follow-on
         }
-        if node_on_cycle(id, def) {
-            return false; // feedback rounding semantics don't survive recompute
+        if node_on_cycle(id, def)
+            && (!consumer_taps_exact || cycle_contains_array(id, def, registry))
+        {
+            return false; // in-loop recompute is only bit-faithful under exact taps
         }
         if node_output_space(spaces, def, registry, id) != region_space {
+            return false;
+        }
+        if node_sampler_mode(def, registry, id) != consumer_mode {
             return false;
         }
     }
     true
 }
 
-/// Whether wire `w` lands on a TEXTURE input port of its target (vs a scalar
-/// param shadow port that happens to receive a texture-typed producer — the
-/// loader rejects those anyway, but fail closed).
-fn wire_feeds_texture_port(
+/// Whether node `id`'s stencil taps are texel-exact under its def params —
+/// see [`EffectNode::stencil_taps_texel_exact`]. Same effective-param
+/// resolution as [`node_sampler_mode`].
+fn node_taps_texel_exact(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u32) -> bool {
+    use crate::node_graph::parameters::ParamValue;
+    let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
+        return false;
+    };
+    let Some(n) = registry.construct(&doc.type_id) else {
+        return false;
+    };
+    let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
+    for p in n.parameters() {
+        let v = match doc.params.get(p.name) {
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => {
+                Some(*value)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => {
+                Some(if *value { 1.0 } else { 0.0 })
+            }
+            _ => match &p.default {
+                ParamValue::Float(f) => Some(*f),
+                ParamValue::Enum(u) => Some(*u as f32),
+                ParamValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+                _ => None,
+            },
+        };
+        if let Some(v) = v {
+            params.insert(p.name, ParamValue::Float(v));
+        }
+    }
+    n.stencil_taps_texel_exact(&params)
+}
+
+/// The sampler address mode node `id` would create standalone, resolved from
+/// its def params (the same read the install pass's gather agreement does).
+fn node_sampler_mode(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-    w: &EffectGraphWire,
-) -> bool {
-    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
-        return false;
+    id: u32,
+) -> manifold_gpu::GpuAddressMode {
+    use crate::node_graph::parameters::ParamValue;
+    let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
+        return manifold_gpu::GpuAddressMode::ClampToEdge;
     };
-    let Some(node) = registry.construct(&to.type_id) else {
-        return false;
+    let Some(n) = registry.construct(&doc.type_id) else {
+        return manifold_gpu::GpuAddressMode::ClampToEdge;
     };
-    node.inputs()
-        .iter()
-        .any(|i| i.name == w.to_port && is_texture_port(&i.ty))
+    let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
+    for p in n.parameters() {
+        let v = match doc.params.get(p.name) {
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => {
+                Some(*value)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => {
+                Some(if *value { 1.0 } else { 0.0 })
+            }
+            _ => match &p.default {
+                ParamValue::Float(f) => Some(*f),
+                ParamValue::Enum(u) => Some(*u as f32),
+                ParamValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+                _ => None,
+            },
+        };
+        if let Some(v) = v {
+            params.insert(p.name, ParamValue::Float(v));
+        }
+    }
+    n.fused_gather_sampler_mode(&params)
 }
 
 /// Stencil tier A kill switch: `MANIFOLD_FREEZE_Q16=0` (or `false`/`off`)

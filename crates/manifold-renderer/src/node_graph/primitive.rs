@@ -277,6 +277,18 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::stencil_taps_texel_exact`](crate::node_graph::effect_node::EffectNode::stencil_taps_texel_exact).
+    /// Override on a stencil atom for the param shapes whose gather coords all
+    /// land on texel centers (integer tap offsets) — e.g. the Linear blur mode.
+    /// Default `false` (taps assumed fractional).
+    fn stencil_taps_texel_exact(
+        &self,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> bool {
+        false
+    }
+
+    /// Mirror of
     /// [`EffectNode::output_dims`](crate::node_graph::effect_node::EffectNode::output_dims).
     /// Override on `node.downsample` (and any future `node.upsample`)
     /// to break out of the default "match max of texture input dims"
@@ -516,6 +528,12 @@ impl<P: Primitive + 'static> EffectNode for P {
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> manifold_gpu::GpuAddressMode {
         Primitive::fused_gather_sampler_mode(self, params)
+    }
+    fn stencil_taps_texel_exact(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> bool {
+        Primitive::stencil_taps_texel_exact(self, params)
     }
     fn output_dims(
         &self,

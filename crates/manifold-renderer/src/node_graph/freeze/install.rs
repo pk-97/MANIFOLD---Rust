@@ -735,6 +735,9 @@ fn resolve_dispatch_count_field(
 /// `node.wgsl_compute` per region. Returns `None` (leave the card entirely
 /// unfused) when nothing fuses. Conservative throughout: any inability to
 /// express a region's params, body, or wiring aborts the whole rewrite.
+// Live callers all pass a mask now; the unmasked form remains the proof/test
+// surface (every oracle drives fusion through it).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,

@@ -758,6 +758,19 @@ pub trait EffectNode: Send {
         manifold_gpu::GpuAddressMode::ClampToEdge
     }
 
+    /// STENCIL atoms only: whether, under these param values, every gather
+    /// coordinate the body computes lands exactly on a texel center (integer
+    /// tap offsets from the fragment's own texel). When true, a fused fetch is
+    /// texel-exact — hardware sampling snaps to the texel, the manual bilinear
+    /// degenerates to a corner — so the finder may absorb a producer chain even
+    /// INSIDE a pure-texture feedback loop (with the chain tail q16'd, the
+    /// loop stays bit-exact by induction, the tier-A argument). Fractional-tap
+    /// shapes (Dynamic blur, variable-width) return the default `false` and
+    /// keep in-loop absorption off (a ~1-ulp lerp gap would amplify).
+    fn stencil_taps_texel_exact(&self, _params: &ParamValues) -> bool {
+        false
+    }
+
     /// If this node EMITS a [`Material`](crate::node_graph::material::Material)
     /// of a statically-known [`MaterialKind`], return it. The validator
     /// uses this to resolve a downstream renderer's

@@ -1990,8 +1990,15 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
             if access == InputAccess::Gather && matches!(src, InputSource::External(_)) {
                 needs_sampler = true;
             }
+            if virtual_nodes.contains(&i) {
+                // EVERY chain external read goes through the shared sampler
+                // (sampled at the corner uv, or by the gather body itself).
+                if matches!(src, InputSource::External(_)) {
+                    needs_sampler = true;
+                }
+                continue; // never pre-read at cs_main's own coord
+            }
             if !access.is_gather()
-                && !virtual_nodes.contains(&i)
                 && let InputSource::External(e) = src
             {
                 coincident_ext.insert(*e);
@@ -2339,11 +2346,14 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
 
 /// Body-arg marshalling for one VIRTUAL chain member, evaluated inside a
 /// stencil fetch's `n{i}_vsrc_<port>` at corner texel `ti` / uv `vuv` / dims
-/// `vd`: a coincident external reads via exact `textureLoad(src_e, ti, 0)`
-/// (the corner texel the unfused chain member produced), an earlier chain
-/// member threads its per-corner register `v{j}`, params/uv/dims/use-flags
-/// follow the same convention as the cs_main marshaller. Chains are
-/// all-coincident by the finder's gates — anything else is a codegen bug.
+/// `vd`: a coincident external reads via `textureSampleLevel(src_e, samp,
+/// vuv, 0.0)` — the same resolution-robust sampled read the unfused
+/// standalone atom makes (exact texel at same-res, bilinear for a half-res
+/// flow field); a sampler-Gather external passes `(src_e, samp)` so the body
+/// samples at its own computed coords; an earlier chain member threads its
+/// per-corner register `v{j}`; params/uv/dims/use-flags follow the cs_main
+/// marshaller. The finder gates chains to Coincident/Gather members agreeing
+/// on the region sampler mode — anything else here is a codegen bug.
 fn chain_member_args(
     j: usize,
     node: &RegionNode<'_>,
@@ -2354,7 +2364,7 @@ fn chain_member_args(
     let mut args: Vec<String> = Vec::new();
     for (idx, src) in node.inputs.iter().enumerate() {
         let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
-        if access != InputAccess::Coincident {
+        if !matches!(access, InputAccess::Coincident | InputAccess::Gather) {
             return Err(CodegenError::BadInput);
         }
         match src {
@@ -2362,9 +2372,17 @@ fn chain_member_args(
                 if *e >= region.num_external_inputs {
                     return Err(CodegenError::BadInput);
                 }
-                args.push(format!("textureLoad(src_{e}, ti, 0)"));
+                if access == InputAccess::Gather {
+                    args.push(format!("src_{e}"));
+                    args.push("samp".to_string());
+                } else {
+                    args.push(format!("textureSampleLevel(src_{e}, samp, vuv, 0.0)"));
+                }
             }
             InputSource::Node(id) => {
+                if access == InputAccess::Gather {
+                    return Err(CodegenError::BadInput); // a register isn't a texture
+                }
                 let Some(k) = index_of(*id) else {
                     return Err(CodegenError::BadInput);
                 };
@@ -2739,12 +2757,15 @@ mod gpu_tests {
         );
         assert!(g.wgsl.contains("fn n0_vsrc_in"), "per-corner chain evaluator emitted");
         assert!(g.wgsl.contains("fn n0_fetch_in"), "bilinear fetch emitted");
-        assert!(g.wgsl.contains("let v1 = n1_body(textureLoad(src_0, ti, 0)"), "chain external loaded at the corner texel");
+        assert!(
+            g.wgsl.contains("let v1 = n1_body(textureSampleLevel(src_0, samp, vuv, 0.0)"),
+            "chain external sampled at the corner uv (resolution-robust, like the unfused atom)"
+        );
         assert!(g.wgsl.contains("return q16(v1)"), "chain output reproduces the f16 store");
         assert!(!g.wgsl.contains("let r1 ="), "the chain member is not evaluated by cs_main");
         assert!(g.wgsl.contains("params.n1_gain"), "the chain member's param stays a live uniform field");
         assert!(g.wgsl.contains("textureStore(dst, coord, r0);"), "the blur register is the region output");
-        assert!(!g.wgsl.contains("var samp"), "a virtual-only gather region binds no sampler");
+        assert!(g.wgsl.contains("var samp"), "chain external reads bind the shared sampler");
     }
 
     /// Tier 3 — a gather input binds a sampler and is passed to the body as a
