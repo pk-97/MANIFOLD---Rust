@@ -315,6 +315,15 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::fused_dispatch_count_param`](crate::node_graph::effect_node::EffectNode::fused_dispatch_count_param).
+    /// Particle integrators override to name their live-count scalar param
+    /// (`active_count`) so a fused region can cap its dispatch at the live
+    /// count instead of the buffer capacity. Default: `None`.
+    fn fused_dispatch_count_param(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Mirror of
     /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
     /// Mux-family primitives override to return the selected input
     /// port name (e.g. `"in_2"` for mux selector=2). See the
@@ -523,6 +532,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn fusion_register_heavy(&self) -> bool {
         Primitive::fusion_register_heavy(self)
+    }
+    fn fused_dispatch_count_param(&self) -> Option<&'static str> {
+        Primitive::fused_dispatch_count_param(self)
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY

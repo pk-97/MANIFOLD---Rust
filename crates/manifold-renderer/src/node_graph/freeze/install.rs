@@ -605,6 +605,47 @@ fn external_is_inplace_loop(
     false
 }
 
+/// Resolve the live-count dispatch cap for an IN-PLACE buffer region: every
+/// member must declare a [`fused_dispatch_count_param`] (the particle
+/// integrators' `active_count`) AND every one of those params must be driven
+/// by the SAME producer wire — then one uniform field is authoritative for the
+/// whole region and the fused kernel can dispatch (and guard) at the live
+/// count instead of the pool capacity, exactly like the standalone dispatches.
+/// Any member without the hint, an unwired count param, or disagreeing
+/// producers ⇒ `None` (capacity dispatch — always correct, just wider).
+///
+/// Returns `(member index, param name)` of the first member; the codegen
+/// formats the field as `n{i}_<param>`.
+///
+/// [`fused_dispatch_count_param`]: crate::node_graph::effect_node::EffectNode::fused_dispatch_count_param
+fn resolve_dispatch_count_field(
+    region: &Region,
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+) -> Option<(usize, &'static str)> {
+    let mut field: Option<(usize, &'static str)> = None;
+    let mut source: Option<(u32, String)> = None;
+    for (i, member) in region.members.iter().enumerate() {
+        let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
+        let node = registry.construct(&doc_node.type_id)?;
+        let param = node.fused_dispatch_count_param()?;
+        let wire = def
+            .wires
+            .iter()
+            .find(|w| w.to_node == member.doc_id && w.to_port == param)?;
+        let src = (wire.from_node, wire.from_port.clone());
+        match &source {
+            None => {
+                source = Some(src);
+                field = Some((i, param));
+            }
+            Some(s) if *s == src => {}
+            Some(_) => return None, // members disagree — capacity dispatch
+        }
+    }
+    field
+}
+
 /// Partition `def` into its fusable regions and rewrite it with one fused
 /// `node.wgsl_compute` per region. Returns `None` (leave the card entirely
 /// unfused) when nothing fuses. Conservative throughout: any inability to
@@ -703,12 +744,22 @@ pub(crate) fn fuse_canonical_def(
         // leave the whole card unfused (a single `samp` can't serve both).
         let sampler_address_mode = resolve_gather_sampler_mode(region, registry, def)?;
 
+        // Live-count dispatch cap: only meaningful for an in-place loop region
+        // (the pool tail must stay untouched either way; a fresh-dst region's
+        // unwritten tail would be garbage, so it keeps the capacity dispatch).
+        let dispatch_count_field = if in_place_alias.is_some() {
+            resolve_dispatch_count_field(region, registry, def)
+        } else {
+            None
+        };
+
         let fusion_region = FusionRegion {
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
             outputs: region.outputs.iter().map(|&d| NodeInstanceId(d)).collect(),
             in_place_alias,
             sampler_address_mode,
+            dispatch_count_field,
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline

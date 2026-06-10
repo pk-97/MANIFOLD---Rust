@@ -144,6 +144,13 @@ pub struct WgslCompute {
     /// Last observed `reset_trigger` integer, for the `reset_gated` edge check.
     /// `None` (first frame) differs from any value ⇒ the first frame dispatches.
     last_reset_trigger: Option<i32>,
+    /// `// @dispatch_count_param: <field>` marker (emitted by the fused buffer
+    /// codegen): the named uniform param carries the kernel's LIVE element
+    /// count, so the array dispatch grid is min(capacity, that value) instead
+    /// of the full buffer capacity — matching the standalone particle
+    /// integrators, which dispatch only live particles. The kernel carries the
+    /// matching in-bounds guard, so this is purely a perf cap.
+    dispatch_count_param: Option<String>,
 
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
@@ -270,6 +277,7 @@ impl WgslCompute {
             sampler_address_mode: GpuAddressMode::ClampToEdge,
             reset_gated: false,
             last_reset_trigger: None,
+            dispatch_count_param: None,
             pipeline: None,
             sampler: None,
             compiled_hash: None,
@@ -327,6 +335,7 @@ impl WgslCompute {
         }
         self.sampler_address_mode = parsed.sampler_address_mode;
         self.reset_gated = parsed.reset_gated;
+        self.dispatch_count_param = parsed.dispatch_count_param;
 
         // Rebuild leaked &'static views.
         self._leaked_strings.clear();
@@ -384,6 +393,7 @@ struct ParsedShader {
     default_dispatch_port: Option<String>,
     sampler_address_mode: GpuAddressMode,
     reset_gated: bool,
+    dispatch_count_param: Option<String>,
 }
 
 /// The synthetic input port a `// @reset_gated` kernel exposes to receive its
@@ -414,6 +424,9 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     let fused_outputs = extract_fused_outputs(source);
     // `// @reset_gated`: the kernel re-dispatches only on a `reset_trigger` edge.
     let reset_gated = source_has_reset_gated_marker(source);
+    // `// @dispatch_count_param: <field>`: the named uniform param caps the
+    // array dispatch grid at the live element count (fused buffer codegen).
+    let dispatch_count_param = extract_dispatch_count_param(source);
 
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
@@ -705,6 +718,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         default_dispatch_port,
         sampler_address_mode: parse_sampler_address_mode(source),
         reset_gated,
+        dispatch_count_param,
     })
 }
 
@@ -1156,6 +1170,24 @@ fn parse_sampler_address_mode(source: &str) -> GpuAddressMode {
 /// Whether the source carries a `// @reset_gated` line-comment marker (own-line
 /// or trailing). Same conventions as the other markers: block comments stripped
 /// first, exact match. Drives the synthetic `reset_trigger` input + dispatch gate.
+/// Scan for a `// @dispatch_count_param: <field>` marker (emitted by the fused
+/// buffer codegen): the named uniform param carries the kernel's live element
+/// count, capping the array dispatch grid below the buffer capacity.
+fn extract_dispatch_count_param(source: &str) -> Option<String> {
+    let stripped = strip_block_comments(source);
+    for line in stripped.lines() {
+        if let (_, Some(c)) = split_line_comment(line)
+            && let Some(rest) = c.trim().strip_prefix("@dispatch_count_param:")
+        {
+            let name = rest.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn source_has_reset_gated_marker(source: &str) -> bool {
     let stripped = strip_block_comments(source);
     stripped
@@ -1665,7 +1697,19 @@ impl WgslCompute {
                 })
                 .unwrap_or(4)
                 .max(1);
-            let count = (buf.size() as u32) / item_size;
+            let mut count = (buf.size() as u32) / item_size;
+            // `// @dispatch_count_param`: cap the grid at the live element
+            // count (the fused particle integrators' `active_count`) — the
+            // kernel guards the same bound, so threads past it are pure waste.
+            // Missing/unwired param falls back to the capacity dispatch.
+            if let Some(p) = &self.dispatch_count_param {
+                let live = ctx.scalar_or_param(p, f32::MAX);
+                if live.is_finite() {
+                    // Floor of one group: a zero live count still dispatches one
+                    // (immediately-guarded) group rather than a zero-dim grid.
+                    count = count.min(live.max(0.0).round() as u32).max(1);
+                }
+            }
             return Some((count.div_ceil(wx), wy.max(1), wz.max(1)));
         }
         None

@@ -1176,6 +1176,18 @@ pub struct FusionRegion<'a> {
     /// samples its edges exactly like the unfused atom. The install pass only
     /// admits gathers that agree on ONE mode, so a single token covers the region.
     pub sampler_address_mode: &'static str,
+    /// IN-PLACE buffer regions only: `(member index, param name)` of the live
+    /// element count (`active_count`) bounding the whole region's dispatch.
+    /// When set, the kernel early-returns at that count and carries a
+    /// `// @dispatch_count_param: n{i}_<param>` marker so `node.wgsl_compute`
+    /// sizes its grid from the param value instead of the buffer CAPACITY —
+    /// matching the standalone integrators, which dispatch only live particles
+    /// and leave the pool tail untouched. The install pass sets this only when
+    /// every member declares
+    /// [`fused_dispatch_count_param`](crate::node_graph::effect_node::EffectNode::fused_dispatch_count_param)
+    /// and all those params are driven by ONE producer wire (so a single field
+    /// is authoritative). `None` keeps the capacity dispatch.
+    pub dispatch_count_field: Option<(usize, &'static str)>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -1456,6 +1468,13 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         )
         .unwrap();
     }
+    // `// @dispatch_count_param: <field>` — node.wgsl_compute reads this marker
+    // and sizes the dispatch grid from the named uniform field's live value
+    // (min'd with capacity) instead of the array length. cs_main carries the
+    // matching in-kernel guard.
+    if let Some((mi, pname)) = region.dispatch_count_field {
+        writeln!(out, "// @dispatch_count_param: n{mi}_{pname}").unwrap();
+    }
     out.push('\n');
 
     // --- shared library includes (noise_common, …), prepended so the bodies'
@@ -1492,6 +1511,29 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     out.push_str("    let idx = gid.x;\n");
     out.push_str("    let count = arrayLength(&src_0);\n");
     out.push_str("    if idx >= count {\n        return;\n    }\n");
+    // Live-count cap (in-place loop regions): early-return past the members'
+    // shared `active_count`, leaving the pool tail untouched exactly like the
+    // standalone integrators. The marker (emitted with the bindings above —
+    // see `dispatch_count_field`) also shrinks the GRID, so the guard here is
+    // the correctness half and the marker is the perf half.
+    if let Some((mi, pname)) = region.dispatch_count_field {
+        let node = region.nodes.get(mi).ok_or(CodegenError::BadInput)?;
+        let p = node
+            .params
+            .iter()
+            .find(|p| p.name == pname)
+            .ok_or(CodegenError::BadInput)?;
+        let zero = match param_wgsl_type(p)? {
+            "f32" => "0.0",
+            "i32" => "0",
+            _ => return Err(CodegenError::BadInput),
+        };
+        writeln!(
+            out,
+            "    if idx >= u32(max(params.n{mi}_{pname}, {zero})) {{\n        return;\n    }}"
+        )
+        .unwrap();
+    }
     for e in 0..region.num_external_inputs {
         writeln!(out, "    let e_{e} = src_{e}[idx];").unwrap();
     }
@@ -2058,6 +2100,7 @@ mod gpu_tests {
             outputs: vec![id(1)],
             in_place_alias: None,
             sampler_address_mode: "clamp",
+            dispatch_count_field: None,
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -2105,6 +2148,7 @@ mod gpu_tests {
             outputs: vec![id(1)],
             in_place_alias: None,
             sampler_address_mode: "clamp",
+            dispatch_count_field: None,
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -2179,6 +2223,7 @@ mod gpu_tests {
             outputs: vec![id(1)],
             in_place_alias: None,
             sampler_address_mode: "clamp",
+            dispatch_count_field: None,
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -2252,6 +2297,7 @@ mod gpu_tests {
             outputs: vec![id(1), id(2)],
             in_place_alias: None,
             sampler_address_mode: "clamp",
+            dispatch_count_field: None,
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -2453,6 +2499,7 @@ mod gpu_tests {
             outputs: vec![id(6)],
             in_place_alias: None,
             sampler_address_mode: "clamp",
+            dispatch_count_field: None,
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

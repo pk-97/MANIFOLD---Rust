@@ -810,6 +810,19 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// The scalar param that bounds this atom's LIVE element count (e.g.
+    /// `active_count` on the particle integrators) — the value its `run()`
+    /// dispatches by, leaving elements beyond it untouched. A fused buffer
+    /// region whose members all agree on the wired source of this param caps
+    /// its dispatch at that value instead of the buffer CAPACITY the generic
+    /// `arrayLength` guard implies — FluidSimulation's euler+wrap fused
+    /// kernel was iterating the full pool (2.69 ms) while the standalone
+    /// dispatches covered only live particles (1.37 ms). Default `None` (no
+    /// cap; capacity dispatch as before).
+    fn fused_dispatch_count_param(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Optional fusable WGSL body fragment (a pure `fn body(...)`) the fusion
     /// codegen chains into one kernel and generates the standalone kernel from
     /// (single-source). `None` (default) = the primitive's own kernel is

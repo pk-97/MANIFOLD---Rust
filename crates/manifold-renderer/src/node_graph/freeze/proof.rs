@@ -1324,6 +1324,20 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
          no such wire means the derived-uniform region never fused (vacuous pass)"
     );
 
+    // The live-count dispatch cap must engage: euler+wrap agree on one
+    // active_count producer, so the fused kernel carries the marker that lets
+    // node.wgsl_compute dispatch live particles instead of pool capacity
+    // (without it the fused kernel iterates the full pool — 2.69 ms vs the
+    // standalone atoms' 1.37 at show scale). The render diff below then proves
+    // the capped kernel leaves the pool tail bit-identical to unfused.
+    assert!(
+        fused_def.nodes.iter().any(|n| n
+            .wgsl_source
+            .as_deref()
+            .is_some_and(|s| s.contains("// @dispatch_count_param: n0_active_count"))),
+        "fused particle kernel must carry the live-count dispatch marker"
+    );
+
     // The fp32 in-loop path must actually fire too: a fused texture region inside
     // the feedback loop (the pointwise flow-field atoms scale → rotate) declares
     // an rgba32float `dst`. If this is absent, the fp32 atoms stayed excluded and
