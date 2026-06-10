@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Watercolor",
-  "description": "Watercolor, decomposed: a feedback paint-flow simulation built from atoms. node.feedback carries last frame's accumulated paint; node.gain(decay) + node.mix(Max) form the decayed-max composite against the source; ONE node.flow_field_noise (warp-free, half-res) drives both node.uv_displace_by_flow (the fBM flow displacement) AND, via scale_offset, the node.masked_mix dilution mask; node.blur the edge diffusion; node.slope_displace the soft-light/Sobel pigment-pull; a second node.blur + node.masked_mix the flow-masked dilution that writes the feedback; node.mix(Lerp) the wet/dry composite. A node.clamp_texture guards the feedback against divergence (replacing the legacy safe_clamp). Replaces the fused 7-pass node.watercolor. Time read from FrameTime.seconds (no generator_input). Perf: the original ran the flow at reduced res with no domain warp and used a single cheap noise for the dilution mask — this graph matches that (flow_field_noise resolution=half + warp_scale=0, and the one flow texture is reused for the mask instead of a second 4-octave fBM pass). Documented deltas (visual effect, verified by eye): the flow/diffusion/luma blurs use the general atoms rather than the exact tap kernels; the dilution mask is a soft reuse of the flow field rather than an independent binary 3D-noise threshold; grain is dropped (the legacy inlined a subtle 0.15 paper-grain multiply into the composite — folding it would mean fusing, so it's omitted; node.film_grain stays in the library); the slope-displacement weight is fixed at the default rather than tracking the Displace slider; no NaN guard (decay < 1 + clamp keep it bounded).",
+  "description": "Watercolor, decomposed: a feedback paint-flow simulation built from atoms. node.feedback carries last frame's accumulated paint; node.gain(decay) + node.mix(Max) form the decayed-max composite against the source; ONE node.flow_field_noise (warp-free, half-res) drives both node.uv_displace_by_flow (the fBM flow displacement) AND, via scale_offset, the node.masked_mix dilution mask; an H+V pair of node.gaussian_blur (Linear mode, the exact port of the old node.blur pass, radius shared via a node.value control wire) the edge diffusion; node.slope_displace the soft-light/Sobel pigment-pull; a second Linear H+V pair + node.masked_mix the flow-masked dilution that writes the feedback; node.mix(Lerp) the wet/dry composite. A node.clamp_texture guards the feedback against divergence (replacing the legacy safe_clamp). Replaces the fused 7-pass node.watercolor. Time read from FrameTime.seconds (no generator_input). Perf: the original ran the flow at reduced res with no domain warp and used a single cheap noise for the dilution mask — this graph matches that (flow_field_noise resolution=half + warp_scale=0, and the one flow texture is reused for the mask instead of a second 4-octave fBM pass). Documented deltas (visual effect, verified by eye): the flow/diffusion/luma blurs use the general atoms rather than the exact tap kernels; the dilution mask is a soft reuse of the flow field rather than an independent binary 3D-noise threshold; grain is dropped (the legacy inlined a subtle 0.15 paper-grain multiply into the composite — folding it would mean fusing, so it's omitted; node.film_grain stays in the library); the slope-displacement weight is fixed at the default rather than tracking the Displace slider; no NaN guard (decay < 1 + clamp keep it bounded).",
   "presetMetadata": {
     "id": "Watercolor",
     "displayName": "Watercolor",
@@ -72,7 +72,7 @@
         "id": "blur",
         "label": "Blur",
         "defaultValue": 2.0,
-        "target": { "kind": "node", "nodeId": "diffuse", "param": "radius" },
+        "target": { "kind": "node", "nodeId": "blur_radius", "param": "value" },
         "convert": { "type": "Float" }
       },
       {
@@ -126,11 +126,30 @@
     },
     {
       "id": 6,
-      "typeId": "node.blur",
-      "handle": "diffuse", "nodeId": "diffuse",
+      "typeId": "node.gaussian_blur",
+      "handle": "diffuse_h", "nodeId": "diffuse_h",
       "params": {
+        "radius_mode": { "type": "Enum", "value": 2 },
         "radius": { "type": "Float", "value": 2.0 },
-        "mode": { "type": "Enum", "value": 0 }
+        "axis": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.gaussian_blur",
+      "handle": "diffuse_v", "nodeId": "diffuse_v",
+      "params": {
+        "radius_mode": { "type": "Enum", "value": 2 },
+        "radius": { "type": "Float", "value": 2.0 },
+        "axis": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 15,
+      "typeId": "node.value",
+      "handle": "blur_radius", "nodeId": "blur_radius",
+      "params": {
+        "value": { "type": "Float", "value": 2.0 }
       }
     },
     {
@@ -145,11 +164,22 @@
     },
     {
       "id": 8,
-      "typeId": "node.blur",
-      "handle": "luma_blur", "nodeId": "luma_blur",
+      "typeId": "node.gaussian_blur",
+      "handle": "luma_blur_h", "nodeId": "luma_blur_h",
       "params": {
+        "radius_mode": { "type": "Enum", "value": 2 },
         "radius": { "type": "Float", "value": 10.0 },
-        "mode": { "type": "Enum", "value": 0 }
+        "axis": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 16,
+      "typeId": "node.gaussian_blur",
+      "handle": "luma_blur_v", "nodeId": "luma_blur_v",
+      "params": {
+        "radius_mode": { "type": "Enum", "value": 2 },
+        "radius": { "type": "Float", "value": 10.0 },
+        "axis": { "type": "Enum", "value": 1 }
       }
     },
     {
@@ -193,12 +223,16 @@
     { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
     { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in" },
     { "fromNode": 4, "fromPort": "flow", "toNode": 5, "toPort": "flow" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "source" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 6, "toPort": "radius" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 14, "toPort": "radius" },
     { "fromNode": 0, "fromPort": "out", "toNode": 7, "toPort": "base" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "image" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "source" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 7, "toPort": "image" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 16, "toPort": "in" },
     { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "b" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 10, "toPort": "b" },
     { "fromNode": 4, "fromPort": "flow", "toNode": 9, "toPort": "in" },
     { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "mask" },
     { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },

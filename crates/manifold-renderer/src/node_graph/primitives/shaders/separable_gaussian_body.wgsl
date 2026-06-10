@@ -120,18 +120,47 @@ fn sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32>
     return result / total_weight;
 }
 
+// Linear-radius separable Gaussian — exact port of node.blur's per-axis pass
+// (blur.wgsl mode 0): sigma = max(radius/2, 0.5), one tap per integer offset
+// -r..r (no tap-pair trick), normalized by the running weight sum, radius
+// clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
+// texel centers, so fusing through this mode is filter-exact by construction.
+fn sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    let r_int = min(i32(radius), 32);
+    if r_int <= 0 {
+        return fetch_in(uv);
+    }
+    let sigma = max(radius * 0.5, 0.5);
+    let two_sigma_sq = 2.0 * sigma * sigma;
+
+    var sum = vec4<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+        let s = fetch_in(uv + axis_dir * f32(d));
+        let dist_sq = f32(d * d);
+        let w = exp(-dist_sq / two_sigma_sq);
+        sum = sum + s * w;
+        weight_sum = weight_sum + w;
+    }
+    return sum / max(weight_sum, 1e-6);
+}
+
 fn body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {
     let texel = vec2<f32>(1.0) / dims;
 
     var result: vec4<f32>;
-    if radius_mode == 1u {
+    if radius_mode == 1u || radius_mode == 2u {
         var axis_dir: vec2<f32>;
         if axis == 0u {
             axis_dir = vec2<f32>(texel.x, 0.0);
         } else {
             axis_dir = vec2<f32>(0.0, texel.y);
         }
-        result = sg_blur_dynamic(uv, axis_dir, radius);
+        if radius_mode == 2u {
+            result = sg_blur_linear(uv, axis_dir, radius);
+        } else {
+            result = sg_blur_dynamic(uv, axis_dir, radius);
+        }
     } else {
         var d: vec2<f32>;
         if axis == 0u {

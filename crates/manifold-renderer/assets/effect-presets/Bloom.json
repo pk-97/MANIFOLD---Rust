@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Bloom",
-  "description": "Bloom, decomposed: node.threshold extracts the bright pass with a soft knee (the legacy bloom prefilter curve), node.downsample drops to quarter-res, node.blur (Gaussian) softens it cheaply, node.mix (Add) layers the glow back over the source by `amount`. Replaces the fused node.bloom kernel. Visual delta vs legacy: a single downsample+gaussian instead of the legacy 3-level Blur9/Blur13 mip pyramid, and `amount` scales glow intensity only (the legacy also widened the radius with amount) — same family, simpler/wider-fixed glow. Verified by eye.",
+  "description": "Bloom, decomposed: node.threshold extracts the bright pass with a soft knee (the legacy bloom prefilter curve), node.downsample drops to quarter-res, an H+V pair of node.gaussian_blur in Linear mode (the exact port of the old node.blur pass) softens it cheaply, node.mix (Add) layers the glow back over the source by `amount`. Replaces the fused node.bloom kernel. Visual delta vs legacy: a single downsample+gaussian instead of the legacy 3-level Blur9/Blur13 mip pyramid, and `amount` scales glow intensity only (the legacy also widened the radius with amount) — same family, simpler/wider-fixed glow. Verified by eye.",
   "presetMetadata": {
     "id": "Bloom",
     "displayName": "Bloom",
@@ -53,11 +53,22 @@
     },
     {
       "id": 3,
-      "typeId": "node.blur",
-      "handle": "blur", "nodeId": "blur",
+      "typeId": "node.gaussian_blur",
+      "handle": "blur_h", "nodeId": "blur_h",
       "params": {
+        "radius_mode": { "type": "Enum", "value": 2 },
         "radius": { "type": "Float", "value": 8.0 },
-        "mode": { "type": "Enum", "value": 0 }
+        "axis": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.gaussian_blur",
+      "handle": "blur_v", "nodeId": "blur_v",
+      "params": {
+        "radius_mode": { "type": "Enum", "value": 2 },
+        "radius": { "type": "Float", "value": 8.0 },
+        "axis": { "type": "Enum", "value": 1 }
       }
     },
     {
@@ -74,9 +85,10 @@
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
     { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "source" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "in" },
     { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "a" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 4, "toPort": "b" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
   ]
 }

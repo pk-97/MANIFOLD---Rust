@@ -23,8 +23,12 @@ pub const GAUSSIAN_BLUR_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
 /// Display labels for the `axis` enum, indexed by enum value.
 pub const GAUSSIAN_BLUR_AXES: &[&str] = &["Horizontal", "Vertical"];
 
-/// Display labels for the `radius_mode` enum.
-pub const GAUSSIAN_BLUR_RADIUS_MODES: &[&str] = &["Fixed", "Dynamic"];
+/// Display labels for the `radius_mode` enum. `Linear` is the exact port of
+/// the legacy `node.blur` per-axis pass (sigma = radius/2, one tap per integer
+/// offset, normalized) so a node.blur in a preset swaps to an H+V pair of
+/// these with zero look change — and integer taps make fusing through it
+/// filter-exact.
+pub const GAUSSIAN_BLUR_RADIUS_MODES: &[&str] = &["Fixed", "Dynamic", "Linear"];
 
 /// Display labels for the `address_mode` enum — sampler wrap policy.
 /// Matches `manifold_gpu::GpuAddressMode` enum order.
@@ -33,7 +37,7 @@ pub const GAUSSIAN_BLUR_ADDRESS_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];
 crate::primitive! {
     name: GaussianBlur,
     type_id: "node.gaussian_blur",
-    purpose: "Single-axis Gaussian blur. Pair an H pass with a V pass for an isotropic blur. Two algorithms behind one primitive: Fixed (default) uses precomputed 9/17/25-tap kernels at σ≈2/4/6 with `step` controlling per-tap UV stride — cheap, deterministic, used by Halation / DoF / Bloom / OilyFluid. Dynamic uses the legacy fluid-sim algorithm — sigma = max(radius/3, 1), bilinear tap-pair loop, `radius` is in pixels — required for bit-exact FluidSim2D parity (the perceived stroke width depends on the dynamic curve specifically). Set `radius_mode = Dynamic` and wire `radius` to switch algorithms; `kernel_size` and `step` are ignored in Dynamic mode. Dynamic with radius=0 collapses to a single-tap nearest-neighbor sample — the legacy downsample trick.",
+    purpose: "Single-axis Gaussian blur. Pair an H pass with a V pass for an isotropic blur. Two algorithms behind one primitive: Fixed (default) uses precomputed 9/17/25-tap kernels at σ≈2/4/6 with `step` controlling per-tap UV stride — cheap, deterministic, used by Halation / DoF / Bloom / OilyFluid. Dynamic uses the legacy fluid-sim algorithm — sigma = max(radius/3, 1), bilinear tap-pair loop, `radius` is in pixels — required for bit-exact FluidSim2D parity (the perceived stroke width depends on the dynamic curve specifically). Set `radius_mode = Dynamic` and wire `radius` to switch algorithms; `kernel_size` and `step` are ignored in Dynamic mode. Dynamic with radius=0 collapses to a single-tap nearest-neighbor sample — the legacy downsample trick. Linear is the exact port of the classic Blur node's per-axis pass (sigma = radius/2, one tap per pixel offset up to 32, normalized): pair an H and a V pass to replace a Blur node with zero look change.",
     inputs: {
         in: Texture2D required,
         // Port-shadow of `step` so a control-rate scalar (LFO, Math,
@@ -78,7 +82,7 @@ crate::primitive! {
             label: "Radius Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
-            range: Some((0.0, 1.0)),
+            range: Some((0.0, 2.0)),
             enum_values: GAUSSIAN_BLUR_RADIUS_MODES,
         },
         ParamDef {
@@ -186,8 +190,8 @@ impl Primitive for GaussianBlur {
             },
         };
         let radius_mode = match ctx.params.get("radius_mode") {
-            Some(ParamValue::Enum(v)) => (*v).min(1),
-            Some(ParamValue::Float(f)) => (f.round() as u32).min(1),
+            Some(ParamValue::Enum(v)) => (*v).min(2),
+            Some(ParamValue::Float(f)) => (f.round() as u32).min(2),
             _ => 0,
         };
         let radius = match ctx.inputs.scalar("radius") {
