@@ -112,6 +112,37 @@ pub enum RegionInput {
     /// fused body receives a zero vector gated off by its injected use flag —
     /// folded to a literal `0u` at codegen since wiring is static in the def.
     Unwired,
+    /// STENCIL tier: a Gather input backed by a VIRTUAL SOURCE — the producer
+    /// chain is recomputed inside the consumer's `fetch_<port>` instead of
+    /// rendered to a texture. Index into [`Region::virtual_chains`]. Only ever
+    /// paired with a `Gather` access on a stencil-fetch member.
+    Virtual(usize),
+}
+
+/// A pointwise/Source chain absorbed INTO a stencil member's gather read (the
+/// stencil tier's "fuse through the blur"). The chain's members are deleted
+/// from the installed def like ordinary fused members; the consumer's fetch
+/// re-evaluates them at each tap's bilinear corner texels (externals read via
+/// exact `textureLoad`, tail value q16-rounded to reproduce the f16 store the
+/// unfused chain made), so the only fused-vs-unfused gap is the manual f32
+/// lerp vs the hardware filter unit — measured by the stencil parity proof.
+#[derive(Debug, Clone)]
+pub struct VirtualChain {
+    /// The consuming stencil member's doc id.
+    pub consumer: u32,
+    /// Which of the consumer's texture-input slots (index into its
+    /// [`RegionMember::inputs`]) this chain backs.
+    pub input_index: usize,
+    /// Chain members in topo order. Inputs resolve to [`RegionInput::External`]
+    /// (region externals — read at corner texels) or [`RegionInput::Member`] of
+    /// an EARLIER chain member (never a main-region member; convexity ensures
+    /// the region never feeds the chain).
+    pub members: Vec<RegionMember>,
+    /// Doc id of the chain's OUTPUT member — the node whose texture the unfused
+    /// graph stored for the consumer to sample. Its (q16-rounded) value is what
+    /// the fetch returns per corner; not necessarily topo-last (the output may
+    /// also feed other chain members).
+    pub output: u32,
 }
 
 /// A texture produced outside a region and read by ≥1 of its members. Read once
@@ -150,6 +181,10 @@ pub struct Region {
     /// build-check verifies the fused def resolves back to this space.
     /// `None` for buffer (Array) regions, which have no texture grid.
     pub space: Option<ElementSpace>,
+    /// STENCIL tier: producer chains absorbed into a stencil member's gather
+    /// read (recomputed per tap corner instead of round-tripped through a
+    /// canvas texture). Empty for every non-stencil region.
+    pub virtual_chains: Vec<VirtualChain>,
 }
 
 /// Partition a flattened def into its maximal pointwise-fusion regions. Returns
@@ -268,6 +303,16 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     for &id in &eligible {
         components.entry(uf.find(id)).or_default().push(id);
     }
+    // Deterministic component list (rep, sorted members) — reused by the
+    // stencil absorption pass below.
+    let mut comp_list: Vec<(u32, Vec<u32>)> = components
+        .into_iter()
+        .map(|(rep, mut nodes)| {
+            nodes.sort_unstable();
+            (rep, nodes)
+        })
+        .collect();
+    comp_list.sort_unstable_by_key(|(rep, _)| *rep);
 
     // Nodes that reach a `final_output` (live). A region output's consumer must
     // be in here, so each fused `dst_<k>` lands on a texture the executor actually
@@ -276,16 +321,344 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
 
     // ── Build a region from each component; drop the ones v1 can't express. ──
     let mut regions: Vec<Region> = Vec::new();
-    for (_, mut nodes) in components {
-        nodes.sort_unstable();
-        if let Some(region) = build_region(def, registry, &nodes, &final_reachable, spaces.as_ref())
+    for (_, nodes) in &comp_list {
+        if let Some(region) = build_region(def, registry, nodes, &final_reachable, spaces.as_ref())
         {
             regions.push(region);
         }
     }
     // Stable order across runs (components iterate in hash order otherwise).
     regions.sort_by_key(|r| r.members.first().map(|m| m.doc_id).unwrap_or(0));
+
+    // ── Stencil tier: absorb producer chains into stencil members' gather
+    // reads (recomputed per tap corner — no canvas round-trip). ──
+    absorb_virtual_chains(def, registry, &mut regions, &comp_list, spaces.as_ref(), &forward);
+
+    // A single-member region only pays once a chain folded into it (fusing one
+    // node alone changes nothing — the MIN_REGION_LEN rule, applied after
+    // absorption so a lone blur + its absorbed producer run still fuses).
+    regions.retain(|r| r.members.len() >= MIN_REGION_LEN || !r.virtual_chains.is_empty());
     regions
+}
+
+/// Longest producer chain a stencil member's fetch will recompute. Per-tap
+/// recomputation multiplies the chain's ALU by 4 bilinear corners × the tap
+/// count, so v1 absorbs only STRANDED SINGLES — a lone pointwise/Source atom
+/// that would otherwise be dropped below MIN_REGION_LEN and pay a full canvas
+/// round-trip for one cheap dispatch. Multi-atom chains already fuse as their
+/// own pointwise region; absorbing those trades a known win for taps×4
+/// recomputes, and the perf gate (per CARD, fused vs unfused) can't compare
+/// the two fused configurations — so don't raise this without per-region
+/// gating.
+const MAX_VIRTUAL_CHAIN: usize = 1;
+
+/// Absorb eligible producer components into stencil members' gather inputs as
+/// [`VirtualChain`]s. A component qualifies when its ONLY escape is the single
+/// gather-consumed wire into one stencil member of `regions[ri]`, every member
+/// is a same-space all-coincident texture atom off any feedback cycle, every
+/// texture wire INTO it comes from the region's element space, and collapsing
+/// it into the region keeps the graph acyclic. A region that was built from an
+/// absorbed component is removed (its work now lives inside the consumer's
+/// fetch); a dropped single-node component absorbs the same way.
+fn absorb_virtual_chains(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    regions: &mut Vec<Region>,
+    comps: &[(u32, Vec<u32>)],
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+    forward: &[(u32, u32)],
+) {
+    let comp_of: AHashMap<u32, u32> = comps
+        .iter()
+        .flat_map(|(rep, ns)| ns.iter().map(move |&n| (n, *rep)))
+        .collect();
+    let comp_nodes: AHashMap<u32, &[u32]> =
+        comps.iter().map(|(rep, ns)| (*rep, ns.as_slice())).collect();
+
+    // Running chain-rep → region-rep merges, so each candidate's convexity test
+    // sees every previously accepted absorption (same incremental invariant the
+    // union loop maintains).
+    let mut merged_into: AHashMap<u32, u32> = AHashMap::default();
+    let mut absorbed_reps: AHashSet<u32> = AHashSet::default();
+    // (region index, consumer doc id, input index, chain rep, chain output doc id)
+    let mut planned: Vec<(usize, u32, usize, u32, u32)> = Vec::new();
+
+    for (ri, region) in regions.iter().enumerate() {
+        let Some(region_space) = region.space else {
+            continue; // buffer regions have no texture grid to recompute on
+        };
+        let region_rep = region
+            .members
+            .first()
+            .and_then(|m| comp_of.get(&m.doc_id))
+            .copied();
+        let Some(region_rep) = region_rep else { continue };
+        for member in &region.members {
+            let Some(doc_node) = def.nodes.iter().find(|n| n.id == member.doc_id) else {
+                continue;
+            };
+            let Some(node) = registry.construct(&doc_node.type_id) else { continue };
+            if !node.stencil_fetch() {
+                continue;
+            }
+            for (idx, (input, access)) in
+                member.inputs.iter().zip(&member.input_access).enumerate()
+            {
+                if *access != InputAccess::Gather {
+                    continue;
+                }
+                let RegionInput::External(e) = input else { continue };
+                let prod = region.externals[*e].from_node;
+                let Some(&rep) = comp_of.get(&prod) else {
+                    continue; // boundary producer — stays a real external
+                };
+                let chain_output = prod;
+                if rep == region_rep || absorbed_reps.contains(&rep) {
+                    continue;
+                }
+                let nodes = comp_nodes[&rep];
+                if nodes.len() > MAX_VIRTUAL_CHAIN {
+                    continue;
+                }
+                if !chain_is_absorbable(def, registry, nodes, member.doc_id, region_space, spaces)
+                {
+                    continue;
+                }
+                // Convexity under the tentative merge: every eligible node maps
+                // to its component rep with accepted merges (plus this one)
+                // folded onto their region reps; boundaries map to themselves.
+                let resolve = |r: u32| merged_into.get(&r).copied().unwrap_or(r);
+                let key = |n: u32| -> u32 {
+                    match comp_of.get(&n) {
+                        Some(&r) if r == rep => resolve(region_rep),
+                        Some(&r) => resolve(r),
+                        None => n,
+                    }
+                };
+                if collapsed_has_cycle(forward, &key) {
+                    continue;
+                }
+                merged_into.insert(rep, resolve(region_rep));
+                absorbed_reps.insert(rep);
+                planned.push((ri, member.doc_id, idx, rep, chain_output));
+            }
+        }
+    }
+    if planned.is_empty() {
+        return;
+    }
+
+    // ── Apply each plan: resolve the chain's members against the region's
+    // externals, repoint the consumer's input, record the chain. ──
+    for (ri, consumer, idx, rep, chain_output) in planned {
+        let nodes = comp_nodes[&rep];
+        let region = &mut regions[ri];
+        let applied = (|| -> Option<(Vec<RegionMember>, Vec<ExternalRef>)> {
+            let node_set: AHashSet<u32> = nodes.iter().copied().collect();
+            let order = topo_sort(nodes, def, registry, &node_set, false)?;
+            let mut new_externals = region.externals.clone();
+            let mut ext_index: AHashMap<(u32, String), usize> = new_externals
+                .iter()
+                .enumerate()
+                .map(|(i, e)| ((e.from_node, e.from_port.clone()), i))
+                .collect();
+            let mut members: Vec<RegionMember> = Vec::with_capacity(order.len());
+            for &doc_id in &order {
+                let constructed =
+                    registry.construct(&def.nodes.iter().find(|n| n.id == doc_id)?.type_id)?;
+                let tex_ports: Vec<&crate::node_graph::ports::NodeInput> = constructed
+                    .inputs()
+                    .iter()
+                    .filter(|i| is_texture_port(&i.ty))
+                    .collect();
+                let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
+                let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
+                for port in &tex_ports {
+                    let Some(wire) = def
+                        .wires
+                        .iter()
+                        .find(|w| w.to_node == doc_id && w.to_port == port.name)
+                    else {
+                        if port.required {
+                            return None;
+                        }
+                        inputs.push(RegionInput::Unwired);
+                        input_access.push(InputAccess::Coincident);
+                        continue;
+                    };
+                    let resolved = if node_set.contains(&wire.from_node) {
+                        RegionInput::Member(wire.from_node)
+                    } else {
+                        let key = (wire.from_node, wire.from_port.clone());
+                        let slot = *ext_index.entry(key).or_insert_with(|| {
+                            new_externals.push(ExternalRef {
+                                from_node: wire.from_node,
+                                from_port: wire.from_port.clone(),
+                            });
+                            new_externals.len() - 1
+                        });
+                        RegionInput::External(slot)
+                    };
+                    inputs.push(resolved);
+                    input_access.push(InputAccess::Coincident);
+                }
+                // Chains never sit on a feedback cycle (gate above), so the
+                // tier-A in-loop rounding never applies; the codegen q16s the
+                // chain TAIL unconditionally to reproduce the f16 store the
+                // unfused chain made for the blur to sample.
+                members.push(RegionMember { doc_id, inputs, input_access, quantize_f16: false });
+            }
+            Some((members, new_externals))
+        })();
+        let Some((members, new_externals)) = applied else {
+            continue; // defensive skip — region keeps its real external (unfused-equivalent)
+        };
+        region.externals = new_externals;
+        let chain_idx = region.virtual_chains.len();
+        if let Some(m) = region.members.iter_mut().find(|m| m.doc_id == consumer) {
+            m.inputs[idx] = RegionInput::Virtual(chain_idx);
+        }
+        region.virtual_chains.push(VirtualChain {
+            consumer,
+            input_index: idx,
+            members,
+            output: chain_output,
+        });
+    }
+
+    // ── Compact each affected region's externals (drop slots no input reads —
+    // the absorbed chains' output textures) and remap indices. ──
+    for region in regions.iter_mut() {
+        if region.virtual_chains.is_empty() {
+            continue;
+        }
+        let mut used: Vec<usize> = Vec::new();
+        let mut mark = |inputs: &Vec<RegionInput>| {
+            for input in inputs {
+                if let RegionInput::External(e) = input
+                    && !used.contains(e)
+                {
+                    used.push(*e);
+                }
+            }
+        };
+        for m in &region.members {
+            mark(&m.inputs);
+        }
+        for c in &region.virtual_chains {
+            for m in &c.members {
+                mark(&m.inputs);
+            }
+        }
+        used.sort_unstable();
+        let remap: AHashMap<usize, usize> =
+            used.iter().enumerate().map(|(new, &old)| (old, new)).collect();
+        let rewrite = |inputs: &mut Vec<RegionInput>| {
+            for input in inputs {
+                if let RegionInput::External(e) = input {
+                    *e = remap[e];
+                }
+            }
+        };
+        for m in &mut region.members {
+            rewrite(&mut m.inputs);
+        }
+        for c in &mut region.virtual_chains {
+            for m in &mut c.members {
+                rewrite(&mut m.inputs);
+            }
+        }
+        region.externals = used.iter().map(|&e| region.externals[e].clone()).collect();
+    }
+
+    // ── Remove regions whose whole component was absorbed into a fetch. ──
+    regions.retain(|r| {
+        r.members
+            .first()
+            .and_then(|m| comp_of.get(&m.doc_id))
+            .is_none_or(|rep| !absorbed_reps.contains(rep))
+    });
+}
+
+/// Per-member + per-incoming-wire gates for absorbing `nodes` into a stencil
+/// fetch: single escape to `consumer`, texture-domain all-coincident members
+/// off any cycle at the region's element space, and every incoming texture
+/// wire produced at that space too (corner reads are exact `textureLoad`s).
+fn chain_is_absorbable(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    nodes: &[u32],
+    consumer: u32,
+    region_space: ElementSpace,
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+) -> bool {
+    let node_set: AHashSet<u32> = nodes.iter().copied().collect();
+    let mut escapes = 0usize;
+    for w in &def.wires {
+        if node_set.contains(&w.from_node) && !node_set.contains(&w.to_node) {
+            escapes += 1;
+            if w.to_node != consumer {
+                return false;
+            }
+        }
+        // Incoming TEXTURE wire: the fetch textureLoads it at corner texels of
+        // the region grid, so it must be produced at the region's space. (A
+        // scalar/control wire into a param port re-anchors as a port shadow.)
+        if !node_set.contains(&w.from_node)
+            && node_set.contains(&w.to_node)
+            && is_texture_wire(def, registry, w)
+            && wire_feeds_texture_port(def, registry, w)
+            && space_of(spaces, w.from_node, &w.from_port) != region_space
+        {
+            return false;
+        }
+    }
+    if escapes != 1 {
+        return false;
+    }
+    for &id in nodes {
+        let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
+            return false;
+        };
+        let Some(n) = registry.construct(&doc.type_id) else {
+            return false;
+        };
+        if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+            return false; // buffer atom — no texture grid
+        }
+        if n.input_access().iter().any(|a| *a != InputAccess::Coincident) {
+            return false; // a gather/texel read inside a chain can't re-anchor
+        }
+        if n.stencil_fetch() {
+            return false; // nested stencils are a follow-on
+        }
+        if node_on_cycle(id, def) {
+            return false; // feedback rounding semantics don't survive recompute
+        }
+        if node_output_space(spaces, def, registry, id) != region_space {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether wire `w` lands on a TEXTURE input port of its target (vs a scalar
+/// param shadow port that happens to receive a texture-typed producer — the
+/// loader rejects those anyway, but fail closed).
+fn wire_feeds_texture_port(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    let Some(node) = registry.construct(&to.type_id) else {
+        return false;
+    };
+    node.inputs()
+        .iter()
+        .any(|i| i.name == w.to_port && is_texture_port(&i.ty))
 }
 
 /// Stencil tier A kill switch: `MANIFOLD_FREEZE_Q16=0` (or `false`/`off`)
@@ -779,7 +1152,10 @@ fn build_region(
     final_reachable: &AHashSet<u32>,
     spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
 ) -> Option<Region> {
-    if nodes.len() < MIN_REGION_LEN {
+    // Singles ARE built here: a lone stencil atom (a blur) becomes worth fusing
+    // the moment the absorption pass folds a producer chain into its fetch.
+    // `partition_regions` drops chainless sub-MIN_REGION_LEN regions at the end.
+    if nodes.is_empty() {
         return None;
     }
     let node_set: AHashSet<u32> = nodes.iter().copied().collect();
@@ -973,7 +1349,7 @@ fn build_region(
         Some(region_space)
     };
 
-    Some(Region { members, externals, outputs, space })
+    Some(Region { members, externals, outputs, space, virtual_chains: Vec::new() })
 }
 
 /// The element space of `id`'s (single) texture output in the unfused plan —
@@ -1795,6 +2171,101 @@ mod tests {
             partition_regions(&def, &registry()).is_empty(),
             "the specialization blur is a boundary, leaving both inverts lone atoms"
         );
+    }
+
+    /// Stencil tier — a STRANDED SINGLE producer (a pointwise atom whose only
+    /// consumer is a stencil blur's gather input) is absorbed into the blur's
+    /// fetch as a virtual chain: one region, member = the blur, the gain
+    /// recomputed per tap corner, the source as the chain's external. Without
+    /// absorption both nodes are lone components and nothing fuses.
+    #[test]
+    fn stranded_single_absorbs_into_blur_fetch() {
+        let json = r#"{
+            "version": 1, "name": "stencil", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "blur + absorbed gain form one region");
+        let r = &regions[0];
+        assert_eq!(r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(r.virtual_chains.len(), 1, "gain absorbed as a virtual chain");
+        let chain = &r.virtual_chains[0];
+        assert_eq!(chain.consumer, 2);
+        assert_eq!(chain.input_index, 0);
+        assert_eq!(chain.output, 1);
+        assert_eq!(chain.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(r.externals.len(), 1, "the source backs the chain");
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(chain.members[0].inputs, vec![RegionInput::External(0)]);
+        let blur = &r.members[0];
+        assert_eq!(blur.inputs, vec![RegionInput::Virtual(0)], "the blur reads the chain");
+        assert_eq!(r.outputs, vec![2]);
+    }
+
+    /// A producer with a SECOND consumer (the blur and a mix both read the
+    /// gain) is NOT absorbed — its texture must still exist for the other
+    /// consumer, so recomputing it inside the fetch would only add work.
+    #[test]
+    fn shared_producer_is_not_absorbed() {
+        let json = r#"{
+            "version": 1, "name": "shared", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "a" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert!(
+            regions.iter().all(|r| r.virtual_chains.is_empty()),
+            "a producer with two consumers keeps its texture"
+        );
+    }
+
+    /// A two-atom run upstream of a blur keeps fusing as its OWN pointwise
+    /// region (the v1 absorption cap is stranded singles — see
+    /// MAX_VIRTUAL_CHAIN); the blur stays standalone.
+    #[test]
+    fn two_atom_chain_keeps_its_own_region() {
+        let json = r#"{
+            "version": 1, "name": "pair", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 3, "typeId": "node.gaussian_blur", "nodeId": "blur" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "the gain+contrast pair fuses; the blur stays standalone");
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(regions[0].virtual_chains.is_empty());
     }
 
     /// A control wire into a scalar PARAM no longer cuts the consumer — it fuses,

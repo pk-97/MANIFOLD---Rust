@@ -1128,6 +1128,32 @@ pub enum InputSource {
     /// is static in the def, so the flag folds at codegen time instead of
     /// becoming a uniform field.
     Unwired,
+    /// STENCIL tier: a Gather input backed by a VIRTUAL SOURCE — index into
+    /// [`FusionRegion::virtual_chains`]. The consumer's `n{i}_fetch_<port>`
+    /// recomputes the chain at each tap's bilinear corner texels instead of
+    /// sampling a bound texture. Only valid on a stencil member's Gather input.
+    Virtual(usize),
+}
+
+/// A producer chain recomputed inside a stencil member's fetch (the finder's
+/// [`VirtualChain`](super::region::VirtualChain), resolved to region-node
+/// indices). The chain members live in [`FusionRegion::nodes`] (so their params
+/// join the merged uniform under the same `n{i}_` numbering) but are SKIPPED by
+/// `cs_main` — their bodies run per corner texel inside the fetch.
+#[derive(Debug, Clone)]
+pub struct FusedVirtualChain {
+    /// Region-node index of the consuming stencil member.
+    pub consumer: usize,
+    /// Which of the consumer's `inputs` slots this chain backs (the slot holds
+    /// `InputSource::Virtual(chain index)`).
+    pub input_index: usize,
+    /// Region-node indices of the chain members, topo order (every `Node` input
+    /// of a chain member refers to an earlier entry in this list).
+    pub members: Vec<usize>,
+    /// Region-node index of the chain's OUTPUT member — the value the fetch
+    /// returns per corner (q16-rounded unless its storage is fp32, reproducing
+    /// the unfused chain's store the consumer sampled).
+    pub output: usize,
 }
 
 /// One atom inside a fusion region. Borrows its body + params (both available
@@ -1245,6 +1271,10 @@ pub struct FusionRegion<'a> {
     /// and all those params are driven by ONE producer wire (so a single field
     /// is authoritative). `None` keeps the capacity dispatch.
     pub dispatch_count_field: Option<(usize, &'static str)>,
+    /// STENCIL tier: producer chains recomputed inside stencil members'
+    /// fetches. Empty for every non-stencil region (and for the buffer path,
+    /// which never carries one).
+    pub virtual_chains: Vec<FusedVirtualChain>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -1785,9 +1815,11 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                     args.push(format!("r{j}"));
                 }
                 // Optional-unwired is a texture-domain contract (use-flag bodies);
-                // no buffer ARRAY input fuses unwired, so reaching here is a
-                // finder bug.
-                InputSource::Unwired => return Err(CodegenError::BadInput),
+                // no buffer ARRAY input fuses unwired, and virtual sources are
+                // texture-domain only — reaching either here is a finder bug.
+                InputSource::Unwired | InputSource::Virtual(_) => {
+                    return Err(CodegenError::BadInput);
+                }
             }
         }
         for p in node.params {
@@ -1935,20 +1967,31 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     out.push_str(&struct_body);
     out.push_str("}\n\n");
 
+    // --- which region-node indices are VIRTUAL (chain members recomputed inside
+    // a stencil fetch). cs_main never evaluates them and never pre-reads their
+    // externals at its own coord — the fetch textureLoads those per corner. ---
+    let virtual_nodes: std::collections::BTreeSet<usize> = region
+        .virtual_chains
+        .iter()
+        .flat_map(|c| c.members.iter().copied())
+        .collect();
+
     // --- which inputs are gathered (the body samples a bound texture itself) vs
     // coincident (a register threaded in). A sampler is bound iff some input is a
-    // sampler-`Gather`; an external is pre-read into a register only if some node
-    // reads it coincidentally — a gather-only external is never load-into-register
-    // (the body samples it at a coord it computes). ---
+    // sampler-`Gather` over a REAL external (a virtual-source fetch recomputes
+    // instead of sampling); an external is pre-read into a register only if some
+    // cs_main-evaluated node reads it coincidentally — a gather-only external is
+    // never load-into-register (the body samples it at a coord it computes). ---
     let mut needs_sampler = false;
     let mut coincident_ext: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-    for node in &region.nodes {
+    for (i, node) in region.nodes.iter().enumerate() {
         for (idx, src) in node.inputs.iter().enumerate() {
             let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
-            if access == InputAccess::Gather {
+            if access == InputAccess::Gather && matches!(src, InputSource::External(_)) {
                 needs_sampler = true;
             }
             if !access.is_gather()
+                && !virtual_nodes.contains(&i)
                 && let InputSource::External(e) = src
             {
                 coincident_ext.insert(*e);
@@ -2032,8 +2075,17 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // member needs it. pack2x16float rounds each f32 to IEEE half (RTNE) —
     // exactly what an rgba16float textureStore would do — and unpack restores
     // the rounded value, so an in-loop member's fused register matches the
-    // unfused chain's store+load bit-for-bit.
-    if region.nodes.iter().any(|n| n.quantize_f16) {
+    // unfused chain's store+load bit-for-bit. A virtual chain's OUTPUT gets the
+    // same rounding (the unfused chain stored f16 for the consumer to sample)
+    // unless its storage is fp32 (exact store — no rounding to reproduce).
+    let chain_q16 = region.virtual_chains.iter().any(|c| {
+        region
+            .nodes
+            .get(c.output)
+            .map(|n| n.output_storage != "rgba32float")
+            .unwrap_or(false)
+    });
+    if region.nodes.iter().any(|n| n.quantize_f16) || chain_q16 {
         out.push_str(
             "fn q16(v: vec4<f32>) -> vec4<f32> {\n    \
              return vec4<f32>(unpack2x16float(pack2x16float(v.xy)), \
@@ -2044,10 +2096,18 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         out.push_str(h.text.trim_end());
         out.push_str("\n\n");
     }
-    // STENCIL members: one `n{i}_fetch_<port>` per sampler-Gather input — the
-    // real textureSampleLevel over the bound external, exactly the read the
-    // standalone wrapper's fetch does, so a fused stencil member samples
-    // bit-identically to its unfused dispatch.
+    // STENCIL members: one `n{i}_fetch_<port>` per sampler-Gather input.
+    //   - REAL external: the literal textureSampleLevel over the bound src —
+    //     exactly the read the standalone wrapper's fetch does, so a fused
+    //     stencil member samples bit-identically to its unfused dispatch.
+    //   - VIRTUAL source: re-evaluate the absorbed chain at the tap's four
+    //     bilinear corner texels (`n{i}_vsrc_<port>`: hardware-faithful
+    //     per-corner address wrap, exact textureLoads of the chain's externals,
+    //     q16 on the chain output to reproduce its unfused f16 store) and lerp
+    //     in f32. Corner values are bit-identical to the unfused chain's stored
+    //     texels; the manual lerp vs the hardware filter unit is the documented
+    //     stencil-tier gap, measured by the stencil parity proof.
+    let dims_tex = if multi_output { "dst_0" } else { "dst" };
     for (i, node) in region.nodes.iter().enumerate() {
         if !node.stencil_fetch {
             continue;
@@ -2062,19 +2122,72 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
             if access != InputAccess::Gather {
                 continue;
             }
-            let InputSource::External(e) = src else {
-                return Err(CodegenError::BadInput);
-            };
-            if *e >= region.num_external_inputs {
-                return Err(CodegenError::BadInput);
+            let port = tex_specs[idx].name;
+            match src {
+                InputSource::External(e) => {
+                    if *e >= region.num_external_inputs {
+                        return Err(CodegenError::BadInput);
+                    }
+                    writeln!(
+                        out,
+                        "fn n{i}_fetch_{port}(c: vec2<f32>) -> vec4<f32> {{\n    \
+                         return textureSampleLevel(src_{e}, samp, c, 0.0);\n}}\n",
+                    )
+                    .unwrap();
+                }
+                InputSource::Virtual(ci) => {
+                    let chain = region
+                        .virtual_chains
+                        .get(*ci)
+                        .filter(|c| c.consumer == i && c.input_index == idx)
+                        .ok_or(CodegenError::BadInput)?;
+                    // Per-corner texel index under the consumer's sampler
+                    // address mode — each corner wraps independently, exactly
+                    // how the hardware filter footprint addresses.
+                    let wrap = match region.sampler_address_mode {
+                        "repeat" => "    let ti = ((t % di) + di) % di;\n",
+                        "mirror" => {
+                            "    let p = ((t % (di * 2)) + di * 2) % (di * 2);\n    \
+                             let ti = select(p, di * 2 - vec2<i32>(1) - p, p >= di);\n"
+                        }
+                        _ => "    let ti = clamp(t, vec2<i32>(0), di - vec2<i32>(1));\n",
+                    };
+                    let mut vsrc = format!(
+                        "fn n{i}_vsrc_{port}(t: vec2<i32>, vd: vec2<f32>) -> vec4<f32> {{\n    \
+                         let di = vec2<i32>(vd);\n{wrap}    \
+                         let vuv = (vec2<f32>(ti) + vec2<f32>(0.5)) / vd;\n"
+                    );
+                    for &j in &chain.members {
+                        let cnode = region.nodes.get(j).ok_or(CodegenError::BadInput)?;
+                        let args =
+                            chain_member_args(j, cnode, region, &index_of, &chain.members)?;
+                        writeln!(vsrc, "    let v{j} = n{j}_body({});", args.join(", ")).unwrap();
+                    }
+                    let out_node =
+                        region.nodes.get(chain.output).ok_or(CodegenError::BadInput)?;
+                    if out_node.output_storage == "rgba32float" {
+                        writeln!(vsrc, "    return v{};\n}}", chain.output).unwrap();
+                    } else {
+                        writeln!(vsrc, "    return q16(v{});\n}}", chain.output).unwrap();
+                    }
+                    out.push_str(&vsrc);
+                    writeln!(
+                        out,
+                        "\nfn n{i}_fetch_{port}(c: vec2<f32>) -> vec4<f32> {{\n    \
+                         let vd = vec2<f32>(textureDimensions({dims_tex}));\n    \
+                         let x = c * vd - vec2<f32>(0.5);\n    \
+                         let f = fract(x);\n    \
+                         let i0 = vec2<i32>(floor(x));\n    \
+                         let c00 = n{i}_vsrc_{port}(i0, vd);\n    \
+                         let c10 = n{i}_vsrc_{port}(i0 + vec2<i32>(1, 0), vd);\n    \
+                         let c01 = n{i}_vsrc_{port}(i0 + vec2<i32>(0, 1), vd);\n    \
+                         let c11 = n{i}_vsrc_{port}(i0 + vec2<i32>(1, 1), vd);\n    \
+                         return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);\n}}\n",
+                    )
+                    .unwrap();
+                }
+                _ => return Err(CodegenError::BadInput),
             }
-            writeln!(
-                out,
-                "fn n{i}_fetch_{}(c: vec2<f32>) -> vec4<f32> {{\n    \
-                 return textureSampleLevel(src_{e}, samp, c, 0.0);\n}}\n",
-                tex_specs[idx].name
-            )
-            .unwrap();
         }
     }
     for b in &bodies {
@@ -2085,7 +2198,6 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // --- cs_main: read external inputs once, thread registers, store output ---
     out.push_str("@compute @workgroup_size(16, 16)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
-    let dims_tex = if multi_output { "dst_0" } else { "dst" };
     writeln!(out, "    let dims = textureDimensions({dims_tex});").unwrap();
     out.push_str("    if id.x >= dims.x || id.y >= dims.y {\n        return;\n    }\n");
     out.push_str("    let coord = vec2<i32>(i32(id.x), i32(id.y));\n");
@@ -2096,6 +2208,9 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
     }
     for (i, node) in region.nodes.iter().enumerate() {
+        if virtual_nodes.contains(&i) {
+            continue; // chain member — evaluated per corner inside its fetch
+        }
         let mut args: Vec<String> = Vec::new();
         for (idx, src) in node.inputs.iter().enumerate() {
             let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
@@ -2117,6 +2232,13 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                         args.push("samp".to_string());
                     }
                 }
+                // A virtual source: only a stencil member's sampler-Gather reads
+                // one, through its fetch — no body args.
+                (InputAccess::Gather, InputSource::Virtual(ci)) => {
+                    if !node.stencil_fetch || *ci >= region.virtual_chains.len() {
+                        return Err(CodegenError::BadInput);
+                    }
+                }
                 (InputAccess::GatherTexel, InputSource::External(e)) => {
                     if *e >= region.num_external_inputs {
                         return Err(CodegenError::BadInput);
@@ -2131,6 +2253,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                     InputSource::Node(_) | InputSource::Unwired,
                 ) => {
                     return Err(CodegenError::BadInput);
+                }
+                (InputAccess::GatherTexel, InputSource::Virtual(_)) => {
+                    return Err(CodegenError::BadInput); // texel-load virtual is a follow-on
+                }
+                (_, InputSource::Virtual(_)) => {
+                    return Err(CodegenError::BadInput); // virtual backs gather reads only
                 }
                 // Optional input with no wire: the body's injected use flag (the
                 // literal `0u`, pushed after params below) gates the read off, so
@@ -2207,6 +2335,69 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     out.push_str("}\n");
 
     Ok(GeneratedFusion { wgsl: out, param_order })
+}
+
+/// Body-arg marshalling for one VIRTUAL chain member, evaluated inside a
+/// stencil fetch's `n{i}_vsrc_<port>` at corner texel `ti` / uv `vuv` / dims
+/// `vd`: a coincident external reads via exact `textureLoad(src_e, ti, 0)`
+/// (the corner texel the unfused chain member produced), an earlier chain
+/// member threads its per-corner register `v{j}`, params/uv/dims/use-flags
+/// follow the same convention as the cs_main marshaller. Chains are
+/// all-coincident by the finder's gates — anything else is a codegen bug.
+fn chain_member_args(
+    j: usize,
+    node: &RegionNode<'_>,
+    region: &FusionRegion<'_>,
+    index_of: &dyn Fn(NodeInstanceId) -> Option<usize>,
+    chain_members: &[usize],
+) -> Result<Vec<String>, CodegenError> {
+    let mut args: Vec<String> = Vec::new();
+    for (idx, src) in node.inputs.iter().enumerate() {
+        let access = node.input_access.get(idx).copied().unwrap_or(InputAccess::Coincident);
+        if access != InputAccess::Coincident {
+            return Err(CodegenError::BadInput);
+        }
+        match src {
+            InputSource::External(e) => {
+                if *e >= region.num_external_inputs {
+                    return Err(CodegenError::BadInput);
+                }
+                args.push(format!("textureLoad(src_{e}, ti, 0)"));
+            }
+            InputSource::Node(id) => {
+                let Some(k) = index_of(*id) else {
+                    return Err(CodegenError::BadInput);
+                };
+                // Must be an EARLIER member of this same chain.
+                let pos = chain_members.iter().position(|&m| m == k);
+                let own = chain_members.iter().position(|&m| m == j);
+                match (pos, own) {
+                    (Some(p), Some(o)) if p < o => args.push(format!("v{k}")),
+                    _ => return Err(CodegenError::BadInput),
+                }
+            }
+            InputSource::Unwired => args.push("vec4<f32>(0.0)".to_string()),
+            InputSource::Virtual(_) => return Err(CodegenError::BadInput),
+        }
+    }
+    args.push("vuv".to_string());
+    args.push("vd".to_string());
+    for p in node.params {
+        args.push(format!("params.n{j}_{}", p.name));
+    }
+    let tex_specs: Vec<&NodeInput> =
+        node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
+    if tex_specs.len() == node.inputs.len() {
+        for (idx, spec) in tex_specs.iter().enumerate() {
+            if !spec.required {
+                let wired = !matches!(node.inputs[idx], InputSource::Unwired);
+                args.push(if wired { "1u" } else { "0u" }.to_string());
+            }
+        }
+    } else if node.inputs.iter().any(|s| matches!(s, InputSource::Unwired)) {
+        return Err(CodegenError::BadInput);
+    }
+    Ok(args)
 }
 
 #[cfg(test)]
@@ -2405,6 +2596,7 @@ mod gpu_tests {
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
+            virtual_chains: Vec::new(),
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -2454,6 +2646,7 @@ mod gpu_tests {
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
+            virtual_chains: Vec::new(),
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -2480,6 +2673,78 @@ mod gpu_tests {
         assert!(g.wgsl.contains("let r0 = n0_body"), "first member's element register");
         assert!(g.wgsl.contains("let r1 = n1_body"), "second member threads r0");
         assert!(g.wgsl.contains("dst[idx] = r1;"), "region result written to the fresh output");
+    }
+
+    /// STENCIL tier — a virtual chain emits `n{i}_vsrc_<port>` (per-corner
+    /// address wrap + chain bodies over textureLoad'ed externals + q16 tail) and
+    /// `n{i}_fetch_<port>` (manual f32 bilinear over four corners); the chain
+    /// member is skipped by cs_main, its params still join the merged uniform,
+    /// and the kernel parses. Region shape: blur(stencil, Virtual(0)) with one
+    /// absorbed gain reading external 0.
+    #[test]
+    fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::{Gain, GaussianBlur};
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: GaussianBlur::FUSION_KIND,
+                    body: GaussianBlur::WGSL_BODY.unwrap(),
+                    params: GaussianBlur::PARAMS,
+                    inputs: vec![InputSource::Virtual(0)],
+                    input_access: GaussianBlur::INPUT_ACCESS.to_vec(),
+                    node_inputs: GaussianBlur::INPUTS,
+                    node_outputs: GaussianBlur::OUTPUTS,
+                    node_includes: &[],
+                    derived_uniforms: &[],
+                    output_storage: "rgba16float",
+                    stencil_fetch: true,
+                    quantize_f16: false,
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: Gain::FUSION_KIND,
+                    body: Gain::WGSL_BODY.unwrap(),
+                    params: Gain::PARAMS,
+                    inputs: vec![InputSource::External(0)],
+                    input_access: vec![],
+                    node_inputs: Gain::INPUTS,
+                    node_outputs: Gain::OUTPUTS,
+                    node_includes: &[],
+                    derived_uniforms: &[],
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+            ],
+            num_external_inputs: 1,
+            outputs: vec![id(0)],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: vec![FusedVirtualChain {
+                consumer: 0,
+                input_index: 0,
+                members: vec![1],
+                output: 1,
+            }],
+        };
+        let g = generate_fused(&region).expect("virtual-chain region fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused stencil kernel parses:\n{}",
+            g.wgsl
+        );
+        assert!(g.wgsl.contains("fn n0_vsrc_in"), "per-corner chain evaluator emitted");
+        assert!(g.wgsl.contains("fn n0_fetch_in"), "bilinear fetch emitted");
+        assert!(g.wgsl.contains("let v1 = n1_body(textureLoad(src_0, ti, 0)"), "chain external loaded at the corner texel");
+        assert!(g.wgsl.contains("return q16(v1)"), "chain output reproduces the f16 store");
+        assert!(!g.wgsl.contains("let r1 ="), "the chain member is not evaluated by cs_main");
+        assert!(g.wgsl.contains("params.n1_gain"), "the chain member's param stays a live uniform field");
+        assert!(g.wgsl.contains("textureStore(dst, coord, r0);"), "the blur register is the region output");
+        assert!(!g.wgsl.contains("var samp"), "a virtual-only gather region binds no sampler");
     }
 
     /// Tier 3 — a gather input binds a sampler and is passed to the body as a
@@ -2531,6 +2796,7 @@ mod gpu_tests {
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
+            virtual_chains: Vec::new(),
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -2608,6 +2874,7 @@ mod gpu_tests {
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
+            virtual_chains: Vec::new(),
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -2810,6 +3077,7 @@ mod gpu_tests {
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
+            virtual_chains: Vec::new(),
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

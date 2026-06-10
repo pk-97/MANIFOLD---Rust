@@ -550,6 +550,7 @@ fn region_output_aliases_external(
             RegionInput::External(e) => return Some(*e),
             RegionInput::Member(prev) => cur_doc = *prev,
             RegionInput::Unwired => return None, // no buffer threads through an unwired port
+            RegionInput::Virtual(_) => return None, // stencil chains are texture-domain only
         }
     }
     None
@@ -671,12 +672,20 @@ pub(crate) fn fuse_canonical_def(
         return None;
     }
 
-    // Which region (if any) each fused-away member belongs to.
-    let member_region: AHashMap<u32, usize> = regions
-        .iter()
-        .enumerate()
-        .flat_map(|(i, r)| r.members.iter().map(move |m| (m.doc_id, i)))
-        .collect();
+    // Which region (if any) each fused-away node belongs to — main members AND
+    // virtual chain members (both are deleted from the installed def; a chain's
+    // work lives inside its consumer's fetch).
+    let mut member_region: AHashMap<u32, usize> = AHashMap::default();
+    for (i, r) in regions.iter().enumerate() {
+        for m in &r.members {
+            member_region.insert(m.doc_id, i);
+        }
+        for c in &r.virtual_chains {
+            for m in &c.members {
+                member_region.insert(m.doc_id, i);
+            }
+        }
+    }
 
     let max_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0);
     let mut new_nodes: Vec<EffectGraphNode> = Vec::new();
@@ -695,11 +704,21 @@ pub(crate) fn fuse_canonical_def(
     let mut control_wires: Vec<(u32, u32, String, String)> = Vec::new();
 
     for (i, region) in regions.iter().enumerate() {
-        // ── Build the codegen region from this component's members (topo order),
-        // resolving each member's inputs to an external slot or an earlier
-        // member's register. ──
-        let mut region_nodes: Vec<RegionNode<'_>> = Vec::with_capacity(region.members.len());
-        for member in &region.members {
+        // ── Build the codegen region from this component's members (topo order)
+        // PLUS its virtual chain members (appended after, in chain order — their
+        // params join the merged uniform under the same `n{idx}` numbering, but
+        // cs_main skips them; the consumer's fetch evaluates them per corner),
+        // resolving each member's inputs to an external slot, an earlier
+        // member's register, or a virtual chain. ──
+        let all_members: Vec<&crate::node_graph::freeze::region::RegionMember> = region
+            .members
+            .iter()
+            .chain(region.virtual_chains.iter().flat_map(|c| c.members.iter()))
+            .collect();
+        let node_index_of =
+            |doc: u32| -> Option<usize> { all_members.iter().position(|m| m.doc_id == doc) };
+        let mut region_nodes: Vec<RegionNode<'_>> = Vec::with_capacity(all_members.len());
+        for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = registry.construct(&doc_node.type_id)?;
             // Specialization tokens baked from the def's static params (classify
@@ -718,6 +737,7 @@ pub(crate) fn fuse_canonical_def(
                     RegionInput::External(e) => InputSource::External(*e),
                     RegionInput::Member(doc) => InputSource::Node(NodeInstanceId(*doc)),
                     RegionInput::Unwired => InputSource::Unwired,
+                    RegionInput::Virtual(ci) => InputSource::Virtual(*ci),
                 })
                 .collect();
             region_nodes.push(RegionNode {
@@ -762,6 +782,20 @@ pub(crate) fn fuse_canonical_def(
             None
         };
 
+        // Virtual chains resolved to region-node indices (the finder's doc-id
+        // form → the codegen's `n{idx}` numbering over `all_members`).
+        let mut virtual_chains = Vec::with_capacity(region.virtual_chains.len());
+        for c in &region.virtual_chains {
+            let members: Option<Vec<usize>> =
+                c.members.iter().map(|m| node_index_of(m.doc_id)).collect();
+            virtual_chains.push(codegen::FusedVirtualChain {
+                consumer: node_index_of(c.consumer)?,
+                input_index: c.input_index,
+                members: members?,
+                output: node_index_of(c.output)?,
+            });
+        }
+
         let fusion_region = FusionRegion {
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
@@ -769,6 +803,7 @@ pub(crate) fn fuse_canonical_def(
             in_place_alias,
             sampler_address_mode,
             dispatch_count_field,
+            virtual_chains,
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline
@@ -791,7 +826,7 @@ pub(crate) fn fuse_canonical_def(
         let fused_doc = max_id + 1 + i as u32;
         let fused_id = NodeId::new(format!("fused_region_{i}").as_str());
         let mut fused_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
-        for (idx, member) in region.members.iter().enumerate() {
+        for (idx, member) in all_members.iter().enumerate() {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = registry.construct(&doc_node.type_id)?;
             let stable = resolve_node_id(doc_node);

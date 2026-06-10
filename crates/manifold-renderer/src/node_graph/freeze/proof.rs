@@ -929,6 +929,145 @@ fn fused_warp_region_matches_unfused() {
     );
 }
 
+/// High-frequency deterministic noise input — the WORST case for the stencil
+/// tier's manual-bilinear-vs-hardware-filter gap (neighbouring texels differ by
+/// up to the full range, so any filter-weight difference is maximally visible).
+/// LCG-seeded, reproducible.
+fn noise_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+    let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+    let mut state = 0x5EED_5EEDu64;
+    for v in px.iter_mut() {
+        *v = f16::from_f32((lcg_next(&mut state) & 0xFFFF) as f32 / 65535.0);
+    }
+    let tex = device.create_texture(&GpuTextureDesc {
+        width: w,
+        height: h,
+        depth: 1,
+        format: FMT,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD
+            | GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_SRC,
+        label: "freeze-proof-noise",
+        mip_levels: 1,
+    });
+    let bytes = unsafe {
+        std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice()))
+    };
+    device.upload_texture(&tex, bytes);
+    tex
+}
+
+/// Render the stencil checkpoint def (source → gain → gaussian_blur → final,
+/// blur params supplied) unfused and fused-with-virtual-chain, and return the
+/// diff. Asserts the structural expectations on the way: the region fuses, the
+/// gain is absorbed (deleted from the installed def), one wgsl_compute node.
+fn stencil_checkpoint_diff(
+    radius_mode: u32,
+    radius: f32,
+    kernel_size: u32,
+    step: f32,
+) -> super::DiffResult {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = noise_input(&device, w, h);
+
+    let json = format!(
+        r#"{{
+        "version": 1, "name": "stencil-cp", "nodes": [
+            {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
+            {{ "id": 1, "typeId": "node.gain", "nodeId": "gain",
+               "params": {{ "gain": {{ "type": "Float", "value": 1.3 }} }} }},
+            {{ "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur",
+               "params": {{
+                 "radius_mode": {{ "type": "Enum", "value": {radius_mode} }},
+                 "radius": {{ "type": "Float", "value": {radius} }},
+                 "kernel_size": {{ "type": "Enum", "value": {kernel_size} }},
+                 "step": {{ "type": "Float", "value": {step} }},
+                 "axis": {{ "type": "Enum", "value": 0 }}
+               }} }},
+            {{ "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }}
+        ], "wires": [
+            {{ "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }},
+            {{ "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }},
+            {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }}
+        ]
+    }}"#
+    );
+    let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the stencil region fuses");
+    assert!(
+        !fdef.nodes.iter().any(|n| n.type_id == "node.gain"),
+        "the gain must be absorbed into the blur's fetch"
+    );
+    assert!(
+        !fdef.nodes.iter().any(|n| n.type_id == "node.gaussian_blur"),
+        "the blur folds into the fused kernel"
+    );
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-3, 1.0e-3)
+}
+
+/// STENCIL CHECKPOINT, integer taps — Fixed mode at step 1.0 puts every tap on
+/// a texel center, where the hardware filter snaps to the exact texel; the
+/// fetch's corner values are bit-identical to the unfused chain's stores, so
+/// the whole pipeline should agree to ~an f16 ulp even on pure noise.
+#[test]
+fn stencil_virtual_chain_integer_tap_blur_matches_unfused() {
+    let r = stencil_checkpoint_diff(0, 0.0, 1, 1.0);
+    assert!(
+        r.max_abs < 1.5e-3,
+        "integer-tap stencil fusion must be ulp-exact: max_abs={}, over={}/{}",
+        r.max_abs,
+        r.over_count,
+        r.total
+    );
+}
+
+/// STENCIL CHECKPOINT, fractional taps — Dynamic mode at radius 7.3 uses the
+/// bilinear tap-pair offsets, so every tap exercises the manual-f32-lerp vs
+/// hardware-filter-unit gap on worst-case noise. This is the fail-fast gate
+/// from the tier design: if this can't hold the documented proof tolerance,
+/// fractional-tap stencil fusion is invalid and the tier narrows to integer
+/// taps. The blur averages ~5 taps with sub-1 weights, so per-tap filter error
+/// must stay within the two-sided budget.
+#[test]
+fn stencil_virtual_chain_fractional_tap_blur_matches_unfused() {
+    let r = stencil_checkpoint_diff(1, 7.3, 1, 1.0);
+    eprintln!(
+        "[stencil checkpoint] fractional taps on noise: max_abs={} max_rel={} over={}/{}",
+        r.max_abs, r.max_rel, r.over_count, r.total
+    );
+    assert!(
+        r.passes(0.005),
+        "fractional-tap stencil fusion exceeded the documented tolerance \
+         (manual bilinear vs hardware filter): max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Coverage baseline — a regression guard on how much of the shipped library the
 /// finder fuses. Walks every bundled effect preset, partitions it, and tallies
 /// the presets that fuse + the total atoms folded into kernels. A future change

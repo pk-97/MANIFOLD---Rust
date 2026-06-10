@@ -146,6 +146,27 @@ struct SeparableGaussianUniforms {
 }
 
 impl Primitive for GaussianBlur {
+    /// Fused-region sampler agreement: a fused kernel that folds this blur in
+    /// must bind the SAME address mode `run()` would create — Repeat for
+    /// toroidal sims, Mirror, else the default clamp. Mirrors the
+    /// `address_mode` read in `run()` exactly; the stencil virtual-source
+    /// fetch wraps its corner texels by this mode too.
+    fn fused_gather_sampler_mode(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> manifold_gpu::GpuAddressMode {
+        let mode = match params.get("address_mode") {
+            Some(ParamValue::Enum(v)) => *v,
+            Some(ParamValue::Float(f)) => f.round() as u32,
+            _ => 0,
+        };
+        match mode {
+            1 => manifold_gpu::GpuAddressMode::Repeat,
+            2 => manifold_gpu::GpuAddressMode::MirrorRepeat,
+            _ => manifold_gpu::GpuAddressMode::ClampToEdge,
+        }
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let kernel_size = match ctx.params.get("kernel_size") {
             Some(ParamValue::Enum(v)) => (*v).min(2),
