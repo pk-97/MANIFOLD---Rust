@@ -1550,17 +1550,36 @@ impl PresetRuntime {
         // over. Drives the persistent-texture pass below.
         let mut harvested: ahash::AHashMap<NodeInstanceId, NodeInstanceId> =
             ahash::AHashMap::default();
-        for slot in &self.effect_nodes {
+        for (idx, slot) in self.effect_nodes.iter().enumerate() {
             if slot.def_content_key == 0 {
                 continue;
             }
-            let Some(old_slot) = prior.effect_nodes.iter().find(|s| {
-                s.effect_id == slot.effect_id
-                    && s.effect_type == slot.effect_type
-                    && s.def_content_key == slot.def_content_key
-            }) else {
+            let Some((old_idx, old_slot)) =
+                prior.effect_nodes.iter().enumerate().find(|(_, s)| {
+                    s.effect_id == slot.effect_id
+                        && s.effect_type == slot.effect_type
+                        && s.def_content_key == slot.def_content_key
+                })
+            else {
                 continue;
             };
+            // A stateful card's state is a function of what FEEDS it — a
+            // feedback trail is a picture of the upstream chain. Carry it
+            // only when the ordered sequence of cards before this one is
+            // unchanged; an upstream reorder resets exactly this card (the
+            // trail's content no longer corresponds to anything the chain
+            // produces, and latching blends would hold the stale look
+            // forever). Downstream reorders carry. Identity is by EffectId,
+            // not content key, so upstream VALUE edits still carry — the
+            // trail just evolves with the new look.
+            let prefix_unchanged = idx == old_idx
+                && self.effect_nodes[..idx]
+                    .iter()
+                    .zip(&prior.effect_nodes[..old_idx])
+                    .all(|(a, b)| a.effect_id == b.effect_id);
+            if !prefix_unchanged {
+                continue;
+            }
             for (node_id, new_inst) in &slot.node_map {
                 let Some((_, old_inst)) =
                     old_slot.node_map.iter().find(|(nid, _)| nid == node_id)
@@ -5315,6 +5334,60 @@ mod chain_fusion_tests {
             r.over_count, 0,
             "a toggle rebuild must reset state (match a fresh build), not \
              carry the old trail: max_abs={}, over={}/{}",
+            r.max_abs, r.over_count, r.total
+        );
+    }
+
+    /// Upstream-prefix gate: moving a card UPSTREAM of a stateful card
+    /// changes what feeds it — its carried trail would be a stale picture of
+    /// the old chain (the 2026-06-11 reorder artifact). The rebuild must
+    /// reset exactly that card: [FB, CG] reordered to [CG, FB] makes the
+    /// harvested chain match a fresh [CG, FB] build.
+    #[test]
+    fn upstream_reorder_resets_stateful_card() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let fb = make_default(PresetTypeId::STYLIZED_FEEDBACK);
+        let mut cg = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut cg, "amount", 1.0);
+        set_param(&mut cg, "gain", 1.1);
+        let fb_first = vec![fb.clone(), cg.clone()];
+        let cg_first = vec![cg.clone(), fb.clone()];
+
+        let build = |effects: &[PresetInstance], prior: Option<&mut PresetRuntime>| {
+            PresetRuntime::try_build(
+                effects, &[], &primitives, &device, None, w, h, None, prior,
+            )
+            .expect("chain builds")
+        };
+
+        const WARM: usize = 6;
+        let mut donor = build(&fb_first, None);
+        for _ in 0..WARM {
+            run_once(&mut donor, &device, &input, &fb_first, &pc);
+        }
+        let mut reordered = build(&cg_first, Some(&mut donor));
+        run_once(&mut reordered, &device, &input, &cg_first, &pc);
+
+        let mut fresh = build(&cg_first, None);
+        run_once(&mut fresh, &device, &input, &cg_first, &pc);
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            fresh.output_texture().unwrap(),
+            reordered.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "an upstream reorder must reset the feedback card (match a fresh \
+             build): max_abs={}, over={}/{}",
             r.max_abs, r.over_count, r.total
         );
     }
