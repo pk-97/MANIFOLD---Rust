@@ -155,6 +155,120 @@ impl TexturePool {
         inner.current_frame
     }
 
+    /// Total bytes currently cached in the free pool (each entry counted at
+    /// `w * h * bytes_per_pixel`; mip-free 2D, so this is the real backing size
+    /// modulo Metal's internal alignment). The live, in-use set is NOT counted —
+    /// held textures aren't in the pool — so this is purely reclaimable slack.
+    pub fn cached_bytes(&self) -> u64 {
+        let inner = unsafe { &*self.inner.get() };
+        inner
+            .available
+            .iter()
+            .map(|((w, h, fmt), entries)| {
+                (*w as u64) * (*h as u64) * (fmt.bytes_per_pixel() as u64) * entries.len() as u64
+            })
+            .sum()
+    }
+
+    /// Evict every FREE entry whose resolution differs from `(keep_w, keep_h)`,
+    /// returning `(textures_freed, bytes_freed)`. The conservative fix for the
+    /// canvas-change leak: when the render resolution moves, old-resolution
+    /// entries can never be recycled again (acquire keys on the new dims) yet
+    /// linger until the slow `prune_stale` ages them out — dead 4K allocations.
+    /// This reclaims them immediately while KEEPING any entry that already
+    /// matches the new resolution warm. Safe by construction: the pool only ever
+    /// holds RELEASED textures, so this can't touch a persistent (feedback-state)
+    /// or sticky (memo-held) resource — those are held by the executor and never
+    /// returned here. A dropped texture still referenced by an in-flight command
+    /// buffer stays alive until GPU completion (Metal retains command-buffer
+    /// resources), so dropping mid-flight is safe.
+    pub fn evict_resolution_mismatch(&self, keep_w: u32, keep_h: u32) -> (usize, u64) {
+        let inner = unsafe { &mut *self.inner.get() };
+        let mut freed_count = 0usize;
+        let mut freed_bytes = 0u64;
+        inner.available.retain(|(w, h, fmt), entries| {
+            if *w == keep_w && *h == keep_h {
+                return true;
+            }
+            freed_count += entries.len();
+            freed_bytes +=
+                (*w as u64) * (*h as u64) * (fmt.bytes_per_pixel() as u64) * entries.len() as u64;
+            false
+        });
+        if freed_count > 0 {
+            log::info!(
+                "TexturePool: evicted {} old-resolution textures ({:.1} MiB) on change to {}x{}",
+                freed_count,
+                freed_bytes as f64 / (1024.0 * 1024.0),
+                keep_w,
+                keep_h,
+            );
+        }
+        (freed_count, freed_bytes)
+    }
+
+    /// Human-readable breakdown of the free pool: one line per `(w, h, format)`
+    /// key with the cached count, bytes, and oldest/newest release age in frames,
+    /// then totals + the lifetime allocate/recycle counters. A lasting diagnostic
+    /// — call it behind an env-var or a profiling mode, never per-frame. Identifies
+    /// what's dead (large old-resolution keys with high age) and why (low recycle
+    /// ratio ⇒ churn, high age ⇒ never reused since a resolution/project change).
+    pub fn report(&self) -> String {
+        use std::fmt::Write;
+        let inner = unsafe { &*self.inner.get() };
+        let mut keys: Vec<&PoolKey> = inner.available.keys().collect();
+        keys.sort_by_key(|(w, h, _)| std::cmp::Reverse((*w as u64) * (*h as u64)));
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "--- TexturePool report (frame {}, {} frames in flight) ---",
+            inner.current_frame, inner.frames_in_flight
+        );
+        let mut total_bytes = 0u64;
+        let mut total_count = 0usize;
+        for key in &keys {
+            let entries = &inner.available[*key];
+            if entries.is_empty() {
+                continue;
+            }
+            let (w, h, fmt) = **key;
+            let bytes = (w as u64) * (h as u64) * (fmt.bytes_per_pixel() as u64) * entries.len() as u64;
+            total_bytes += bytes;
+            total_count += entries.len();
+            let oldest = entries
+                .iter()
+                .map(|e| inner.current_frame.saturating_sub(e.release_frame))
+                .max()
+                .unwrap_or(0);
+            let newest = entries
+                .iter()
+                .map(|e| inner.current_frame.saturating_sub(e.release_frame))
+                .min()
+                .unwrap_or(0);
+            let _ = writeln!(
+                out,
+                "  {:>5}x{:<5} {:<14?} x{:<3} {:>8.2} MiB   age {}..{} frames",
+                w,
+                h,
+                fmt,
+                entries.len(),
+                bytes as f64 / (1024.0 * 1024.0),
+                newest,
+                oldest,
+            );
+        }
+        let _ = writeln!(
+            out,
+            "  TOTAL cached: {} textures, {:.1} MiB   (cap {})   lifetime: {} allocated / {} recycled",
+            total_count,
+            total_bytes as f64 / (1024.0 * 1024.0),
+            MAX_POOL_TEXTURES,
+            inner.stats_allocated,
+            inner.stats_recycled,
+        );
+        out
+    }
+
     /// Remove textures that have been sitting in the pool unreused for
     /// `stale_frames` frames.
     pub fn prune_stale(&self, stale_frames: u64) {

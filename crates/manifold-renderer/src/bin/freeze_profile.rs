@@ -171,6 +171,15 @@ fn main() {
         profile_perf_gate(&device);
         return;
     }
+    // `poolstats` → synthetic reproduction of the texture-pool canvas-change leak
+    // + the evict_resolution_mismatch fix, with before/after bytes. Headless, so
+    // it can't drive the real Liveschool fixture (that's MANIFOLD_POOL_STATS=1 on
+    // the app); this demonstrates the mechanism and the reclaim on a known
+    // working set. The pool report is the lasting diagnostic either path surfaces.
+    if args.first().map(String::as_str) == Some("poolstats") {
+        profile_pool_stats(&device);
+        return;
+    }
 
     let source_type_id = Source::new().type_id().as_str().to_string();
 
@@ -639,6 +648,64 @@ fn profile_perf_gate(device: &GpuDevice) {
         } else {
             "keep unfused"
         }
+    );
+}
+
+/// Synthetic reproduction of the texture-pool canvas-change leak and the
+/// `evict_resolution_mismatch` fix. Acquires + releases a realistic 4K working
+/// set into the pool, then simulates a canvas change to 1080p (a fresh 1080p
+/// working set) WITHOUT eviction — the report then shows the dead 4K entries
+/// sitting alongside the live 1080p ones (the bug). Then applies the fix and
+/// reports the bytes reclaimed. Real-fixture numbers come from
+/// `MANIFOLD_POOL_STATS=1` on the running app; this is the headless mechanism +
+/// before/after I can produce without the GUI.
+fn profile_pool_stats(device: &GpuDevice) {
+    use manifold_gpu::GpuTextureUsage;
+
+    let pool = device.create_texture_pool(3);
+    let usage = GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ;
+
+    // A representative 4K working set: a handful of full-res rgba16float
+    // intermediates (the compositor + a fused chain's scratch) plus a couple of
+    // half-res HDR intermediates. Acquire then release so they land in the free
+    // pool exactly as a real frame leaves them.
+    let acquire_release = |w: u32, h: u32, fmt: GpuTextureFormat, n: usize| {
+        let mut held = Vec::with_capacity(n);
+        for _ in 0..n {
+            held.push(pool.acquire(w, h, fmt, usage, "poolstats"));
+        }
+        for t in held {
+            pool.release(t);
+        }
+    };
+
+    println!("\n--- TexturePool: synthetic canvas-change leak + evict fix ---");
+    pool.begin_frame();
+    acquire_release(3840, 2160, GpuTextureFormat::Rgba16Float, 16);
+    acquire_release(1920, 1080, GpuTextureFormat::Rgba16Float, 8);
+    println!("\n[1] After rendering at 4K (the live working set):");
+    print!("{}", pool.report());
+    let bytes_4k = pool.cached_bytes();
+
+    // Canvas change to 1080p. begin_frame so the new entries are recyclable; the
+    // OLD 4K entries can never be (acquire now keys on 1080p) — they're dead.
+    pool.begin_frame();
+    acquire_release(1920, 1080, GpuTextureFormat::Rgba16Float, 16);
+    acquire_release(960, 540, GpuTextureFormat::Rgba16Float, 8);
+    println!("\n[2] After canvas change to 1080p, BEFORE the fix (4K entries now dead):");
+    print!("{}", pool.report());
+    let bytes_leaked = pool.cached_bytes();
+
+    let (freed_n, freed_bytes) = pool.evict_resolution_mismatch(1920, 1080);
+    println!("\n[3] After evict_resolution_mismatch(1920x1080): freed {freed_n} textures");
+    print!("{}", pool.report());
+
+    println!(
+        "\n  4K live set: {:.1} MiB | leaked after change: {:.1} MiB | reclaimed: {:.1} MiB ({:.0}%)",
+        bytes_4k as f64 / (1024.0 * 1024.0),
+        bytes_leaked as f64 / (1024.0 * 1024.0),
+        freed_bytes as f64 / (1024.0 * 1024.0),
+        100.0 * freed_bytes as f64 / bytes_leaked.max(1) as f64,
     );
 }
 

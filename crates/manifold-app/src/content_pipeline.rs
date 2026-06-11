@@ -841,6 +841,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if let Some(pool) = texture_pool {
             pool.begin_frame();
             if pool.current_frame() % 300 == 0 {
+                // Lasting memory diagnostic: set MANIFOLD_POOL_STATS=1 to log the
+                // per-resolution pool breakdown (dims/format/bytes/age) every ~5s
+                // — run the Liveschool fixture with it to see what's dead and why.
+                // Off by default (env read is cheap at this 300-frame cadence).
+                if std::env::var_os("MANIFOLD_POOL_STATS").is_some() {
+                    log::info!("{}", pool.report());
+                }
                 pool.prune_stale(300);
             }
         }
@@ -1316,6 +1323,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         self.output_w = width;
         self.output_h = height;
+
+        // Reclaim old-resolution pool entries immediately on a canvas change.
+        // Without this they can never be recycled (acquire keys on the new dims)
+        // and only age out via the 300-frame prune_stale — dead 4K allocations
+        // surviving up to ~10s. Keeps any entry already at the new render dims.
+        if let Some(pool) = self.texture_pool.as_ref() {
+            pool.evict_resolution_mismatch(render_w, render_h);
+        }
 
         #[cfg(target_os = "macos")]
         let native_device = self
