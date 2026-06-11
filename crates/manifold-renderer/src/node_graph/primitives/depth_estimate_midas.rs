@@ -32,6 +32,7 @@ use manifold_gpu::{
 use manifold_native::depth_estimator::DepthEstimator;
 
 use crate::background_worker::BackgroundWorker;
+use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -141,11 +142,12 @@ impl DepthEstimateMidas {
 
     fn ensure_depth_state(
         &mut self,
-        device: &manifold_gpu::GpuDevice,
+        gpu: &mut GpuEncoder,
         width: u32,
         height: u32,
         analysis_max_dim: u32,
     ) {
+        let device = gpu.device;
         let max_dim = width.max(height);
         let scale = if max_dim == 0 {
             1.0
@@ -165,16 +167,23 @@ impl DepthEstimateMidas {
             return;
         }
         let pixel_count = (aw * ah) as usize;
+        // Rgba8Unorm to match the u8 scalar pack in run(). upload_texture
+        // derives bytesPerRow from the texture FORMAT, so a wider format
+        // here makes Metal reinterpret the u8 rows as f16 garbage (this
+        // was the dead-Z-slider bug in WireframeDepthGraph).
         let depth_texture = device.create_texture(&GpuTextureDesc {
             width: aw,
             height: ah,
             depth: 1,
-            format: GpuTextureFormat::Rgba16Float,
+            format: GpuTextureFormat::Rgba8Unorm,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
             label: "node.depth_estimate_midas.depth",
             mip_levels: 1,
         });
+        // Fresh Metal textures have undefined contents, and the upsample
+        // pass samples this before the first inference arrives.
+        gpu.clear_texture(&depth_texture, 0.0, 0.0, 0.0, 0.0);
         let staging_texture = device.create_texture(&GpuTextureDesc {
             width: aw,
             height: ah,
@@ -225,7 +234,7 @@ impl Primitive for DepthEstimateMidas {
 
         let gpu = ctx.gpu_encoder();
         self.ensure_depth_worker();
-        self.ensure_depth_state(gpu.device, source.width, source.height, analysis_max_dim);
+        self.ensure_depth_state(gpu, source.width, source.height, analysis_max_dim);
 
         if let (Some(ds), Some(dw)) = (self.depth_state.as_mut(), self.depth_worker.as_mut()) {
             // Poll readback → submit to worker.
