@@ -37,6 +37,83 @@ impl SharedOutputView {
     }
 }
 
+/// Opaque occlusion: find every layer made invisible by a fully-opaque
+/// layer above it, so the compositor can skip blending it into the
+/// composite. Blend-skip ONLY — nothing upstream (generator render, sim
+/// state, clip playback, per-layer effect chains) is affected by occlusion;
+/// blend modes never interact with simulation or generator state.
+///
+/// The cutoff is the topmost top-level (non-group, no parent) layer that is
+/// active this frame (has a ready clip), passes mute/solo, blends `Opaque`,
+/// and sits at full opacity. `Opaque` (mode 6) replaces every pixel and
+/// ignores the base regardless of alpha — even a transformed or effected
+/// opaque layer writes its full texture — so everything below the cutoff
+/// contributes nothing to the frame.
+///
+/// A layer below the cutoff is occluded only if its whole parent chain is
+/// also below the cutoff (a child of a group ABOVE the cutoff still renders
+/// into that group's composite). Opaque layers inside groups never act as
+/// global occluders in v1 — their group may carry partial opacity or effects.
+///
+/// `out` receives the occluded layer indices (empty = no occluder). Layer
+/// `index` equals its position in `timeline.layers`; index 0 is the top.
+fn compute_occluded_layer_indices(
+    layers: &[manifold_core::layer::Layer],
+    ready_clips: &[manifold_playback::scheduler::ActiveClipRef],
+    out: &mut Vec<i32>,
+) {
+    out.clear();
+    let any_solo = layers.iter().any(|l| l.is_solo);
+    let mut cutoff: Option<i32> = None;
+    for l in layers {
+        if l.is_group() || l.parent_layer_id.is_some() {
+            continue;
+        }
+        if l.is_muted || (any_solo && !l.is_solo) {
+            continue;
+        }
+        if l.default_blend_mode != BlendMode::Opaque || l.opacity < 1.0 {
+            continue;
+        }
+        if !ready_clips.iter().any(|c| c.layer_index == l.index) {
+            continue;
+        }
+        cutoff = Some(l.index);
+        break;
+    }
+    let Some(cut) = cutoff else {
+        return;
+    };
+    for l in layers {
+        if l.index <= cut {
+            continue;
+        }
+        // Walk the parent chain: occluded only if every ancestor is below
+        // the cutoff too. Chains are short (groups nest 1-2 deep); the
+        // depth guard caps pathological/cyclic parent data.
+        let mut above_cutoff_ancestor = false;
+        let mut parent = l.parent_layer_id.as_ref();
+        let mut depth = 0;
+        while let Some(pid) = parent {
+            depth += 1;
+            if depth > 16 {
+                break;
+            }
+            match layers.iter().find(|p| &p.layer_id == pid) {
+                Some(p) if p.index <= cut => {
+                    above_cutoff_ancestor = true;
+                    break;
+                }
+                Some(p) => parent = p.parent_layer_id.as_ref(),
+                None => break,
+            }
+        }
+        if !above_cutoff_ancestor {
+            out.push(l.index);
+        }
+    }
+}
+
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
@@ -180,6 +257,14 @@ pub struct ContentPipeline {
     /// Pulled into [`ContentState`](crate::content_state::ContentState) each
     /// frame so the editor can show a value inspector for non-image nodes.
     last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
+    /// Layer indices occluded this frame by a fully-opaque layer above them
+    /// (opaque blend at full opacity replaces every pixel, so nothing below
+    /// it can contribute). Occlusion elides ONLY the final blend dispatches
+    /// into the composite — generators, sims, clip playback, and per-layer
+    /// effect chains all keep running every frame, so no state anywhere
+    /// depends on visibility. Recomputed every frame (opacity/blend are live
+    /// performance surfaces); pre-allocated scratch, no per-frame allocation.
+    occluded_layers_scratch: Vec<i32>,
     /// Whether the node-output preview applies its smart (semantic) encoding.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
@@ -243,6 +328,7 @@ impl ContentPipeline {
             node_preview_request: None,
             node_preview_generator: None,
             last_node_preview_info: None,
+            occluded_layers_scratch: Vec::new(),
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
@@ -856,6 +942,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
+        // ── Opaque occlusion (blend-skip only) ────────────────────────
+        // The topmost fully-opaque top-level layer replaces every pixel
+        // beneath it (Opaque blend ignores the base), so the compositor
+        // skips blending the layers below. Everything still RENDERS —
+        // generators, sims, and effect chains advance normally.
+        compute_occluded_layer_indices(
+            layers,
+            &tick_result.ready_clips,
+            &mut self.occluded_layers_scratch,
+        );
+
         {
             let mut gen_enc = native_device.create_encoder("Generators");
             {
@@ -1022,6 +1119,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             },
             output_width: self.output_w,
             output_height: self.output_h,
+            occluded_layers: &self.occluded_layers_scratch,
         };
         let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -1733,5 +1831,94 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         type_id: &manifold_core::PresetTypeId,
     ) -> Vec<manifold_renderer::node_graph::OuterParamRouting> {
         self.compositor.outer_routings_for(type_id)
+    }
+}
+
+#[cfg(test)]
+mod occlusion_tests {
+    use super::compute_occluded_layer_indices;
+    use manifold_core::layer::Layer;
+    use manifold_core::{BlendMode, LayerType};
+    use manifold_playback::scheduler::ActiveClipRef;
+
+    fn layer(index: i32, blend: BlendMode, opacity: f32) -> Layer {
+        let mut l = Layer::new(format!("L{index}"), LayerType::Video, index);
+        l.default_blend_mode = blend;
+        l.opacity = opacity;
+        l
+    }
+
+    fn clip(layer_index: i32) -> ActiveClipRef {
+        ActiveClipRef {
+            clip_id: format!("clip-{layer_index}").into(),
+            layer_index,
+            clip_index: 0,
+            start_beat: manifold_core::Beats(0.0),
+            duration_beats: manifold_core::Beats(4.0),
+            is_looping: false,
+            is_video: false,
+        }
+    }
+
+    #[test]
+    fn opaque_layer_occludes_everything_below() {
+        let layers = vec![
+            layer(0, BlendMode::Normal, 1.0),
+            layer(1, BlendMode::Opaque, 1.0),
+            layer(2, BlendMode::Additive, 1.0),
+            layer(3, BlendMode::Normal, 1.0),
+        ];
+        let clips = vec![clip(0), clip(1), clip(2), clip(3)];
+        let mut out = Vec::new();
+        compute_occluded_layer_indices(&layers, &clips, &mut out);
+        assert_eq!(out, vec![2, 3], "layers below the opaque cutoff are culled");
+    }
+
+    #[test]
+    fn no_cull_when_opaque_is_faded_muted_or_clipless() {
+        let mut out = Vec::new();
+        // Partial opacity: a fade is in progress, everything below shows.
+        let faded = vec![layer(0, BlendMode::Opaque, 0.99), layer(1, BlendMode::Normal, 1.0)];
+        compute_occluded_layer_indices(&faded, &[clip(0), clip(1)], &mut out);
+        assert!(out.is_empty(), "fading opaque layer must not occlude");
+        // Muted opaque layer doesn't block.
+        let mut muted = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
+        muted[0].is_muted = true;
+        compute_occluded_layer_indices(&muted, &[clip(0), clip(1)], &mut out);
+        assert!(out.is_empty(), "muted opaque layer must not occlude");
+        // Opaque layer with no ready clip this frame doesn't block.
+        let idle = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
+        compute_occluded_layer_indices(&idle, &[clip(1)], &mut out);
+        assert!(out.is_empty(), "clipless opaque layer must not occlude");
+    }
+
+    #[test]
+    fn solo_overrides_opaque_and_children_follow_their_group() {
+        let mut out = Vec::new();
+        // Solo elsewhere hides the opaque layer entirely.
+        let mut soloed = vec![layer(0, BlendMode::Opaque, 1.0), layer(1, BlendMode::Normal, 1.0)];
+        soloed[1].is_solo = true;
+        compute_occluded_layer_indices(&soloed, &[clip(0), clip(1)], &mut out);
+        assert!(out.is_empty(), "solo on another layer suppresses the occluder");
+        // Parent-chain rule: a child whose group header sits ABOVE the
+        // cutoff still renders into that group's composite; a plain layer
+        // below the cutoff is culled.
+        let mut group_header = layer(0, BlendMode::Normal, 1.0);
+        group_header.layer_type = LayerType::Group;
+        let occluder = layer(1, BlendMode::Opaque, 1.0);
+        let mut child_of_top_group = layer(2, BlendMode::Normal, 1.0);
+        child_of_top_group.parent_layer_id = Some(group_header.layer_id.clone());
+        let plain_below = layer(3, BlendMode::Normal, 1.0);
+        let layers = vec![group_header, occluder, child_of_top_group, plain_below];
+        compute_occluded_layer_indices(
+            &layers,
+            &[clip(1), clip(2), clip(3)],
+            &mut out,
+        );
+        assert!(
+            !out.contains(&2),
+            "child of a group above the cutoff keeps rendering"
+        );
+        assert!(out.contains(&3), "plain layer below the cutoff is culled");
     }
 }

@@ -49,6 +49,13 @@ pub struct CompositorFrame<'a> {
     /// resolution-invariant (edge detect texel size, glitch/dither pixel counts).
     pub output_width: u32,
     pub output_height: u32,
+    /// Layer indices occluded this frame by a fully-opaque layer above them
+    /// (computed once by the content pipeline; see
+    /// `compute_occluded_layer_indices`). Blend-skip ONLY: these layers
+    /// render normally (clips, generators, effect chains all run — no state
+    /// ever depends on visibility); the compositor just elides their final
+    /// blend dispatch, which the opaque layer would overwrite anyway.
+    pub occluded_layers: &'a [i32],
 }
 
 impl<'a> CompositorFrame<'a> {
@@ -65,6 +72,14 @@ impl<'a> CompositorFrame<'a> {
         }
         // Slow path: layer order doesn't match index (reordered/gaps).
         self.layers.iter().find(|l| l.layer_index == layer_index)
+    }
+
+    /// Whether this layer is occluded by a fully-opaque layer above it.
+    /// Occluded layers skip their final blend dispatch only (the opaque
+    /// blend overwrites their pixels anyway); they render normally upstream.
+    #[inline]
+    pub fn is_occluded(&self, layer_index: i32) -> bool {
+        self.occluded_layers.contains(&layer_index)
     }
 }
 

@@ -1123,11 +1123,24 @@ impl LayerCompositor {
     ///
     /// Layers are blended bottom-to-top (order preserved from generate_layers).
     /// This pass is always serial — each blend reads the previous blend's result.
-    fn blend_layers(&mut self, gpu: &mut GpuEncoder, layer_outputs: &[LayerOutput]) {
+    ///
+    /// `occluded_layers` (from `CompositorFrame`) lists layers hidden by a
+    /// fully-opaque layer above them: their blend dispatch is skipped because
+    /// the opaque blend overwrites every pixel anyway. Strictly an elision of
+    /// redundant math — the layers themselves rendered normally upstream.
+    fn blend_layers(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        layer_outputs: &[LayerOutput],
+        occluded_layers: &[i32],
+    ) {
         // Clear main to opaque black
         self.main.clear_source(gpu, true);
 
         for output in layer_outputs {
+            if occluded_layers.contains(&output.layer_index) {
+                continue;
+            }
             let uniforms = BlendUniforms {
                 blend_mode: output.blend_mode as u32,
                 opacity: output.opacity,
@@ -1633,7 +1646,7 @@ impl LayerCompositor {
         let outputs_ptr = self.layer_outputs_scratch.as_ptr();
         let outputs_len = self.layer_outputs_scratch.len();
         let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
-        self.blend_layers(gpu, outputs);
+        self.blend_layers(gpu, outputs, frame.occluded_layers);
     }
 
     /// Parallel composite path: one command buffer per layer for generation,
@@ -1902,7 +1915,7 @@ impl LayerCompositor {
         let outputs_ptr = self.layer_outputs_scratch.as_ptr();
         let outputs_len = self.layer_outputs_scratch.len();
         let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
-        self.blend_layers(compositor_gpu, outputs);
+        self.blend_layers(compositor_gpu, outputs, frame.occluded_layers);
     }
 }
 
