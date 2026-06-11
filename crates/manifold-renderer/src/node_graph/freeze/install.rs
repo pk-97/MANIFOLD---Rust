@@ -680,11 +680,13 @@ pub(crate) fn compile_segment_view(
         return None;
     }
 
-    // Per-region gate, segment edition: fused-all vs the unfused concatenation
-    // (identical dispatches to the per-card chain). Measured on the supplied
-    // device; same margins as every card verdict.
+    // Per-region gate, segment edition. The honest baseline is the PRODUCTION
+    // fallback — each card through its per-card FUSED kernel (gate verdicts
+    // respected), concatenated — not the raw atom dispatches, which would let
+    // a segment win against a strawman. Same margins as every card verdict.
     if let Some(device) = gate_device {
-        let win = super::perf_gate::measure_segment(device, registry, &concat, &fused.def);
+        let baseline = segment_baseline_def(cards).unwrap_or_else(|| concat.clone());
+        let win = super::perf_gate::measure_segment(device, registry, &baseline, &fused.def);
         if !win {
             return None;
         }
@@ -696,6 +698,51 @@ pub(crate) fn compile_segment_view(
         card_bindings,
         retarget,
     })))
+}
+
+/// The production-fallback chain as one def: each card swapped for its
+/// per-card FUSED def when the type's gate verdict says it renders fused
+/// (mask-seeded winners apply on the content thread; on the worker the
+/// per-card fuse is mask-less — segment members are pointwise cards where
+/// masks don't arise), else its unfused def. Concatenated, this has exactly
+/// the per-card chain's dispatch + seam round-trip structure, so it is the
+/// honest gate baseline.
+fn segment_baseline_def(
+    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+) -> Option<EffectGraphDef> {
+    let baseline_defs: Vec<&EffectGraphDef> = cards
+        .iter()
+        .map(|(def, view)| {
+            if super::perf_gate::should_fuse(&view.type_id) {
+                fused_view_for(def, view).map(|v| v.canonical_def).unwrap_or(*def)
+            } else {
+                *def
+            }
+        })
+        .collect();
+    super::segment::concat_defs(&baseline_defs)
+}
+
+/// Profiling hook (freeze-profile `chain`): compile a segment from canonical
+/// card defs and measure unfused (per-card-equivalent dispatches) vs fused on
+/// `device`, bypassing cache and verdict storage. Returns `(unfused_ms,
+/// fused_ms)` at the tune resolution, `None` when the segment refuses to
+/// compile.
+pub fn profile_segment_by_ids(
+    type_ids: &[PresetTypeId],
+    device: &manifold_gpu::GpuDevice,
+) -> Option<(f64, f64)> {
+    let registry = PrimitiveRegistry::with_builtin();
+    let cards: Vec<(&EffectGraphDef, &'static LoadedPresetView)> = type_ids
+        .iter()
+        .map(|id| {
+            let view = crate::node_graph::loaded_preset_view_by_id(id)?;
+            Some((view.canonical_def, view))
+        })
+        .collect::<Option<_>>()?;
+    let baseline = segment_baseline_def(&cards)?;
+    let view = compile_segment_view(&cards, &registry, None)?;
+    super::perf_gate::profile_segment(device, &registry, &baseline, view.def)
 }
 
 /// Test/tooling hook: compile a segment synchronously (no gate) and seed the

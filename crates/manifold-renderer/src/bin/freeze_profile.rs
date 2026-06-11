@@ -130,6 +130,39 @@ fn main() {
         profile_attribution(&registry, &device, &names);
         return;
     }
+    // `chain [Type Type ...]` → chain-fusion before/after: measure the named
+    // cards (default: a representative pointwise chain) rendered as separate
+    // per-card-equivalent dispatches vs ONE fused cross-card segment, at the
+    // tune resolution. The seam round-trip economics, measured.
+    if args.first().map(String::as_str) == Some("chain") {
+        use manifold_core::PresetTypeId;
+        let ids: Vec<PresetTypeId> = if args.len() > 1 {
+            args[1..].iter().map(|s| PresetTypeId::from_string(s.clone())).collect()
+        } else {
+            vec![
+                PresetTypeId::COLOR_GRADE,
+                PresetTypeId::INVERT_COLORS,
+                PresetTypeId::new("HdrBoost"),
+            ]
+        };
+        let names: Vec<&str> = ids.iter().map(|i| i.as_str()).collect();
+        println!("--- chain fusion: {} @ 4K, real GPU time ---", names.join(" → "));
+        match manifold_renderer::node_graph::freeze::install::profile_segment_by_ids(
+            &ids, &device,
+        ) {
+            Some((unfused, fused)) => {
+                println!("  per-card (seam round-trips): {unfused:.3} ms/frame");
+                println!("  fused segment (one region):  {fused:.3} ms/frame");
+                println!(
+                    "  {:.2}x, {:.3} ms saved/frame",
+                    unfused / fused,
+                    unfused - fused
+                );
+            }
+            None => println!("  segment refused to compile (no seam-spanning region?)"),
+        }
+        return;
+    }
     // `tune` → run ONLY the startup perf-gate tuning and print every verdict
     // (validation mode for gate measurement changes — fast, skips the sweeps).
     if args.first().map(String::as_str) == Some("tune") {

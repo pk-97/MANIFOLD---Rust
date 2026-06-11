@@ -227,6 +227,19 @@ pub(crate) fn measure_segment(
     verdict
 }
 
+/// Raw segment measurement for the freeze-profile `chain` subcommand:
+/// `(unfused_ms, fused_ms)` at the tune resolution, no verdict, no cache.
+pub fn profile_segment(
+    device: &GpuDevice,
+    registry: &PrimitiveRegistry,
+    unfused: &EffectGraphDef,
+    fused: &EffectGraphDef,
+) -> Option<(f64, f64)> {
+    let u = measure_def(device, registry, unfused, SOURCE_TYPE_ID)?;
+    let f = measure_def(device, registry, fused, SOURCE_TYPE_ID)?;
+    Some((u, f))
+}
+
 /// Minimum measured drop (ms/frame) for the greedy mask search to accept
 /// disabling a region — a noise guard on the leave-one-out comparisons, well
 /// under [`MIN_SAVING_MS`] because each step compares two FUSED variants of
