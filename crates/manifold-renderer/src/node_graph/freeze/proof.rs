@@ -355,6 +355,109 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     );
 }
 
+/// CHAIN FUSION CHECKPOINT (docs/CHAIN_FUSION_DESIGN.md §8) — the fail-fast
+/// gate before any cross-card generalization. Two pointwise cards are rendered
+/// the way the chain renders them today (card A's graph to a texture, that
+/// texture fed into card B's graph — the full-canvas seam round-trip), and
+/// against the fused concatenated segment def (one kernel, no seam). The fused
+/// side must match within the same f16-accumulation budget as every pointwise
+/// proof. Card params drive the fused kernel through the segment's namespaced
+/// retarget map — proving the binding surface survives the card boundary.
+#[test]
+fn chain_segment_fused_matches_sequential_per_card() {
+    use super::install::{FusedDef, fuse_canonical_def};
+    use super::segment::concat_defs;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input(&device, w, h);
+
+    let card_a: EffectGraphDef = serde_json::from_str(
+        r#"{
+        "version": 1, "name": "segA", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#,
+    )
+    .expect("parse card A");
+    let card_b: EffectGraphDef = serde_json::from_str(
+        r#"{
+        "version": 1, "name": "segB", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.saturation", "nodeId": "sat" },
+            { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+        ]
+    }"#,
+    )
+    .expect("parse card B");
+
+    // Non-trivial params, applied to both sides.
+    let (gain, contrast, saturation) = (1.35_f32, 1.25_f32, 0.6_f32);
+
+    // ── Sequential per-card: today's chain semantics, seam round-trip included. ──
+    let mut graph_a = card_a.clone().into_graph(&registry).expect("card A graph");
+    set_f(&mut graph_a, "node.gain", "gain", gain);
+    set_f(&mut graph_a, "node.contrast", "contrast", contrast);
+    let plan_a = compile(&graph_a).expect("compile card A");
+    let a_src = resource_for_output(&plan_a, find_node(&graph_a, "system.source"), "out");
+    let a_out = resource_for_output(&plan_a, find_node(&graph_a, "node.contrast"), "out");
+    let a_result = render_graph(&device, &mut graph_a, &plan_a, a_src, &input, a_out);
+
+    let mut graph_b = card_b.clone().into_graph(&registry).expect("card B graph");
+    set_f(&mut graph_b, "node.saturation", "saturation", saturation);
+    let plan_b = compile(&graph_b).expect("compile card B");
+    let b_src = resource_for_output(&plan_b, find_node(&graph_b, "system.source"), "out");
+    let b_out = resource_for_output(&plan_b, find_node(&graph_b, "node.saturation"), "out");
+    let sequential =
+        render_graph(&device, &mut graph_b, &plan_b, b_src, &a_result.texture, b_out);
+
+    // ── Fused segment: concat → one region across the seam → one kernel. ──
+    let seg = concat_defs(&[&card_a, &card_b]).expect("segment concat builds");
+    let FusedDef { def: fused_def, retarget, .. } =
+        fuse_canonical_def(&seg, &registry).expect("two pointwise cards fuse across the seam");
+    let mut fused_graph = fused_def.into_graph(&registry).expect("fused segment graph builds");
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+    for (node_id, param, v) in [
+        ("c0.gain", "gain", gain),
+        ("c0.contrast", "contrast", contrast),
+        ("c1.sat", "saturation", saturation),
+    ] {
+        let (_, field) = retarget
+            .get(&(node_id.to_string(), param.to_string()))
+            .unwrap_or_else(|| panic!("segment retarget missing {node_id}.{param}"));
+        fused_graph
+            .set_param(fused_node, field, ParamValue::Float(v))
+            .unwrap_or_else(|e| panic!("set fused {field}: {e:?}"));
+    }
+    let fused_plan = compile(&fused_graph).expect("compile fused segment");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+    let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    // Pointwise-only: same budget as the gain-chain proof. The sequential side
+    // rounds to f16 at the seam; the fused side keeps registers — that drift is
+    // the tolerance's entire job.
+    let r = differ.compare(&device, &sequential.texture, &fused.texture, 4e-3, 1e-2);
+    assert_eq!(
+        r.over_count, 0,
+        "fused two-card segment must match sequential per-card rendering: \
+         max_abs={}, max_rel={}, over={}/{}",
+        r.max_abs, r.max_rel, r.over_count, r.total
+    );
+}
+
 /// CPU-built gradient with spatially-varying alpha (A ramps in x), so the
 /// faithful per-atom alpha threading (mix lerps a.a→b.a) is observable in the
 /// diff — the §12.4 hardened-fixture alpha axis. R/G/B as in `gradient_input`.

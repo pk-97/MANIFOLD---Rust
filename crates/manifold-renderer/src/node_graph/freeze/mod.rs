@@ -17,6 +17,7 @@ pub mod install;
 pub mod perf_gate;
 pub mod reference;
 pub mod region;
+pub mod segment;
 pub mod space;
 
 pub use classify::FusionKind;
